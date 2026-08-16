@@ -44,9 +44,10 @@ node --version >/dev/null 2>&1 || { note "FATAL: no node"; exit 1; }
 note "toolchain: node $(node --version)"
 [ -d node_modules/commander ] || { note "npm ci…"; npm ci >"$OUT/npm-ci.log" 2>&1 || { note "FATAL npm ci"; exit 1; }; }
 
-note "cloning things-lab-golden-v2 -> $VM"
+GOLDEN="${GOLDEN:-things-lab-golden-v2}"
+note "cloning $GOLDEN -> $VM"
 tart delete "$VM" >/dev/null 2>&1 || true
-tart clone things-lab-golden-v2 "$VM"
+tart clone "$GOLDEN" "$VM"
 (tart run "$VM" --no-graphics >"$OUT/tart-run.log" 2>&1 &)
 IP=$(lab_wait_for_ssh "$VM" 300) || { note "FATAL: no SSH"; exit 1; }
 note "ssh up at $IP"
@@ -183,5 +184,5 @@ note "  failure detail:"
 grep -o '"message":"[^"]*"' "$OUT/drive/C_fail.log" | head -1 | sed 's/^/    /' | tee -a "$REPORT"
 
 note ""; note "########## ADR1 RE-CERT COMPLETE ##########"
-note "env: Things $TVER / golden-v2 / clock 2026-07-05"
+note "env: Things $TVER / $GOLDEN / clock 2026-07-05"
 note "artifacts under $OUT"

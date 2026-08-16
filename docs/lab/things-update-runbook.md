@@ -16,7 +16,7 @@ What to do when Cultured Code ships a new Things version (routine 3.22.x patch o
 ## Version pinning (do this BEFORE any release drops)
 
 - **Automation hosts hold their Things version** until this runbook has been completed for the new release. Direct-download installs: Things > Settings > General > uncheck automatic updates (Sparkle). Mac App Store installs: System Settings > App Store > disable automatic app updates (host-wide — prefer the direct download on dedicated automation machines for per-app control).
-- The lab-certified version list lives in the golden metadata (`golden-v1-metadata.json`); the current certified app is **Things 3.22.11** on macOS 15.7.7.
+- The lab-certified version list lives in the golden metadata; the current certified app is **Things 3.22.14** (golden-v3, build 32214000) on macOS 15.7.7 — a behavioral-only advance over 3.22.12/3.22.11 (schema + sdef byte-identical throughout). See [golden-v3-metadata.json](golden-v3-metadata.json) + [gv3-certification.md](gv3-certification.md); the in-place DRIFT-1 swap path (clone the prior golden, `ditto -xk` the new app zip over `/Applications/Things3.app`, warm-up, re-fingerprint) is the routine recipe when a point release is schema-identical.
 
 ## Recertification sequence (new release drops)
 

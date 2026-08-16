@@ -1,0 +1,83 @@
+{
+  "golden": "things-lab-golden-v3",
+  "builtAt": "2026-08-16T00:00:00Z",
+  "buildMethod": "in-place Things update in a things-lab-golden-v2 clone (drift-runbook DRIFT-1 in-place path): swapped Things3.app 3.22.12->3.22.14 via ditto -xk of the pristine Cultured Code direct-download zip (preserves framework symlinks), warm-up launch (schema migration none — DB stayed v26), fingerprint + sdef re-verified byte-identical to v2. All v2 human-seeded layers (seed dataset, TCC AppleEvents/FDA/Screen-Recording/Accessibility, disruption-monitor LaunchAgent, six Shortcuts proxies, AXVM1 L3-accessibility grant) inherited byte-for-byte via APFS COW clone.",
+  "derivedFrom": "things-lab-golden-v2",
+  "baseImage": "ghcr.io/cirruslabs/macos-sequoia-vanilla:latest",
+  "thingsVersion": "3.22.14",
+  "thingsCfBundleVersion": "32214000",
+  "thingsZipSha256": "e37f927900a517e21fae1883a889a41d25402bdfa8c64b88705b3aa8812b7e1e",
+  "thingsZipNote": "Cultured Code direct-download build (static.culturedcode.com/things/Things3.zip, last-modified 2026-08-14); CFBundleShortVersionString 3.22.14 / CFBundleVersion 32214000. Direct-download channel; the maintainer's host is the MAS channel (build number differs by distribution channel, as with v1/v2). LSMinimumSystemVersion 10.15.0 (runs on the golden's macOS 15.7.7 despite the macOS-26 build SDK).",
+  "thingsSdefSha256": "1b6752334207f68cdcb7e71dfc34a21407095bd239afe5df6b3cdd8e2c70cde0",
+  "sdefNote": "byte-identical to the 3.22.11 (v1) and 3.22.12 (v2) golden sdef; still declares `_private_experimental_ reorder to dos in` (reorder canary surface unchanged). 3.22.14 is a BEHAVIORAL-only update relative to 3.22.12: zero sdef delta.",
+  "trialFirstLaunch": "2026-07-03 03:14:28 +0000",
+  "trialFirstLaunchIso": "2026-07-03T03:14:28Z",
+  "pinnedDate": "2026-07-05",
+  "guestClockNote": "guest free-runs (networktime off); all trial math uses GUEST wall-clock. Trial data inherited from v2/v1 (an in-place app update does NOT reset the trial); 13 days remaining at the pinned date.",
+  "uriSchemeAuthToken": "9dFi9fY-QBuqFq59yAUxOg",
+  "settings": {
+    "groupTodayByParent": false,
+    "thingsCloudDeclined": true,
+    "thingsUrlsEnabled": true,
+    "shortcutsBulkEditWithoutConfirmation": true,
+    "thingsAutoUpdateDisabled": true
+  },
+  "schemaFingerprint": "sha256:784bd2f6533e6f85e053b0ec68958083d4ebca11c152ad1d2935178240d4c52b",
+  "schemaNote": "databaseVersion 26, fingerprint byte-identical to golden-v1/v2 under Things 3.22.14 — 3.22.14 is a BEHAVIORAL-only update (zero schema delta); no new baseline required. Verified host-side via `doctor --db --json` on the pulled guest DB (fingerprint.status=ok, value matches; extraColumns warn-only, excluded from hash).",
+  "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
+  "humanLayersDone": [
+    "L2",
+    "L3-appleevents",
+    "L3-fulldisk",
+    "L3-accessibility",
+    "L4-launchagent",
+    "L6-seed-dataset",
+    "L5-shortcuts"
+  ],
+  "consentResidue": "one trashed L5-CONSENT-PROJ (type=1) from the v1 L5 consent absorption run — not in the seed manifest; probe assertions tolerate it (inherited through v1->v2->v3).",
+  "shortcutsConsent": "output-class actions Always-Allowed on the golden (headless in clones); delete-class actions have no Always-Allow and re-prompt every run (tier-3, oddities 5j).",
+  "tcc": {
+    "appleEvents_sshd": "granted (inherited from v1 base image; both Things3 + System Events work prompt-free)",
+    "fullDiskAccess_sshd": "granted (inherited from v1 base image; kTCCServiceSystemPolicyAllFiles)",
+    "accessibility": "granted to /usr/libexec/sshd-keygen-wrapper (kTCCServiceAccessibility auth_value=2; user-path System-Settings toggle driven by tccd, SIP stayed ENABLED). Baked in v2 (AXVM1 L3-accessibility), inherited into v3; re-confirmed auth_value=2 in the v3 build clone.",
+    "screenRecording": "granted (monitor + sshd) — inherited from v1."
+  },
+  "axvm1Layer": {
+    "grantedTo": "/usr/libexec/sshd-keygen-wrapper",
+    "service": "kTCCServiceAccessibility",
+    "authValue": 2,
+    "method": "inherited byte-for-byte from golden-v2 via APFS COW (the AXVM1 recipe was baked in v2; no re-grant needed for an in-place app swap). Verified in the v3 build clone: `SELECT auth_value FROM access WHERE service LIKE '%Accessibility%'` = 2.",
+    "sipEnabled": true,
+    "verification": {
+      "buildCloneGrant": "auth_value=2 confirmed on the v3 build clone before the app swap.",
+      "adr1AxDrive": "under 3.22.14 the baked grant drove the full add-repeating recipe (System Events over SSH: reveal -> select -> assert-eligible -> Items>Repeat -> dialog fields -> OK) across all 6 ADR1 repro cells + the selprobe, with no VNC.",
+      "chkt1AxDrive": "under 3.22.14 the grant drove add-repeating + full-app AX-tree census dumps."
+    }
+  },
+  "seedCounts": {
+    "areas": 2,
+    "tags": 10,
+    "todos": 26,
+    "projects": 5,
+    "headings": 2,
+    "checklistItems": 3,
+    "trashed": 1,
+    "repeatingTemplates": 2
+  },
+  "l5Progress": {
+    "sittingCompleted": "2026-07-09 (inherited through v1->v2->v3)",
+    "proxies": [
+      "things-proxy-create-heading {title, project(uuid)}",
+      "things-proxy-edit-title {id(uuid), title}",
+      "things-proxy-delete-items {id(uuid)}",
+      "things-proxy-delete-items-permanently {id(uuid), Delete Immediately}",
+      "things-proxy-set-detail {id(uuid), detail, value}",
+      "things-proxy-find-items {search}"
+    ]
+  },
+  "certification": {
+    "status": "CERTIFIED (active golden) — 2026-08-16",
+    "note": "Structural gates PASSED (fingerprint + sdef byte-identical to v2, dbVersion 26). lab:regress GREEN across all suites (u/a/x/o/r/e/p/s) + write-layer e2e with zero verdict/tier/crash flips vs the v2 baseline; schedule-class crashes (U12/R09) still reproduce (guards stay). Repeat-rule blob corpus decoded byte-identical with rrv=4 unchanged; ADR1/ANCH2 ui-vector defenses re-certified. The two reported 3.22.14 regressions (#479 checklist-on-template silent-noop; #480 add-repeating Repeat-dialog timeout) DO NOT REPRODUCE in a clean airgapped 3.22.14 clone — no version-gated fix shipped (anomaly reported). Evidence: docs/lab/gv3-certification.md. Follow-ups: `things config set certified-app-version 3.22.14` on the host; a confirmatory second lab:regress pass for the two-run acceptance gate.",
+    "regressRun": "2026-08-16 (single full green pass; per-suite run ids under lab/artifacts/{u,a,x,o,r,e,p,s}-20260816-*)"
+  }
+}

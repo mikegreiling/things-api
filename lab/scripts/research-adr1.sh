@@ -69,10 +69,11 @@ if [ ! -d node_modules/commander ]; then
   npm ci >"$OUT/npm-ci.log" 2>&1 || { note "FATAL: npm ci failed (see npm-ci.log)."; exit 1; }
 fi
 
-# ---------------- clone + boot (no VNC — golden-v2 AX baked) ----------------
-note "cloning things-lab-golden-v2 -> $VM"
+# ---------------- clone + boot (no VNC — golden AX baked) ----------------
+GOLDEN="${GOLDEN:-things-lab-golden-v2}"
+note "cloning $GOLDEN -> $VM"
 tart delete "$VM" >/dev/null 2>&1 || true
-tart clone things-lab-golden-v2 "$VM"
+tart clone "$GOLDEN" "$VM"
 (tart run "$VM" --no-graphics >"$OUT/tart-run.log" 2>&1 &)
 IP=$(lab_wait_for_ssh "$VM" 300) || { note "FATAL: no SSH"; exit 1; }
 note "ssh up at $IP"
@@ -274,7 +275,7 @@ cell full      --area \"Synthetic Area\" --tag recurring --reminder 18:00 --note
 
 # =====================================================================
 note ""; note "############### ADR1 PHASE 0 COMPLETE ###############"
-note "env: Things $TVER / macOS $MVER / DB v26 / golden-v2 / clock 2026-07-05"
+note "env: Things $TVER / macOS $MVER / DB v26 / $GOLDEN / clock 2026-07-05"
 note "area=$AREA tag=$TAG"
 note "artifacts under $OUT (report.txt, drive/*.log, sel/*.txt)"
 note "MATRIX SUMMARY (grep VERDICT):"
