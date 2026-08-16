@@ -275,6 +275,42 @@ end tell
 return "NOMATCH"`;
 }
 
+/**
+ * assert-eligible: after a `things:///show?id=` reveal, VERIFY the target to-do
+ * is genuinely the sole selection AND that the menu item that acts on it is
+ * enabled — before the menu is pressed (ADR1, issue #480). The reveal is assumed
+ * to select the row, but on some surfaces it can navigate without selecting; an
+ * AXPress on the resulting DISABLED `Items ▸ Repeat…` is a silent no-op, so the
+ * dialog never opens and the drive dies far downstream at the dialog-wait timeout
+ * with no hint of the real cause. Reading `Things3 → id of selected to dos` is
+ * uuid-precise (never a fuzzy title match), so a match GUARANTEES the intended row
+ * is selected. Returns "OK" only when exactly the target is selected and the menu
+ * item is enabled; otherwise a diagnostic (`NOTSEL…`/`WRONGSEL…`/`DISABLED…`)
+ * naming expected vs observed. Pure System Events + Things scripting, background-
+ * capable. One stable command shape per primitive.
+ */
+export function axAssertEligibleScript(targetUuid: string, menuItemPath: string): string {
+  const u = escapeAppleScript(targetUuid);
+  return `set selIds to {}
+tell application "Things3"
+  try
+    set selIds to id of selected to dos
+  end try
+end tell
+if (count of selIds) is 0 then return "NOTSEL no to-do is selected after the reveal (expected ${u}) — the show URL navigated without selecting an eligible row"
+if (count of selIds) is greater than 1 then return "NOTSEL " & (count of selIds) & " to-dos are selected, expected exactly the target ${u}"
+set theId to (item 1 of selIds) as text
+if theId is not "${u}" then return "WRONGSEL the selected to-do is " & theId & ", expected the target ${u}"
+set repEnabled to false
+tell application "System Events" to tell process "Things3"
+  try
+    set repEnabled to enabled of ${menuItemPath}
+  end try
+end tell
+if repEnabled is false then return "DISABLED the target ${u} is selected but its Repeat menu item is disabled (not an eligible row for this action)"
+return "OK"`;
+}
+
 /** activate: foreground Things (the fallback preamble step). */
 export function axActivateScript(): string {
   return `tell application "Things3" to activate`;
@@ -602,6 +638,12 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         label: step.label,
         script: axSelectHeadingRowScript(step.path ?? "", Number(step.value ?? "0")),
       };
+    case "assert-eligible":
+      return {
+        primitive: "assert-eligible",
+        label: step.label,
+        script: axAssertEligibleScript(step.value ?? targetUuid, step.path ?? ""),
+      };
     case "key":
       return { primitive: "key", label: step.label, script: axKeyScript(step.keys ?? "") };
     case "click-element":
@@ -832,6 +874,32 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
             : res.timedOut === true
               ? "the row-selection step timed out"
               : res.stderr.trim() || "the row-selection step failed",
+          dismissed,
+        );
+      }
+      done.push(step.label);
+      continue;
+    }
+    if (step.primitive === "assert-eligible") {
+      // ADR1 (#480): fail EARLY + NAMED when the reveal did not land an eligible
+      // selection, rather than letting a disabled-menu no-op surface downstream
+      // as an opaque dialog-wait timeout. The script returns "OK" or a diagnostic
+      // (NOTSEL…/WRONGSEL…/DISABLED…) that IS the human-readable failure reason.
+      // the selection/enabled state must be confirmed before the menu is pressed
+      const res = await run(command, STEP_TIMEOUT_MS);
+      const verdict = res.stdout.trim();
+      if (!res.ok || verdict !== "OK") {
+        // clear any transient state (and verify) before reporting
+        const { dismissed } = await verifiedAbort(run);
+        return partial(
+          step.label,
+          res.ok
+            ? verdict !== ""
+              ? verdict
+              : "the target to-do was not confirmed selected/eligible after the reveal"
+            : res.timedOut === true
+              ? "the eligibility check timed out"
+              : res.stderr.trim() || "the eligibility check failed",
           dismissed,
         );
       }

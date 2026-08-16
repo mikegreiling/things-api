@@ -95,6 +95,24 @@ function menuPress(label: string, path: string, canaryPath?: string): UiStep {
 
 const REPEAT_SUBMENU_ANCHOR = `menu item "Repeat" of ${ITEMS_MENU}`;
 
+/**
+ * Assert the reveal landed an eligible selection before pressing a menu item
+ * (ADR1, issue #480). `menuItemPath` is the item whose `AXEnabled` gates the
+ * action. Dynamic (its verdict depends on the runtime selection the reveal
+ * produced), so it is never canaried; the driver surfaces a non-OK verdict as an
+ * early, named failure instead of a downstream dialog-wait timeout.
+ */
+function assertEligible(targetUuid: string, menuItemPath: string): UiStep {
+  return {
+    primitive: "assert-eligible",
+    label: "confirm the target to-do is selected and Items ▸ Repeat… is enabled",
+    value: targetUuid,
+    path: menuItemPath,
+    dynamic: true,
+    addressing: "title",
+  };
+}
+
 /** Wait for a dynamic element (sheet/popover) to appear, then abort on timeout. */
 function waitFor(label: string, path: string, timeoutMs = 5000): UiStep {
   return { primitive: "wait", label, path, timeoutMs, dynamic: true, addressing: "title" };
@@ -557,6 +575,12 @@ export function makeRepeatingRecipe(
     targetUuid,
     steps: [
       ...preamble(targetUuid),
+      // ADR1 (#480): the reveal is assumed to select the to-do row, but on some
+      // surfaces it can navigate without selecting — and an AXPress on the
+      // resulting DISABLED Repeat… item silently no-ops, so the dialog never
+      // opens and the drive died opaquely at the dialog-wait timeout. Assert the
+      // eligible selection FIRST, failing early + named on a miss.
+      assertEligible(targetUuid, `menu item "Repeat…" of ${ITEMS_MENU}`),
       menuPress("Items ▸ Repeat…", `menu item "Repeat…" of ${ITEMS_MENU}`),
       ...repeatDialogEntry({ frequency, interval, ...extras }),
     ],

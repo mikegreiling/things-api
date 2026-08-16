@@ -14,7 +14,7 @@ import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
-import { pauseRepeatRecipe } from "../../src/write/vectors/ui-recipes.ts";
+import { makeRepeatingRecipe, pauseRepeatRecipe } from "../../src/write/vectors/ui-recipes.ts";
 import { createUiVector, type UiCommand, type UiRunResult } from "../../src/write/vectors/ui.ts";
 import type { CompiledInvocation, UiRecipe, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -561,5 +561,74 @@ describe("ui driver — mouse-hybrid click-element (NATIVE1 primitive)", () => {
     expect(res.stderr).toContain("preflight refused");
     expect(commands.some((c) => c.primitive === "resolve-frame")).toBe(false);
     expect(commands.some((c) => c.primitive === "click-point")).toBe(false);
+  });
+});
+
+// ADR1 (issue #480): the to-do make/add-repeating recipe asserts the reveal
+// landed an eligible selection BEFORE pressing Items ▸ Repeat…, so a disabled-menu
+// no-op (the row was not actually selected) fails EARLY + named instead of dying
+// opaquely at the downstream dialog-wait timeout.
+describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
+  it("aborts EARLY + named when the reveal did not land an eligible selection", async () => {
+    const diagnostic =
+      "NOTSEL no to-do is selected after the reveal (expected TODO-1) — the show URL navigated without selecting an eligible row";
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true"); // canary passes
+      if (c.primitive === "assert-eligible") return ok(diagnostic);
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)));
+    expect(res.exitCode).toBe(1);
+    // The diagnostic IS the human-readable failure reason (not an opaque timeout).
+    expect(res.stderr).toContain("NOTSEL");
+    expect(res.stderr).toContain("stopped at");
+    // The eligibility check DID run…
+    expect(commands.some((c) => c.primitive === "assert-eligible")).toBe(true);
+    // …and NOTHING was actuated afterwards (no menu press, no dialog controls).
+    expect(
+      commands.some(
+        (c) =>
+          c.primitive === "press" || c.primitive === "set-value" || c.primitive === "select-popup",
+      ),
+    ).toBe(false);
+  });
+
+  it("carries the target uuid + Repeat… menu path into the assertion script", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    await vector.execute(invocation(makeRepeatingRecipe("TODO-42", "weekly", 2)));
+    const assertCmd = commands.find((c) => c.primitive === "assert-eligible");
+    expect(assertCmd?.script).toContain("id of selected to dos");
+    expect(assertCmd?.script).toContain("TODO-42");
+    expect(assertCmd?.script).toContain('menu item "Repeat…"');
+    expect(assertCmd?.script).toContain("enabled of");
+  });
+
+  it("proceeds to the menu press once the target is confirmed selected + enabled", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)));
+    expect(res.exitCode).toBe(0);
+    // The assertion preceded the Items ▸ Repeat… press in the command stream.
+    const assertIdx = commands.findIndex((c) => c.primitive === "assert-eligible");
+    const pressIdx = commands.findIndex(
+      (c) => c.primitive === "press" && c.script?.includes('menu item "Repeat…"') === true,
+    );
+    expect(assertIdx).toBeGreaterThanOrEqual(0);
+    expect(pressIdx).toBeGreaterThan(assertIdx);
   });
 });

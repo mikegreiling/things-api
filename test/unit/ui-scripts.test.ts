@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  axAssertEligibleScript,
   axSelectPopupCandidatesScript,
   axSelectPopupScript,
   axSetValueScript,
@@ -76,5 +77,36 @@ describe("axSheetOpenScript — verified-abort / preflight sheet probe (defects 
 
   it("wraps each probe in try so a missing window reads as 'no sheet', not an error", () => {
     expect(script.match(/end try/g)?.length).toBe(2);
+  });
+});
+
+describe("axAssertEligibleScript — reveal-landed-eligible check (ADR1, #480)", () => {
+  const script = axAssertEligibleScript(
+    "UUID-9",
+    `menu item "Repeat…" of menu "Items" of menu bar 1`,
+  );
+
+  it("reads the selection uuid-precisely (never a fuzzy title match)", () => {
+    expect(script).toContain("id of selected to dos");
+    expect(script).not.toContain("name of selected to dos");
+  });
+
+  it("distinguishes NOTSEL / WRONGSEL / DISABLED and only says OK when all hold", () => {
+    expect(script).toContain("NOTSEL");
+    expect(script).toContain("WRONGSEL");
+    expect(script).toContain("DISABLED");
+    expect(script.trimEnd().endsWith('return "OK"')).toBe(true);
+  });
+
+  it("requires EXACTLY the target selected (count checks) and the menu item enabled", () => {
+    expect(script).toContain("(count of selIds) is 0");
+    expect(script).toContain("(count of selIds) is greater than 1");
+    expect(script).toContain('enabled of menu item "Repeat…" of menu "Items" of menu bar 1');
+    expect(script).toContain("UUID-9");
+  });
+
+  it("escapes the target uuid into the AppleScript string literals", () => {
+    const s = axAssertEligibleScript('u"x', "menu item 1");
+    expect(s).toContain('u\\"x');
   });
 });

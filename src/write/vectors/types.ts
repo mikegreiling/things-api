@@ -106,6 +106,22 @@ export type UiPrimitive =
    */
   | "select-heading-row"
   /**
+   * Assert the reveal actually landed an ELIGIBLE selection before a menu press
+   * (ADR1, issue #480). A `things:///show?id=<uuid>` reveal is assumed to select
+   * the to-do row, but on some surfaces (a future-scheduled to-do in Upcoming, an
+   * area view) it may navigate without leaving the row selected — and an AXPress
+   * on the resulting DISABLED `Items ▸ Repeat…` "succeeds" as a silent no-op, so
+   * the dialog never opens and the drive dies at the dialog-wait timeout with no
+   * hint of the real cause. This step closes that gap fail-closed: it reads back
+   * `Things3 → id of selected to dos` and requires EXACTLY the target uuid to be
+   * selected, then reads the addressed menu item's `AXEnabled`. It returns "OK"
+   * only when the target is the sole selection AND the menu item is enabled;
+   * otherwise it returns a diagnostic (`NOTSEL…`/`WRONGSEL…`/`DISABLED…`) the
+   * driver surfaces as an EARLY, named failure. `value` is the target uuid; `path`
+   * the menu item to enabled-check. Pure System Events, background-capable.
+   */
+  | "assert-eligible"
+  /**
    * Set one of the Repeat dialog's date/time controls — each an `AXDateTimeArea`
    * whose value is an NSDate, NOT a text field (UIC6). System Events cannot set
    * it (`set value … to <date>` errors -10000), so the driver sets `AXValue` to

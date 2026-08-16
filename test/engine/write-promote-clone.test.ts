@@ -370,6 +370,36 @@ describe("add-repeating — add → native promote", () => {
     expect(row(res.uuid)?.["area"]).toBe(area);
   });
 
+  it("threads the base --reminder onto the SERIES via the promote (ADR1 #480, behavior #3)", async () => {
+    // The Repeat-dialog conversion does not preserve the seed's one-off reminder,
+    // so add-repeating must drive the dialog reminder with the base time — the
+    // promote leg's rule params must carry it (else the template drops it).
+    let promoteReminder: unknown = "UNSEEN";
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    const capturing: WriteVector = {
+      ...sim,
+      async execute(inv) {
+        if (inv.op === "todo.make-repeating") {
+          promoteReminder = (inv.opParams as { reminder?: unknown } | undefined)?.reminder;
+        }
+        return sim.execute(inv);
+      },
+    };
+    const res = await runAddRepeatingTodo(
+      deps(capturing),
+      {
+        title: "Reminded habit",
+        when: "2026-08-26",
+        reminder: "18:00",
+        frequency: "weekly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    expect(promoteReminder).toBe("18:00");
+  });
+
   it("blocks before creating when the GUI-drive ack is missing", async () => {
     const res = await runAddRepeatingTodo(deps(vector), {
       title: "x",
@@ -392,6 +422,75 @@ describe("add-repeating — add → native promote", () => {
     );
     expect(summary).toBeDefined();
     expect(summary?.preModDates).toBeUndefined();
+  });
+});
+
+// ADR1 (issue #480): the add legs are NOT atomic — the seed persists if the
+// promote no-ops. RATIFIED RULING: auto-trash our OWN seed inside the txn and
+// disclose it; if the auto-trash also fails, surface the seed's REAL resolvable
+// uuid with a working `delete` remediation (the #480 second bug — a residue whose
+// reported uuid was not actionable).
+describe("add-repeating — seed auto-trash on promote failure (#480)", () => {
+  /**
+   * A simulator that applies add/delete normally but makes the promote leg a
+   * clean-transport NO-OP → the create-mode verify finds no template → the
+   * pipeline returns verify-failed:silent-noop (the exact #480 shape). With
+   * `deleteFails`, the auto-trash leg reports a transport failure too.
+   */
+  function promoteFailsVector(opts: { deleteFails?: boolean } = {}): WriteVector {
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    return {
+      ...sim,
+      async execute(inv) {
+        if (inv.op === "todo.make-repeating" || inv.op === "project.make-repeating") {
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (
+          opts.deleteFails === true &&
+          (inv.op === "todo.delete" || inv.op === "project.delete")
+        ) {
+          return { exitCode: 1, stdout: "", stderr: "delete failed (injected)" };
+        }
+        return sim.execute(inv);
+      },
+    };
+  }
+
+  const seedRow = (title: string): { uuid: string; trashed: number } | undefined =>
+    fixture.db
+      .prepare("SELECT uuid, trashed FROM TMTask WHERE title = ? ORDER BY trashed DESC LIMIT 1")
+      .get(title) as { uuid: string; trashed: number } | undefined;
+
+  it("auto-trashes the seed and points at `restore` when the promote fails", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(promoteFailsVector()),
+      { title: "Doomed habit", when: "someday", frequency: "weekly", interval: 1 },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    expect(res.op).toBe("todo.add-repeating");
+    const seed = seedRow("Doomed habit");
+    expect(seed?.trashed).toBe(1); // created then auto-trashed inside the txn
+    if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
+    expect(res.detail).toContain(seed?.uuid ?? "MISSING");
+    expect(res.detail).toContain("moved to the Trash");
+    expect(res.detail).toContain("things todo restore");
+    // The auto-trash ran as an embedded leg.
+    expect(auditRecords.some((r) => r.op === "todo.delete")).toBe(true);
+  });
+
+  it("names the seed's resolvable uuid + a `delete` remediation when the auto-trash ALSO fails", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(promoteFailsVector({ deleteFails: true })),
+      { title: "Stranded habit", when: "someday", frequency: "weekly", interval: 1 },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    const seed = seedRow("Stranded habit");
+    expect(seed?.trashed).toBe(0); // the auto-trash did not land
+    if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
+    expect(res.detail).toContain("could NOT be auto-trashed");
+    expect(res.detail).toContain(`things todo delete ${seed?.uuid ?? "MISSING"}`);
   });
 });
 
