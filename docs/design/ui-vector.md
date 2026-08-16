@@ -101,9 +101,23 @@ The ack also **lifts the disruption ceiling**: the ui vector is **DisruptionTier
 
 **Surface-copy note.** Per [surface-copy.md](surface-copy.md), the consumer-facing MCP tool descriptions and CLI `--help` state the disruption **plainly and in behavior terms** — "drives the local Things app through its accessibility interface to make a change the app offers nowhere else; intended for a dedicated always-on Mac" — and must NOT leak internal vocabulary (`hazard`, `H-UI-DRIVE`, `vector`, disruption-tier numbers, probe ids) into those strings. The internal names in THIS doc are for the design/`docs` surface only.
 
-### The locked-session question (LOCK1 → AXVM1)
+### The locked-session question (LOCK1 → AXVM1 → SESSGATE)
 
-VNC input hits the lock screen on a locked session (LOCK1-f, [headless-research.md](../lab/headless-research.md)) — that was a reason the VNC path needed the session unlocked. **AXVM1 falsified this for the AX path**: element presses by name worked under a locked session and stole no focus (a template was paused with Finder frontmost — Finder stayed frontmost). So the ui vector does **not** carry an inherent unlocked-session requirement, and `H-UI-DRIVE` is worded accordingly. The closet-mini setup still keeps the session unlocked as operational hygiene (so a human can watch/intervene, and so the row-selection `things:///show` handle behaves predictably); the open certification question is only whether the `activate-app` preamble step can be dropped entirely. A dedicated machine nobody else touches remains the right home regardless.
+VNC input hits the lock screen on a locked session (LOCK1-f, [headless-research.md](../lab/headless-research.md)) — that was a reason the VNC path needed the session unlocked. **AXVM1 falsified this for the AX path**: element presses by name worked under a locked session and stole no focus (a template was paused with Finder frontmost — Finder stayed frontmost).
+
+**SESSGATE (issue #480, 2026-08-16) drew the crucial line AXVM1 did not: this holds for MENU-only ops, but NOT for DIALOG-class ops.** A menu-item press (`todo.pause-repeat`/`resume-repeat`) touches only the menu bar, which stays AX-reachable under lock — so those ops carry no unlocked-session requirement, exactly as AXVM1 found. But an op that opens a **sheet on the main window** (make/reschedule a repeat, convert a to-do/heading to a project, move a heading) needs that **window** AX-reachable — and when the screen is **locked**, or a **full-screen app** owns the current Space, System Events enumerates **zero windows for every process** (it sees only the current Space). The sheet then opens on an AX-unreachable window: the dialog-wait times out, the still-open modal **blocks AppleScript mutations app-wide** (the #480 auto-trash silent-noop), and an AX-blind Escape cleanup cannot even see the sheet to confirm it is gone. Proven live: `System Events` reported 0 windows for Things, Finder, AND Safari while Things' own AppleScript dictionary reported 1 visible normal window ([sessgate-session-reachability.md](../lab/sessgate-session-reachability.md)).
+
+So dialog-class ops now carry a **documented session-reachability precondition**, and the driver enforces it as a **three-state gate** (probed after the reveal, before any press — `src/write/vectors/session-reachability.ts`):
+
+| Live state | Discriminator (AS · AX · all-process AX windows) | Gate response |
+|---|---|---|
+| **Reachable** | Things AX ≥ 1 | proceed (works backgrounded too — the dialog also presents as a detached `AXUnknown` window, UIC4-a) |
+| **Wrong Space** | Things AX = 0, other processes AX > 0 | **auto-relocate**: AppleScript `close window 1` + `reopen` + `activate` pulls the window to the current Space, re-probe closed-loop, then proceed — the relocation is disclosed in the result's warnings |
+| **Locked / full-screen** | Things AX = 0 AND every process AX = 0 | **refuse** (`blocked`, exit 4, zero mutation) with behavioral remediation: unlock the Mac / leave the full-screen app |
+
+The promote **orchestrators** (make/add-repeating) additionally probe BEFORE they seed a row, refusing the locked signature so no orphan seed is ever created; a wrong-Space signature is left for the in-drive relocation (the reveal has not run yet, so refusing pre-seed would be a false positive). And the failure cleanup is now **honest**: when AX-blind it never claims "confirmed gone" — it runs the same proven `close window 1` + `reopen` maneuver (which works without the Accessibility tree, taking a stuck sheet with the window) and says so.
+
+The closet-mini setup still keeps the session unlocked as operational hygiene; a dedicated machine nobody else touches remains the right home regardless.
 
 ## The ops — tiers and the minimal rule vocabulary
 
@@ -184,6 +198,8 @@ The [certification runbook](../lab/ui-certification-runbook.md) IS the deferred 
 ### The open certification question
 
 **Does AXPress work WITHOUT foregrounding Things (background driving)?** The recipes include an `activate-app` fallback that is **skipped if background press proves out**. The runbook must answer this during the sitting. If background AXPress works, the vector can drive without stealing focus even on a machine someone is using (softening the disruption story and possibly relaxing LOCK1); if it does not, the activate preamble stays and the foreground-steal / unlocked-session requirements stand as written.
+
+**SESSGATE law — the Repeat dialog CANNOT be opened from the background (settle this negative once).** The `Items ▸ Repeat…` menu item is **selection- AND frontmost-dependent**: with Things backgrounded (not frontmost), the item does **not exist at all** in the Items menu — even with a live AS-level selection (`selected to dos` returns the target uuid). So a background-press path for the Repeat *dialog* is dead, and the recipe's `activate` preamble is **load-bearing** for the dialog-class ops, not an optional fallback (it can only ever be dropped for the pure menu-item ops like pause/resume, whose submenu items behave differently). This is the same selection-dependent-menu-existence family as UIC1 (the Repeat submenu only appears once a repeating item is selected), extended: the *plain* `Repeat…` entry also requires Things frontmost. Recorded so nobody re-attempts a background Repeat-dialog drive. Evidence: live host, 2026-08-16 (SESSGATE); [things-app-oddities.md](../things-app-oddities.md) §selection/frontmost-dependent menu existence.
 
 ### Doctor ui-vector section
 

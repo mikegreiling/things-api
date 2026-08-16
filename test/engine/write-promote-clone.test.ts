@@ -847,3 +847,86 @@ describe("template-direct clone via re-promote — project", () => {
     expect(row(src)?.["trashed"]).toBe(0);
   });
 });
+
+// SESSGATE (#480): a promote composite is not atomic — it seeds a row before the
+// GUI promote leg. A locked/full-screen session must refuse BEFORE the seed, so
+// no orphan row is ever created.
+/** A fake ui vector that reports the session AX-blind (locked) via probeReachability. */
+function lockedUiVector(): WriteVector {
+  return {
+    id: "ui",
+    matrix: {},
+    async execute() {
+      throw new Error("execute must never run — the gate blocks before the seed");
+    },
+    probeReachability: async () => ({
+      reachable: false,
+      scope: "session",
+      detail: "the Mac's screen is locked",
+      remediation: "unlock the Mac and run this again",
+    }),
+  };
+}
+
+describe("promote composites — pre-seed session-reachability gate (SESSGATE #480)", () => {
+  /** deps with ui ENABLED so the gate consults the ui vector's probeReachability. */
+  function depsUi(vectors: WriteVector[]): WriteDeps {
+    return { ...deps(vectors), config: { ...CONFIG, ui: { enabled: true } } };
+  }
+  const titleRows = (title: string): number =>
+    (
+      fixture.db.prepare("SELECT COUNT(*) AS n FROM TMTask WHERE title = ?").get(title) as {
+        n: number;
+      }
+    ).n;
+
+  it("add-repeating REFUSES on a locked session and seeds NOTHING (zero mutation)", async () => {
+    const res = await runAddRepeatingTodo(
+      depsUi([vector, lockedUiVector()]),
+      { title: "SESSGATE doomed seed", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") {
+      expect(res.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+      expect(res.op).toBe("todo.add-repeating");
+    }
+    // The decisive guarantee: the seed to-do was never created.
+    expect(titleRows("SESSGATE doomed seed")).toBe(0);
+  });
+
+  it("make-repeating REFUSES on a locked session and never clones/trashes the original", async () => {
+    const src = seedTodo(fixture.db, { title: "SESSGATE original", start: "active" });
+    const res = await runMakeRepeatingTodo(
+      depsUi([vector, lockedUiVector()]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") expect(res.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+    // The original is untouched (not trashed) and no clone row was minted.
+    expect(row(src)?.["trashed"]).toBe(0);
+    expect(titleRows("SESSGATE original")).toBe(1);
+  });
+
+  it("proceeds past the gate when the ui vector reports the session reachable", async () => {
+    const reachableUi: WriteVector = {
+      id: "ui",
+      matrix: {},
+      // The promote leg is delivered by the simulator (vector: "ui" is remapped in
+      // the sim fence); this fake only answers the reachability probe.
+      async execute() {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      probeReachability: async () => ({ reachable: true }),
+    };
+    const res = await runAddRepeatingTodo(
+      depsUi([vector, reachableUi]),
+      { title: "SESSGATE reachable", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    // The gate did NOT block — the compound ran (the simulator applies the legs).
+    expect(res.kind).not.toBe("blocked");
+    expect(titleRows("SESSGATE reachable")).toBeGreaterThan(0);
+  });
+});

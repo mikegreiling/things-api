@@ -7,12 +7,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  convertToProjectRecipe,
+  headingConvertToProjectRecipe,
   makeRepeatingRecipe,
+  moveHeadingToProjectRecipe,
+  pauseRepeatRecipe,
   projectMakeRepeatingRecipe,
+  projectPauseRepeatRecipe,
+  projectRescheduleRepeatRecipe,
   rescheduleRepeatRecipe,
+  resumeRepeatRecipe,
   type RepeatRuleExtras,
 } from "../../src/write/vectors/ui-recipes.ts";
-import type { UiStep } from "../../src/write/vectors/types.ts";
+import type { UiRecipe, UiStep } from "../../src/write/vectors/types.ts";
 
 /** The dialog-entry steps (those addressed by pathCandidates). */
 function dialogSteps(
@@ -193,5 +200,33 @@ describe("repeat dialog recipe — ADR1 eligibility assertion (#480)", () => {
     expect(step?.value).toBe("T-7");
     expect(step?.path).toContain('menu item "Repeat…"');
     expect(step?.dynamic).toBe(true);
+  });
+});
+
+// SESSGATE (#480): a recipe that opens a SHEET on the main window is dialog-class
+// and must carry `needsWindowReachability` so the driver gates it; a menu-only
+// recipe (a pure menu-item press that works even under lock, AXVM1) must NOT.
+describe("needsWindowReachability — dialog-class vs menu-only", () => {
+  const dialogClass: [string, UiRecipe][] = [
+    ["todo.make-repeating", makeRepeatingRecipe("T-1", "weekly", 1)],
+    ["project.make-repeating", projectMakeRepeatingRecipe("AREA-1", "P-1", "Proj", "weekly", 1)],
+    ["todo.reschedule-repeat", rescheduleRepeatRecipe("T-1", "weekly", 1)],
+    ["project.reschedule-repeat", projectRescheduleRepeatRecipe("P-1", "weekly", 1)],
+    ["todo.convert-to-project", convertToProjectRecipe("todo.convert-to-project", "T-1")],
+    ["project.promote-heading", headingConvertToProjectRecipe("P-1", 0)],
+    ["project.move-heading-to-project", moveHeadingToProjectRecipe("P-1", "H", "Dest")],
+  ];
+  const menuOnly: [string, UiRecipe][] = [
+    ["todo.pause-repeat", pauseRepeatRecipe("T-1")],
+    ["todo.resume-repeat", resumeRepeatRecipe("T-1")],
+    ["project.pause-repeat", projectPauseRepeatRecipe("P-1")],
+  ];
+
+  it.each(dialogClass)("%s is gated (needsWindowReachability = true)", (_op, recipe) => {
+    expect(recipe.needsWindowReachability).toBe(true);
+  });
+
+  it.each(menuOnly)("%s is NOT gated (no needsWindowReachability)", (_op, recipe) => {
+    expect(recipe.needsWindowReachability).not.toBe(true);
   });
 });

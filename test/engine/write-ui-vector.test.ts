@@ -632,3 +632,129 @@ describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
     expect(pressIdx).toBeGreaterThan(assertIdx);
   });
 });
+
+const isReach = (c: UiCommand): boolean => c.script?.includes("sessgate-reachability") === true;
+const isCloseReopen = (c: UiCommand): boolean => c.script?.includes("close window 1") === true;
+const isActuation = (c: UiCommand): boolean =>
+  c.primitive === "press" || c.primitive === "set-value" || c.primitive === "select-popup";
+
+// SESSGATE (issue #480): dialog-class ops probe the live session AFTER the reveal
+// and BEFORE any press. A locked/full-screen session (every process AX-0) refuses
+// (blocked, zero mutation); a window merely on another Space (Things AX-0, others
+// visible) is RELOCATED to the current Space and the drive proceeds (disclosed).
+describe("ui driver — session-reachability gate (SESSGATE #480)", () => {
+  it("REFUSES (blocked, exit 4) on the LOCKED signature — every process AX-0 — with zero mutation", async () => {
+    // reachability probe reports Things AS=1 but AX=0 AND all-processes AX=0.
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) return ok("1 0 0");
+      if (c.primitive === "resolve") return ok("true");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)));
+    expect(res.exitCode).toBe(4);
+    expect(res.blocked?.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+    expect(res.blocked?.remediation.toLowerCase()).toContain("unlock");
+    // Zero mutation: nothing actuated, and NO relocation was attempted (locked ≠ off-Space).
+    expect(commands.some(isActuation)).toBe(false);
+    expect(commands.some(isCloseReopen)).toBe(false);
+  });
+
+  it("RELOCATES on the WRONG-SPACE signature (Things AX-0, others visible), then proceeds + discloses", async () => {
+    let reachCalls = 0;
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) {
+        reachCalls += 1;
+        // First probe: off-Space (others visible). After close+reopen: reachable.
+        return ok(reachCalls === 1 ? "1 0 4" : "1 1 4");
+      }
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)));
+    expect(res.exitCode).toBe(0);
+    // The relocation maneuver ran (close window + reopen) and was disclosed.
+    expect(commands.some(isCloseReopen)).toBe(true);
+    expect(res.stdout).toContain("moved to the desktop");
+    expect(reachCalls).toBe(2); // probe → relocate → re-probe (closed-loop)
+  });
+
+  it("BLOCKS with the Space remediation when relocation does NOT restore reachability", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) return ok("1 0 4"); // off-Space before AND after the relocation
+      if (c.primitive === "resolve") return ok("true");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)));
+    expect(res.exitCode).toBe(4);
+    expect(res.blocked?.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+    expect(res.blocked?.detail.toLowerCase()).toContain("another desktop");
+    // The relocation WAS attempted before giving up, but nothing was actuated.
+    expect(commands.some(isCloseReopen)).toBe(true);
+    expect(commands.some(isActuation)).toBe(false);
+  });
+
+  it("does NOT gate a menu-only op (pause-repeat) — no reachability probe, no block under lock", async () => {
+    // Even if the session WOULD read locked, a pure menu-item press works under
+    // lock (AXVM1), so pause-repeat is never gated: the probe is never issued.
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) return ok("1 0 0"); // would be "locked" — but must never be consulted
+      if (c.primitive === "resolve") return ok("true");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(pauseRepeatRecipe("TODO-1")));
+    expect(res.exitCode).toBe(0);
+    expect(commands.some(isReach)).toBe(false);
+  });
+
+  it("mid-flight lock: an AX-blind dialog-wait timeout clears the sheet by close+reopen, HONESTLY", async () => {
+    // The gate passes (reachable), then the session goes AX-blind and the dialog
+    // wait times out. Cleanup must NOT claim "confirmed gone" (it is blind) — it
+    // runs the proven app-level close+reopen and says so. A bespoke dialog-class
+    // recipe with a 1ms wait keeps the timeout fast.
+    const recipe: UiRecipe = {
+      op: "todo.make-repeating",
+      targetUuid: "TODO-1",
+      needsWindowReachability: true,
+      steps: [
+        {
+          primitive: "press",
+          label: "open the dialog",
+          path: `menu item "Repeat…" of menu "Items" of menu bar 1`,
+          addressing: "title",
+        },
+        {
+          primitive: "wait",
+          label: "the Repeat dialog",
+          path: `sheet 1`,
+          timeoutMs: 1,
+          dynamic: true,
+        },
+      ],
+    };
+    let reachCalls = 0;
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) {
+        reachCalls += 1;
+        return ok(reachCalls === 1 ? "1 1 3" : "1 0 0"); // reachable at the gate, locked at cleanup
+      }
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("false"); // the dialog never appears (window went AX-blind)
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(recipe));
+    expect(res.exitCode).toBe(1); // partial-state refusal
+    expect(res.stderr).toContain("closed and reopened");
+    expect(res.stderr).not.toContain("confirmed gone");
+    // The proven maneuver ran to clear the (unseen) stuck sheet.
+    expect(commands.some(isCloseReopen)).toBe(true);
+  });
+});
