@@ -875,8 +875,13 @@ export function resolveTag(db: DatabaseSync, ref: string): ContainerResolution {
   return resolveNamedRef(db, "TMTag", "1=1", [], ref);
 }
 
-export function loadTarget(db: DatabaseSync, uuid: string): AnyTask | null {
-  return byUuid(db, uuid);
+export function loadTarget(
+  db: DatabaseSync,
+  uuid: string,
+  now?: Date,
+  zone?: string,
+): AnyTask | null {
+  return byUuid(db, uuid, now ?? new Date(), zone);
 }
 
 /**

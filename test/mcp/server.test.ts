@@ -3044,3 +3044,62 @@ describe("MCP single-op idempotency (op_id)", () => {
     expect((textOf(bad) as { code: string }).code).toBe("usage");
   });
 });
+
+describe("MCP completion-context (HINTS1)", () => {
+  const simEnvBackup: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    fixture.close();
+    fixture = buildFixtureDb({ benchMarker: true });
+    for (const key of [
+      "THINGS_SIM_WRITES",
+      "THINGS_DB",
+      "THINGS_API_STATE_DIR",
+      "THINGS_API_CONFIG_DIR",
+    ]) {
+      simEnvBackup[key] = process.env[key];
+    }
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    process.env["THINGS_API_STATE_DIR"] = stateDir;
+    process.env["THINGS_API_CONFIG_DIR"] = join(stateDir, "config");
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(simEnvBackup)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("set_status completed carries the project remaining-open context in its result", async () => {
+    const proj = seedProject(fixture.db, { title: "MCP Launch" });
+    const target = seedTodo(fixture.db, { title: "child A", project: proj });
+    seedTodo(fixture.db, { title: "child B", project: proj });
+    await connect([createSimulatorVector(fixture.path, { now: () => NOW })]);
+
+    const result = textOf(
+      await client.callTool({
+        name: "set_status",
+        arguments: { scope: "todo", uuid: target, status: "completed" },
+      }),
+    ) as { context?: { project?: { uuid: string; title: string; remainingOpen: number } } };
+    expect(result.context?.project).toEqual({
+      uuid: proj,
+      title: "MCP Launch",
+      remainingOpen: 1,
+    });
+  });
+
+  it("set_status completed on a loose to-do carries no context", async () => {
+    const loose = seedTodo(fixture.db, { title: "loose", start: "active" });
+    await connect([createSimulatorVector(fixture.path, { now: () => NOW })]);
+    const result = textOf(
+      await client.callTool({
+        name: "set_status",
+        arguments: { scope: "todo", uuid: loose, status: "completed" },
+      }),
+    ) as { context?: unknown };
+    expect(result.context).toBeUndefined();
+  });
+});

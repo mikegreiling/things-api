@@ -24,6 +24,7 @@ import {
   runCompleteWithDate,
   runUpdateDates,
 } from "../../src/write/resolution-timestamps.ts";
+import { runBatch } from "../../src/write/batch.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import { defaultVectors } from "../../src/write/vectors/registry.ts";
@@ -230,6 +231,138 @@ describe("simulator write vector — covered operations", () => {
     });
     expect(updated.kind).toBe("ok");
     if (updated.kind === "ok") expect(updated.title).toBe("Rename me");
+  });
+
+  // ------------------------------------------------ completion-context (HINTS1)
+
+  it("HINTS1: completing a project's direct child reports the project's remaining open count", async () => {
+    const proj = seedProject(fixture.db, { title: "Launch" });
+    const a = seedTodo(fixture.db, { title: "A", project: proj });
+    seedTodo(fixture.db, { title: "B", project: proj });
+    const res = await runMutation(deps(vector), "todo.complete", { uuid: a });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.context?.project).toEqual({ uuid: proj, title: "Launch", remainingOpen: 1 });
+    expect(res.context?.today).toBeUndefined();
+  });
+
+  it("HINTS1: a heading-nested child flattens into its project's count (heading rows never count)", async () => {
+    const proj = seedProject(fixture.db, { title: "Book" });
+    const head = seedHeading(fixture.db, { title: "Chapter 1", project: proj });
+    const nested1 = seedTodo(fixture.db, { title: "para1", heading: head });
+    seedTodo(fixture.db, { title: "para2", heading: head });
+    seedTodo(fixture.db, { title: "direct", project: proj });
+    const res = await runMutation(deps(vector), "todo.complete", { uuid: nested1 });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    // remaining = para2 (heading child) + direct (direct child) = 2; the heading
+    // row itself is not a to-do and is never counted.
+    expect(res.context?.project).toEqual({ uuid: proj, title: "Book", remainingOpen: 2 });
+  });
+
+  it("HINTS1: completing the last open child reports remainingOpen 0 (completed siblings excluded)", async () => {
+    const proj = seedProject(fixture.db, { title: "Wrap up" });
+    const last = seedTodo(fixture.db, { title: "last open", project: proj });
+    seedTodo(fixture.db, { title: "already done", project: proj, status: "completed" });
+    const res = await runMutation(deps(vector), "todo.complete", { uuid: last });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.context?.project?.remainingOpen).toBe(0);
+  });
+
+  it("HINTS1: a repeating-template row in the project is excluded from the remaining count", async () => {
+    const proj = seedProject(fixture.db, { title: "Chores" });
+    const open = seedTodo(fixture.db, { title: "one-off", project: proj });
+    // A hidden repeating TEMPLATE row parked in the project must not count.
+    seedTodo(fixture.db, { title: "recurring", project: proj, recurrenceRule: true });
+    const res = await runMutation(deps(vector), "todo.complete", { uuid: open });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.context?.project?.remainingOpen).toBe(0);
+  });
+
+  it("HINTS1: a to-do in no project and not in Today carries no context", async () => {
+    const loose = seedTodo(fixture.db, { title: "loose", start: "active" });
+    const res = await runMutation(deps(vector), "todo.complete", { uuid: loose });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.context).toBeUndefined();
+  });
+
+  it("HINTS1: completing a Today member reports remaining open Today members; a non-member carries none", async () => {
+    // TODAY = 2026-07-05; scheduled-arm membership (start active, startDate today).
+    const member = seedTodo(fixture.db, { title: "today A", start: "active", startDate: TODAY });
+    seedTodo(fixture.db, { title: "today B", start: "active", startDate: TODAY });
+    const memberRes = await runMutation(deps(vector), "todo.complete", { uuid: member });
+    expect(memberRes.kind).toBe("ok");
+    if (memberRes.kind !== "ok") throw new Error("expected ok");
+    // The just-completed member is no longer open; one other open member remains.
+    expect(memberRes.context?.today).toEqual({ remainingOpen: 1 });
+    expect(memberRes.context?.project).toBeUndefined();
+
+    // A future-scheduled to-do is NOT a Today member — no today context.
+    const future = seedTodo(fixture.db, {
+      title: "later",
+      start: "active",
+      startDate: "2026-08-01",
+    });
+    const futureRes = await runMutation(deps(vector), "todo.complete", { uuid: future });
+    expect(futureRes.kind).toBe("ok");
+    if (futureRes.kind !== "ok") throw new Error("expected ok");
+    expect(futureRes.context).toBeUndefined();
+  });
+
+  it("HINTS1: both project and today arms populate when the to-do is in a project AND in Today", async () => {
+    const proj = seedProject(fixture.db, { title: "Sprint" });
+    const both = seedTodo(fixture.db, {
+      title: "scheduled child",
+      project: proj,
+      start: "active",
+      startDate: TODAY,
+    });
+    seedTodo(fixture.db, { title: "sibling", project: proj });
+    const res = await runMutation(deps(vector), "todo.complete", { uuid: both });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.context?.project).toEqual({ uuid: proj, title: "Sprint", remainingOpen: 1 });
+    expect(res.context?.today).toEqual({ remainingOpen: 0 });
+  });
+
+  it("HINTS1: the cancel path attaches context too", async () => {
+    const proj = seedProject(fixture.db, { title: "Abandon" });
+    const a = seedTodo(fixture.db, { title: "give up", project: proj });
+    seedTodo(fixture.db, { title: "keep", project: proj });
+    const res = await runMutation(deps(vector), "todo.cancel", { uuid: a });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.context?.project).toEqual({ uuid: proj, title: "Abandon", remainingOpen: 1 });
+  });
+
+  it("HINTS1: batch completes carry per-op context, each reflecting the running project state", async () => {
+    const proj = seedProject(fixture.db, { title: "Batch proj" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj });
+    const b = seedTodo(fixture.db, { title: "b", project: proj });
+    seedTodo(fixture.db, { title: "c", project: proj });
+    const { results } = await runBatch(deps(vector), [
+      { op: "todo.complete", params: { uuid: a } },
+      { op: "todo.complete", params: { uuid: b } },
+    ]);
+    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "ok"]);
+    const first = results[0]?.outcome;
+    const second = results[1]?.outcome;
+    if (first?.kind !== "ok" || second?.kind !== "ok") throw new Error("expected ok outcomes");
+    // Sequential: after completing a, b and c remain (2); after completing b, only c (1).
+    expect(first.context?.project?.remainingOpen).toBe(2);
+    expect(second.context?.project?.remainingOpen).toBe(1);
+  });
+
+  it("HINTS1: reopen does NOT attach context (scope guard — complete/cancel only)", async () => {
+    const proj = seedProject(fixture.db, { title: "Reopen proj" });
+    const done = seedTodo(fixture.db, { title: "was done", project: proj, status: "completed" });
+    const res = await runMutation(deps(vector), "todo.reopen", { uuid: done });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.context).toBeUndefined();
   });
 
   it("todo.delete (trash) and todo.restore", async () => {

@@ -615,9 +615,12 @@ function statusSpec<K extends "todo.complete" | "todo.cancel" | "todo.reopen">(
   return {
     op,
     hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
-    preRead(db, params) {
+    preRead(db, params, now, zone) {
       const pre = emptyPreState();
-      pre.target = loadTarget(db, params.uuid);
+      // Load under the response clock so the target's Today marker (read by the
+      // HINTS1 completion-context) reflects the same calendar day the pipeline
+      // verifies under, not the host wall clock.
+      pre.target = loadTarget(db, params.uuid, now, zone);
       return pre;
     },
     expectedDelta(_pre, params) {

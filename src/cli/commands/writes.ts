@@ -377,6 +377,32 @@ function emitPreserveNote(result: {
   }
 }
 
+/**
+ * TTY disclosure for the HINTS1 completion-context on a verified complete/cancel:
+ * a dim line naming the OPEN work remaining in the to-do's project and/or Today,
+ * so an operator (or an agent reading the human render) sees an emptied container
+ * at a glance. Silent when neither arm applies (the field is absent).
+ */
+function emitContextNote(result: {
+  context?: {
+    project?: { uuid: string; title: string; remainingOpen: number };
+    today?: { remainingOpen: number };
+  };
+}): void {
+  const context = result.context;
+  if (context === undefined) return;
+  const parts: string[] = [];
+  if (context.project !== undefined) {
+    parts.push(
+      `project "${context.project.title}": ${context.project.remainingOpen} open remaining`,
+    );
+  }
+  if (context.today !== undefined) {
+    parts.push(`today: ${context.today.remainingOpen} open remaining`);
+  }
+  if (parts.length > 0) process.stdout.write(dim(`  ${parts.join("; ")}\n`));
+}
+
 function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMeta): void {
   switch (result.kind) {
     case "bounce-aborted": {
@@ -419,6 +445,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
             : `vector=${result.vector}, tier=${result.tier}, verified`;
         process.stdout.write(`ok ${result.op}${uuid} (${status})\n`);
         emitPreserveNote(result);
+        emitContextNote(result);
       }
       process.exitCode = ExitCode.Ok;
       return;
