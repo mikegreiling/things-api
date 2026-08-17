@@ -49,6 +49,7 @@ const CONFIG: ThingsApiConfig = {
   allowExperimental: false,
   bounceEnabled: true,
   bounceMaxItems: 30,
+  autoLaunch: true,
   ui: { enabled: false },
   host: "test-host",
 };

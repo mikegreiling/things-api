@@ -81,6 +81,7 @@ const CONFIG: ThingsApiConfig = {
   allowExperimental: false,
   bounceEnabled: true,
   bounceMaxItems: 30,
+  autoLaunch: true,
   ui: { enabled: false },
   host: "test-host",
 };
@@ -453,5 +454,78 @@ describe("blocked / unsupported paths", () => {
     }
     expect(calls).toHaveLength(0);
     expect(auditRecords).toHaveLength(0);
+  });
+});
+
+describe("closed-app auto-launch (issue #486)", () => {
+  it("auto-launch on (default): a closed app is launched-and-readied, then the write lands", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Old" });
+    const { vector } = fakeVector((db) => {
+      db.prepare("UPDATE TMTask SET title = 'New' WHERE uuid = ?").run(uuid);
+    });
+    let launched = false;
+    const result = await runMutation(
+      deps(vector, {
+        isAppRunning: () => false,
+        ensureRunning: async (alreadyRunning) => {
+          expect(alreadyRunning).toBe(false);
+          launched = true;
+          return true;
+        },
+      }),
+      "todo.update",
+      { uuid, title: "New" },
+    );
+    expect(launched).toBe(true);
+    expect(result.kind).toBe("ok");
+  });
+
+  it("auto-launch off: a closed app is refused BEFORE dispatch, zero side effects", async () => {
+    const uuid = seedTodo(fixture.db, { title: "x" });
+    const { vector, calls } = fakeVector(() => {
+      throw new Error("must not dispatch when auto-launch is off and the app is closed");
+    });
+    let ensureCalled = false;
+    const result = await runMutation(
+      deps(vector, {
+        config: { ...CONFIG, autoLaunch: false },
+        isAppRunning: () => false,
+        ensureRunning: async () => {
+          ensureCalled = true;
+          return true;
+        },
+      }),
+      "todo.update",
+      { uuid, title: "y" },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.likelyCause).toBe("app-not-running");
+      expect(result.detail).toContain("not running");
+    }
+    expect(ensureCalled).toBe(false); // refused before any launch attempt
+    expect(calls).toHaveLength(0); // zero dispatch
+  });
+
+  it("a residual silent-noop after a launch is attributed to the app not having been running", async () => {
+    const uuid = seedTodo(fixture.db, { title: "x" });
+    // The app launches but the write is dropped in the startup window (no effect).
+    const { vector } = fakeVector(null);
+    const result = await runMutation(
+      deps(vector, {
+        isAppRunning: () => false,
+        ensureRunning: async () => true,
+      }),
+      "todo.update",
+      { uuid, title: "y" },
+      { verifyTimeoutMs: 250 },
+    );
+    expect(result.kind).toBe("verify-failed");
+    if (result.kind === "verify-failed") {
+      expect(result.reason).toBe("silent-noop");
+      expect(result.likelyCause).toBe("app-not-running");
+      expect(result.hint).toContain("startup window");
+    }
   });
 });

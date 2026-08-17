@@ -60,6 +60,16 @@ export interface ThingsApiConfig {
    */
   bounceMaxItems: number;
   /**
+   * Auto-launch Things for a write when the app is not running (default true).
+   * A write needs the app up to land through any real transport; when it is
+   * closed the pipeline background-launches it (tier 1) and waits closed-loop
+   * for it to become ready before dispatching. Set false to instead REFUSE a
+   * write against a closed app with an environment `blocked` (zero dispatch) —
+   * for a host that must never surface the app on its own. Reads are unaffected
+   * (they hit the database directly and never launch anything).
+   */
+  autoLaunch: boolean;
+  /**
    * The Accessibility GUI ("ui") write vector. When disabled the vector does
    * not exist on this machine: its GUI-only operations report unsupported.
    * Enabling it is the FIRST of two keys — every ui-vector call still needs a
@@ -136,6 +146,7 @@ interface ConfigFile {
   allowExperimental?: boolean;
   bounceEnabled?: boolean;
   bounceMaxItems?: number;
+  autoLaunch?: boolean;
   uiEnabled?: boolean;
   scope?: string;
 }
@@ -176,6 +187,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
   const experimentalEnv = boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false");
   const bounceEnabledEnv = boolEnvOverride(env["THINGS_API_BOUNCE_ENABLED"], "true", "false");
   const bounceMaxItemsEnv = positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]);
+  const autoLaunchEnv = boolEnvOverride(env["THINGS_API_AUTO_LAUNCH"], "true", "false");
   const uiEnv = boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false");
 
   // Scope precedence within the config layer: THINGS_API_SCOPE env > stored
@@ -199,6 +211,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     allowExperimental: experimentalEnv ?? file.allowExperimental ?? true,
     bounceEnabled: bounceEnabledEnv ?? file.bounceEnabled ?? true,
     bounceMaxItems: bounceMaxItemsEnv ?? file.bounceMaxItems ?? 30,
+    autoLaunch: autoLaunchEnv ?? file.autoLaunch ?? true,
     ui: { enabled: uiEnv ?? file.uiEnabled ?? false },
     scope,
     host: hostname(),
@@ -331,6 +344,12 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       cfg.bounceMaxItems,
       file.bounceMaxItems !== undefined,
       positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]) !== undefined,
+    ),
+    view(
+      "auto-launch",
+      cfg.autoLaunch,
+      file.autoLaunch !== undefined,
+      boolEnvOverride(env["THINGS_API_AUTO_LAUNCH"], "true", "false") !== undefined,
     ),
     view(
       "ui-enabled",

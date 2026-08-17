@@ -358,12 +358,12 @@ Configuration that affects writes — \`things config set <key> <value>\`
 which overrides the built-in default.
   actor               author name recorded on each change
   maxDisruption       ceiling for how disruptive a change may be
+  auto-launch         launch Things for a write when it is closed (default on; off refuses)
   ui-enabled          allow the GUI-driven operations
   allow-experimental  use the app's private reorder command (default on; off-switch)
   bounce-enabled / bounce-max-items  when= bounce reorder: on by default, ≤30 items
   scope               limit this host to one area/project — jails EVERY command,
-                      your own terminal included, until \`config set scope ""\`; for
-                      one process prefer \`things mcp --scope\` / THINGS_API_SCOPE
+                      terminal included; per process prefer \`things mcp --scope\`
 
 Writes are NAMESPACED: a bare \`things <verb> …\` (update, add, delete, complete,
 cancel, move, …) is not a command — it points you at the typed form

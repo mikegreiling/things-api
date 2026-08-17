@@ -7,6 +7,7 @@
  * after verify.
  */
 import { execFile, execFileSync } from "node:child_process";
+import { statSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { AuditWriter } from "../audit/log.ts";
@@ -22,6 +23,7 @@ import {
 } from "../read/queries.ts";
 import { namedProjectClause, taskMembershipClause, type ResolvedScope } from "../read/scope.ts";
 import { evaluateScope } from "./scope-guard.ts";
+import { isThingsRunning } from "./automation-probe.ts";
 import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
@@ -280,6 +282,20 @@ export interface WriteDeps {
   /** Injectable for tests/lab: returns true when Things is up (launching if needed). */
   ensureRunning?: (alreadyRunning: boolean) => Promise<boolean>;
   isAppRunning?: () => boolean;
+  /**
+   * Seam for the default launch: the consent-free launch-readiness probe polled
+   * after a background launch, before dispatch (past the startup URL-drop
+   * window, #486). Only consulted by the default {@link ensureRunning}; ignored
+   * when a test injects its own `ensureRunning`.
+   */
+  appReady?: () => boolean;
+  /**
+   * The resolved on-disk database path (client-wired from the located DB). The
+   * default launch uses `${dbPath}-wal` as its consent-free readiness signal
+   * (the app has written since we launched it, #486). Absent = fall back to the
+   * LaunchServices launch-completion label.
+   */
+  dbPath?: string;
   /** Canary seam: does the installed sdef still declare the private command? */
   sdefProbe?: () => boolean;
   /** Consent-churn tripwire: tuple recorded per verified mutation (client wires the default). */
@@ -318,32 +334,114 @@ export function readAuthToken(db: DatabaseSync): string | null {
   }
 }
 
-function defaultIsAppRunning(): boolean {
+/**
+ * The ONE process-presence signal (shared with `doctor`/sync-health via
+ * automation-probe.ts) — a single stable `pgrep -x Things3` shape so macOS
+ * never sees a second command form.
+ */
+const defaultIsAppRunning = isThingsRunning;
+
+/** Poll interval for the launch waits. */
+const LAUNCH_POLL_INTERVAL_MS = 200;
+/** Cap on how long we wait for the launched PROCESS to appear. */
+const LAUNCH_PROCESS_TIMEOUT_MS = 20_000;
+/**
+ * Cap on how long we wait — after the process appears — for the app to become
+ * READY to land a write. A freshly launched Things registers its URL handler
+ * before it can actually apply a command: a command dispatched into that
+ * startup window is accepted and silently dropped (issue #486). We poll a cheap
+ * consent-free readiness signal past that window before dispatching.
+ */
+const LAUNCH_READY_TIMEOUT_MS = 12_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** The write-ahead-log's mtime in ms, or null when it cannot be read. */
+function walMtimeMs(walPath: string): number | null {
   try {
-    execFileSync("pgrep", ["-x", "Things3"], { stdio: "ignore" });
+    return statSync(walPath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Consent-free launch-completion signal via LaunchServices — the fallback used
+ * only when the database path is unknown. NOT an Apple Event, so it never drags
+ * Automation consent onto the consent-free URL path. `lsappinfo` reports a
+ * process still coming up as `"Not Finished Launching"`; anything else is
+ * treated as launched. False on any error (treated as "not ready yet").
+ */
+function lsappinfoLaunched(): boolean {
+  try {
+    const out = execFileSync(
+      "lsappinfo",
+      ["info", "-only", "StatusLabel", "-app", "com.culturedcode.ThingsMac"],
+      { encoding: "utf8", timeout: 3000 },
+    );
+    if (out.trim() === "" || /Not Finished Launching/i.test(out)) return false;
     return true;
   } catch {
     return false;
   }
 }
 
-/** Background-launch Things and wait for the process (tier 1, by policy). */
-async function defaultEnsureRunning(alreadyRunning: boolean): Promise<boolean> {
+/**
+ * Consent-free launch-readiness signal — a DB-write-capability probe. A freshly
+ * launched Things recomputes its Today/repeat state and writes to its database
+ * shortly after launch; a URL command applied BEFORE the app is truly up is at
+ * risk of being dropped in the startup window (issue #486). Reading a file mtime
+ * needs no Apple Event, so this never triggers a consent prompt. "Ready" = the
+ * write-ahead log has advanced past the pre-launch baseline (the app has written
+ * since we launched it). APPRUN1 (golden-v3, Things 3.22.14): the WAL advanced
+ * ~0.9s after `open -g` — a real post-launch signal — while the process appeared
+ * at ~0.03s; the drop window itself did not reproduce in a clean airgapped clone
+ * (first URL landed immediately), so this wait is a defensive floor, and any
+ * residual drop is caught by verify and attributed `app-not-running`. Falls back
+ * to the LaunchServices label when the DB path is unknown. See
+ * docs/lab/apprun1-launch-readiness.md.
+ */
+function walAdvancedSince(walPath: string | undefined, baseline: number | null): boolean {
+  if (walPath === undefined) return lsappinfoLaunched();
+  const m = walMtimeMs(walPath);
+  return m !== null && (baseline === null || m > baseline);
+}
+
+/**
+ * Background-launch Things (tier 1, by policy — `open -g` keeps it off the
+ * foreground) and wait CLOSED-LOOP for it to become ready to land a write:
+ * first for the process to appear, then for the readiness signal to trip (past
+ * the startup URL-drop window, #486). Returns false only if the process never
+ * appears within {@link LAUNCH_PROCESS_TIMEOUT_MS}; once it is up we proceed
+ * after readiness trips OR the readiness cap elapses (best-effort — a residual
+ * drop is then caught by verify + attributed "app was not running").
+ */
+async function defaultEnsureRunning(
+  alreadyRunning: boolean,
+  opts: { dbPath?: string; appReady?: () => boolean } = {},
+): Promise<boolean> {
   if (alreadyRunning) return true;
+  // Capture the readiness baseline BEFORE launching, so "the app has written
+  // since we launched it" is judged against the pre-launch WAL state.
+  const walPath = opts.dbPath !== undefined ? `${opts.dbPath}-wal` : undefined;
+  const walBaseline = walPath !== undefined ? walMtimeMs(walPath) : null;
+  const appReady = opts.appReady ?? (() => walAdvancedSince(walPath, walBaseline));
   await new Promise<void>((resolve) => {
     execFile("open", ["-g", "-a", "Things3"], () => resolve());
   });
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    if (defaultIsAppRunning()) {
-      // the post-launch settle wait must happen once, right after the process is first detected, before returning
-      await new Promise((r) => setTimeout(r, 2000)); // post-launch settle
-      return true;
-    }
-    // launch-detection retries are inherently sequential polling of the same process state
-    await new Promise((r) => setTimeout(r, 250));
+  // Phase 1: wait for the process to exist.
+  const processDeadline = Date.now() + LAUNCH_PROCESS_TIMEOUT_MS;
+  while (!defaultIsAppRunning()) {
+    if (Date.now() >= processDeadline) return false;
+    await sleep(LAUNCH_POLL_INTERVAL_MS);
   }
-  return false;
+  // Phase 2: wait for launch-readiness (past the URL-drop window).
+  const readyDeadline = Date.now() + LAUNCH_READY_TIMEOUT_MS;
+  while (!appReady()) {
+    if (Date.now() >= readyDeadline) break; // best-effort: proceed and let verify judge
+    await sleep(LAUNCH_POLL_INTERVAL_MS);
+  }
+  return true;
 }
 
 /** Capture pre-values of asserted fields + movement tripwires for the spec. */
@@ -846,14 +944,39 @@ export async function runMutation<K extends OperationKind>(
     // plain opens and AppleEvents to a closed Things steal focus (A40/A41).
     // A simulating vector applies SQL to a fixture DB and never touches the
     // real app, so it neither needs nor may trigger the background launch.
-    if (vector.simulates !== true) {
-      const running = await (deps.ensureRunning ?? defaultEnsureRunning)(appRunning);
+    // A write can only land through a real transport when Things is up (a
+    // command dispatched into a closed app is silently dropped, #486), so a
+    // closed app is either launched-and-readied here or — when auto-launch is
+    // disabled — refused BEFORE dispatch with a plain environment error.
+    if (vector.simulates !== true && !appRunning) {
+      if (!config.autoLaunch) {
+        audit({ result: blockedCode({ reason: "environment" }) });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          likelyCause: "app-not-running",
+          detail: "Things is not running, and auto-launch is turned off",
+          remediation:
+            "open Things (or run `things config set auto-launch true` to let writes launch it), " +
+            "then retry",
+        };
+      }
+      const running = await (
+        deps.ensureRunning ??
+        ((ar: boolean) =>
+          defaultEnsureRunning(ar, {
+            ...(deps.dbPath !== undefined && { dbPath: deps.dbPath }),
+            ...(deps.appReady !== undefined && { appReady: deps.appReady }),
+          }))
+      )(appRunning);
       if (!running) {
         audit({ result: blockedCode({ reason: "environment" }) });
         return {
           kind: "blocked",
           op,
           reason: "environment",
+          likelyCause: "app-not-running",
           detail: "Things did not become available after a background launch attempt",
           remediation: "launch Things manually and retry",
         };
@@ -1051,6 +1174,14 @@ export async function runMutation<K extends OperationKind>(
               ...(options.txn !== undefined && { txn: options.txn }),
             });
       const warnings: string[] = [];
+      // Auto-launch disclosure (#486): the app was not running when this write
+      // started, so it was background-launched for the write. Never silent — a
+      // side effect the caller should see (a simulating vector never launches).
+      if (!appRunning && vector.simulates !== true) {
+        warnings.push(
+          "Things was not running, so it was launched in the background for this write",
+        );
+      }
       // Template-delete disclosure (public deletes only — internal trash-both legs
       // run under a txn and aggregate their own result). The series stops, its live
       // instances are left in place (count + name the current occurrence), and the
@@ -1168,6 +1299,7 @@ export async function runMutation<K extends OperationKind>(
         reason: outcome.kind,
         vector: vector.id,
         urlSchemeEnabled: (deps.urlSchemeEnabled ?? (() => readUrlSchemeEnabled().enabled))(),
+        appWasRunning: appRunning,
         environmentChanges: envChanges,
       }),
     );

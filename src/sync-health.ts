@@ -313,7 +313,8 @@ export function computeSyncHealth(
     verdict: running
       ? "the Things app is running — the database is live and receiving writes"
       : "the Things app is NOT running — the database is frozen (there is no background sync " +
-        "daemon); launch Things to resume syncing and writes",
+        "daemon); launch Things to resume syncing. A write launches it automatically unless " +
+        "`auto-launch` is turned off",
   };
 
   // WAL freshness.
