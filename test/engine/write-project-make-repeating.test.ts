@@ -53,6 +53,7 @@ function config(uiEnabled = true): ThingsApiConfig {
     allowExperimental: false,
     bounceEnabled: true,
     bounceMaxItems: 30,
+    autoLaunch: true,
     ui: { enabled: uiEnabled },
     host: "test-host",
   };

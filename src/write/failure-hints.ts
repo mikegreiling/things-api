@@ -13,6 +13,7 @@ export type LikelyCause =
   | "permission-denied"
   | "permission-pending"
   | "feature-disabled"
+  | "app-not-running"
   | "app-updated"
   | "app-behavior-change"
   | "schema-drift"
@@ -102,6 +103,15 @@ export function classifyVerifyFailure(input: {
    * never implies the scheme is enabled.
    */
   urlSchemeEnabled: boolean | null;
+  /**
+   * Whether Things was ALREADY running when this write's preflight ran. False
+   * means the pipeline had to background-launch it for this write: a residual
+   * silent-noop/timeout right after a cold launch is very likely the app's
+   * startup window, where the URL handler is registered but a command dispatched
+   * too early is accepted-and-dropped (issue #486). Attributed ahead of the
+   * generic app-behavior theory so the exact scenario never reads as a mystery.
+   */
+  appWasRunning: boolean;
   environmentChanges: EnvironmentChange[];
 }): FailureHint | null {
   if (
@@ -115,6 +125,15 @@ export function classifyVerifyFailure(input: {
         "'Enable Things URLs' is off (Things > Settings > General) — the app holds URL " +
         "commands behind an enable dialog instead of executing them, so the write never " +
         "lands. Turn the setting on and retry.",
+    };
+  }
+  if (!input.appWasRunning && (input.reason === "silent-noop" || input.reason === "timeout")) {
+    return {
+      likelyCause: "app-not-running",
+      hint:
+        "Things was not running when this write started, so it was launched first — the command " +
+        "then ran during the app's startup window, when a command can be accepted but not yet " +
+        "applied. Now that Things is up, retry the same command.",
     };
   }
   const thingsChange = input.environmentChanges.find((c) => c.field === "thingsVersion");

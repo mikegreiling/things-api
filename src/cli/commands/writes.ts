@@ -2921,7 +2921,7 @@ export function registerWriteCommands(program: Command): void {
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
         "accepted-fingerprint | certified-app-version | allow-experimental | bounce-enabled | " +
-        "bounce-max-items | ui-enabled | scope",
+        "bounce-max-items | auto-launch | ui-enabled | scope",
     )
     .action((key: string, value: string, opts: { dryRun?: boolean }) => {
       const map: Record<string, string> = {
@@ -2934,6 +2934,7 @@ export function registerWriteCommands(program: Command): void {
         "allow-experimental": "allowExperimental",
         "bounce-enabled": "bounceEnabled",
         "bounce-max-items": "bounceMaxItems",
+        "auto-launch": "autoLaunch",
         "ui-enabled": "uiEnabled",
         scope: "scope",
       };
@@ -2949,6 +2950,7 @@ export function registerWriteCommands(program: Command): void {
           : target === "auditEnabled" ||
               target === "allowExperimental" ||
               target === "bounceEnabled" ||
+              target === "autoLaunch" ||
               target === "uiEnabled"
             ? value === "true"
             : value;

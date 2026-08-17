@@ -73,6 +73,18 @@ describe("boolean env overrides are bidirectional", () => {
     expect(loadConfig(env({ THINGS_API_BOUNCE_ENABLED: "true" })).bounceEnabled).toBe(true);
   });
 
+  it("auto-launch defaults on and THINGS_API_AUTO_LAUNCH forces it off/on bidirectionally", () => {
+    expect(loadConfig(env()).autoLaunch).toBe(true); // default on
+    expect(sourceOf("auto-launch", env())).toBe("default");
+    saveConfigKey("autoLaunch", false, env());
+    expect(loadConfig(env()).autoLaunch).toBe(false); // stored false
+    expect(sourceOf("auto-launch", env())).toBe("stored");
+    expect(loadConfig(env({ THINGS_API_AUTO_LAUNCH: "true" })).autoLaunch).toBe(true);
+    expect(sourceOf("auto-launch", env({ THINGS_API_AUTO_LAUNCH: "true" }))).toBe("env");
+    saveConfigKey("autoLaunch", true, env());
+    expect(loadConfig(env({ THINGS_API_AUTO_LAUNCH: "false" })).autoLaunch).toBe(false);
+  });
+
   it("THINGS_API_BOUNCE_MAX_ITEMS accepts a positive int and defaults to 30", () => {
     expect(loadConfig(env()).bounceMaxItems).toBe(30);
     expect(loadConfig(env({ THINGS_API_BOUNCE_MAX_ITEMS: "50" })).bounceMaxItems).toBe(50);

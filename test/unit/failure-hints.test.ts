@@ -83,6 +83,7 @@ describe("classifyVerifyFailure", () => {
       reason: "silent-noop",
       vector: "url-scheme",
       urlSchemeEnabled: false,
+      appWasRunning: true,
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("feature-disabled");
@@ -94,6 +95,7 @@ describe("classifyVerifyFailure", () => {
       reason: "timeout",
       vector: "url-scheme",
       urlSchemeEnabled: false,
+      appWasRunning: true,
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("feature-disabled");
@@ -104,9 +106,44 @@ describe("classifyVerifyFailure", () => {
       reason: "silent-noop",
       vector: "url-scheme",
       urlSchemeEnabled: null,
+      appWasRunning: true,
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("app-behavior-change");
+  });
+
+  it("silent no-op when the app was NOT running at preflight → app-not-running (issue #486)", () => {
+    const hint = classifyVerifyFailure({
+      reason: "silent-noop",
+      vector: "url-scheme",
+      urlSchemeEnabled: true,
+      appWasRunning: false,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("app-not-running");
+    expect(hint?.hint).toContain("startup window");
+  });
+
+  it("app-not-running outranks a coincident Things version change (the launch-drop is the proximate cause)", () => {
+    const hint = classifyVerifyFailure({
+      reason: "silent-noop",
+      vector: "url-scheme",
+      urlSchemeEnabled: true,
+      appWasRunning: false,
+      environmentChanges: THINGS_UPDATED,
+    });
+    expect(hint?.likelyCause).toBe("app-not-running");
+  });
+
+  it("the on-disk feature-disabled signal still outranks app-not-running (a definitive on-disk read)", () => {
+    const hint = classifyVerifyFailure({
+      reason: "silent-noop",
+      vector: "url-scheme",
+      urlSchemeEnabled: false,
+      appWasRunning: false,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("feature-disabled");
   });
 
   it("a Things version change since the last verified write → app-updated", () => {
@@ -114,6 +151,7 @@ describe("classifyVerifyFailure", () => {
       reason: "timeout",
       vector: "url-scheme",
       urlSchemeEnabled: true,
+      appWasRunning: true,
       environmentChanges: THINGS_UPDATED,
     });
     expect(hint?.likelyCause).toBe("app-updated");
@@ -125,6 +163,7 @@ describe("classifyVerifyFailure", () => {
       reason: "silent-noop",
       vector: "url-scheme",
       urlSchemeEnabled: true,
+      appWasRunning: true,
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("app-behavior-change");
@@ -136,6 +175,7 @@ describe("classifyVerifyFailure", () => {
         reason: "mismatch",
         vector: "applescript",
         urlSchemeEnabled: true,
+        appWasRunning: true,
         environmentChanges: [],
       }),
     ).toBeNull();
