@@ -1429,8 +1429,14 @@ function applyReschedule(sim: DatabaseSync, params: RepeatRuleParams, ctx: Apply
   if (preserveAfterCompletion) effective.afterCompletion = true;
 
   const todayIso = ctx.todayIso;
-  const nextIso = addUnitsIso(todayIso, params.frequency, params.interval);
-  const spec = composeRepeatRuleSpec(effective, todayIso, epochOfIso(nextIso));
+  // ANCH2 (#476/#491): an explicit --when fixes the first occurrence (the
+  // template cursor); otherwise the app re-anchors to the next calendar match,
+  // modeled here as today + one interval. The calendar-anchor reference is the
+  // requested first occurrence when given, so a weekday-less weekly reschedule
+  // anchors on --when's weekday rather than today's.
+  const refIso = params.next ?? todayIso;
+  const nextIso = params.next ?? addUnitsIso(todayIso, params.frequency, params.interval);
+  const spec = composeRepeatRuleSpec(effective, refIso, epochOfIso(nextIso));
 
   const setsDeadline = params.deadline !== undefined || params.startDaysEarlier !== undefined;
   if (!setsDeadline) spec.ts = existing.startOffsetDays; // preserve the prior start offset

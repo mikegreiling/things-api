@@ -6,6 +6,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import type { AnyTask, TaskType } from "../../model/entities.ts";
+import { anchorKeyOfOffsets } from "../../model/recurrence.ts";
 import { byUuid } from "../../read/detail.ts";
 
 /**
@@ -82,21 +83,19 @@ export interface RepeatingProbe {
    */
   subtreeUuids?: string[];
   /**
-   * The rule the drive REQUESTED (type/unit/interval). When set, the discovered
-   * template's DECODED rule must match it — a template minted with the wrong
-   * frequency/interval is a `verify-failed:mismatch`, never a silent `ok`. This
-   * catches the interval-field re-layout race (oddities §8l) where the GUI drive
-   * creates the template but the interval reverts to 1. The check is SKIPPED
-   * when the rule cannot be decoded (a future Things rule format) — discovery
-   * still succeeds, consistent with the read-side decoder's fail-soft. It does
-   * NOT participate in candidate DISCOVERY (which stays `isTemplate`-only, so a
-   * template with an unreadable rule is still found).
+   * The FULL-FIDELITY expected-rule assertion set the discovered template must
+   * satisfy — the complete requested rule (type/unit/interval + calendar anchor +
+   * ends bound + deadline offset), built by `expectedRuleAssertions` in
+   * src/write/repeat-asserts.ts (includeCursor:false — the rule BLOB + deadline,
+   * not the spawn-law cursor). A template minted with ANY wrong rule field (the
+   * interval-field re-layout race §8l reverting interval to 1, OR a dropped
+   * anchor / ends / deadline) is a `verify-failed:mismatch`, never a silent `ok`.
+   * The check is SKIPPED when the rule cannot be decoded (a future Things rule
+   * format) — discovery still succeeds, consistent with the read-side decoder's
+   * fail-soft. It does NOT participate in candidate DISCOVERY (which stays
+   * `isTemplate`-only, so a template with an unreadable rule is still found).
    */
-  expectedRule?: {
-    type: "fixed" | "after-completion";
-    unit: "daily" | "weekly" | "monthly" | "yearly";
-    interval: number;
-  };
+  expectedRule?: FieldAssertion[];
 }
 
 /**
@@ -479,6 +478,15 @@ export function getField(entity: AnyTask, path: string): unknown {
   if (path === "createdDate" && "created" in entity) {
     return localIsoDate(entity.created);
   }
+  // The canonical, order-insensitive key of a repeating template's calendar
+  // anchor — the comparison surface for full-fidelity recurrence assertions
+  // (src/write/repeat-asserts.ts). Computed from the decoded rule's offsets;
+  // undefined when the row is not a template or its rule did not decode (an
+  // equality assertion against a concrete key then correctly fails).
+  if (path === "repeating.rule.anchorKey") {
+    const rule = "repeating" in entity ? entity.repeating.rule : undefined;
+    return rule === undefined ? undefined : anchorKeyOfOffsets(rule.offsets);
+  }
   if (path === "tags" && "tags" in entity) {
     return entity.tags.map((t) => t.title).toSorted();
   }
@@ -672,43 +680,32 @@ function evaluateRepeatingCreate(
   // discovery still succeeds and doctor counts the undecodable template, matching
   // the read-side decoder's fail-soft. Discovery above is `isTemplate`-only, so
   // an unreadable-rule template is still found; only this verification is skipped.
-  if (probe.expectedRule !== undefined) {
-    const landedType = getField(template, "repeating.rule.type");
-    if (landedType !== undefined) {
-      const landedUnit = getField(template, "repeating.rule.unit");
-      const landedInterval = getField(template, "repeating.rule.interval");
-      const want = probe.expectedRule;
-      if (
-        landedType !== want.type ||
-        landedUnit !== want.unit ||
-        landedInterval !== want.interval
-      ) {
-        // The template WAS created — derive its full discovery so the mismatch
-        // verdict hands the caller the successor uuid(s) for cleanup (the source
-        // uuid is already destroyed by now). The uuids ride `observed`, which the
-        // CLI/MCP surface as the error envelope's `detail.observed`.
-        const { repeating } = deriveRepeatingDiscovery(spec, template, probe, reader);
-        return {
-          satisfied: false,
-          movement: true,
-          assertedMovement: true,
-          observed: {
-            "repeating.rule.type": landedType,
-            "repeating.rule.unit": landedUnit,
-            "repeating.rule.interval": landedInterval,
-            "repeating.templateUuid": repeating.templateUuid,
-            "repeating.instanceUuid": repeating.instanceUuid,
-            "repeating.replacedUuid": repeating.replacedUuid,
-          },
-          detail:
-            "the repeating template was created but its rule does not match the request " +
-            `(expected ${want.type}/${want.unit}/interval ${want.interval}, got ` +
-            `${String(landedType)}/${String(landedUnit)}/interval ${String(landedInterval)}) — the ` +
-            "frequency or interval may not have committed to the dialog (oddities §8l). The template " +
-            `WAS created (uuid ${repeating.templateUuid}) and its uuid is included for cleanup: ` +
-            "reschedule-repeat it to the intended rule, or delete it.",
-        };
-      }
+  if (probe.expectedRule !== undefined && getField(template, "repeating.rule.type") !== undefined) {
+    const { pass, observed: ruleObserved } = checkAssertions(template, probe.expectedRule);
+    if (!pass) {
+      // The template WAS created — derive its full discovery so the mismatch
+      // verdict hands the caller the successor uuid(s) for cleanup (the source
+      // uuid is already destroyed by now). The observed bag carries every asserted
+      // rule field + its actual value, plus the successor uuids, which the CLI/MCP
+      // surface as the error envelope's `detail.observed`.
+      const { repeating } = deriveRepeatingDiscovery(spec, template, probe, reader);
+      return {
+        satisfied: false,
+        movement: true,
+        assertedMovement: true,
+        observed: {
+          ...ruleObserved,
+          "repeating.templateUuid": repeating.templateUuid,
+          "repeating.instanceUuid": repeating.instanceUuid,
+          "repeating.replacedUuid": repeating.replacedUuid,
+        },
+        detail:
+          "the repeating template was created but its rule does not match the request — a " +
+          "frequency/interval, calendar anchor, ends bound, or deadline field did not commit to " +
+          "the dialog (the interval-field re-layout race, oddities §8l, reverts interval to 1). The " +
+          `template WAS created (uuid ${repeating.templateUuid}) and its uuid is included for ` +
+          "cleanup: reschedule-repeat it to the intended rule, or delete it.",
+      };
     }
   }
 

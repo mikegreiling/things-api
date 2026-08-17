@@ -54,6 +54,7 @@ import {
 import { resolveTagRefs } from "./tag-refs.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { assertRepeatRule } from "./repeat-rule.ts";
+import { expectedRuleAssertions } from "./repeat-asserts.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
   areaReorderSidebarRecipe,
@@ -2189,9 +2190,12 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
     // rows), pick it by asserting it IS a template, then the `repeating` context
     // hardens discovery (restored time-bound, source-fingerprint tiebreak) and
     // derives instance + source fate for the enriched result. `expectedRule`
-    // makes the LANDED rule verifiable: a template minted with the wrong
-    // frequency/interval (the interval-field race, oddities §8l) becomes a
-    // verify-failed:mismatch instead of a silent ok.
+    // makes the LANDED rule verifiable at FULL fidelity (#491): a template minted
+    // with the wrong frequency/interval (the interval-field race, oddities §8l) OR
+    // a dropped anchor / ends / deadline becomes a verify-failed:mismatch instead
+    // of a silent ok. includeCursor:false — the fresh template's cursor follows
+    // the app's spawn law (ANCH1), not the raw --when, so make verifies the rule
+    // BLOB + deadline, not the cursor.
     return {
       mode: "create",
       probe: {
@@ -2203,11 +2207,7 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
           repeating: {
             sourceUuid: pre.target.uuid,
             fingerprint: buildRepeatingFingerprint(pre.target),
-            expectedRule: {
-              type: params.afterCompletion === true ? "after-completion" : "fixed",
-              unit: params.frequency,
-              interval: params.interval,
-            },
+            expectedRule: expectedRuleAssertions(params, { includeCursor: false }),
           },
         }),
       },
@@ -2232,26 +2232,19 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
     return pre;
   },
   expectedDelta(_pre, params) {
-    // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in
-    // place. Assert the decoded rule's TYPE + frequency + interval; ALSO capture
-    // the whole prior rule (+ deadline flag) so the undo can re-drive it
-    // faithfully. Asserting `type` (fixed vs after-completion) is what makes a
-    // fixed→after-completion conversion VERIFIABLE at all: in the field-report
-    // incident (0½ item 1) both rules were weekly/interval-2, so unit+interval
-    // never changed — only the type flipped, and without this assertion verify
-    // could neither confirm the conversion landed nor tell the pre-drive
-    // idempotency check that the target had not yet been reached.
+    // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in place.
+    // Assert the FULL requested rule (#491) — type + unit + interval + calendar
+    // anchor + ends bound + deadline offset + the ANCH2 first-occurrence cursor —
+    // built from the complete vocabulary by expectedRuleAssertions so the pre-drive
+    // idempotency check skips ONLY when EVERY requested field already holds, and
+    // the post-drive verify catches a wrong-anchor landing. A shallow unit+interval
+    // subset false-noop'd a reschedule that changed only the monthly anchor /
+    // deadline / ends (#491). ALSO capture the whole prior rule (+ deadline flag)
+    // so the undo can re-drive it faithfully.
     return {
       mode: "update",
       uuid: params.uuid,
-      assert: [
-        {
-          field: "repeating.rule.type",
-          equals: params.afterCompletion === true ? "after-completion" : "fixed",
-        },
-        { field: "repeating.rule.unit", equals: params.frequency },
-        { field: "repeating.rule.interval", equals: params.interval },
-      ],
+      assert: expectedRuleAssertions(params, { includeCursor: true }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },
@@ -2326,19 +2319,13 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
   expectedDelta(_pre, params) {
     // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place;
     // capture the prior rule (+ deadline flag) for the faithful undo. Assert the
-    // rule TYPE too (fixed vs after-completion) so a conversion that leaves
-    // unit+interval unchanged is still verifiable — see todo.reschedule-repeat.
+    // FULL requested rule (#491) via expectedRuleAssertions — same completeness as
+    // todo.reschedule-repeat (a shallow unit+interval subset false-noop'd an
+    // anchor/deadline/ends-only reschedule).
     return {
       mode: "update",
       uuid: params.uuid,
-      assert: [
-        {
-          field: "repeating.rule.type",
-          equals: params.afterCompletion === true ? "after-completion" : "fixed",
-        },
-        { field: "repeating.rule.unit", equals: params.frequency },
-        { field: "repeating.rule.interval", equals: params.interval },
-      ],
+      assert: expectedRuleAssertions(params, { includeCursor: true }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },
@@ -2424,7 +2411,10 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
     // the current-occurrence instance. Pick the TEMPLATE by asserting it IS one,
     // excluding pre-existing same-title rows; the `repeating` context hardens
     // discovery and derives instance + source fate + childrenReplaced.
-    // `expectedRule` makes the landed rule verifiable (interval-race guard, §8l).
+    // `expectedRule` makes the landed rule verifiable at FULL fidelity (#491):
+    // a wrong frequency/interval (interval-race §8l) OR a dropped anchor/ends/
+    // deadline is a mismatch, not a silent ok. includeCursor:false — the fresh
+    // template's cursor follows the ANCH1 spawn law, not the raw --when.
     return {
       mode: "create",
       probe: {
@@ -2437,11 +2427,7 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
             sourceUuid: pre.target.uuid,
             fingerprint: buildRepeatingFingerprint(pre.target),
             subtreeUuids: pre.repeatSubtreeUuids ?? [],
-            expectedRule: {
-              type: params.afterCompletion === true ? "after-completion" : "fixed",
-              unit: params.frequency,
-              interval: params.interval,
-            },
+            expectedRule: expectedRuleAssertions(params, { includeCursor: false }),
           },
         }),
       },
