@@ -30,3 +30,14 @@ export function mutationLockPath(env: NodeJS.ProcessEnv = process.env): string {
 export function environmentStatePath(env: NodeJS.ProcessEnv = process.env): string {
   return join(stateDir(env), "environment.json");
 }
+
+/**
+ * Dev-mode step-timeline trace directory (TRACE1, #487). One JSONL file per
+ * write invocation lands here when tracing is on (a `-dev` build, or forced via
+ * the `traceEnabled` config / `THINGS_API_TRACE` env). LOCAL-ONLY: a trace may
+ * contain real task titles/uuids from the running database, so these files must
+ * NEVER be committed to the public repo or attached to a public issue.
+ */
+export function traceDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(stateDir(env), "trace");
+}

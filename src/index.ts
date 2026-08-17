@@ -300,6 +300,24 @@ export type {
 export { shortcutProxies } from "./diagnose.ts";
 export type { ShortcutsState } from "./write/availability.ts";
 
+// Dev-mode step-timeline trace (TRACE1, #487): the CLI write driver installs a
+// file sink (isDevVersion / config-forced) and the signal handler reads the
+// in-flight-write marker to emit an honest "interrupted, outcome uncertain"
+// result. All of it lives in the library so the surfaces consume it through this
+// one entry point (the air-gap boundary). See src/trace/tracer.ts.
+export {
+  closeCliTrace,
+  getInflight,
+  installCliTrace,
+  resolveTraceEnabled,
+  sanitizeArgv,
+  trace,
+  traceActive,
+  tracePath,
+} from "./trace/tracer.ts";
+export type { InflightWrite, TraceEvent, TraceSink } from "./trace/tracer.ts";
+export { traceDir } from "./paths.ts";
+
 // The MCP server is a CONSUMER surface (like the CLI), not part of the client
 // library API — and its module eagerly imports zod + the MCP SDK. Expose it
 // through a LAZY loader so importing this barrel never drags those heavyweight

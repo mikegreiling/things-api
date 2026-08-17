@@ -222,6 +222,34 @@ describe("source-fate resolution (RSIM-R: absent OR relinked-as-instance)", () =
       expect(evaluation.repeatingWarnings?.[0]).toContain("could not derive the spawned instance");
     });
   });
+
+  // TRACE1 (#487) regression: the maintainer's proposed hang cause — that
+  // make-repeating with a FUTURE-DATED first occurrence blocks polling for a
+  // not-yet-spawned instance — is FALSIFIED here and locked so it can never
+  // become true. A future-first-occurrence template has no live FK instance yet;
+  // the discovery must tolerate that (instanceUuid: null) and the delta must be
+  // SATISFIED (satisfied === true → the poller returns on its FIRST attempt, i.e.
+  // promptly with clean JSON), never waiting for an instance that will not appear.
+  it("future-dated first occurrence: instanceUuid null and the delta is satisfied promptly (#487)", () => {
+    withDb((db) => {
+      const source = seedTodo(db, { title: "Chores", creationDate: NOW_EPOCH - 10 });
+      const { evaluation } = evalTodo(db, source, () => {
+        db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(source);
+        // The minted template's next occurrence is in the future, so no instance
+        // row exists yet — the exact shape that was theorized to hang.
+        seedTodo(db, {
+          uuid: "TMPL-FUTURE",
+          title: "Chores",
+          recurrenceRule: true,
+          creationDate: NOW_EPOCH,
+          startDate: "2026-07-19",
+        });
+      });
+      expect(evaluation.satisfied).toBe(true); // prompt: poller returns on attempt 1
+      expect(evaluation.discoveredUuid).toBe("TMPL-FUTURE");
+      expect(evaluation.repeating?.instanceUuid).toBeNull();
+    });
+  });
 });
 
 /** A decodable weekly rule blob at the given interval + type. */

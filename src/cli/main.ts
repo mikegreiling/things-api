@@ -27,6 +27,7 @@ import { runVerbHint } from "./verb-hint.ts";
 import { detectMoveHint, runMoveHint } from "./move-hint.ts";
 import { setRenderClock } from "./clock.ts";
 import { maybeEmitSkillDriftNote } from "./skill-check.ts";
+import { installSignalHandlers } from "./interrupt.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
 import { CLI_VERSION } from "./version.ts";
 import { ExitCode, resolveClock } from "../index.ts";
@@ -66,6 +67,10 @@ export function buildProgram(): Command {
 }
 
 export function runCli(): void {
+  // Install SIGTERM/SIGINT handlers first: a write interrupted mid-drive gets a
+  // structured, honest "outcome uncertain" result instead of empty stdout
+  // (TRACE1, #487). No-op unless a write is actually in flight when a signal lands.
+  installSignalHandlers();
   // Resolve the width-aware row fit ONCE at startup (docs/design/width-aware-
   // tty.md): THINGS_WIDTH override, else stdout.columns on a TTY, else null (no
   // fitting — pipes/grep/--json byte-stable). Threaded to the renderers via the

@@ -27,7 +27,8 @@
  */
 import { execFile } from "node:child_process";
 
-import type { ThingsApiConfig } from "../../config.ts";
+import { DEFAULT_UI_DRIVE_BUDGET_MS, type ThingsApiConfig } from "../../config.ts";
+import { noteInflightStep, trace, traceActive, tracePath } from "../../trace/tracer.ts";
 import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
 import {
@@ -648,6 +649,40 @@ function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunResult>
   });
 }
 
+/**
+ * Wrap the dispatch seam so every osascript hop is recorded. The last-dispatched
+ * step is noted on the in-flight-write marker (so a SIGTERM/SIGINT can name it,
+ * even with tracing off), and — when tracing is on — a `ui-dispatch` start/end
+ * pair lands in the trace carrying the hop's duration and outcome. This
+ * per-osascript granularity is exactly what reconstructs a hang: the timeline
+ * shows which step's osascript was in flight, and for how long, when it stopped
+ * (TRACE1 #487). Overhead when tracing is off is one boolean check + a field write.
+ */
+function tracingRun(inner: UiRunner): UiRunner {
+  return async (command, timeoutMs) => {
+    noteInflightStep(command.label);
+    if (!traceActive()) return inner(command, timeoutMs);
+    const started = Date.now();
+    trace(() => ({
+      phase: "ui-dispatch",
+      event: "start",
+      primitive: command.primitive,
+      label: command.label,
+    }));
+    const res = await inner(command, timeoutMs);
+    trace(() => ({
+      phase: "ui-dispatch",
+      event: "end",
+      primitive: command.primitive,
+      label: command.label,
+      durationMs: Date.now() - started,
+      ok: res.ok,
+      timedOut: res.timedOut === true,
+    }));
+    return res;
+  };
+}
+
 /** The element paths the preflight canary resolves (static steps only). */
 function canaryPaths(recipe: UiRecipe): { path: string; label: string }[] {
   const out: { path: string; label: string }[] = [];
@@ -836,8 +871,52 @@ async function driveClickElement(
   return { ok: true };
 }
 
-async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<ExecuteResult> {
+async function drive(
+  recipe: UiRecipe,
+  run: UiRunner,
+  aux: UiDriveAux,
+  budgetMs: number = DEFAULT_UI_DRIVE_BUDGET_MS,
+): Promise<ExecuteResult> {
   const done: string[] = [];
+  // The overall-drive WATCHDOG (TRACE1 #487). A drive can outlast the caller's
+  // own timeout on a slow production database (large + Things-Cloud syncing
+  // commits the Repeat dialog several times slower than the lab golden), which
+  // is how #487 fired: the caller's 30s kill left empty stdout and no retained
+  // exit code. This budget lets the CLI give up FIRST — clearing any open dialog
+  // and returning an honest, uncertain-outcome timeout — so the caller always
+  // receives structured output. Checked between steps (per-step execFile
+  // timeouts bound each osascript, so a step boundary is never far off).
+  const driveStart = Date.now();
+  const driveDeadline = driveStart + budgetMs;
+  const overBudget = (): boolean => Date.now() >= driveDeadline;
+  const watchdogResult = async (lastStep: string): Promise<ExecuteResult> => {
+    // Attempt the SESSGATE dialog clearance so the watchdog never leaves a stuck
+    // modal behind (#485), then report honestly. The outcome is UNCERTAIN: a rule
+    // whose OK press was mid-commit could still land — the pipeline re-verifies
+    // and shapes the final result accordingly.
+    const clear = await clearDialog(run);
+    trace(() => ({
+      phase: "watchdog",
+      budgetMs,
+      elapsedMs: Date.now() - driveStart,
+      lastStep,
+      clear: clear.state,
+      completed: done,
+    }));
+    return {
+      exitCode: 1,
+      stdout: `ui drive watchdog stopped after ${done.length} step(s): ${done.join(" → ") || "nothing"}`,
+      stderr: `ui drive exceeded its ${Math.round(budgetMs / 1000)}s budget at "${lastStep}"`,
+      timedOut: true,
+      watchdog: {
+        budgetMs,
+        elapsedMs: Date.now() - driveStart,
+        lastStep,
+        clear: clear.state,
+        tracePath: tracePath(),
+      },
+    };
+  };
   // A note prepended to the success summary when the drive had to RELOCATE the
   // Things window to the current Space to open its dialog (SESSGATE wrong-Space
   // recovery) — surfaced to the caller as a disclosure warning.
@@ -941,6 +1020,10 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
   // 2. Execute the remaining steps in order; a dynamic element is waited-for.
   for (let i = idx; i < recipe.steps.length; i += 1) {
     let step = recipe.steps[i] as UiStep;
+    // Overall-drive watchdog: if the budget is spent, stop at THIS step boundary
+    // (the per-step execFile timeouts keep the boundary close), clear any open
+    // dialog, and return the honest uncertain-outcome timeout (TRACE1 #487).
+    if (overBudget()) return watchdogResult(step.label);
     if (step.primitive === "wait") {
       // A candidate-addressed wait polls for ANY of its shapes to appear (the
       // dialog opening as an attached sheet OR a detached AXUnknown window).
@@ -1173,6 +1256,11 @@ export function createUiVector(
   aux: UiDriveAux = {},
 ): WriteVector {
   const enabled = config.ui.enabled;
+  const budgetMs = config.ui.driveBudgetMs ?? DEFAULT_UI_DRIVE_BUDGET_MS;
+  // Every osascript hop runs through the tracing seam: it notes the step on the
+  // in-flight marker (for the signal handler) and, when tracing is on, records a
+  // start/end pair with timing/outcome (TRACE1 #487).
+  const tracedRun = tracingRun(run);
   return {
     id: "ui",
     matrix: enabled ? enabledMatrix() : disabledMatrix(),
@@ -1185,12 +1273,12 @@ export function createUiVector(
       if (invocation.recipe === undefined) {
         return refusal("ui invocation carried no recipe (compile bug).");
       }
-      return drive(invocation.recipe, run, aux);
+      return drive(invocation.recipe, tracedRun, aux, budgetMs);
     },
     // Pre-seed gate seam for the promote orchestrators (SESSGATE, #480): probe the
     // live session BEFORE they seed a row, so a locked/full-screen session refuses
     // with zero mutation. Present regardless of `enabled` (the orchestrator has
     // already cleared the H-UI-DRIVE ack by the time it consults this).
-    probeReachability: () => probeSessionReachability(run, STEP_TIMEOUT_MS),
+    probeReachability: () => probeSessionReachability(tracedRun, STEP_TIMEOUT_MS),
   };
 }

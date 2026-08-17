@@ -320,6 +320,28 @@
                 "completed": {
                   "type": "array",
                   "items": {}
+                },
+                "signal": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "type": ["string", "null"]
+                },
+                "step": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "type": "string",
+                  "const": "uncertain"
+                },
+                "recheck": {
+                  "type": "string"
+                },
+                "tracePath": {
+                  "type": "string"
                 }
               },
               "additionalProperties": false,

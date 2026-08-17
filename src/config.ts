@@ -76,7 +76,33 @@ export interface ThingsApiConfig {
    * per-call `dangerouslyDriveGui` acknowledgement. Intended for a dedicated
    * always-on Mac ("closet mini") kept unlocked; see docs/design/ui-vector.md.
    */
-  ui: { enabled: boolean };
+  ui: {
+    enabled: boolean;
+    /**
+     * The overall UI-drive budget in milliseconds (default 90000). The ui
+     * vector's own watchdog aborts a drive that exceeds this — clearing any open
+     * dialog and returning a structured, honest timeout — so the CLI, not the
+     * caller, is the first to give up (TRACE1, #487). Generous by design: a live
+     * production database (large + Things-Cloud syncing) commits the Repeat
+     * dialog several times slower than the lab golden, so the default is the
+     * lab-measured drive time multiplied by a wide safety factor. Agent callers
+     * should still allow a longer timeout than this (≥120s) so the watchdog wins.
+     * Optional in the type (a hand-built config may omit it, defaulting to
+     * {@link DEFAULT_UI_DRIVE_BUDGET_MS}); {@link loadConfig} always populates it.
+     */
+    driveBudgetMs?: number;
+  };
+  /**
+   * Dev-mode step-timeline trace (TRACE1, #487), tri-state. `true`/`false` force
+   * tracing on/off; `null` (the default) follows the build — on for a `-dev`
+   * source checkout, off for a published install. When on, every write
+   * invocation writes a local JSONL timeline under the trace directory (see
+   * src/trace/tracer.ts). LOCAL-ONLY: a trace may hold real task titles, so the
+   * files must never be committed or attached to a public issue. Optional in the
+   * type (a hand-built config may omit it = follow the build); {@link loadConfig}
+   * always populates it.
+   */
+  traceEnabled?: boolean | null;
   /**
    * Container-scoped sandbox: a raw ref (uuid / uuid-prefix / unique area or
    * project name) plus where it came from, resolved to a pinned container at
@@ -148,8 +174,13 @@ interface ConfigFile {
   bounceMaxItems?: number;
   autoLaunch?: boolean;
   uiEnabled?: boolean;
+  uiDriveBudgetMs?: number;
+  traceEnabled?: boolean;
   scope?: string;
 }
+
+/** Default overall UI-drive budget (ms) — see {@link ThingsApiConfig.ui}. */
+export const DEFAULT_UI_DRIVE_BUDGET_MS = 90_000;
 
 function configFilePath(env: NodeJS.ProcessEnv): string {
   return join(configDir(env), "config.json");
@@ -189,6 +220,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
   const bounceMaxItemsEnv = positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]);
   const autoLaunchEnv = boolEnvOverride(env["THINGS_API_AUTO_LAUNCH"], "true", "false");
   const uiEnv = boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false");
+  const uiDriveBudgetEnv = positiveIntEnvOverride(env["THINGS_API_UI_DRIVE_BUDGET_MS"]);
+  const traceEnv = boolEnvOverride(env["THINGS_API_TRACE"], "true", "false");
 
   // Scope precedence within the config layer: THINGS_API_SCOPE env > stored
   // `scope` key. The MCP `--scope` flag outranks BOTH and is applied above this
@@ -212,7 +245,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     bounceEnabled: bounceEnabledEnv ?? file.bounceEnabled ?? true,
     bounceMaxItems: bounceMaxItemsEnv ?? file.bounceMaxItems ?? 30,
     autoLaunch: autoLaunchEnv ?? file.autoLaunch ?? true,
-    ui: { enabled: uiEnv ?? file.uiEnabled ?? false },
+    ui: {
+      enabled: uiEnv ?? file.uiEnabled ?? false,
+      driveBudgetMs: uiDriveBudgetEnv ?? file.uiDriveBudgetMs ?? DEFAULT_UI_DRIVE_BUDGET_MS,
+    },
+    // Tri-state: env > stored > null (null = "follow the -dev build signal",
+    // resolved by resolveTraceEnabled in src/trace/tracer.ts).
+    traceEnabled: traceEnv ?? file.traceEnabled ?? null,
     scope,
     host: hostname(),
   };
@@ -356,6 +395,18 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       cfg.ui.enabled,
       file.uiEnabled !== undefined,
       boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false") !== undefined,
+    ),
+    view(
+      "ui-drive-budget-ms",
+      cfg.ui.driveBudgetMs ?? DEFAULT_UI_DRIVE_BUDGET_MS,
+      file.uiDriveBudgetMs !== undefined,
+      positiveIntEnvOverride(env["THINGS_API_UI_DRIVE_BUDGET_MS"]) !== undefined,
+    ),
+    view(
+      "trace",
+      cfg.traceEnabled ?? null,
+      file.traceEnabled !== undefined,
+      boolEnvOverride(env["THINGS_API_TRACE"], "true", "false") !== undefined,
     ),
     // The container scope's RAW ref (resolved to a container at open); env >
     // stored. A stored value jails every process on this host — see the
