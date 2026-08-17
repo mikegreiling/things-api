@@ -45,6 +45,7 @@ import {
   type OperationKind,
   type OperationParamsMap,
 } from "./operations.ts";
+import { computeCompletionContext, type CompletionContext } from "./completion-context.ts";
 import { planVector } from "./planner.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 import {
@@ -227,6 +228,20 @@ export type MutationResult =
        * disclosed, never fatal. Absent when every restore leg succeeded.
        */
       preserveFailures?: PreserveModifiedFailure[];
+      /**
+       * HINTS1 completion-context (ADDITIVE, presence-keyed): on a successful
+       * `todo.complete` / `todo.cancel` only, the remaining OPEN work in the
+       * to-do's container(s), computed from a cheap post-verify re-read so an
+       * agent can notice an emptied project/Today without a second read.
+       * `project` is present when the to-do was in a project (directly or under a
+       * heading) and carries its `uuid`, `title`, and the OPEN, untrashed,
+       * non-template to-dos remaining in it (heading children included; `0` = the
+       * project's open work is now empty). `today` is present when the to-do was
+       * a Today member at mutation time and carries the OPEN Today members
+       * remaining. The hint INFORMS, never auto-acts; absent when neither applies
+       * (and on every other op). See {@link CompletionContext}.
+       */
+      context?: CompletionContext;
     }
   | {
       kind: "verify-failed";
@@ -1096,6 +1111,15 @@ export async function runMutation<K extends OperationKind>(
             `capability may show a macOS consent prompt`,
         );
       }
+      // HINTS1 completion-context: on a verified complete/cancel of a to-do,
+      // attach the remaining OPEN work in its project and/or Today. Applicability
+      // is read off the captured pre-state, so a to-do in neither costs no extra
+      // reads; the counts are a cheap post-verify re-read via the library's own
+      // read paths.
+      const completionContext: CompletionContext | undefined =
+        op === "todo.complete" || op === "todo.cancel"
+          ? computeCompletionContext(deps.db, pre.target, deps.now?.() ?? new Date(), deps.zone)
+          : undefined;
       return {
         kind: "ok",
         op,
@@ -1119,6 +1143,7 @@ export async function runMutation<K extends OperationKind>(
           }),
         ...(preserve !== null &&
           preserve.failures.length > 0 && { preserveFailures: preserve.failures }),
+        ...(completionContext !== undefined && { context: completionContext }),
         ...(warnings.length > 0 && { warnings }),
       };
     }
