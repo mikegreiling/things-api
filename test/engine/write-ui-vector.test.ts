@@ -13,7 +13,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
+import { encodePackedDate } from "../../src/model/dates.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
+import type { RepeatRuleParams } from "../../src/write/operations.ts";
+import {
+  composeRepeatRuleSpec,
+  ruleXml as composeRuleXml,
+} from "../../src/write/recurrence-rule-blob.ts";
 import { makeRepeatingRecipe, pauseRepeatRecipe } from "../../src/write/vectors/ui-recipes.ts";
 import { createUiVector, type UiCommand, type UiRunResult } from "../../src/write/vectors/ui.ts";
 import type { CompiledInvocation, UiRecipe, WriteVector } from "../../src/write/vectors/types.ts";
@@ -377,6 +383,19 @@ function scriptedUiVector(execute: () => Promise<{ exitCode: number; effect?: ()
   };
 }
 
+type Bag = Omit<RepeatRuleParams, "uuid">;
+
+/** The DB state a reschedule-to-`bag` lands: rule blob + deadline column + cursor. */
+function bagState(bag: Bag): { xml: string; deadline: string | null; cursor: string | null } {
+  const deadlined = bag.deadline === true || (bag.startDaysEarlier ?? 0) > 0;
+  const spec = composeRepeatRuleSpec({ uuid: "x", ...bag }, bag.next ?? "2026-09-22", 0);
+  return {
+    xml: composeRuleXml(spec),
+    deadline: deadlined ? "4001-01-01" : null,
+    cursor: bag.next ?? null,
+  };
+}
+
 describe("ui vector — idempotency + transport recovery (defect (a))", () => {
   it("pre-drive idempotency: the rule already equals the target → ok no-op, NO GUI drive", async () => {
     const uuid = seedTodo(fixture.db, {
@@ -442,6 +461,102 @@ describe("ui vector — idempotency + transport recovery (defect (a))", () => {
     if (res.kind === "verify-failed") {
       expect(res.reason).toBe("silent-noop");
       expect(res.detail).toContain("no landed change");
+    }
+  });
+
+  // ---- #491: full-fidelity precheck (anchor/deadline/offset/cursor) ----------
+  //
+  // The pre-drive idempotency check evaluates the SAME assert set expectedDelta
+  // produces. When those asserts were unit+interval only, a reschedule that
+  // changed the monthly anchor / deadline offset / cursor read back "already
+  // satisfied" and was skipped with a false no-op. These two cells prove the
+  // full-fidelity asserts fix that: the anchor/offset/cursor change DRIVES, and a
+  // genuine same-command re-run still no-ops.
+
+  function seedBagTemplate(title: string, bag: Bag): string {
+    const s = bagState(bag);
+    return seedTodo(fixture.db, {
+      title,
+      start: "someday",
+      recurrenceRuleXml: s.xml,
+      deadline: s.deadline,
+      nextInstanceStartDate: s.cursor,
+    });
+  }
+
+  function applyBagToRow(uuid: string, bag: Bag): void {
+    const s = bagState(bag);
+    fixture.db
+      .prepare(
+        "UPDATE TMTask SET rt1_recurrenceRule = ?, deadline = ?, rt1_nextInstanceStartDate = ?, " +
+          "userModificationDate = ? WHERE uuid = ?",
+      )
+      .run(
+        new TextEncoder().encode(s.xml),
+        s.deadline === null ? null : encodePackedDate(s.deadline),
+        s.cursor === null ? null : encodePackedDate(s.cursor),
+        Math.floor(NOW.getTime() / 1000) + 1,
+        uuid,
+      );
+  }
+
+  // The maintainer's live-repro shape, synthetic: a monthly last-day deadlined
+  // ts=-14 template, rescheduled to monthly 4th-Tuesday ts=-21 with an explicit
+  // --when. Pre-#491 the precheck false-noop'd (unit+interval unchanged).
+  const PREV: Bag = {
+    frequency: "monthly",
+    interval: 1,
+    monthly: { day: "last" },
+    deadline: true,
+    startDaysEarlier: 14,
+    next: "2026-08-31",
+  };
+  const NEW: Bag = {
+    frequency: "monthly",
+    interval: 1,
+    monthly: { weekday: "tuesday", ordinal: 4 },
+    deadline: true,
+    startDaysEarlier: 21,
+    next: "2026-09-22",
+  };
+
+  it("#491: a monthly anchor/offset/cursor-only reschedule DRIVES (not a false no-op)", async () => {
+    const uuid = seedBagTemplate("Monthly review", PREV);
+    // The drive "lands" NEW's full state so the post-verify passes.
+    const scripted = scriptedUiVector(async () => ({
+      exitCode: 0,
+      effect: () => applyBagToRow(uuid, NEW),
+    }));
+    const res = await runMutation(
+      deps(scripted.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, ...NEW },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 500 },
+    );
+    expect(res.kind).toBe("ok");
+    expect(scripted.ran()).toBe(true); // the precheck did NOT short-circuit — #491 closed
+    // The landed anchor + offset + cursor are what was requested.
+    const row = fixture.db
+      .prepare("SELECT rt1_nextInstanceStartDate AS cur, deadline AS dl FROM TMTask WHERE uuid = ?")
+      .get(uuid) as { cur: number; dl: number | null };
+    expect(row.cur).toBe(encodePackedDate("2026-09-22"));
+    expect(row.dl).not.toBeNull();
+  });
+
+  it("#491: a genuine same-command re-run is still an idempotent no-op (zero drive)", async () => {
+    const uuid = seedBagTemplate("Monthly review", NEW);
+    const scripted = scriptedUiVector(async () => ({ exitCode: 0 }));
+    const res = await runMutation(
+      deps(scripted.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, ...NEW },
+      { dangerouslyDriveGui: true },
+    );
+    expect(res.kind).toBe("ok");
+    expect(scripted.ran()).toBe(false); // every requested field already holds → no drive
+    if (res.kind === "ok") {
+      expect((res.warnings ?? []).join(" ")).toContain("already in the requested state");
+      expect(res.undoToken).toBeUndefined();
     }
   });
 

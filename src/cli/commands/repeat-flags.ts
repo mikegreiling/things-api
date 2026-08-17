@@ -122,50 +122,115 @@ function dayAnchor(opts: Record<string, unknown>): MonthlyAnchor | undefined {
 }
 
 /**
+ * The CALENDAR-ANCHOR flags that apply only to a SUBSET of frequencies, and the
+ * frequencies that consume each. A present anchor flag on any other frequency is
+ * a hard error — never a silent drop (UIC6-l). Exhaustive over the anchor flag
+ * set; a new anchor flag must earn a row here (and the mapper below consumes it).
+ * `weekdays` is intentionally ABSENT: it is mapped unconditionally and refused
+ * downstream by assertRepeatRule ("weekdays apply only to a weekly rule"), the
+ * mapped-contradiction path — this table is only for the SILENTLY-dropped anchors.
+ */
+const ANCHOR_FLAG_FREQUENCIES: Record<string, RepeatFrequency[]> = {
+  onDay: ["monthly", "yearly"],
+  onWeekday: ["monthly", "yearly"],
+  onOrdinal: ["monthly", "yearly"],
+  yearlyMonth: ["yearly"],
+};
+
+/** The user-facing flag spelling for a camelCase option key (error messages). */
+const ANCHOR_FLAG_SPELLING: Record<string, string> = {
+  onDay: "--on-day",
+  onWeekday: "--on-weekday",
+  onOrdinal: "--on-ordinal",
+  yearlyMonth: "--yearly-month",
+};
+
+/**
+ * Refuse a calendar-anchor flag supplied on a frequency that does not consume it
+ * (UIC6-l): `--frequency weekly --on-day 15` errors instead of silently running a
+ * plain weekly rule. Behavioral message — names the flag + the frequency it
+ * belongs to, never a mechanism.
+ */
+function assertAnchorFlagsMatchFrequency(
+  opts: Record<string, unknown>,
+  frequency: RepeatFrequency,
+): void {
+  for (const [key, allowed] of Object.entries(ANCHOR_FLAG_FREQUENCIES)) {
+    if (opts[key] === undefined) continue;
+    if (!allowed.includes(frequency)) {
+      const flag = ANCHOR_FLAG_SPELLING[key] ?? key;
+      throw new RangeError(
+        `${flag} applies only to a ${allowed.join(" or ")} rule — this rule is ${frequency}`,
+      );
+    }
+  }
+}
+
+/**
+ * EXHAUSTIVE over every field of {@link RepeatRuleFlagFields}: each rule param is
+ * derived from the CLI options by exactly one entry, so a new param added to
+ * RepeatRuleParams breaks compilation here until it earns a flag mapping. This is
+ * what makes an accepted-but-dropped flag impossible for this vocabulary (the
+ * UIC6-l class) — the wrong-frequency guard above catches the inverse (a flag
+ * with no consuming frequency). Each entry returns the mapped value or
+ * `undefined` (absent — exactOptionalPropertyTypes).
+ */
+const FLAG_MAP: {
+  [K in keyof RepeatRuleFlagFields]-?: (
+    opts: Record<string, unknown>,
+    frequency: RepeatFrequency,
+    anchor: MonthlyAnchor | undefined,
+  ) => RepeatRuleFlagFields[K] | undefined;
+} = {
+  afterCompletion: (opts) => (opts["afterCompletion"] === true ? true : undefined),
+  weekdays: (opts) =>
+    typeof opts["weekdays"] === "string"
+      ? (opts["weekdays"]
+          .split(",")
+          .map((d) => d.trim().toLowerCase())
+          .filter((d) => d.length > 0) as Weekday[])
+      : undefined,
+  monthly: (_opts, frequency, anchor) =>
+    frequency === "monthly" && anchor !== undefined ? anchor : undefined,
+  yearly: (opts, frequency, anchor) => {
+    if (frequency !== "yearly") return undefined;
+    const month = opts["yearlyMonth"];
+    if (month === undefined && anchor === undefined) return undefined;
+    const base = { month: Number(month) };
+    return (anchor === undefined ? base : { ...base, ...anchor }) as YearlyAnchor;
+  },
+  ends: (opts) => {
+    if (opts["endsAfter"] !== undefined) return { kind: "after", count: Number(opts["endsAfter"]) };
+    if (typeof opts["endsOn"] === "string") return { kind: "on-date", date: opts["endsOn"] };
+    return undefined;
+  },
+  reminder: (opts) => (typeof opts["reminder"] === "string" ? opts["reminder"] : undefined),
+  next: (opts) => (typeof opts["when"] === "string" ? opts["when"] : undefined),
+  deadline: (opts) => (opts["deadline"] === true ? true : undefined),
+  startDaysEarlier: (opts) =>
+    opts["startDaysEarlier"] !== undefined ? Number(opts["startDaysEarlier"]) : undefined,
+};
+
+/**
  * Build the extended rule fields from CLI options (present keys only —
- * exactOptionalPropertyTypes). Combination validity is enforced downstream
- * (the same refusals the library raises), so a wrong-frequency flag surfaces a
- * clear error rather than being silently applied.
+ * exactOptionalPropertyTypes). A wrong-frequency anchor flag is REFUSED here
+ * (UIC6-l), never silently dropped; other combination validity (e.g. weekdays on
+ * a non-weekly rule) is enforced downstream by assertRepeatRule.
  */
 export function repeatRuleFlagsFromOpts(
   opts: Record<string, unknown>,
   frequency: RepeatFrequency,
 ): RepeatRuleFlagFields {
-  const fields: RepeatRuleFlagFields = {};
-
-  if (opts["afterCompletion"] === true) fields.afterCompletion = true;
-
-  if (typeof opts["weekdays"] === "string") {
-    fields.weekdays = opts["weekdays"]
-      .split(",")
-      .map((d) => d.trim().toLowerCase())
-      .filter((d) => d.length > 0) as Weekday[];
-  }
-
+  assertAnchorFlagsMatchFrequency(opts, frequency);
   const anchor = dayAnchor(opts);
-  if (frequency === "monthly" && anchor !== undefined) {
-    fields.monthly = anchor;
-  }
-  if (frequency === "yearly") {
-    const month = opts["yearlyMonth"];
-    if (month !== undefined || anchor !== undefined) {
-      const base = { month: Number(month) };
-      fields.yearly = (anchor === undefined ? base : { ...base, ...anchor }) as YearlyAnchor;
+  const fields: RepeatRuleFlagFields = {};
+  for (const key of Object.keys(FLAG_MAP) as (keyof RepeatRuleFlagFields)[]) {
+    const value = FLAG_MAP[key](opts, frequency, anchor);
+    if (value !== undefined) {
+      // The map's per-key return type is exactly RepeatRuleFlagFields[K]; the
+      // index write is safe but TS cannot narrow K across the loop.
+      (fields as Record<string, unknown>)[key] = value;
     }
   }
-
-  if (opts["endsAfter"] !== undefined) {
-    fields.ends = { kind: "after", count: Number(opts["endsAfter"]) };
-  } else if (typeof opts["endsOn"] === "string") {
-    fields.ends = { kind: "on-date", date: opts["endsOn"] };
-  }
-
-  if (typeof opts["reminder"] === "string") fields.reminder = opts["reminder"];
-  if (typeof opts["when"] === "string") fields.next = opts["when"];
-  if (opts["deadline"] === true) fields.deadline = true;
-  if (opts["startDaysEarlier"] !== undefined) {
-    fields.startDaysEarlier = Number(opts["startDaysEarlier"]);
-  }
-
   return fields;
 }

@@ -90,6 +90,48 @@ const UNITS: Record<number, RepeatRule["unit"]> = {
   4: "yearly",
 };
 
+/**
+ * Decode ONE `of` offset entry (the plist grammar `dy`/`mo`/`wd`/`wdo`) into a
+ * {@link RepeatOffset}. Shared by {@link decodeRecurrenceRule} (reading a stored
+ * rule) and the write-side full-fidelity assert builder (which composes the
+ * expected numeric offsets and round-trips them through this SAME decode so the
+ * canonical anchor key it compares against is byte-consistent with what a real
+ * read produces). Accepts any record; non-numeric fields are ignored.
+ */
+export function decodeOffsetEntry(e: Record<string, unknown>): RepeatOffset {
+  const offset: RepeatOffset = {};
+  if (typeof e["dy"] === "number") offset.day = e["dy"] === -1 ? -1 : e["dy"] + 1;
+  if (typeof e["mo"] === "number") offset.month = e["mo"] + 1;
+  if (typeof e["wd"] === "number") offset.weekday = e["wd"];
+  if (typeof e["wdo"] === "number") offset.weekdayOrdinal = e["wdo"];
+  return offset;
+}
+
+/**
+ * A canonical, ORDER-INSENSITIVE string key of a rule's calendar anchor (its
+ * `offsets`) — the comparison surface for full-fidelity recurrence assertions.
+ * Each offset renders to a compact token (`m` month · `d` day · `w` weekday ·
+ * `o` weekday-ordinal, all decoded values), and the tokens are sorted so a
+ * weekly rule that fires Tue+Thu keys identically regardless of the order the
+ * app happened to store the two weekday offsets in. Two rules share a key iff
+ * they name the SAME set of calendar placements. Empty offsets (or all-nominal
+ * after-completion offsets) yield "".
+ */
+export function anchorKeyOfOffsets(offsets: RepeatOffset[]): string {
+  return offsets
+    .map((o) => {
+      const parts: string[] = [];
+      if (o.month !== undefined) parts.push(`m${o.month}`);
+      if (o.day !== undefined) parts.push(`d${o.day}`);
+      if (o.weekday !== undefined) parts.push(`w${o.weekday}`);
+      if (o.weekdayOrdinal !== undefined) parts.push(`o${o.weekdayOrdinal}`);
+      return parts.join("");
+    })
+    .filter((t) => t.length > 0)
+    .toSorted()
+    .join(",");
+}
+
 /** Unix seconds this far out (year ≥ 3000) mean "repeats forever". */
 const DISTANT_FUTURE_EPOCH = 32503680000;
 
@@ -155,13 +197,7 @@ export function decodeRecurrenceRule(blob: unknown): RepeatRule {
   if (Array.isArray(of)) {
     for (const entry of of) {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-      const e = entry as Record<string, PlistValue>;
-      const offset: RepeatOffset = {};
-      if (typeof e["dy"] === "number") offset.day = e["dy"] === -1 ? -1 : e["dy"] + 1;
-      if (typeof e["mo"] === "number") offset.month = e["mo"] + 1;
-      if (typeof e["wd"] === "number") offset.weekday = e["wd"];
-      if (typeof e["wdo"] === "number") offset.weekdayOrdinal = e["wdo"];
-      offsets.push(offset);
+      offsets.push(decodeOffsetEntry(entry as Record<string, unknown>));
     }
   }
 
