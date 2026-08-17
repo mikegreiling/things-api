@@ -228,6 +228,10 @@ export type ErrorCode =
   | "bounce-aborted"
   | "verify-failed"
   | "blocked"
+  // A signal (SIGTERM/SIGINT) interrupted a write mid-flight — the outcome is
+  // UNCERTAIN (the in-flight UI step may still complete), so the caller must
+  // re-check rather than assume nothing changed (TRACE1, #487).
+  | "interrupted"
   | `verify-failed:${string}`
   | `blocked:${string}`;
 
@@ -278,6 +282,16 @@ export interface ErrorEnvelope {
       cause?: unknown;
       failed?: unknown;
       completed?: unknown[];
+      // `interrupted` (TRACE1, #487): the signal that killed the write, the op +
+      // resolved target + last UI step it was on, the honest outcome verdict, the
+      // exact re-check command, and the local trace file reconstructing the run.
+      signal?: string;
+      op?: string;
+      uuid?: string | null;
+      step?: string;
+      outcome?: "uncertain";
+      recheck?: string;
+      tracePath?: string;
     };
   };
   meta: EnvelopeMeta;

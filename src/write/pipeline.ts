@@ -57,7 +57,7 @@ import {
 } from "./preserve-modified.ts";
 import { REVERSIBILITY } from "./reversibility.ts";
 import { certificationOf } from "./vectors/ui-certification.ts";
-import type { CompiledInvocation, VectorId, WriteVector } from "./vectors/types.ts";
+import type { CompiledInvocation, ExecuteResult, VectorId, WriteVector } from "./vectors/types.ts";
 import {
   createDbReader,
   evaluateDelta,
@@ -67,6 +67,7 @@ import {
   type RepeatingDiscovery,
 } from "./verify/delta.ts";
 import { pollUntilVerified, type PollerDeps, type PollOutcome } from "./verify/poller.ts";
+import { setInflight, trace } from "../trace/tracer.ts";
 
 /**
  * Bounded backoff for the post-transport-failure re-verify (0½ defect (a)): a
@@ -255,6 +256,16 @@ export type MutationResult =
       /** Advisory attribution when the failure signals point somewhere. */
       likelyCause?: LikelyCause;
       hint?: string;
+      /**
+       * The outcome is genuinely UNCERTAIN, not confirmed-failed (TRACE1, #487):
+       * a UI drive was aborted by the watchdog (or the process was interrupted)
+       * while the app might have been mid-commit, so the caller must re-check
+       * with `things show <uuid>` rather than assume nothing changed. Present
+       * only on the ui-drive watchdog timeout.
+       */
+      uncertain?: true;
+      /** The local trace file reconstructing this drive's timeline (TRACE1). */
+      tracePath?: string;
     }
   | {
       kind: "blocked";
@@ -1014,7 +1025,38 @@ export async function runMutation<K extends OperationKind>(
       uuid: intentUuid,
     });
 
-    const executeResult = await vector.execute(invocation);
+    // Mark the write as touching the app (read by the CLI's signal handler so a
+    // SIGTERM/SIGINT can name the exact op — and last UI step — it interrupted,
+    // TRACE1 #487) and open the execute stage in the trace. Cleared the moment
+    // execute returns, whatever the outcome.
+    setInflight({
+      op,
+      uuid: intentUuid,
+      vector: vector.id,
+      uiDrive: vector.id === "ui",
+      startedAt: (deps.now?.() ?? new Date()).getTime(),
+    });
+    trace(() => ({
+      phase: "stage",
+      stage: "execute-start",
+      op,
+      vector: vector.id,
+      tier: effectiveTier,
+    }));
+    let executeResult: ExecuteResult;
+    try {
+      executeResult = await vector.execute(invocation);
+    } finally {
+      setInflight(null);
+    }
+    trace(() => ({
+      phase: "stage",
+      stage: "execute-done",
+      op,
+      exitCode: executeResult.exitCode,
+      timedOut: executeResult.timedOut === true,
+      ...(executeResult.watchdog !== undefined && { watchdog: executeResult.watchdog }),
+    }));
 
     // A vector that REFUSED at runtime before touching the app (the ui vector's
     // session-reachability gate: a locked / full-screen session leaves no
@@ -1058,6 +1100,49 @@ export async function runMutation<K extends OperationKind>(
         deps.poller ?? {},
       );
       if (recovery.kind !== "ok") {
+        // The ui-drive WATCHDOG timeout is its own honest outcome (TRACE1 #487):
+        // the CLI gave up first and cleared the dialog, but a drive aborted while
+        // the OK was possibly mid-commit cannot promise the app is untouched — so
+        // it is reported UNCERTAIN with the trace path and a "re-check first"
+        // remediation, distinct from a plain transport failure with no landed change.
+        const wd = executeResult.watchdog;
+        if (wd !== undefined) {
+          audit({
+            result: verifyFailedCode({ reason: "timeout" }),
+            vector: vector.id,
+            disruption: effectiveTier,
+            invocation: invocation.redactedPayload,
+            pre: flattenPreFields(preCapture.fields),
+            observed: recovery.observed,
+          });
+          const budgetS = Math.round(wd.budgetMs / 1000);
+          const elapsedS = Math.round(wd.elapsedMs / 1000);
+          const cleared =
+            wd.clear === "dismissed"
+              ? "the open dialog was dismissed"
+              : wd.clear === "cleared-blind"
+                ? "the Things window was closed and reopened to clear the open dialog"
+                : "a dialog may still be open in Things";
+          const traceNote =
+            wd.tracePath != null && wd.tracePath !== ""
+              ? ` The step timeline is at ${wd.tracePath}.`
+              : "";
+          return {
+            kind: "verify-failed" as const,
+            op,
+            reason: "timeout" as const,
+            expected: delta,
+            observed: recovery.observed,
+            detail:
+              `the GUI drive ran past its ${budgetS}s budget at step "${wd.lastStep}" (after ` +
+              `~${elapsedS}s) and the CLI stopped it before the change could be confirmed; ` +
+              `${cleared}. The outcome is UNCERTAIN — a rule committed at the last moment could ` +
+              `still appear — so re-check with \`things show ${intentUuid ?? "<uuid>"}\` before ` +
+              `retrying (retrying could create a duplicate series).${traceNote}`,
+            uncertain: true as const,
+            ...(wd.tracePath != null && wd.tracePath !== "" && { tracePath: wd.tracePath }),
+          };
+        }
         audit({
           result: verifyFailedCode({ reason: "silent-noop" }),
           vector: vector.id,
@@ -1100,6 +1185,16 @@ export async function runMutation<K extends OperationKind>(
         deps.poller ?? {},
       );
     }
+
+    trace(() => ({
+      phase: "stage",
+      stage: "verify",
+      op,
+      kind: outcome.kind,
+      attempts: outcome.attempts,
+      elapsedMs: outcome.elapsedMs,
+      recovered: transportRecovered,
+    }));
 
     const auditCommon = {
       vector: vector.id,
@@ -1251,6 +1346,7 @@ export async function runMutation<K extends OperationKind>(
         op === "todo.complete" || op === "todo.cancel"
           ? computeCompletionContext(deps.db, pre.target, deps.now?.() ?? new Date(), deps.zone)
           : undefined;
+      trace(() => ({ phase: "result", op, kind: "ok", uuid, vector: vector.id }));
       return {
         kind: "ok",
         op,

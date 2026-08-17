@@ -422,6 +422,13 @@ one call), \`… reschedule-repeat <ref>\` (change a rule in place). Every rule 
 (\`--interval 1\` = every unit). Repeating operations drive the app's Repeat dialog, so
 they require \`--dangerously-drive-gui\`, including \`--dry-run\` previews.
 
+Driving the dialog can take over a minute on a large database (Things commits the rule
+while syncing), so allow a GENEROUS timeout — 120s or more. If your own timeout stops
+the command first, you get empty output instead of a result; the change may still have
+landed, so re-check with \`things show <ref>\` before retrying, never blindly re-run. If
+the app's own budget is exceeded, the command returns a structured timeout that says
+the outcome is uncertain and names the same re-check.
+
 make-repeating is RECOVERABLE (promote-via-clone): it copies the item, promotes the
 copy, and moves the ORIGINAL to the Trash — so \`things undo\` reverses it (removes the
 new series and restores the original). It refuses a project holding a nested repeater.

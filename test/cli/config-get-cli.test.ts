@@ -162,9 +162,11 @@ describe("config get (all keys)", () => {
     expect(env["kind"]).toBe("config");
     const data = (env["data"] as { items: { key: string; source: string }[] }).items;
     expect(Array.isArray(data)).toBe(true);
-    expect(data).toHaveLength(13);
+    expect(data).toHaveLength(15);
     expect(data.map((e) => e.key)).toContain("ui-enabled");
     expect(data.map((e) => e.key)).toContain("auto-launch");
+    expect(data.map((e) => e.key)).toContain("ui-drive-budget-ms");
+    expect(data.map((e) => e.key)).toContain("trace");
     expect(data.map((e) => e.key)).toContain("scope");
     expect(data.map((e) => e.key)).toContain("host");
     expect(data.map((e) => e.key)).toContain("bounce-enabled");

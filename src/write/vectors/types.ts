@@ -266,6 +266,26 @@ export interface ExecuteResult {
    * (exit 4), never a transport failure — nothing was mutated.
    */
   blocked?: { hazard: HazardId; detail: string; remediation: string };
+  /**
+   * The ui vector's overall-drive WATCHDOG fired: the drive exceeded its budget
+   * so the CLI — not the caller — gave up first, cleared any open dialog, and
+   * returned (TRACE1, #487). Carried alongside a nonzero `exitCode` + `timedOut`
+   * so the pipeline routes it through the existing transport-failure re-verify
+   * (a mid-commit OK may still have landed), then shapes an HONEST timeout:
+   * confirmed-landed → ok with a disclosure; not-confirmed → verify-failed with
+   * `uncertain` set and the trace path, since a drive aborted mid-commit cannot
+   * promise the app is untouched. See {@link drive}.
+   */
+  watchdog?: {
+    budgetMs: number;
+    elapsedMs: number;
+    /** The step the drive was about to run (or running) when the budget blew. */
+    lastStep: string;
+    /** How the open dialog was cleaned up (SESSGATE clearDialog outcome). */
+    clear: "dismissed" | "cleared-blind" | "may-remain";
+    /** The local trace file reconstructing the timeline, when tracing is on. */
+    tracePath?: string | null;
+  };
 }
 
 export interface WriteVector {

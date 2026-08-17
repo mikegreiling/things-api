@@ -9,6 +9,10 @@ import type { Command } from "commander";
 
 import { readFileSync } from "node:fs";
 
+import { armInterrupt, disarmInterrupt } from "../interrupt.ts";
+import { isDevVersion } from "../skill.ts";
+import { CLI_VERSION } from "../version.ts";
+
 import {
   addRepeatCalendarFlags,
   addRepeatingRuleFieldsFromOpts,
@@ -20,9 +24,11 @@ import {
   blockedCode,
   capabilitiesTable,
   ClockError,
+  closeCliTrace,
   describeConfig,
   errorEnvelope,
   ExitCode,
+  installCliTrace,
   getConfigKey,
   mutationWireData,
   okEnvelope,
@@ -32,6 +38,7 @@ import {
   ReferenceResolutionError,
   saveConfigKey,
   splitWhenSugar,
+  trace,
   ThingsDbNotFoundError,
   ThingsDbOpenError,
   verifyFailedCode,
@@ -244,7 +251,10 @@ function addDriveGuiFlag(cmd: Command): Command {
   return cmd.option(
     "--dangerously-drive-gui",
     "required: visibly drives the Things app to make a change it offers nowhere else; " +
-      "also needs `things config set ui-enabled true`",
+      "also needs `things config set ui-enabled true`. Driving the app can take over a " +
+      "minute on a large database, so allow a generous timeout (120s or more) — if your own " +
+      "timeout stops the command first you get empty output, not a result; the change may still " +
+      "have landed, so re-check with `things show <ref>` before retrying",
   );
 }
 
@@ -291,6 +301,16 @@ async function runWrite(
 ): Promise<void> {
   if (!opIdOk(opts)) return;
   const started = Date.now();
+  // Dev-mode step-timeline trace + signal-safe interrupt guard (TRACE1, #487).
+  // Scoped to the write driver — the invocations where a per-step timeline earns
+  // its keep, and where a mid-drive kill would otherwise leave empty stdout. The
+  // sink is a no-op unless tracing is on (a `-dev` build, or config/env forced).
+  installCliTrace({
+    argv: process.argv.slice(1),
+    version: CLI_VERSION,
+    isDev: isDevVersion(CLI_VERSION),
+  });
+  armInterrupt(opts.json === true);
   let client: ThingsClient | null = null;
   const meta = (client_: ThingsClient | null): EnvelopeMeta => {
     let dbVersion: number | null = null;
@@ -350,6 +370,16 @@ async function runWrite(
     process.exitCode = isEnv ? ExitCode.Environment : ExitCode.Unexpected;
   } finally {
     client?.close();
+    // Close the trace with a final result line (the exit code the caller sees),
+    // then disarm the interrupt guard so a later signal during teardown/reads
+    // emits nothing.
+    trace(() => ({
+      phase: "invocation-end",
+      exitCode: process.exitCode ?? 0,
+      elapsedMs: Date.now() - started,
+    }));
+    disarmInterrupt();
+    closeCliTrace();
   }
 }
 
@@ -2921,7 +2951,7 @@ export function registerWriteCommands(program: Command): void {
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
         "accepted-fingerprint | certified-app-version | allow-experimental | bounce-enabled | " +
-        "bounce-max-items | auto-launch | ui-enabled | scope",
+        "bounce-max-items | auto-launch | ui-enabled | ui-drive-budget-ms | trace | scope",
     )
     .action((key: string, value: string, opts: { dryRun?: boolean }) => {
       const map: Record<string, string> = {
@@ -2936,6 +2966,8 @@ export function registerWriteCommands(program: Command): void {
         "bounce-max-items": "bounceMaxItems",
         "auto-launch": "autoLaunch",
         "ui-enabled": "uiEnabled",
+        "ui-drive-budget-ms": "uiDriveBudgetMs",
+        trace: "traceEnabled",
         scope: "scope",
       };
       const target = map[key];
@@ -2945,13 +2977,14 @@ export function registerWriteCommands(program: Command): void {
         return;
       }
       const parsed: string | number | boolean =
-        target === "maxDisruption" || target === "bounceMaxItems"
+        target === "maxDisruption" || target === "bounceMaxItems" || target === "uiDriveBudgetMs"
           ? Number(value)
           : target === "auditEnabled" ||
               target === "allowExperimental" ||
               target === "bounceEnabled" ||
               target === "autoLaunch" ||
-              target === "uiEnabled"
+              target === "uiEnabled" ||
+              target === "traceEnabled"
             ? value === "true"
             : value;
       // Universal `--dry-run` (../dry-run.ts): `config set` writes local config
