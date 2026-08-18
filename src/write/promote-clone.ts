@@ -974,7 +974,17 @@ export async function runAddRepeatingTodo(
   params: TodoAddRepeatingParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
-  const { frequency, interval, afterCompletion, weekdays, monthly, yearly, ends, ...add } = params;
+  const {
+    frequency,
+    interval,
+    afterCompletion,
+    weekdays,
+    monthly,
+    yearly,
+    ends,
+    startDaysEarlier,
+    ...add
+  } = params;
   const baseRule: AddRepeatingRuleFields = {
     frequency,
     interval,
@@ -996,25 +1006,60 @@ export async function runAddRepeatingTodo(
   // (add-repeating dropped the rule deadline, forcing a follow-up reschedule-repeat);
   // mapping it up front makes that unnecessary. A deadline needs a concrete `--when`
   // (the per-occurrence offset is deadline − start) and must be on/after it.
+  //
+  // DEADLINE/OFFSET AGREEMENT (ruling 2026-08-18): the same rule-global offset can be
+  // named two ways — a concrete `--deadline <date>` (offset = deadline − when) OR an
+  // explicit `--start-days-earlier N` (offset = N, deadline derived as when + N). The
+  // geometry when/deadline/N is OVER-DETERMINED: the dialog's start-offset is
+  // rule-global and the first occurrence's start is derived as due − N, so there is no
+  // per-first-instance gap to absorb a disagreement (unlike DACON1's off-rule-first
+  // calendar freedom). So when BOTH are given they must AGREE (`deadline − when == N`)
+  // — an exact match is harmless redundancy, a mismatch is inexpressible and refused
+  // fast (zero mutation). Either input ALONE maps to the rule and keeps the seed
+  // deadline-free.
   let rule: AddRepeatingRuleFields &
     Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">> = baseRule;
   let seedDeadline = add.deadline;
-  if (add.deadline !== undefined && afterCompletion !== true) {
+  if ((add.deadline !== undefined || startDaysEarlier !== undefined) && afterCompletion !== true) {
     if (!isIsoDate(add.when)) {
       throw new RangeError(
-        "a repeating --deadline needs a concrete --when date (the deadline sets each occurrence's " +
-          "due date relative to its start) — schedule the series on a YYYY-MM-DD --when, or drop --deadline",
+        "a repeating --deadline or --start-days-earlier needs a concrete --when date (the deadline " +
+          "offset is measured from each occurrence's start) — schedule the series on a YYYY-MM-DD " +
+          "--when, or drop --deadline / --start-days-earlier",
       );
     }
-    const startEarlier = daysBetweenIso(add.when, add.deadline);
-    if (startEarlier < 0) {
-      throw new RangeError(
-        `--deadline (${add.deadline}) must be on or after --when (${add.when}) — a deadline cannot ` +
-          "precede the occurrence's own start",
-      );
+    let startEarlier: number;
+    if (add.deadline !== undefined) {
+      const derived = daysBetweenIso(add.when, add.deadline);
+      if (derived < 0) {
+        throw new RangeError(
+          `--deadline (${add.deadline}) must be on or after --when (${add.when}) — a deadline cannot ` +
+            "precede the occurrence's own start",
+        );
+      }
+      if (startDaysEarlier !== undefined && startDaysEarlier !== derived) {
+        throw new RangeError(
+          `--deadline (${add.deadline}) puts each occurrence's due date ${derived} day` +
+            `${derived === 1 ? "" : "s"} after its start (--when ${add.when}), but ` +
+            `--start-days-earlier says ${startDaysEarlier} — these disagree. Drop one, or make them ` +
+            `agree (--start-days-earlier ${derived}, or --deadline ${addDaysIso(add.when, startDaysEarlier)}).`,
+        );
+      }
+      startEarlier = derived;
+    } else {
+      // `--start-days-earlier N` alone: the deadline is derived as when + N. A bad N
+      // (non-integer / negative) is refused by assertRepeatRule once mapped.
+      startEarlier = startDaysEarlier as number;
     }
     rule = { ...baseRule, deadline: true, startDaysEarlier: startEarlier };
     seedDeadline = undefined; // the RULE owns the deadline; the seed carries none
+  } else if (startDaysEarlier !== undefined) {
+    // afterCompletion === true here: an after-completion repeat has no calendar
+    // start to count a deadline back from — refuse rather than silently drop it.
+    throw new RangeError(
+      "--start-days-earlier applies only to a fixed-schedule deadline — an after-completion repeat " +
+        "has no calendar start to count back from; drop --after-completion or --start-days-earlier",
+    );
   }
 
   const addParams: Record<string, unknown> = {
