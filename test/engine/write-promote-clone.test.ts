@@ -470,6 +470,113 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     );
   });
 
+  it("add-repeating: --start-days-earlier alone maps to the RULE deadline (no concrete --deadline)", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "Lead-only",
+        when: "2026-07-15",
+        startDaysEarlier: 14, // deadline derived as 2026-07-29
+        frequency: "yearly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // Same landed rule as the concrete-date form: deadline sentinel + start-offset −14.
+    expect(row(res.uuid)?.["deadline"]).not.toBeNull();
+    const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(-14);
+    // Seed carries no deadline → no future double-book (icCount 0, start == --when).
+    expect(res.repeating?.instanceUuid).toBeNull();
+    expect(instancesOf(res.uuid)).toBe(0);
+  });
+
+  it("add-repeating: --deadline AND --start-days-earlier that AGREE proceed (harmless redundancy)", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "Agreeing offset",
+        when: "2026-07-15",
+        deadline: "2026-07-29", // 14 days after the start …
+        startDaysEarlier: 14, // … and the offset says the same
+        frequency: "yearly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(-14);
+  });
+
+  it("add-repeating: --deadline AND --start-days-earlier that DISAGREE are refused (zero mutation)", async () => {
+    await expect(
+      runAddRepeatingTodo(
+        deps(vector),
+        {
+          title: "Conflicting offset",
+          when: "2026-07-15",
+          deadline: "2026-07-29", // implies a 14-day lead …
+          startDaysEarlier: 10, // … but the offset says 10 — inexpressible
+          frequency: "yearly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/these disagree/);
+    // The refusal names both corrected spellings (make them agree).
+    await expect(
+      runAddRepeatingTodo(
+        deps(vector),
+        {
+          title: "Conflicting offset",
+          when: "2026-07-15",
+          deadline: "2026-07-29",
+          startDaysEarlier: 10,
+          frequency: "yearly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/--start-days-earlier 14, or --deadline 2026-07-25/);
+  });
+
+  it("add-repeating: --start-days-earlier with a keyword --when is refused (needs a concrete date)", async () => {
+    await expect(
+      runAddRepeatingTodo(
+        deps(vector),
+        {
+          title: "Undated offset",
+          when: "someday",
+          startDaysEarlier: 7,
+          frequency: "weekly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/concrete --when/);
+  });
+
+  it("add-repeating: --start-days-earlier with --after-completion is refused (no calendar start)", async () => {
+    await expect(
+      runAddRepeatingTodo(
+        deps(vector),
+        {
+          title: "After-completion offset",
+          when: "2026-07-15",
+          startDaysEarlier: 7,
+          afterCompletion: true,
+          frequency: "weekly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/after-completion/);
+  });
+
   it("add-repeating: --deadline before --when is refused (behavioral)", async () => {
     await expect(
       runAddRepeatingTodo(

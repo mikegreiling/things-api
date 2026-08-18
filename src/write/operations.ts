@@ -829,6 +829,9 @@ export interface ProjectAddRepeatingParams extends AddRepeatingRuleFields {
  * deadline-free so the app does not SRCFATE-preserve it into a double-booked
  * future instance (DBLSPAWN1). It therefore requires a concrete `when` on or
  * before it (after-completion series keep the seed's one-off deadline instead).
+ * `startDaysEarlier` is the SAME deadline geometry named from the other end (the
+ * per-occurrence lead directly, deadline derived as `when + N`); the two are
+ * over-determined together and must AGREE (`deadline − when == startDaysEarlier`).
  */
 export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
   title: string;
@@ -842,6 +845,15 @@ export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
    * Needs a concrete `when` on or before it; not applicable to after-completion.
    */
   deadline?: IsoDate;
+  /**
+   * An ALTERNATIVE spelling of the deadline geometry: start each occurrence N days
+   * before its own deadline (integer ≥ 0), the deadline derived as `when + N`.
+   * Where a concrete `deadline` names the first due date, this names the
+   * per-occurrence lead directly. Needs a concrete `when`; when BOTH are given they
+   * must AGREE (`deadline − when == startDaysEarlier`) or the call is refused. Not
+   * applicable to after-completion (no calendar start to count back from).
+   */
+  startDaysEarlier?: number;
   tags?: string[];
   checklistItems?: string[];
   project?: ContainerRef;

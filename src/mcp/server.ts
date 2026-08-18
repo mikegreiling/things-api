@@ -2606,13 +2606,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             return usage('action "add" requires frequency and interval');
           }
           // add-repeating carries only the calendar-anchor rule fields here; the rule
-          // reminder/start-offset are set with a follow-up reschedule. A concrete
-          // `project_deadline` maps to the RULE for a to-do (DBLSPAWN1 — each occurrence
-          // deadlined, seed deadline-free) and to the project's own due date for a project.
+          // reminder is set with a follow-up reschedule. A concrete `project_deadline`
+          // maps to the RULE for a to-do (DBLSPAWN1 — each occurrence deadlined, seed
+          // deadline-free) and to the project's own due date for a project. For a to-do,
+          // `start_days_earlier` is the alternative spelling of that deadline geometry
+          // (the two must AGREE when both are given — enforced in the library).
           const {
             reminder: _reminder,
             deadline: _deadline,
-            startDaysEarlier: _sde,
+            startDaysEarlier,
             ...ruleExtras
           } = repeatExtras(args, frequency);
           if (args.scope === "todo") {
@@ -2622,6 +2624,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                   title: args.title,
                   ...(args.notes !== undefined && { notes: args.notes }),
                   ...(args.project_deadline !== undefined && { deadline: args.project_deadline }),
+                  ...(startDaysEarlier !== undefined && { startDaysEarlier }),
                   frequency,
                   interval,
                   ...ruleExtras,

@@ -1935,6 +1935,12 @@ export function registerWriteCommands(program: Command): void {
             "YYYY-MM-DD — deadlines EVERY occurrence: each starts (deadline − --when) days " +
               "before its own deadline (needs a concrete --when, on or before the deadline)",
           )
+          .option(
+            "--start-days-earlier <n>",
+            "deadlines EVERY occurrence, naming the lead directly: each starts N days before " +
+              "its own deadline (needs a concrete --when; an alternative to --deadline <date> — " +
+              "give both only if they agree)",
+          )
           .option("--tag <name>", "tag to attach (repeatable)", collect, [])
           .option("--checklist-item <title>", "checklist item (repeatable)", collect, [])
           .option("--project <ref>", "destination project (uuid or unique name)")
@@ -1963,6 +1969,9 @@ export function registerWriteCommands(program: Command): void {
           ...(opts["when"] !== undefined && { when: opts["when"] as never }),
           ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as never }),
           ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as never }),
+          ...(opts["startDaysEarlier"] !== undefined && {
+            startDaysEarlier: Number(opts["startDaysEarlier"]),
+          }),
           ...(tags.length > 0 && { tags }),
           ...(checklistItems.length > 0 && { checklistItems }),
           ...(projectRef !== undefined && { project: projectRef }),

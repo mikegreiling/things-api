@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addRepeatingRuleFieldsFromOpts,
   repeatRuleFlagsFromOpts,
   type RepeatRuleFlagFields,
 } from "../../src/cli/commands/repeat-flags.ts";
@@ -130,5 +131,22 @@ describe("repeatRuleFlagsFromOpts", () => {
       startDaysEarlier: 3,
       afterCompletion: true,
     });
+  });
+});
+
+describe("addRepeatingRuleFieldsFromOpts (add-repeating calendar subset)", () => {
+  // The add-repeating composites own `--deadline` / `--reminder` on the base add,
+  // and the todo command threads `--start-days-earlier` explicitly, so the shared
+  // calendar mapper must STRIP all three — otherwise the project add-repeating
+  // command (which has no start-offset vocabulary) would inherit one, or the todo
+  // path would double it and clobber the deadline/offset-agreement check.
+  it("strips reminder / deadline / start-days-earlier, keeping only calendar anchors", () => {
+    expect(
+      addRepeatingRuleFieldsFromOpts(
+        { weekdays: "monday", reminder: "09:00", deadline: true, startDaysEarlier: "3" },
+        "weekly",
+        1,
+      ),
+    ).toEqual({ frequency: "weekly", interval: 1, weekdays: ["monday"] });
   });
 });
