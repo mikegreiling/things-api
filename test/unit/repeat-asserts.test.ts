@@ -36,6 +36,9 @@ import { seedTodo } from "../fixtures/seed.ts";
 
 type Bag = Omit<RepeatRuleParams, "uuid">;
 
+/** A bag with `--when` removed — its purely STRUCTURAL vocabulary (see the validity test). */
+const stripWhen = ({ next: _next, ...rest }: Bag): Bag => rest;
+
 const NOW = new Date("2026-07-05T12:00:00Z");
 /** A forward-dated cursor default (a Tuesday), used where a bag omits --when. */
 const REF: string = "2026-09-22";
@@ -165,11 +168,21 @@ const BASES: { name: string; bag: Bag }[] = [
 ];
 
 describe("expectedRuleAssertions — validity of the corpus", () => {
-  it("every generated bag passes assertRepeatRule (the corpus is all-valid)", () => {
+  // The corpus generates template STATES (not necessarily valid reschedule
+  // REQUESTS): a base pins `--when` (REF) AND a fixed anchor AND a deadline shift
+  // so a single-field mutant stays inside one requested-field footprint. Freely
+  // mutating `--when` / `startDaysEarlier` / the anchor moves the first occurrence
+  // off the anchor grid — a combination the DACON1 anchor/when law refuses at
+  // request time (tested in repeat-rule.test.ts). Such off-anchor states still
+  // ARISE (the app itself parks an off-rule cursor), and the assert builder must
+  // discriminate them — so here we validate the STRUCTURAL vocabulary (anchor /
+  // ends / deadline shapes) with `next` stripped, which is exactly the request
+  // the anchor-derivation path would accept.
+  it("every generated bag is structurally valid (anchor/when coupling aside)", () => {
     for (const { bag } of BASES) {
-      expect(() => assertRepeatRule(bag)).not.toThrow();
+      expect(() => assertRepeatRule(stripWhen(bag))).not.toThrow();
       for (const m of singleFieldMutants(bag)) {
-        expect(() => assertRepeatRule(m.bag), m.label).not.toThrow();
+        expect(() => assertRepeatRule(stripWhen(m.bag)), m.label).not.toThrow();
       }
     }
   });

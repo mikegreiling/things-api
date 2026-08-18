@@ -188,6 +188,103 @@ describe("assertRepeatRule — reminders + deadline offset", () => {
   });
 });
 
+describe("assertRepeatRule — DACON1 off-rule first occurrence (empirical boundary)", () => {
+  // An explicit anchor disagreeing with `--when` (deadline-shift-aware) requests an
+  // OFF-RULE first occurrence. The app HONORS this for weekly/yearly (allowed,
+  // disclosed at the call site) but SNAPS it for monthly (fail-closed here). Evidence:
+  // docs/lab/dacon1-deadline-contradiction.md (golden-v3 / Things 3.22.14).
+
+  it("ALLOWS a weekly off-rule first (Thursday --when, Wednesday anchor — the maintainer's shape)", () => {
+    ok({ frequency: "weekly", interval: 1, next: "2028-10-19", weekdays: ["wednesday"] }); // Oct 19 2028 is a Thursday
+  });
+  it("ALLOWS a weekly off-rule first under a deadline shift (weekday of when + N not in the set)", () => {
+    ok({
+      frequency: "weekly",
+      interval: 1,
+      next: "2028-10-18",
+      weekdays: ["monday", "friday"],
+      deadline: true,
+      startDaysEarlier: 7,
+    });
+  });
+  it("ALLOWS a yearly off-rule first (the live-host CREATE shape — honored on create)", () => {
+    // --when Oct 16 + 14 ⇒ due Oct 30; anchor names the Oct-16 due date — off-rule first, honored.
+    ok({
+      frequency: "yearly",
+      interval: 1,
+      next: "2028-10-16",
+      yearly: { month: 10, day: 16 },
+      deadline: true,
+      startDaysEarlier: 14,
+    });
+  });
+  it("ALLOWS an on-rule anchor and a --when-only rule (no disagreement)", () => {
+    ok({ frequency: "yearly", interval: 1, next: "2028-10-16", yearly: { month: 10, day: 16 } });
+    ok({
+      frequency: "yearly",
+      interval: 1,
+      next: "2028-10-16",
+      deadline: true,
+      startDaysEarlier: 14,
+    });
+    ok({ frequency: "weekly", interval: 1, next: "2028-10-18", weekdays: ["wednesday"] }); // Oct 18 is a Wednesday
+  });
+
+  it("REFUSES a monthly off-rule first (the dialog snaps to the anchor day)", () => {
+    bad(
+      { frequency: "monthly", interval: 1, next: "2028-10-16", monthly: { day: 1 } },
+      /monthly rule cannot start off its anchor.*snaps.*day 1.*first occurrence on 2028-10-16/s,
+    );
+  });
+  it("REFUSES a monthly off-rule first under a deadline shift", () => {
+    bad(
+      {
+        frequency: "monthly",
+        interval: 1,
+        next: "2028-10-16",
+        monthly: { day: 1 },
+        deadline: true,
+        startDaysEarlier: 5,
+      },
+      /monthly rule cannot start off its anchor/s,
+    );
+  });
+  it("REFUSES a monthly nth-weekday off-rule first", () => {
+    // 2028-10-16 is the 3rd Monday; a 2nd-Monday anchor disagrees.
+    bad(
+      {
+        frequency: "monthly",
+        interval: 1,
+        next: "2028-10-16",
+        monthly: { weekday: "monday", ordinal: 2 },
+      },
+      /monthly rule cannot start off its anchor.*the 2nd monday/s,
+    );
+  });
+  it("ALLOWS a monthly ON-rule anchor (no off-rule first)", () => {
+    ok({ frequency: "monthly", interval: 1, next: "2028-10-16", monthly: { day: 16 } });
+    // 2028-10-16 IS the 3rd Monday.
+    ok({
+      frequency: "monthly",
+      interval: 1,
+      next: "2028-10-16",
+      monthly: { weekday: "monday", ordinal: 3 },
+    });
+    ok({ frequency: "monthly", interval: 1, next: "2028-10-31", monthly: { day: "last" } });
+  });
+
+  it("does not fire without a concrete --when, nor for after-completion, nor daily", () => {
+    ok({ frequency: "monthly", interval: 1, monthly: { day: 1 } }); // no --when
+    ok({
+      frequency: "daily",
+      interval: 1,
+      next: "2028-10-16",
+      deadline: true,
+      startDaysEarlier: 14,
+    });
+  });
+});
+
 // --------------------------------------------------------- inverse mapping
 
 function rule(partial: Partial<RepeatRule>): RepeatRule {

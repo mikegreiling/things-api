@@ -25,7 +25,13 @@
  * today+interval model for the default (their default-anchor law is unprobed).
  */
 import { addDaysIso, type IsoDate } from "../model/dates.ts";
-import type { MonthlyAnchor, RepeatRuleParams, Weekday, YearlyAnchor } from "./operations.ts";
+import type {
+  MonthlyAnchor,
+  RepeatRuleParams,
+  Weekday,
+  WeekdayOrdinal,
+  YearlyAnchor,
+} from "./operations.ts";
 import { WD_TO_WEEKDAY, WEEKDAY_TO_WD } from "./repeat-rule.ts";
 
 /** True iff `v` is a concrete `YYYY-MM-DD` date (not a list keyword / undefined). */
@@ -190,6 +196,192 @@ export function deriveFixedAnchor(
     ...(weekdays !== undefined && { weekdays }),
     ...(monthly !== undefined && { monthly }),
     ...(yearly !== undefined && { yearly }),
+  };
+}
+
+// ------------------------------------------------ off-rule first occurrence (DACON1)
+//
+// A concrete `--when` together with an EXPLICIT calendar anchor
+// (weekdays/monthly/yearly) can DISAGREE — the first occurrence lands off the
+// rule's grid. This is NOT an error by default: the Repeat dialog's "Next:" field
+// accepts an off-schedule first occurrence, so the series appears on `--when` the
+// first time and follows the anchor thereafter (e.g. `--weekdays wednesday --when
+// <a thursday>` = Thursday first, Wednesdays after). In DEADLINE mode `--when` is
+// the START and each occurrence is DUE `startDaysEarlier` days later; the anchor
+// names the DUE date, so the off-rule test compares the anchor against
+// `deadlineDriveNext` (= when + N, the deadline). `deriveFixedAnchor` covers the
+// NO-explicit-anchor case (anchor derived from `--when`, never off-rule).
+//
+// EMPIRICAL boundary (docs/lab/dacon1-deadline-contradiction.md, golden-v3 /
+// Things 3.22.14). The app HONORS an off-rule first for WEEKLY and YEARLY (cells
+// DC1/DC5, DC3/DC4: the typed `--when` lands verbatim as the first instance start,
+// the anchor drives the recurring grid). It does NOT for MONTHLY: the month row's
+// "Next:" field SNAPS to the anchor day (cell DC2: Next 08-10 with a day-20 anchor
+// committed 08-20, then the CLI's read-back rejected it, -2700). So an off-rule
+// first is EXPRESSIBLE for weekly/yearly (allowed + disclosed) and INEXPRESSIBLE
+// for monthly (fail-closed at validation rather than mid-drive).
+
+/** Days in the calendar month containing `iso`. */
+function daysInMonthOf(iso: IsoDate): number {
+  const [y, m] = iso.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m, 0)).getUTCDate(); // day 0 of month m+1 = last day of m
+}
+
+/** True iff `iso` is the last calendar day of its month. */
+function isLastDayOfMonth(iso: IsoDate): boolean {
+  return dayOfMonthIso(iso) === daysInMonthOf(iso);
+}
+
+/** Which occurrence (1-based) of its own weekday `iso` is within its month. */
+function weekdayOrdinalInMonth(iso: IsoDate): number {
+  return Math.floor((dayOfMonthIso(iso) - 1) / 7) + 1;
+}
+
+/** True iff `iso` is the LAST occurrence of its weekday in its month. */
+function isLastWeekdayInMonth(iso: IsoDate): boolean {
+  return dayOfMonthIso(iso) + 7 > daysInMonthOf(iso);
+}
+
+/** Whether date `iso` lands on the monthly/yearly day-or-nth-weekday `anchor`. */
+function dateSatisfiesDayAnchor(iso: IsoDate, anchor: MonthlyAnchor): boolean {
+  if ("day" in anchor) {
+    return anchor.day === "last" ? isLastDayOfMonth(iso) : dayOfMonthIso(iso) === anchor.day;
+  }
+  if (WEEKDAY_TO_WD[anchor.weekday] !== weekdayOfIso(iso)) return false;
+  return anchor.ordinal === "last"
+    ? isLastWeekdayInMonth(iso)
+    : weekdayOrdinalInMonth(iso) === anchor.ordinal;
+}
+
+/** "1st" | "2nd" | … | "5th" | "last" for an nth-weekday ordinal. */
+function ordinalWord(ordinal: WeekdayOrdinal): string {
+  if (ordinal === "last") return "last";
+  return `${ordinal}${["th", "st", "nd", "rd", "th"][ordinal] ?? "th"}`;
+}
+
+/** Human phrase for a monthly/yearly day-or-nth-weekday anchor (surface copy). */
+function describeDayAnchor(anchor: MonthlyAnchor): string {
+  if ("day" in anchor)
+    return anchor.day === "last" ? "the last day of the month" : `day ${anchor.day}`;
+  return `the ${ordinalWord(anchor.ordinal)} ${anchor.weekday}`;
+}
+
+/** The effective deadline back-shift (days) for the given params, mirroring {@link deadlineDriveNext}. */
+function anchorShiftDays(p: Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">): number {
+  return p.deadline === true || (p.startDaysEarlier ?? 0) > 0 ? (p.startDaysEarlier ?? 0) : 0;
+}
+
+/** Whether `driveIso` lands on the explicit anchor of these params (deadline-shift date already applied). */
+function driveDateOnAnchor(
+  p: Pick<AnchorParams, "frequency" | "weekdays" | "monthly" | "yearly">,
+  driveIso: IsoDate,
+): boolean {
+  if (p.frequency === "weekly" && p.weekdays !== undefined && p.weekdays.length > 0) {
+    return p.weekdays.includes(WD_TO_WEEKDAY[weekdayOfIso(driveIso)] as Weekday);
+  }
+  if (p.frequency === "monthly" && p.monthly !== undefined) {
+    return dateSatisfiesDayAnchor(driveIso, p.monthly);
+  }
+  if (p.frequency === "yearly" && p.yearly !== undefined) {
+    return monthOfIso(driveIso) === p.yearly.month && dateSatisfiesDayAnchor(driveIso, p.yearly);
+  }
+  return true; // no explicit anchor for this frequency ⇒ never off-rule (derived from --when)
+}
+
+/** The recurring-pattern phrase for the explicit anchor (the "thereafter" half of the disclosure). */
+function describeRulePattern(
+  p: Pick<AnchorParams, "frequency" | "weekdays" | "monthly" | "yearly">,
+): string {
+  if (p.frequency === "weekly" && p.weekdays !== undefined) {
+    return `every ${p.weekdays.join(", ")}`;
+  }
+  if (p.frequency === "monthly" && p.monthly !== undefined) {
+    return `monthly on ${describeDayAnchor(p.monthly)}`;
+  }
+  if (p.frequency === "yearly" && p.yearly !== undefined) {
+    return `yearly in month ${p.yearly.month} on ${describeDayAnchor(p.yearly)}`;
+  }
+  return "the rule";
+}
+
+type AnchorParams = Pick<
+  RepeatRuleParams,
+  | "frequency"
+  | "interval"
+  | "weekdays"
+  | "monthly"
+  | "yearly"
+  | "afterCompletion"
+  | "deadline"
+  | "startDaysEarlier"
+  | "next"
+>;
+
+/** The disclosure of a HONORED off-rule first occurrence (both halves of the landed pattern). */
+export interface OffRuleFirstDisclosure {
+  /** The date the first occurrence APPEARS (the start = `--when`). */
+  appearsIso: IsoDate;
+  /** The first occurrence's DUE date (`--when + startDaysEarlier`), or null when not deadlined. */
+  dueIso: IsoDate | null;
+  /** Behavioral one-line summary of both halves (warning + echo copy). */
+  message: string;
+}
+
+/**
+ * Assess a rule request's off-rule-first status (DACON1). Returns:
+ *  - `null` — no off-rule first (on-rule, no explicit anchor, no concrete `--when`,
+ *    after-completion, or daily): nothing to disclose or refuse.
+ *  - `{ kind: "honored", disclosure }` — the app honors this off-rule first
+ *    (weekly/yearly): allow + disclose both halves of the landed pattern.
+ *  - `{ kind: "dishonored", refusal }` — the app snaps/skips instead of honoring it
+ *    (monthly): a behavioral fail-closed refusal naming the expressible alternatives.
+ */
+export type OffRuleFirstAssessment =
+  | { kind: "honored"; disclosure: OffRuleFirstDisclosure }
+  | { kind: "dishonored"; refusal: string };
+
+export function assessOffRuleFirst(p: AnchorParams): OffRuleFirstAssessment | null {
+  if (p.afterCompletion === true) return null;
+  if (!isIsoDate(p.next)) return null;
+  const driveIso = deadlineDriveNext(p);
+  if (driveIso === undefined) return null;
+  if (driveDateOnAnchor(p, driveIso)) return null; // on-rule — the common case
+
+  const shift = anchorShiftDays(p);
+  const dueIso = shift > 0 ? addDaysIso(p.next, shift) : null;
+  const pattern = describeRulePattern(p);
+
+  // MONTHLY off-rule first is INEXPRESSIBLE — the month row's "Next:" field snaps
+  // to the anchor day (dacon1-deadline-contradiction.md cell DC2). Fail closed at
+  // validation with the two nearest expressible alternatives.
+  if (p.frequency === "monthly") {
+    const onRuleHint =
+      shift > 0
+        ? `set --when so that --when + ${shift} lands on ${describeDayAnchor(p.monthly as MonthlyAnchor)}`
+        : `set --when to a date on ${describeDayAnchor(p.monthly as MonthlyAnchor)}`;
+    return {
+      kind: "dishonored",
+      refusal:
+        `a monthly rule cannot start off its anchor: the Repeat dialog snaps the first ` +
+        `occurrence to ${describeDayAnchor(p.monthly as MonthlyAnchor)}, so a first occurrence on ` +
+        `${p.next} would not hold. Either ${onRuleHint}, or omit the monthly anchor to take it ` +
+        `from --when.`,
+    };
+  }
+
+  // WEEKLY / YEARLY off-rule first is HONORED — allow + disclose both halves.
+  const dueClause = dueIso !== null ? `, due ${dueIso}` : "";
+  const ongoing =
+    dueIso !== null
+      ? `thereafter: ${pattern}, appearing ${shift} day${shift === 1 ? "" : "s"} earlier`
+      : `thereafter: ${pattern}`;
+  return {
+    kind: "honored",
+    disclosure: {
+      appearsIso: p.next,
+      dueIso,
+      message: `off-rule first occurrence — appears ${p.next}${dueClause}; ${ongoing}`,
+    },
   };
 }
 

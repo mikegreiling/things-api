@@ -48,6 +48,8 @@ import {
   type OperationParamsMap,
 } from "./operations.ts";
 import { computeCompletionContext, type CompletionContext } from "./completion-context.ts";
+import { assessOffRuleFirst } from "./repeat-anchor.ts";
+import type { RepeatRuleParams } from "./operations.ts";
 import { planVector } from "./planner.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 import {
@@ -166,6 +168,8 @@ export interface MutationPlan {
   invocation: string;
   expectedDelta: DeltaSpec;
   hazardsChecked: HazardId[];
+  /** Advisory notes the preview should surface (e.g. the DACON1 off-rule-first disclosure). */
+  notes?: string[];
 }
 
 export type MutationResult =
@@ -869,6 +873,12 @@ export async function runMutation<K extends OperationKind>(
     });
 
     if (options.dryRun === true) {
+      // DACON1: preview the off-rule-first disclosure so --dry-run states the same
+      // two-phase pattern the executed write would (the dishonored monthly shape is
+      // already refused before reaching here).
+      const planNotes: string[] = [];
+      const dryOffRule = assessOffRuleFirst(params as unknown as RepeatRuleParams);
+      if (dryOffRule?.kind === "honored") planNotes.push(dryOffRule.disclosure.message);
       return {
         kind: "dry-run",
         op,
@@ -879,6 +889,7 @@ export async function runMutation<K extends OperationKind>(
           invocation: invocation.redactedPayload,
           expectedDelta: delta,
           hazardsChecked: spec.hazards,
+          ...(planNotes.length > 0 && { notes: planNotes }),
         },
       };
     }
@@ -1304,6 +1315,15 @@ export async function runMutation<K extends OperationKind>(
         );
       }
       if (outcome.repeatingWarnings !== undefined) warnings.push(...outcome.repeatingWarnings);
+      // DACON1 off-rule-first disclosure (reschedule-repeat): an explicit anchor
+      // that disagrees with --when lands an OFF-RULE first occurrence (honored for
+      // weekly/yearly). State both halves of the landed pattern; the dishonored
+      // monthly shape was already refused at validation. (make/add-repeating carry
+      // their own disclosure via the promote result.)
+      if (op === "todo.reschedule-repeat" || op === "project.reschedule-repeat") {
+        const offRule = assessOffRuleFirst(params as unknown as RepeatRuleParams);
+        if (offRule?.kind === "honored") warnings.push(offRule.disclosure.message);
+      }
       // #V11 heading-reorder disclosure: re-ranking an archived heading also
       // un-archives it (status→open). Never silent — name every reopened heading.
       if (pre.headingMove !== null && pre.headingMove.reopened.length > 0) {

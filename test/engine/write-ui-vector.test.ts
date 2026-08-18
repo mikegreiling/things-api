@@ -518,8 +518,11 @@ describe("ui vector — idempotency + transport recovery (defect (a))", () => {
   }
 
   // The maintainer's live-repro shape, synthetic: a monthly last-day deadlined
-  // ts=-14 template, rescheduled to monthly 4th-Tuesday ts=-21 with an explicit
-  // --when. Pre-#491 the precheck false-noop'd (unit+interval unchanged).
+  // ts=-14 template, rescheduled to a monthly nth-Tuesday ts=-21 with an explicit
+  // --when. Pre-#491 the precheck false-noop'd (unit+interval unchanged). The
+  // anchor is the DEADLINE date's placement (--when 2026-09-22 + 21 ⇒ 2026-10-13,
+  // the 2nd Tuesday) so the request is DACON1-consistent (a deadlined rule anchors
+  // on its deadline).
   const PREV: Bag = {
     frequency: "monthly",
     interval: 1,
@@ -531,7 +534,7 @@ describe("ui vector — idempotency + transport recovery (defect (a))", () => {
   const NEW: Bag = {
     frequency: "monthly",
     interval: 1,
-    monthly: { weekday: "tuesday", ordinal: 4 },
+    monthly: { weekday: "tuesday", ordinal: 2 },
     deadline: true,
     startDaysEarlier: 21,
     next: "2026-09-22",
@@ -657,10 +660,12 @@ describe("ui vector — RRD1 checkbox convergence (reschedule on a pre-populated
 
   it("reschedule-on-deadlined converges the deadline box (not a blind press) and orders it before Next", async () => {
     const uuid = seedRow(DEADLINED_PREV);
+    // Anchor = the deadline date's placement (--when + start-21 ⇒ 2026-10-13, the
+    // 2nd Tuesday) — DACON1-consistent (a deadlined rule anchors on its deadline).
     const NEW: Bag = {
       frequency: "monthly",
       interval: 1,
-      monthly: { weekday: "tuesday", ordinal: 4 },
+      monthly: { weekday: "tuesday", ordinal: 2 },
       deadline: true,
       startDaysEarlier: 21,
       next: "2026-09-22",

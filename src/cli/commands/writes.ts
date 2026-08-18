@@ -493,6 +493,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
             `  invocation: ${result.plan.invocation}`,
             `  hazards checked: ${result.plan.hazardsChecked.join(", ") || "none"}`,
             `  expected delta: ${JSON.stringify(result.plan.expectedDelta)}`,
+            ...(result.plan.notes ?? []).map((n) => `  note: ${n}`),
             "",
           ].join("\n"),
         );

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import type { RepeatRuleParams } from "../../src/write/operations.ts";
 import {
+  assessOffRuleFirst,
   deadlineDriveNext,
   deriveFixedAnchor,
   deriveMonthlyAnchor,
@@ -136,6 +137,105 @@ describe("deadlineDriveNext — deadline-mode Next shift (YANCH1 #493)", () => {
   });
   it("undefined when there is no concrete first-occurrence date", () => {
     expect(deadlineDriveNext({ deadline: true, startDaysEarlier: 14 })).toBeUndefined();
+  });
+});
+
+describe("assessOffRuleFirst — off-rule-first classification (DACON1, golden-v3 evidence)", () => {
+  it("null when there is no off-rule first (on-rule, --when-only, after-completion, daily, no --when)", () => {
+    // on-rule weekly (Oct 18 2028 IS a Wednesday)
+    expect(
+      assessOffRuleFirst({
+        frequency: "weekly",
+        interval: 1,
+        next: "2028-10-18",
+        weekdays: ["wednesday"],
+      }),
+    ).toBeNull();
+    // --when only (no explicit anchor → derived, never off-rule)
+    expect(assessOffRuleFirst({ frequency: "yearly", interval: 1, next: "2028-10-16" })).toBeNull();
+    // no --when
+    expect(
+      assessOffRuleFirst({ frequency: "monthly", interval: 1, monthly: { day: 1 } }),
+    ).toBeNull();
+    // after-completion + daily
+    expect(
+      assessOffRuleFirst({
+        frequency: "weekly",
+        interval: 1,
+        next: "2028-10-19",
+        weekdays: ["wednesday"],
+        afterCompletion: true,
+      }),
+    ).toBeNull();
+    expect(
+      assessOffRuleFirst({
+        frequency: "daily",
+        interval: 1,
+        next: "2028-10-16",
+        deadline: true,
+        startDaysEarlier: 14,
+      }),
+    ).toBeNull();
+  });
+
+  it("weekly off-rule first is HONORED — discloses both halves (appears when; thereafter the weekdays)", () => {
+    // Oct 19 2028 is a Thursday; anchor is Wednesday.
+    const a = assessOffRuleFirst({
+      frequency: "weekly",
+      interval: 1,
+      next: "2028-10-19",
+      weekdays: ["wednesday"],
+    });
+    expect(a?.kind).toBe("honored");
+    if (a?.kind === "honored") {
+      expect(a.disclosure.appearsIso).toBe("2028-10-19");
+      expect(a.disclosure.dueIso).toBeNull();
+      expect(a.disclosure.message).toMatch(/appears 2028-10-19.*thereafter.*wednesday/s);
+    }
+  });
+
+  it("yearly off-rule first under a deadline is HONORED — the live-host CREATE shape", () => {
+    // --when Oct 16 + 14 ⇒ due Oct 30; anchor names the Oct-16 due date → off-rule first.
+    const a = assessOffRuleFirst({
+      frequency: "yearly",
+      interval: 1,
+      next: "2028-10-16",
+      yearly: { month: 10, day: 16 },
+      deadline: true,
+      startDaysEarlier: 14,
+    });
+    expect(a?.kind).toBe("honored");
+    if (a?.kind === "honored") {
+      expect(a.disclosure.appearsIso).toBe("2028-10-16");
+      expect(a.disclosure.dueIso).toBe("2028-10-30");
+      expect(a.disclosure.message).toMatch(
+        /appears 2028-10-16, due 2028-10-30.*thereafter.*14 days earlier/s,
+      );
+    }
+  });
+
+  it("monthly off-rule first is DISHONORED — fail-closed refusal naming the alternatives", () => {
+    const a = assessOffRuleFirst({
+      frequency: "monthly",
+      interval: 1,
+      next: "2028-10-16",
+      monthly: { day: 1 },
+    });
+    expect(a?.kind).toBe("dishonored");
+    if (a?.kind === "dishonored") {
+      expect(a.refusal).toMatch(
+        /monthly rule cannot start off its anchor.*day 1.*omit the monthly anchor/s,
+      );
+    }
+    // on-rule monthly (day 16 = --when) → null
+    expect(
+      assessOffRuleFirst({
+        frequency: "monthly",
+        interval: 1,
+        next: "2028-10-16",
+        monthly: { day: 16 },
+      }),
+    ).toBeNull();
   });
 });
 
