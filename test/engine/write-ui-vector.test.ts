@@ -396,6 +396,23 @@ function bagState(bag: Bag): { xml: string; deadline: string | null; cursor: str
   };
 }
 
+/** Apply a reschedule-`bag`'s landed state (rule blob + deadline column + cursor) to a row. */
+function applyBag(uuid: string, bag: Bag): void {
+  const s = bagState(bag);
+  fixture.db
+    .prepare(
+      "UPDATE TMTask SET rt1_recurrenceRule = ?, deadline = ?, rt1_nextInstanceStartDate = ?, " +
+        "userModificationDate = ? WHERE uuid = ?",
+    )
+    .run(
+      new TextEncoder().encode(s.xml),
+      s.deadline === null ? null : encodePackedDate(s.deadline),
+      s.cursor === null ? null : encodePackedDate(s.cursor),
+      Math.floor(NOW.getTime() / 1000) + 1,
+      uuid,
+    );
+}
+
 describe("ui vector — idempotency + transport recovery (defect (a))", () => {
   it("pre-drive idempotency: the rule already equals the target → ok no-op, NO GUI drive", async () => {
     const uuid = seedTodo(fixture.db, {
@@ -573,6 +590,145 @@ describe("ui vector — idempotency + transport recovery (defect (a))", () => {
     );
     // The rule is still fixed → the type assertion catches the no-op.
     expect(res.kind).toBe("verify-failed");
+  });
+});
+
+// ---- RRD1: reschedule on a deadlined rule + preserve-unspecified ------------
+//
+// These drive the REAL compile path (commands.ts reschedRuleExtras →
+// rescheduleRepeatRecipe → repeatDialogEntry) through runMutation and inspect the
+// COMPILED RECIPE a capturing vector records. That is where the checkbox-converge
+// fix lives: an already-deadlined reschedule must converge the box (never blind-
+// press it), and an unspecified deadline/reminder must emit NO checkbox step so
+// the pre-populated state is preserved (#492).
+
+/** A ui vector that RECORDS the compiled recipe it is handed and applies a DB effect. */
+function capturingUiVector(effect?: () => void): {
+  vector: WriteVector;
+  recipe: () => UiRecipe | undefined;
+} {
+  let captured: UiRecipe | undefined;
+  const base = createUiVector(config(true), async () => ok("true"));
+  return {
+    recipe: () => captured,
+    vector: {
+      id: "ui",
+      matrix: base.matrix,
+      async execute(inv: CompiledInvocation) {
+        captured = inv.recipe;
+        effect?.();
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    },
+  };
+}
+
+/** The dialog-entry steps of a compiled reschedule recipe (checkbox/field controls). */
+function rescheduleDialogSteps(recipe: UiRecipe | undefined) {
+  return (recipe?.steps ?? []).filter(
+    (s) => s.pathCandidates !== undefined || s.primitive === "set-datetime",
+  );
+}
+
+describe("ui vector — RRD1 checkbox convergence (reschedule on a pre-populated dialog)", () => {
+  // A currently-DEADLINED monthly template (last-day, ts=-14), rescheduled to a
+  // different anchor + offset while KEEPING the deadline — the maintainer's live
+  // repro shape. The drive must run (anchor/offset differ) and the compiled recipe
+  // must converge "Add deadlines" (target checked) BEFORE it drives "Next:".
+  const DEADLINED_PREV: Bag = {
+    frequency: "monthly",
+    interval: 1,
+    monthly: { day: "last" },
+    deadline: true,
+    startDaysEarlier: 14,
+    next: "2026-08-31",
+  };
+
+  function seedRow(bag: Bag): string {
+    const s = bagState(bag);
+    return seedTodo(fixture.db, {
+      title: "Monthly review",
+      start: "someday",
+      recurrenceRuleXml: s.xml,
+      deadline: s.deadline,
+      nextInstanceStartDate: s.cursor,
+    });
+  }
+
+  it("reschedule-on-deadlined converges the deadline box (not a blind press) and orders it before Next", async () => {
+    const uuid = seedRow(DEADLINED_PREV);
+    const NEW: Bag = {
+      frequency: "monthly",
+      interval: 1,
+      monthly: { weekday: "tuesday", ordinal: 4 },
+      deadline: true,
+      startDaysEarlier: 21,
+      next: "2026-09-22",
+    };
+    const cap = capturingUiVector(() => applyBag(uuid, NEW));
+    const res = await runMutation(
+      deps(cap.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, ...NEW },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 500 },
+    );
+    expect(res.kind).toBe("ok");
+    const steps = rescheduleDialogSteps(cap.recipe());
+    const deadline = steps.find((s) => s.label === "Add deadlines");
+    expect(deadline?.primitive).toBe("ensure-checkbox");
+    expect(deadline?.checkboxTarget).toBe(true);
+    // No blind checkbox press survives the compile.
+    expect(
+      steps.some((s) => s.primitive === "press" && /Add (deadlines|reminders)/.test(s.label)),
+    ).toBe(false);
+    // Deadline mode is established before the deadline-shifted "Next:" is driven.
+    const deadlineIdx = steps.findIndex((s) => s.label === "Add deadlines");
+    const nextIdx = steps.findIndex((s) => s.dtTarget === "next");
+    expect(nextIdx).toBeGreaterThan(deadlineIdx);
+    // YANCH1 shift: --when 2026-09-22 + start-21 ⇒ the deadline (Next) is driven to 2026-10-13.
+    expect(steps.find((s) => s.dtTarget === "next")?.value).toBe("date:2026-10-13");
+  });
+
+  it("reschedule preserving an UNSPECIFIED deadline emits NO deadline checkbox step", async () => {
+    // A rule-only reschedule (anchor change) of a deadlined template with NO
+    // --deadline: the box must be left untouched so the app preserves it (#492).
+    const uuid = seedRow(DEADLINED_PREV);
+    const NEW_NO_DEADLINE: Bag = {
+      frequency: "monthly",
+      interval: 1,
+      monthly: { weekday: "tuesday", ordinal: 4 },
+    };
+    // The drive "lands" the new anchor while the app keeps the deadline untouched.
+    const cap = capturingUiVector(() =>
+      applyBag(uuid, { ...NEW_NO_DEADLINE, deadline: true, startDaysEarlier: 14 }),
+    );
+    const res = await runMutation(
+      deps(cap.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, ...NEW_NO_DEADLINE },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 500 },
+    );
+    expect(res.kind).toBe("ok");
+    const steps = rescheduleDialogSteps(cap.recipe());
+    expect(steps.some((s) => s.label === "Add deadlines")).toBe(false);
+    expect(steps.some((s) => s.label === "Add reminders")).toBe(false);
+  });
+
+  it("reschedule preserving an UNSPECIFIED reminder emits NO reminder checkbox step", async () => {
+    const uuid = seedRow(DEADLINED_PREV);
+    const NEW: Bag = { frequency: "monthly", interval: 2, monthly: { day: "last" } };
+    const cap = capturingUiVector(() =>
+      applyBag(uuid, { ...NEW, deadline: true, startDaysEarlier: 14 }),
+    );
+    const res = await runMutation(
+      deps(cap.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, ...NEW },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 500 },
+    );
+    expect(res.kind).toBe("ok");
+    const steps = rescheduleDialogSteps(cap.recipe());
+    expect(steps.some((s) => s.label === "Add reminders")).toBe(false);
   });
 });
 

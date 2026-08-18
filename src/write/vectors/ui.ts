@@ -165,6 +165,39 @@ export function axSetValueScript(path: string, value: string, attempts = 3): str
 end tell`;
 }
 /**
+ * ensure-checkbox: converge a dialog checkbox to a target state through a
+ * DETERMINISTIC CLOSED LOOP (RRD1, determinism doctrine) — never a blind toggle.
+ * It reads the checkbox's `AXValue` (0 = unchecked, 1 = checked), presses it ONLY
+ * when the observed value differs from `target`, then RE-READS to confirm the new
+ * value equals `target`. A press that did not register (or a value that has not
+ * settled) is retried a bounded number of times; if it never converges the script
+ * FAILS CLOSED (an `error`, i.e. a transport failure the pipeline re-verifies).
+ *
+ * This is what makes the "Add deadlines" / "Add reminders" checkboxes safe on a
+ * PRE-POPULATED reschedule dialog: the dialog opens with the item's CURRENT
+ * deadline/reminder state already ticked, so the old unconditional `click`
+ * FLIPPED an already-correct box the wrong way — the live #493-adjacent bug where
+ * a blind "Add deadlines" press UNCHECKED an already-deadlined rule and hid the
+ * "start N days earlier" field, collapsing the drive. Reading before pressing
+ * makes an already-correct box a no-op. One stable command shape per primitive.
+ */
+export function axEnsureCheckboxScript(path: string, target: boolean, attempts = 3): string {
+  const want = target ? 1 : 0;
+  const n = Math.max(1, Math.trunc(attempts));
+  return `${SE}
+  set cb to (${path})
+  repeat ${n} times
+    set cur to (value of cb) as integer
+    if cur is ${want} then return "OK"
+    click cb
+    delay 0.2
+  end repeat
+  set cur to (value of cb) as integer
+  if cur is ${want} then return "OK"
+  error "checkbox did not converge to ${want} after ${n} attempt(s); still " & cur
+end tell`;
+}
+/**
  * select-popup: choose an item in a pop-up button by NAME. Setting `value` on a
  * Things pop-up button is a silent no-op (UIC1 / UI2-i) — the control must be
  * opened and the menu item clicked. The open-click is POLLED until the menu
@@ -798,6 +831,12 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         label: step.label,
         lang: "javascript",
         script: axSetDateTimeScript(step.value ?? "", step.dtTarget ?? "next"),
+      };
+    case "ensure-checkbox":
+      return {
+        primitive: "ensure-checkbox",
+        label: step.label,
+        script: axEnsureCheckboxScript(step.path ?? "", step.checkboxTarget === true),
       };
     case "wait":
       return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };
