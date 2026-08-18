@@ -2486,7 +2486,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       .number()
       .int()
       .optional()
-      .describe("With deadline: start each occurrence N days before its deadline"),
+      .describe(
+        "With deadline: start each occurrence N days before its deadline (on add, an " +
+          "alternative spelling of project_deadline — give one or the other, both must agree)",
+      ),
   };
 
   /** Map the flat repeat-rule args to the extended fields (present keys only). */
@@ -2564,7 +2567,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe(
             `add: due date (${DATE_FORMAT}). For a to-do it deadlines EVERY occurrence — each ` +
               `starts (deadline − when) days before its own deadline, so it needs a concrete when ` +
-              `on or before it. For a project it is the project's own due date.`,
+              `on or before it (an alternative spelling of start_days_earlier — give one or the ` +
+              `other, both must agree). For a project it is the project's own due date.`,
           ),
         todos: z.array(z.string()).optional().describe("add (project): initial child to-do titles"),
         frequency: z
