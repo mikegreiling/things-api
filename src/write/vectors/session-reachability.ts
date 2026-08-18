@@ -72,6 +72,24 @@ const PROBE_MARKER = "-- sessgate-reachability probe";
  * One stable osascript shape returning the three window counts as "AS AX ALL".
  * Every count is wrapped so a lock-time error (a window lookup that throws on an
  * AX-blind session) degrades to -1 rather than failing the whole script.
+ *
+ * PERF1 scoping — behavior-preserving. The app-wide `allAx` walk (System Events
+ * enumerating every foreground process's windows) is near-free on the empty lab
+ * golden but seconds-long on a busy real desktop (measured 8s+ on the
+ * maintainer's host, 2026-08-18). Two changes cut that cost WITHOUT changing any
+ * verdict `interpretReachability` can produce:
+ *   - The walk runs ONLY when `thingsAx = 0`. When Things has an AX-visible
+ *     window (`thingsAx >= 1`, the common healthy case) the verdict is already
+ *     "reachable" regardless of `allAx`, so the walk is pure waste — skipped, and
+ *     `allAx` is left at -1 (never consulted on that branch). When `thingsAx < 0`
+ *     (AX unreadable) the gate fail-opens on `thingsAx`, so the walk is likewise
+ *     skipped and irrelevant.
+ *   - When the walk IS needed, it SHORT-CIRCUITS on the first window-bearing app
+ *     and reports `allAx = 1` (not the sum). The discriminator only ever tests
+ *     `allAx === 0` vs `allAx > 0` (0 => whole session AX-blind / locked;
+ *     > 0 => Things' window is merely on another Space or absent), so a boolean
+ *     "any other window?" yields byte-identical verdicts while avoiding the cost
+ *     of materializing every app's full window list.
  */
 export function axSessionReachabilityScript(): string {
   return `${PROBE_MARKER}
@@ -85,14 +103,19 @@ tell application "System Events"
 	try
 		set thingsAx to count (windows of process "Things3")
 	end try
-	try
-		set allAx to 0
-		repeat with proc in (application processes whose background only is false)
-			try
-				set allAx to allAx + (count (windows of proc))
-			end try
-		end repeat
-	end try
+	if thingsAx is 0 then
+		try
+			set allAx to 0
+			repeat with proc in (application processes whose background only is false)
+				try
+					if (count (windows of proc)) > 0 then
+						set allAx to 1
+						exit repeat
+					end if
+				end try
+			end repeat
+		end try
+	end if
 end tell
 return ((thingsAs as integer) as text) & " " & ((thingsAx as integer) as text) & " " & ((allAx as integer) as text)`;
 }
@@ -177,4 +200,65 @@ export async function probeSessionReachability(
   );
   if (!res.ok) return { reachable: true }; // fail-open: a probe transport error never blocks
   return interpretReachability(parseReachabilityCounts(res.stdout));
+}
+
+/**
+ * TTL for the intra-invocation reachability memo (PERF1). A promote composite
+ * probes reachability TWICE — once at the orchestrator's pre-seed gate, once at
+ * the in-drive gate after the reveal — ~20s apart on a busy host (both paid the
+ * full probe cost before this memo). 30s spans that gap with margin while
+ * expiring well before an unrelated later operation could reuse a stale verdict.
+ */
+export const REACHABILITY_CACHE_TTL_MS = 30_000;
+
+/**
+ * A short-lived memo of a REACHABLE verdict, shared between a promote composite's
+ * pre-seed gate and its in-drive gate so the two do not both pay the full probe
+ * cost (PERF1). `probe` returns a still-fresh memoized reachable verdict, else
+ * probes live and memoizes the result when (and only when) it is reachable;
+ * `invalidate` drops the memo (call after any action that changes window/session
+ * state, e.g. a relocation).
+ *
+ * Only a `reachable` verdict is memoized: a not-reachable verdict (locked /
+ * wrong-Space) must ALWAYS be re-evaluated fresh, because the in-drive gate probes
+ * AFTER the reveal — which surfaces a window in a healthy session and so can
+ * legitimately turn a pre-seed "window" verdict into "reachable" (reusing a stale
+ * "window" would fire a spurious relocation). A reachable verdict is stable across
+ * the reveal; if the session DEGRADES (locks / window moves) inside the cached
+ * window, the drive's dialog-wait fails and the cleanup path's OWN independent
+ * blindness probe (clearDialog, deliberately NOT routed through this memo) handles
+ * it — so a memoized reachable verdict is safe. Restricting the memo to reachable
+ * verdicts also keeps the "refuse locked / relocate wrong-Space / disclose"
+ * SESSGATE behavior byte-identical: every refusal and relocation decision is still
+ * taken on a fresh probe.
+ */
+export interface ReachabilityProbeCache {
+  /** Return a still-fresh memoized reachable verdict, else probe live and (if reachable) memoize it. */
+  probe(
+    run: (command: UiCommand, timeoutMs: number) => Promise<UiRunResult>,
+    timeoutMs: number,
+  ): Promise<ReachabilityVerdict>;
+  /** Drop the memo (call after any action that changes window/session state, e.g. a relocation). */
+  invalidate(): void;
+}
+
+/** Build an intra-invocation reachability memo (PERF1). `now`/`ttlMs` are injectable for tests. */
+export function createReachabilityCache(
+  ttlMs: number = REACHABILITY_CACHE_TTL_MS,
+  now: () => number = Date.now,
+): ReachabilityProbeCache {
+  let entry: { verdict: ReachabilityVerdict; at: number } | null = null;
+  return {
+    async probe(run, timeoutMs) {
+      if (entry !== null && entry.verdict.reachable && now() - entry.at < ttlMs) {
+        return entry.verdict;
+      }
+      const verdict = await probeSessionReachability(run, timeoutMs);
+      entry = { verdict, at: now() };
+      return verdict;
+    },
+    invalidate() {
+      entry = null;
+    },
+  };
 }
