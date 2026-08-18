@@ -1933,13 +1933,14 @@ export function registerWriteCommands(program: Command): void {
           .option(
             "--deadline <date>",
             "YYYY-MM-DD — deadlines EVERY occurrence: each starts (deadline − --when) days " +
-              "before its own deadline (needs a concrete --when, on or before the deadline)",
+              "before its own deadline (needs a concrete --when, on or before the deadline; " +
+              "alternative spelling of --start-days-earlier — give one or the other, both must agree)",
           )
           .option(
             "--start-days-earlier <n>",
             "deadlines EVERY occurrence, naming the lead directly: each starts N days before " +
-              "its own deadline (needs a concrete --when; an alternative to --deadline <date> — " +
-              "give both only if they agree)",
+              "its own deadline (needs a concrete --when; alternative spelling of --deadline <date> — " +
+              "give one or the other, both must agree)",
           )
           .option("--tag <name>", "tag to attach (repeatable)", collect, [])
           .option("--checklist-item <title>", "checklist item (repeatable)", collect, [])
