@@ -141,16 +141,69 @@ describe("repeat dialog recipe — per-control drive", () => {
     expect(steps.find((s) => s.value === "date:2027-01-01")?.primitive).toBe("set-datetime");
   });
 
-  it("reminders: an Add-reminders checkbox press + a set-datetime time picker", () => {
+  it("reminders: an ensure-checkbox (target checked) + a set-datetime time picker", () => {
     const steps = allDialogSteps({ reminder: "08:15" });
-    expect(steps.find((s) => s.label === "check Add reminders")?.primitive).toBe("press");
+    // RRD1: the "Add reminders" checkbox converges deterministically, never a
+    // blind press — the pre-populated reschedule dialog would flip a correct box.
+    const cb = steps.find((s) => s.label === "Add reminders");
+    expect(cb?.primitive).toBe("ensure-checkbox");
+    expect(cb?.checkboxTarget).toBe(true);
     expect(steps.find((s) => s.value === "time:08:15")?.primitive).toBe("set-datetime");
   });
 
-  it("deadline + start-earlier: an Add-deadlines checkbox press + an offset field", () => {
+  it("deadline + start-earlier: an ensure-checkbox (target checked) + an offset field", () => {
     const steps = dialogSteps({ deadline: true, startDaysEarlier: 3 });
-    expect(steps.find((s) => s.label === "check Add deadlines")?.primitive).toBe("press");
+    const cb = steps.find((s) => s.label === "Add deadlines");
+    expect(cb?.primitive).toBe("ensure-checkbox");
+    expect(cb?.checkboxTarget).toBe(true);
     expect(steps.find((s) => s.value === "3")?.primitive).toBe("set-value");
+  });
+
+  it("RRD1: no blind checkbox press survives — deadline/reminder go through ensure-checkbox", () => {
+    const steps = allDialogSteps({ deadline: true, startDaysEarlier: 3, reminder: "08:15" });
+    const checkboxPresses = steps.filter(
+      (s) => s.primitive === "press" && /Add (deadlines|reminders)/.test(s.label),
+    );
+    expect(checkboxPresses).toHaveLength(0);
+  });
+
+  it("RRD1: deadline:false converges the box OFF (explicit un-deadline on reschedule)", () => {
+    const steps = dialogSteps({ deadline: false });
+    const cb = steps.find((s) => s.label === "Add deadlines");
+    expect(cb?.primitive).toBe("ensure-checkbox");
+    expect(cb?.checkboxTarget).toBe(false);
+    // deadline:false ⇒ no start-earlier field driven.
+    expect(steps.some((s) => s.label.startsWith("start "))).toBe(false);
+  });
+
+  it("RRD1: startDaysEarlier>0 alone implies a checked deadline box", () => {
+    const steps = dialogSteps({ startDaysEarlier: 21 });
+    const cb = steps.find((s) => s.label === "Add deadlines");
+    expect(cb?.primitive).toBe("ensure-checkbox");
+    expect(cb?.checkboxTarget).toBe(true);
+    expect(steps.find((s) => s.value === "21")?.primitive).toBe("set-value");
+  });
+
+  it("RRD1 preserve-unspecified: no deadline/reminder step when neither is requested", () => {
+    // A rule-only reschedule (e.g. interval change) must leave BOTH checkboxes
+    // untouched so a pre-populated deadlined/remindered rule keeps its state (#492).
+    const steps = allDialogSteps({ monthly: { day: 15 } }, "monthly");
+    expect(steps.some((s) => s.label === "Add deadlines")).toBe(false);
+    expect(steps.some((s) => s.label === "Add reminders")).toBe(false);
+    // ...and a deadline requested WITHOUT an offset drives the box but not the field.
+    const withDeadline = dialogSteps({ deadline: true });
+    expect(withDeadline.find((s) => s.label === "Add deadlines")?.checkboxTarget).toBe(true);
+    expect(withDeadline.some((s) => s.label.startsWith("start "))).toBe(false);
+  });
+
+  it("RRD1 ordering: the deadline checkbox converges BEFORE the Next field is driven", () => {
+    // Deadline mode changes what "Next:" means (it becomes the deadline date, YANCH1
+    // #493), so the checkbox must be converged before Next is driven with the shift.
+    const steps = allDialogSteps({ deadline: true, startDaysEarlier: 21, next: "2026-09-22" });
+    const deadlineIdx = steps.findIndex((s) => s.label === "Add deadlines");
+    const nextIdx = steps.findIndex((s) => s.dtTarget === "next");
+    expect(deadlineIdx).toBeGreaterThanOrEqual(0);
+    expect(nextIdx).toBeGreaterThan(deadlineIdx);
   });
 
   it("OK is always the last dialog step", () => {

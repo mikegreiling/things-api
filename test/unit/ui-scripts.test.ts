@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   axAssertEligibleScript,
+  axEnsureCheckboxScript,
   axSelectPopupCandidatesScript,
   axSelectPopupScript,
   axSetDateTimeScript,
@@ -64,6 +65,39 @@ describe("axSetValueScript — closed-loop read-back retry (interval-field race,
 
   it("honors a custom attempt count", () => {
     expect(axSetValueScript("f", "5", 1)).toContain("repeat 1 times");
+  });
+});
+
+describe("axEnsureCheckboxScript — deterministic closed-loop convergence (RRD1)", () => {
+  const check = axEnsureCheckboxScript(`checkbox "Add deadlines"`, true);
+  const uncheck = axEnsureCheckboxScript(`checkbox "Add deadlines"`, false);
+
+  it("READS the checkbox value first and no-ops (returns OK) when it already matches", () => {
+    expect(check).toContain("set cur to (value of cb) as integer");
+    expect(check).toContain('if cur is 1 then return "OK"');
+    // the read precedes the click — an already-correct box is never toggled
+    expect(check.indexOf("value of cb")).toBeLessThan(check.indexOf("click cb"));
+  });
+
+  it("presses ONLY on a mismatch, then re-reads to confirm convergence", () => {
+    expect(check).toContain("click cb");
+    // a second read after the retry loop is the convergence confirmation
+    expect(check.split("value of cb").length - 1).toBeGreaterThanOrEqual(2);
+  });
+
+  it("targets 0 when the requested state is unchecked", () => {
+    expect(uncheck).toContain('if cur is 0 then return "OK"');
+    expect(uncheck).toContain("did not converge to 0");
+  });
+
+  it("retries a bounded number of times, then FAILS CLOSED (errors) if it never converges", () => {
+    expect(check).toContain("repeat 3 times");
+    expect(check).toContain("error");
+    expect(check).toContain("did not converge to 1");
+  });
+
+  it("honors a custom attempt count", () => {
+    expect(axEnsureCheckboxScript("cb", true, 1)).toContain("repeat 1 times");
   });
 });
 

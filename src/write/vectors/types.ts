@@ -151,7 +151,24 @@ export type UiPrimitive =
    * "Next" field is the top row and the "Ends" field the bottom row. Fails
    * closed if the addressed control is absent.
    */
-  | "set-datetime";
+  | "set-datetime"
+  /**
+   * Converge a dialog CHECKBOX to a target state via a deterministic closed loop
+   * (RRD1): read the checkbox's `AXValue` (0/1), press ONLY when the observed
+   * state differs from the requested {@link UiStep.checkboxTarget}, then re-read to
+   * confirm it landed — never a blind toggle. This is what makes the Repeat
+   * dialog's "Add deadlines" / "Add reminders" checkboxes safe on a PRE-POPULATED
+   * reschedule dialog: the dialog opens with the item's CURRENT deadline/reminder
+   * state already reflected, so an unconditional press flips an already-correct box
+   * the wrong way (the live bug — a blind "Add deadlines" press UNCHECKED an
+   * already-deadlined rule, hiding the "start N days earlier" field it had already
+   * revealed). Only fields the caller actually requested emit a step; an
+   * unspecified `--deadline` / `--reminder` on reschedule emits NO step, so the
+   * pre-populated state is PRESERVED (requested-fields-only law, #492). Fails
+   * closed (an `error` the pipeline re-verifies) if the box will not converge
+   * within the bounded retries.
+   */
+  | "ensure-checkbox";
 
 export interface UiStep {
   primitive: UiPrimitive;
@@ -228,6 +245,12 @@ export interface UiStep {
    * (larger-y) midnight date picker. Required for every set-datetime step.
    */
   dtTarget?: "next" | "ends" | "reminder";
+  /**
+   * ensure-checkbox only: the desired checkbox state. The driver reads the
+   * control's `AXValue` and presses ONLY when it differs from this target, then
+   * confirms convergence (RRD1 closed loop). Required for every ensure-checkbox step.
+   */
+  checkboxTarget?: boolean;
 }
 
 export interface VectorSupport {

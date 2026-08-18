@@ -402,6 +402,25 @@ function pressControl(label: string, pathCandidates: string[]): UiStep {
   return { primitive: "press", label, pathCandidates, dynamic: true, addressing: "title" };
 }
 /**
+ * Converge a dialog checkbox to `target` via the deterministic closed-loop
+ * ensure-checkbox primitive (RRD1) — read, press only on a mismatch, confirm.
+ * Replaces the old blind `pressControl`, which flipped an already-correct box on a
+ * PRE-POPULATED reschedule dialog (the live bug: a blind "Add deadlines" press
+ * unchecked an already-deadlined rule, hiding the start-earlier field). Emitted
+ * ONLY for a checkbox the caller actually addressed; an unspecified deadline/
+ * reminder emits no step, so the pre-populated state is preserved (#492).
+ */
+function ensureCheckbox(label: string, pathCandidates: string[], target: boolean): UiStep {
+  return {
+    primitive: "ensure-checkbox",
+    label,
+    pathCandidates,
+    checkboxTarget: target,
+    dynamic: true,
+    addressing: "title",
+  };
+}
+/**
  * Set ONE of the dialog's date/time pickers (Next first-occurrence / end-date
  * bound / reminder time). Each is an `AXDateTimeArea` located by role within the
  * front dialog, so it carries no element path — the driver's set-datetime
@@ -516,6 +535,42 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(...monthlyAnchorSteps(y, DIALOG_YEAR_MODE, DIALOG_YEAR_ORDINAL));
   }
 
+  // "Add deadlines" / "start N days earlier" — DEADLINE MODE, converged (RRD1)
+  // BEFORE the "Next:" field is driven below. In deadline mode the "Next:" field IS
+  // the deadline date and the instance start = deadline − startDaysEarlier (YANCH1
+  // #493), so the deadline-date shift `deadlineDriveNext` computes must be applied
+  // against the CONVERGED checkbox state; a box flipped AFTER Next was driven (the
+  // old order) changed Next's meaning under an already-committed value — the live
+  // bug where a blind press on an already-deadlined reschedule dialog UNCHECKED the
+  // box and hid the start-earlier field. Converging the checkbox reveals only a
+  // NUMBER field ("start N days earlier"), never a date area (YANCH1 census), so it
+  // does not perturb the date-area targeting the ends/Next drives below rely on.
+  //
+  // Target (requested-fields-only, #492): an explicit `deadline` converges to it; a
+  // bare `startDaysEarlier > 0` implies deadline:true; an UNSPECIFIED deadline emits
+  // NO step, PRESERVING the pre-populated checkbox state (a reschedule that does not
+  // address the deadline leaves it exactly as it was).
+  const deadlineTarget: boolean | undefined =
+    rule.deadline !== undefined
+      ? rule.deadline
+      : (rule.startDaysEarlier ?? 0) > 0
+        ? true
+        : undefined;
+  if (deadlineTarget !== undefined) {
+    steps.push(ensureCheckbox("Add deadlines", DIALOG_ADD_DEADLINES, deadlineTarget));
+    // startDaysEarlier is requested-fields-only too: drive the offset field only
+    // when it was given (>0), else leave it at its pre-populated value.
+    if (deadlineTarget && (rule.startDaysEarlier ?? 0) > 0) {
+      steps.push(
+        setField(
+          `start ${rule.startDaysEarlier} days earlier`,
+          DIALOG_START_EARLIER,
+          String(rule.startDaysEarlier),
+        ),
+      );
+    }
+  }
+
   // Ends bound + "Next:" first-occurrence field (ANCH2, issue #476). ORDER MATTERS:
   // select "Ends: on date" FIRST (revealing its date area) BEFORE driving Next, so
   // both date areas already exist when each is set through its own deterministic
@@ -541,22 +596,16 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(setDateTime(`ends on = ${endsOnDate.date}`, `date:${endsOnDate.date}`, "ends"));
   }
 
+  // "Add reminders" — converged (RRD1), then its time driven. Kept AFTER the Next/
+  // ends date drives (its ANCH2-certified position): a freshly-checked reminder
+  // area defaults to a NON-midnight 12:00 (ANCH2 census), so the set-datetime
+  // tod discriminator never confuses it with the midnight Next/ends pickers,
+  // whatever the creation order. Requested-fields-only (#492): an unspecified
+  // reminder emits NO step, PRESERVING the pre-populated checkbox + time. (The rule
+  // vocabulary carries no "reminder off", so the only requested target is checked.)
   if (rule.reminder !== undefined) {
-    steps.push(pressControl("check Add reminders", DIALOG_ADD_REMINDERS));
+    steps.push(ensureCheckbox("Add reminders", DIALOG_ADD_REMINDERS, true));
     steps.push(setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`, "reminder"));
-  }
-
-  if (rule.deadline === true || (rule.startDaysEarlier ?? 0) > 0) {
-    steps.push(pressControl("check Add deadlines", DIALOG_ADD_DEADLINES));
-    if ((rule.startDaysEarlier ?? 0) > 0) {
-      steps.push(
-        setField(
-          `start ${rule.startDaysEarlier} days earlier`,
-          DIALOG_START_EARLIER,
-          String(rule.startDaysEarlier),
-        ),
-      );
-    }
   }
 
   steps.push(pressControl('press "OK"', DIALOG_OK));
