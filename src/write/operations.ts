@@ -818,10 +818,17 @@ export interface ProjectAddRepeatingParams extends AddRepeatingRuleFields {
 /**
  * Create a to-do and, in the same call, promote it to a repeating series (the
  * add→promote composite closing §0.2). The create leg carries the COMPLETE
- * to-do add vocabulary (title/notes/tags/when/deadline/reminder/checklist +
- * `--created-at` + container), and the promote leg carries the full calendar-
- * anchor rule vocabulary ({@link AddRepeatingRuleFields}). The two legs are NOT
- * atomic: the created to-do persists even if the promote refuses.
+ * to-do add vocabulary (title/notes/tags/when/reminder/checklist + `--created-at`
+ * + container), and the promote leg carries the full calendar-anchor rule
+ * vocabulary ({@link AddRepeatingRuleFields}). The two legs are NOT atomic: the
+ * created to-do persists even if the promote refuses.
+ *
+ * `deadline` is the exception: a concrete deadline DATE maps to the RULE (each
+ * occurrence starts `deadline − when` days before its own deadline) rather than
+ * landing on the seed — this deadlines every occurrence AND keeps the seed
+ * deadline-free so the app does not SRCFATE-preserve it into a double-booked
+ * future instance (DBLSPAWN1). It therefore requires a concrete `when` on or
+ * before it (after-completion series keep the seed's one-off deadline instead).
  */
 export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
   title: string;
@@ -829,6 +836,11 @@ export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
   when?: WhenValue;
   /** Time-of-day reminder on the created to-do (requires a schedulable `when`). */
   reminder?: ReminderTime;
+  /**
+   * The FIRST occurrence's due date — mapped to the RULE (derive start-days-earlier =
+   * deadline − when), so every occurrence is deadlined and the seed carries none.
+   * Needs a concrete `when` on or before it; not applicable to after-completion.
+   */
   deadline?: IsoDate;
   tags?: string[];
   checklistItems?: string[];

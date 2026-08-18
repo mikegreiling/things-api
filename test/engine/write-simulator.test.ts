@@ -884,6 +884,40 @@ describe("simulator write vector — covered operations", () => {
     expect(tagsOf(src)).toEqual([tag]);
   });
 
+  it("todo.make-repeating FIXED deadlined with a FUTURE first occurrence (DBLSPAWN1): preserved as a future instance, cursor collides at icCount=0", async () => {
+    // The DBLSPAWN1 double-book: a deadlined source preserved at a FUTURE occurrence
+    // leaves the template cursor pointing at that SAME date with icCount=0 (the cursor
+    // "does not know" it is materialized) — which spawns a DUPLICATE on the date
+    // (docs/lab/dblspawn1-preserved-instance.md cell A/C). The prior model forced
+    // icCount=1 on any preserve; the observed at-rest state is 0 for a future occurrence.
+    const src = seedTodo(fixture.db, {
+      title: "Future filing",
+      start: "active",
+      startDate: "2026-07-20", // future (NOW = 2026-07-05)
+      deadline: "2026-08-03",
+    });
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "yearly", interval: 1, next: "2026-07-20" },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with template uuid");
+
+    // Source PRESERVED and relinked as a FUTURE-dated instance (start=2, future date).
+    const preserved = row(src);
+    expect(preserved["rt1_repeatingTemplate"]).toBe(res.uuid);
+    expect(preserved["startDate"]).toBe(encodePackedDate("2026-07-20"));
+    // Template cursor collides with the preserved instance at icCount=0 (the double-book).
+    const tmpl = row(res.uuid);
+    expect(tmpl["rt1_instanceCreationCount"]).toBe(0);
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-20"));
+    expect(tmpl["rt1_instanceCreationStartDate"]).toBe(encodePackedDate("2026-07-20"));
+    // The preserved future instance already exists (materialized) — one linked row.
+    expect(instancesOf(res.uuid)).toHaveLength(1);
+  });
+
   it("todo.make-repeating FIXED bare (RSIM-T control): NO deadline → source DELETED, replacedUuid = source", async () => {
     // Bare (deadline-less) is the delete-default; the deadline branch must not fire.
     const src = seedTodo(fixture.db, { title: "Take out the recycling", start: "active" });

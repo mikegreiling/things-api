@@ -2561,7 +2561,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         project_deadline: z
           .string()
           .optional()
-          .describe(`add: the item's due date — ${DATE_FORMAT}`),
+          .describe(
+            `add: due date (${DATE_FORMAT}). For a to-do it deadlines EVERY occurrence — each ` +
+              `starts (deadline − when) days before its own deadline, so it needs a concrete when ` +
+              `on or before it. For a project it is the project's own due date.`,
+          ),
         todos: z.array(z.string()).optional().describe("add (project): initial child to-do titles"),
         frequency: z
           .enum(["daily", "weekly", "monthly", "yearly"])
@@ -2601,9 +2605,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           if (frequency === undefined || interval === undefined) {
             return usage('action "add" requires frequency and interval');
           }
-          // add-repeating carries only the calendar-anchor rule fields; the base
-          // add owns the item's own deadline, and the rule reminder/start-offset
-          // are set with a follow-up reschedule.
+          // add-repeating carries only the calendar-anchor rule fields here; the rule
+          // reminder/start-offset are set with a follow-up reschedule. A concrete
+          // `project_deadline` maps to the RULE for a to-do (DBLSPAWN1 — each occurrence
+          // deadlined, seed deadline-free) and to the project's own due date for a project.
           const {
             reminder: _reminder,
             deadline: _deadline,

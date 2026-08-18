@@ -426,6 +426,124 @@ describe("add-repeating — add → native promote", () => {
   });
 });
 
+// DBLSPAWN1 (docs/lab/dblspawn1-preserved-instance.md, golden-v3 / Things 3.22.14):
+// a seed carrying a CONCRETE item-level deadline is SRCFATE-preserved on promote as a
+// FUTURE-dated instance, double-booking the template cursor (icCount=0, next == the
+// occurrence) — and the app spawns a DUPLICATE when the date arrives (cell C). The fix:
+// (add-repeating) map a concrete --deadline to the RULE's deadline so the seed stays
+// deadline-free (no preserve); (make-repeating) trash the redundant preserved FUTURE
+// instance post-promote.
+describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved double-book)", () => {
+  const instancesOf = (templateUuid: string): number =>
+    (
+      fixture.db
+        .prepare("SELECT count(*) AS n FROM TMTask WHERE rt1_repeatingTemplate = ? AND trashed = 0")
+        .get(templateUuid) as { n: number }
+    ).n;
+
+  it("add-repeating: a concrete --deadline lands as the RULE deadline (start-offset), no orphaned instance", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "Annual filing",
+        when: "2026-07-15",
+        deadline: "2026-07-29", // 14 days after the start
+        frequency: "yearly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // The RULE owns the deadline: template deadline sentinel set + start-offset −14.
+    expect(row(res.uuid)?.["deadline"]).not.toBeNull();
+    const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(-14);
+    // The seed was NOT preserved (it carried no deadline) — a future first occurrence
+    // holds NO materialized instance, so nothing double-books the cursor.
+    expect(res.repeating?.instanceUuid).toBeNull();
+    expect(instancesOf(res.uuid)).toBe(0);
+    // The template records the START (the --when), not the deadline (icCount=0, future).
+    expect(row(res.uuid)?.["rt1_instanceCreationCount"]).toBe(0);
+    expect(decodePackedDate(row(res.uuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-15",
+    );
+  });
+
+  it("add-repeating: --deadline before --when is refused (behavioral)", async () => {
+    await expect(
+      runAddRepeatingTodo(
+        deps(vector),
+        {
+          title: "Impossible",
+          when: "2026-07-15",
+          deadline: "2026-07-01",
+          frequency: "weekly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/on or after/);
+  });
+
+  it("add-repeating: --deadline with a keyword --when is refused (needs a concrete date)", async () => {
+    await expect(
+      runAddRepeatingTodo(
+        deps(vector),
+        {
+          title: "Undated",
+          when: "someday",
+          deadline: "2026-07-15",
+          frequency: "weekly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/concrete --when/);
+  });
+
+  it("make-repeating: a FUTURE-scheduled deadlined source's redundant preserved instance is trashed + disclosed", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Future deadlined",
+      start: "active",
+      startDate: "2026-07-20", // future (NOW = 2026-07-05)
+      deadline: "2026-08-03",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // The preserved FUTURE instance was trashed (it would spawn a duplicate on the date).
+    expect(res.repeating?.instanceUuid).toBeNull();
+    expect(instancesOf(res.uuid)).toBe(0);
+    expect((res.warnings ?? []).join(" ")).toMatch(/future/i);
+    expect((res.warnings ?? []).join(" ")).toMatch(/Trash/);
+  });
+
+  it("make-repeating: a TODAY-scheduled deadlined source's preserved instance is KEPT (legitimate current occurrence)", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Today deadlined",
+      start: "active",
+      startDate: "2026-07-05", // today (NOW)
+      deadline: "2026-07-19",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // The current-occurrence instance is legitimate — kept, no duplicate-factory warning.
+    expect(res.repeating?.instanceUuid).not.toBeNull();
+    expect(instancesOf(res.uuid)).toBe(1);
+    expect((res.warnings ?? []).join(" ")).not.toMatch(/duplicate/i);
+  });
+});
+
 // ADR1 (issue #480): the add legs are NOT atomic — the seed persists if the
 // promote no-ops. RATIFIED RULING: auto-trash our OWN seed inside the txn and
 // disclose it; if the auto-trash also fails, surface the seed's REAL resolvable

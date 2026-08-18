@@ -39,6 +39,10 @@ Worked example — intent "appears October 16, due October 30" (a 14-day lead):
 
 If you instead write an explicit anchor on the APPEAR date (`--on-day 16` with the same `--when` and lead), you are asking for an off-schedule first occurrence relative to the due-date anchor — for weekly/yearly this is honored and disclosed (the first occurrence appears/dues on your `--when`, the ongoing series dues on the anchor); a monthly combination of this shape is refused as above. When you want the two to agree, either drop the anchor flags (derived) or set the anchor to the due date (`when + N`).
 
+### `add-repeating` takes a concrete `--deadline <date>` (not the flag pair)
+
+On `todo add-repeating`, `--deadline` takes an actual DATE — the FIRST occurrence's due date — and the per-occurrence lead is derived for you: it becomes "start `deadline − --when` days before each deadline", exactly the `--deadline --start-days-earlier N` the promote commands take. So `todo add-repeating "Taxes" --when 2027-03-15 --deadline 2027-05-31 --frequency yearly --yearly-month 5 --on-weekday monday --on-ordinal last` deadlines every occurrence (77-day lead) in ONE call — no follow-up `reschedule-repeat` to add the deadline. Rules: the `--deadline` date needs a concrete `--when` (the lead is `deadline − start`) and must be on or after it; the anchor names the DUE date as usual. Do NOT combine a concrete `--deadline` with `reschedule-repeat`'s `--deadline`/`--start-days-earlier` flag shape — that pair is for changing an existing template; `add-repeating` owns the concrete-date form. (Historically a concrete `--deadline` on `add-repeating` landed on the seed only and was dropped from the series, and double-booked the first occurrence — see [docs/lab/dblspawn1-preserved-instance.md](../../../docs/lab/dblspawn1-preserved-instance.md); it now maps to the rule.)
+
 ## Ends bounds, reminder, and limits worth knowing
 
 - **Ends bound** (default: never): `--ends-after N` stops after N total occurrences (the ORIGINAL count, not a remaining tally — it does not tick down), or `--ends-on <date>` stops after that date. An exhausted series reads as `ended`.

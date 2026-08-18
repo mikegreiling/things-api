@@ -46,7 +46,7 @@ export function weekdayOfIso(iso: IsoDate): number {
 }
 
 /** Whole days from `a` to `b` (b − a); negative when b precedes a. */
-function daysBetweenIso(a: IsoDate, b: IsoDate): number {
+export function daysBetweenIso(a: IsoDate, b: IsoDate): number {
   const [ay, am, ad] = a.split("-").map(Number) as [number, number, number];
   const [by, bm, bd] = b.split("-").map(Number) as [number, number, number];
   return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
