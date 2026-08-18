@@ -54,7 +54,7 @@ import {
 import { resolveTagRefs } from "./tag-refs.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { assertRepeatRule } from "./repeat-rule.ts";
-import { deadlineDriveNext } from "./repeat-anchor.ts";
+import { assessOffRuleFirst, deadlineDriveNext } from "./repeat-anchor.ts";
 import { expectedRuleAssertions } from "./repeat-asserts.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
@@ -2260,7 +2260,15 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
     return {
       mode: "update",
       uuid: params.uuid,
-      assert: expectedRuleAssertions(params, { includeCursor: true }),
+      // includeCursor asserts the first-occurrence cursor == --when. For an OFF-RULE
+      // first (explicit anchor ≠ --when) the cursor lands on the next RULE-ALIGNED
+      // occurrence, not --when (DACON1 cell DC4: --when Oct 16 with an Oct-16 due
+      // anchor cursors to the next aligned start, 2029-10-02), so asserting it would
+      // false-fail an honored off-rule reschedule — drop the cursor assertion there
+      // and verify the rule anchor only.
+      assert: expectedRuleAssertions(params, {
+        includeCursor: assessOffRuleFirst(params)?.kind !== "honored",
+      }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },
@@ -2346,7 +2354,15 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
     return {
       mode: "update",
       uuid: params.uuid,
-      assert: expectedRuleAssertions(params, { includeCursor: true }),
+      // includeCursor asserts the first-occurrence cursor == --when. For an OFF-RULE
+      // first (explicit anchor ≠ --when) the cursor lands on the next RULE-ALIGNED
+      // occurrence, not --when (DACON1 cell DC4: --when Oct 16 with an Oct-16 due
+      // anchor cursors to the next aligned start, 2029-10-02), so asserting it would
+      // false-fail an honored off-rule reschedule — drop the cursor assertion there
+      // and verify the rule anchor only.
+      assert: expectedRuleAssertions(params, {
+        includeCursor: assessOffRuleFirst(params)?.kind !== "honored",
+      }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },

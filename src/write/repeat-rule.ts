@@ -13,6 +13,7 @@
  */
 import type { IsoDate } from "../model/dates.ts";
 import type { RepeatOffset, RepeatRule } from "../model/recurrence.ts";
+import { assessOffRuleFirst } from "./repeat-anchor.ts";
 import {
   WEEKDAYS,
   type MonthlyAnchor,
@@ -229,6 +230,15 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
       );
     }
   }
+
+  // DACON1: an EXPLICIT calendar anchor that disagrees with `--when` requests an
+  // OFF-RULE first occurrence (first on `--when`, the anchor thereafter). The app
+  // HONORS this for weekly/yearly (allowed — disclosed at the call sites), but a
+  // MONTHLY rule's dialog snaps the first occurrence to the anchor day, so that
+  // shape is inexpressible and fail-closed here before any mutation. On-rule
+  // requests and `--when`-only (derived-anchor) requests return null.
+  const offRule = assessOffRuleFirst(params);
+  if (offRule?.kind === "dishonored") throw new RangeError(offRule.refusal);
 }
 
 // ----------------------------------------------------- decode → inverse params

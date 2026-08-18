@@ -46,7 +46,7 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
-import { deriveFixedAnchor, isIsoDate } from "./repeat-anchor.ts";
+import { assessOffRuleFirst, deriveFixedAnchor, isIsoDate } from "./repeat-anchor.ts";
 import { assertRepeatRule, ruleToInverseParams } from "./repeat-rule.ts";
 import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
@@ -259,6 +259,19 @@ function landedRuleEcho(rule: RepeatRuleParams, startIso: IsoDate | null): strin
         ? ", with a deadline on each occurrence"
         : "";
   return `landed: the series repeats ${cadence}${first}${deadlineNote}`;
+}
+
+/**
+ * The DACON1 off-rule-first disclosure line, or null when the request is on-rule.
+ * When an explicit anchor disagrees with `--when` (deadline-shift-aware) the app
+ * lands an OFF-RULE first occurrence (honored for weekly/yearly); this states both
+ * halves of the landed pattern so the caller can eyeball the two-phase series.
+ * The dishonored monthly shape is refused upstream (assertRepeatRule), so only the
+ * honored disclosure ever reaches here.
+ */
+function offRuleFirstNote(params: RepeatRuleParams): string | null {
+  const assessment = assessOffRuleFirst(params);
+  return assessment?.kind === "honored" ? assessment.disclosure.message : null;
 }
 
 /**
@@ -625,6 +638,8 @@ async function makeRepeatingViaClone(
       "removes the new series (trash-both) and restores it",
     PLACEMENT_NOTE,
   ];
+  const offRule = offRuleFirstNote(effParams);
+  if (offRule !== null) warnings.push(offRule);
   if (promote.warnings !== undefined) warnings.push(...promote.warnings);
 
   appendPromoteSummary(deps, {
@@ -810,6 +825,8 @@ async function addRepeatingViaCreate(
     landedRuleEcho(ruleParams, nextIso ?? firstOccurrenceOf(deps.db, templateUuid)),
     PLACEMENT_NOTE,
   ];
+  const offRule = offRuleFirstNote(ruleParams);
+  if (offRule !== null) warnings.push(offRule);
   if (promote.warnings !== undefined) warnings.push(...promote.warnings);
 
   appendPromoteSummary(deps, {
