@@ -11,7 +11,11 @@ import { describe, expect, it } from "vitest";
 
 import type { RepeatRuleParams } from "../../src/write/operations.ts";
 import {
+  deadlineDriveNext,
+  deriveFixedAnchor,
+  deriveMonthlyAnchor,
   deriveWeeklyWeekdays,
+  deriveYearlyAnchor,
   fixedFirstOccurrence,
   fixedSpawnPlan,
   nextFixedOccurrenceAfter,
@@ -53,6 +57,85 @@ describe("deriveWeeklyWeekdays — issue #476 item 3", () => {
     ).toBeUndefined();
     expect(deriveWeeklyWeekdays(weekly(2), "someday")).toBeUndefined();
     expect(deriveWeeklyWeekdays(weekly(2), null)).toBeUndefined();
+  });
+});
+
+describe("deriveMonthlyAnchor / deriveYearlyAnchor — YANCH1 #493 (completes the family)", () => {
+  it("monthly: derives the day-of-month from a concrete date when no anchor given", () => {
+    expect(deriveMonthlyAnchor({ frequency: "monthly" }, "2027-10-16")).toEqual({ day: 16 });
+    expect(deriveMonthlyAnchor({ frequency: "monthly" }, "2026-07-31")).toEqual({ day: 31 });
+  });
+  it("yearly: derives month + day from a concrete date when no anchor given", () => {
+    expect(deriveYearlyAnchor({ frequency: "yearly" }, "2027-10-16")).toEqual({
+      month: 10,
+      day: 16,
+    });
+  });
+  it("does not override an explicit anchor", () => {
+    expect(
+      deriveMonthlyAnchor({ frequency: "monthly", monthly: { day: "last" } }, "2027-10-16"),
+    ).toBeUndefined();
+    expect(
+      deriveYearlyAnchor({ frequency: "yearly", yearly: { month: 3, day: 1 } }, "2027-10-16"),
+    ).toBeUndefined();
+  });
+  it("no derivation for the wrong frequency, after-completion, or a non-concrete date", () => {
+    expect(deriveMonthlyAnchor({ frequency: "yearly" }, "2027-10-16")).toBeUndefined();
+    expect(deriveYearlyAnchor({ frequency: "monthly" }, "2027-10-16")).toBeUndefined();
+    expect(
+      deriveMonthlyAnchor({ frequency: "monthly", afterCompletion: true }, "2027-10-16"),
+    ).toBeUndefined();
+    expect(deriveYearlyAnchor({ frequency: "yearly" }, "someday")).toBeUndefined();
+    expect(deriveMonthlyAnchor({ frequency: "monthly" }, null)).toBeUndefined();
+  });
+});
+
+describe("deriveFixedAnchor — the unified weekly/monthly/yearly patch (YANCH1 #493)", () => {
+  it("yearly with a concrete date and no anchor → drives the derived month+day", () => {
+    expect(deriveFixedAnchor({ frequency: "yearly", interval: 1 }, "2027-10-16")).toEqual({
+      yearly: { month: 10, day: 16 },
+    });
+  });
+  it("monthly → derived day; weekly → derived weekday", () => {
+    expect(deriveFixedAnchor({ frequency: "monthly", interval: 1 }, "2027-10-16")).toEqual({
+      monthly: { day: 16 },
+    });
+    expect(deriveFixedAnchor({ frequency: "weekly", interval: 2 }, "2026-07-15")).toEqual({
+      weekdays: ["wednesday"],
+    });
+  });
+  it("empty patch for daily, an explicit anchor, after-completion, or no date", () => {
+    expect(deriveFixedAnchor({ frequency: "daily", interval: 1 }, "2027-10-16")).toEqual({});
+    expect(
+      deriveFixedAnchor(
+        { frequency: "yearly", interval: 1, yearly: { month: 1, day: 1 } },
+        "2027-10-16",
+      ),
+    ).toEqual({});
+    expect(
+      deriveFixedAnchor({ frequency: "yearly", interval: 1, afterCompletion: true }, "2027-10-16"),
+    ).toEqual({});
+    expect(deriveFixedAnchor({ frequency: "yearly", interval: 1 }, null)).toEqual({});
+  });
+});
+
+describe("deadlineDriveNext — deadline-mode Next shift (YANCH1 #493)", () => {
+  it("shifts the drive date forward by startDaysEarlier for a deadlined rule", () => {
+    // --when is the scheduled START; the dialog anchors on the DEADLINE (start + N),
+    // so the "Next:" field is driven with when + N and the app back-shifts the start.
+    expect(deadlineDriveNext({ next: "2027-10-16", deadline: true, startDaysEarlier: 14 })).toBe(
+      "2027-10-30",
+    );
+    expect(deadlineDriveNext({ next: "2026-09-22", deadline: true, startDaysEarlier: 21 })).toBe(
+      "2026-10-13",
+    );
+  });
+  it("drives --when verbatim when not deadlined (or start-offset 0)", () => {
+    expect(deadlineDriveNext({ next: "2027-10-16" })).toBe("2027-10-16");
+    expect(deadlineDriveNext({ next: "2027-10-16", deadline: true })).toBe("2027-10-16");
+  });
+  it("undefined when there is no concrete first-occurrence date", () => {
+    expect(deadlineDriveNext({ deadline: true, startDaysEarlier: 14 })).toBeUndefined();
   });
 });
 

@@ -164,8 +164,10 @@ const RULE_ASSERT_MAP: { [K in keyof RuleFields]-?: FieldAssertSpec } = {
   },
   next: {
     kind: "assert",
-    // The ANCH2 first-occurrence cursor (rt1_nextInstanceStartDate → nextOccurrence).
-    // Gated by RuleAssertOptions.includeCursor — see expectedRuleAssertions.
+    // The ANCH2 first-occurrence CURSOR (rt1_nextInstanceStartDate → nextOccurrence)
+    // — the first RULE-ALIGNED occurrence, which equals the requested `--when` only
+    // when that date is itself on-rule AND future. Gated by
+    // RuleAssertOptions.includeCursor (reschedule only) — see expectedRuleAssertions.
     build: (p) =>
       p.next === undefined ? [] : [{ field: "repeating.nextOccurrence", equals: p.next }],
   },
@@ -180,12 +182,19 @@ const RULE_ASSERT_MAP: { [K in keyof RuleFields]-?: FieldAssertSpec } = {
 
 export interface RuleAssertOptions {
   /**
-   * Include the ANCH2 first-occurrence cursor assertion (`repeating.nextOccurrence`)
-   * when `next` is requested. TRUE for reschedule-repeat — the cursor is driven
-   * into the EXISTING template in place, so a wrong-anchor drive is caught. FALSE
-   * for make-repeating / add-repeating: the freshly-minted template's cursor
-   * follows the app's spawn law (ANCH1: next calendar match ≥ today), not the raw
-   * Next field, so those verbs verify the rule BLOB + deadline only.
+   * Include the ANCH2 first-occurrence cursor assertion (`repeating.nextOccurrence`
+   * = rt1_nextInstanceStartDate) when `next` is requested. TRUE for
+   * reschedule-repeat — the cursor is driven into the EXISTING template in place
+   * with an on-rule `--when`, so a wrong-anchor drive is caught. FALSE for
+   * make-repeating / add-repeating: the cursor is the first RULE-ALIGNED occurrence
+   * ≥ today (ANCH1 spawn law), which coincides with the requested `--when` only
+   * when that date is on-rule AND future — an overdue seed or an off-rule `--when`
+   * makes the cursor legitimately differ. Those verbs instead verify (a) the rule
+   * BLOB anchor at full fidelity — the calendar anchor is asserted whether it was
+   * given explicitly or DERIVED from `--when` (YANCH1 #493: this is what catches a
+   * dropped January-1 / Sunday / 1st-of-month anchor), and (b) the driven FIRST
+   * occurrence (rt1_instanceCreationStartDate, verbatim even off-rule) through the
+   * dedicated post-drive check in promote-clone.ts — not the cursor.
    */
   includeCursor: boolean;
 }

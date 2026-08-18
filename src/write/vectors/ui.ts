@@ -558,9 +558,18 @@ function clickPointCommand(x: number, y: number, label: string): UiCommand {
  *   - `ends` — the BOTTOM (largest-y) midnight date picker (present only once
  *     "Ends: on date" is selected).
  * The areas are polled briefly (revealed a beat after the checkbox/pop-up), and
- * the script THROWS when the addressed control is absent so the driver fails
- * closed. `spec` is `time:HH:mm` (keep the date, set the time-of-day) or
- * `date:YYYY-MM-DD` (set the calendar date at midnight). One stable JXA shape.
+ * the script THROWS a NAMED, structured error when the addressed control is
+ * absent — reporting which target was sought and the FULL date-area inventory of
+ * the current dialog state (count + per-area y / time-of-day) — so a dialog shape
+ * that does not present the target (e.g. the deadline-mode variant, YANCH1 #493)
+ * fails closed with an actionable message, never an uncaught `-[__NSArray0
+ * objectAtIndex:]` (-2700) from indexing an empty collection. It then READS THE
+ * CONTROL BACK after the write and throws if the committed value differs from the
+ * request: a control that silently rejects the write (the macOS error beep the
+ * user hears) must fail the step loudly, never leave a garbled/default value to be
+ * verified as ok (YANCH1; UIC6-g refuse-rather-than-commit precedent). `spec` is
+ * `time:HH:mm` (keep the date, set the time-of-day) or `date:YYYY-MM-DD` (set the
+ * calendar date at midnight). One stable JXA shape.
  */
 export function axSetDateTimeScript(spec: string, target: "next" | "ends" | "reminder"): string {
   return `ObjC.import('Foundation'); ObjC.import('AppKit'); ObjC.import('ApplicationServices');
@@ -581,22 +590,28 @@ function pick(areas,target){
   if(midnight.length===0) midnight=sorted;
   return target==='ends' ? midnight[midnight.length-1] : midnight[0];
 }
+function inv(areas){ var s=[]; for(var i=0;i<areas.length;i++){ s.push('#'+i+'(y='+Math.round(posY(areas[i]))+',tod='+timeOfDay(areas[i])+')'); } return areas.length? s.join(' ') : '(none)'; }
+function ymdStr(el,cal){ var v=attr(el,'AXValue'); if(!v) return null; var y=cal.componentFromDate($.NSCalendarUnitYear,v), m=cal.componentFromDate($.NSCalendarUnitMonth,v), dd=cal.componentFromDate($.NSCalendarUnitDay,v); return y+'-'+('0'+m).slice(-2)+'-'+('0'+dd).slice(-2); }
+function hmStr(el,cal){ var v=attr(el,'AXValue'); if(!v) return null; var h=cal.componentFromDate($.NSCalendarUnitHour,v), mi=cal.componentFromDate($.NSCalendarUnitMinute,v); return h+':'+('0'+mi).slice(-2); }
 function run(){
   var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
   if(!apps || apps.count===0) throw new Error('Things not running');
   var app=$.AXUIElementCreateApplication(apps.objectAtIndex(0).processIdentifier);
   var target=${JSON.stringify(target)};
-  var dt=null;
-  for(var t=0;t<20 && !dt;t++){ var areas=[]; collect(app,'AXDateTimeArea',16,areas); dt=pick(areas,target); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
-  if(!dt) throw new Error('no '+target+' AXDateTimeArea in the Repeat dialog');
   var spec=${JSON.stringify(spec)};
+  // Poll for the addressed area. collect is wrapped so a stale-element ObjC
+  // exception during traversal cannot bubble as a raw -2700; pick guards the
+  // empty set, so dt is null (never a crash) when the target is absent.
+  var areas=[]; var dt=null;
+  for(var t=0;t<20 && !dt;t++){ areas=[]; try{ collect(app,'AXDateTimeArea',16,areas); }catch(e){ areas=[]; } dt=pick(areas,target); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
+  if(!dt) throw new Error('set-datetime '+target+': this Repeat-dialog state presents '+areas.length+' date area(s) ['+inv(areas)+'] but none is the '+target+' control — the requested first occurrence / bound cannot be set in this dialog shape');
   var cal=$.NSCalendar.currentCalendar;
   var d;
   if(spec.indexOf('time:')===0){
     // Set the time-of-day on the control's own date via the purpose-built
     // calendar API — component-bag mutation via JXA silently drops the hour,
     // leaking the current wall-clock hour into the reminder (UIC6).
-    var cur=attr(dt,'AXValue'); if(!cur) throw new Error('date/time control has no value');
+    var cur=attr(dt,'AXValue'); if(!cur) throw new Error('set-datetime '+target+': the date/time control has no value to anchor the time on');
     var hm=spec.slice(5).split(':');
     d=cal.dateBySettingHourMinuteSecondOfDateOptions(+hm[0], +hm[1], 0, cur, 0);
   } else if(spec.indexOf('date:')===0){
@@ -607,8 +622,18 @@ function run(){
   } else { throw new Error('bad datetime spec: '+spec); }
   if(!d) throw new Error('could not build date from '+spec);
   var err=$.AXUIElementSetAttributeValue(dt,$('AXValue'),d);
-  if(err!==0) throw new Error('AXValue set failed err='+err);
+  if(err!==0) throw new Error('set-datetime '+target+': the control refused the write (AX err='+err+')');
   $.NSThread.sleepForTimeInterval(0.2);
+  // READ-BACK: a control can accept the AX write (err 0) yet reject the value —
+  // the macOS error beep — leaving its prior/default value. Fail the step loudly
+  // rather than let a garbled commit verify as ok (YANCH1 #493).
+  if(spec.indexOf('date:')===0){
+    var got=ymdStr(dt,cal); var want=spec.slice(5);
+    if(got!==want) throw new Error('set-datetime '+target+' rejected: the control committed '+(got||'(no value)')+', not the requested '+want+' — the write did not take');
+  } else {
+    var gott=hmStr(dt,cal); var wanth=spec.slice(5).split(':'); var wantt=(+wanth[0])+':'+('0'+(+wanth[1])).slice(-2);
+    if(gott!==wantt) throw new Error('set-datetime '+target+' rejected: the control committed '+(gott||'(no value)')+', not the requested '+wantt+' — the write did not take');
+  }
   return 'OK';
 }`;
 }

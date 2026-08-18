@@ -54,6 +54,7 @@ import {
 import { resolveTagRefs } from "./tag-refs.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { assertRepeatRule } from "./repeat-rule.ts";
+import { deadlineDriveNext } from "./repeat-anchor.ts";
 import { expectedRuleAssertions } from "./repeat-asserts.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
@@ -2169,6 +2170,21 @@ function ruleExtras(params: RepeatRuleParams): RepeatRuleExtras {
   };
 }
 
+/**
+ * Recipe extras for a RESCHEDULE, with the "Next:" drive date deadline-adjusted
+ * (YANCH1 #493): `--when` is the scheduled START, but a deadlined rule anchors on
+ * the DEADLINE, so the dialog's "Next:" field is driven with `when +
+ * startDaysEarlier` and the app back-shifts the instance start to `--when`. The
+ * expectedDelta keeps the RAW `params.next` (the cursor asserts the START).
+ * make/add-repeating apply this shift upstream (promote-clone.ts) and pass an
+ * already-adjusted rule, so only the reschedule compile needs it here.
+ */
+function reschedRuleExtras(params: RepeatRuleParams): RepeatRuleExtras {
+  const base = ruleExtras(params);
+  const drive = deadlineDriveNext(params);
+  return drive !== undefined ? { ...base, next: drive } : base;
+}
+
 /** ui ops all guard existence/type + the H-UI-DRIVE acknowledgement. */
 const UI_HAZARDS: HazardId[] = ["H-UNKNOWN-DESTINATION", "H-UI-DRIVE"];
 
@@ -2251,7 +2267,12 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
   compile(params, vector) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
     return uiDrive(
-      rescheduleRepeatRecipe(params.uuid, params.frequency, params.interval, ruleExtras(params)),
+      rescheduleRepeatRecipe(
+        params.uuid,
+        params.frequency,
+        params.interval,
+        reschedRuleExtras(params),
+      ),
     );
   },
 };
@@ -2336,7 +2357,7 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
         params.uuid,
         params.frequency,
         params.interval,
-        ruleExtras(params),
+        reschedRuleExtras(params),
       ),
     );
   },

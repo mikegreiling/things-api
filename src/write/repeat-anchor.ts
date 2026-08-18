@@ -25,7 +25,7 @@
  * today+interval model for the default (their default-anchor law is unprobed).
  */
 import { addDaysIso, type IsoDate } from "../model/dates.ts";
-import type { RepeatRuleParams, Weekday } from "./operations.ts";
+import type { MonthlyAnchor, RepeatRuleParams, Weekday, YearlyAnchor } from "./operations.ts";
 import { WD_TO_WEEKDAY, WEEKDAY_TO_WD } from "./repeat-rule.ts";
 
 /** True iff `v` is a concrete `YYYY-MM-DD` date (not a list keyword / undefined). */
@@ -94,6 +94,103 @@ export function deriveWeeklyWeekdays(
   if (rule.weekdays !== undefined) return undefined;
   if (!isIsoDate(anchorIso)) return undefined;
   return [WD_TO_WEEKDAY[weekdayOfIso(anchorIso)] as Weekday];
+}
+
+/** The 1-based day-of-month of an ISO date. */
+function dayOfMonthIso(iso: IsoDate): number {
+  return Number(iso.split("-")[2]);
+}
+/** The 1-based month of an ISO date. */
+function monthOfIso(iso: IsoDate): number {
+  return Number(iso.split("-")[1]);
+}
+
+/**
+ * When a MONTHLY rule omits its day anchor but a concrete first-occurrence date
+ * is known, the day-of-month anchor to drive EXPLICITLY (so the series recurs on
+ * that day, not the Repeat dialog's untouched default). Returns `undefined` when
+ * nothing should change (non-monthly, an explicit anchor already given, or no
+ * concrete date). Mirrors {@link deriveWeeklyWeekdays} for the monthly unit —
+ * the same day-of-month the read-path decoder / composeOffsets derives from the
+ * occurrence date, so the derived anchor is byte-consistent with the rule blob.
+ */
+export function deriveMonthlyAnchor(
+  rule: Pick<RepeatRuleParams, "frequency" | "monthly" | "afterCompletion">,
+  anchorIso: IsoDate | null | undefined,
+): MonthlyAnchor | undefined {
+  if (rule.afterCompletion === true) return undefined;
+  if (rule.frequency !== "monthly") return undefined;
+  if (rule.monthly !== undefined) return undefined;
+  if (!isIsoDate(anchorIso)) return undefined;
+  return { day: dayOfMonthIso(anchorIso) };
+}
+
+/**
+ * When a YEARLY rule omits its month+day anchor but a concrete first-occurrence
+ * date is known, the {month, day} anchor to drive EXPLICITLY (so the series recurs
+ * on that month/day, not the dialog's untouched January-1 default — the ANCH2-c /
+ * issue #493 anchor-drop). Returns `undefined` when nothing should change
+ * (non-yearly, an explicit anchor already given, or no concrete date).
+ */
+export function deriveYearlyAnchor(
+  rule: Pick<RepeatRuleParams, "frequency" | "yearly" | "afterCompletion">,
+  anchorIso: IsoDate | null | undefined,
+): YearlyAnchor | undefined {
+  if (rule.afterCompletion === true) return undefined;
+  if (rule.frequency !== "yearly") return undefined;
+  if (rule.yearly !== undefined) return undefined;
+  if (!isIsoDate(anchorIso)) return undefined;
+  return { month: monthOfIso(anchorIso), day: dayOfMonthIso(anchorIso) };
+}
+
+/**
+ * The date to drive into the Repeat dialog's "Next:" field for a rule whose
+ * `next` is the scheduled START (`--when`). A DEADLINED rule anchors on the
+ * DEADLINE — the dialog's "Next:" is the next deadline and the instance START =
+ * deadline − startDaysEarlier — so it is driven with `next + startDaysEarlier` and
+ * the app back-shifts the start to `next` (YANCH1 #493, golden-v3 probe: Next
+ * driven to a date with start-N lands the instance start N days earlier). A
+ * non-deadlined rule (or one with no concrete `next`) drives `next` verbatim.
+ * Returns `undefined` when `next` is absent/non-concrete.
+ */
+export function deadlineDriveNext(
+  p: Pick<RepeatRuleParams, "next" | "deadline" | "startDaysEarlier">,
+): IsoDate | undefined {
+  if (!isIsoDate(p.next)) return undefined;
+  const shift =
+    p.deadline === true || (p.startDaysEarlier ?? 0) > 0 ? (p.startDaysEarlier ?? 0) : 0;
+  return addDaysIso(p.next, shift);
+}
+
+/**
+ * The calendar-anchor fields to drive EXPLICITLY for a fixed weekly/monthly/yearly
+ * rule when the caller supplied a concrete first-occurrence date but NO explicit
+ * anchor — each derived from that date by the SAME refIso law composeOffsets uses
+ * (weekly → weekday, monthly → day-of-month, yearly → month+day). Driving the
+ * anchor pop-ups makes the series RECUR on the intended calendar placement;
+ * leaving the anchor to the "Next:" first-occurrence field alone fixes only the
+ * FIRST occurrence and leaves the dialog's untouched default as the recurring rule
+ * (weekly → Sunday, monthly → 1st, yearly → January 1 — ANCH2 cell c / issue
+ * #493). Returns only the fields that need driving; an explicit anchor, an
+ * after-completion rule, daily, or no concrete date yields an empty patch. This
+ * completes the derive-and-drive family the weekly weekday-derivation began
+ * post-ANCH1 (decisions.md).
+ */
+export function deriveFixedAnchor(
+  rule: Pick<
+    RepeatRuleParams,
+    "frequency" | "interval" | "weekdays" | "monthly" | "yearly" | "afterCompletion"
+  >,
+  anchorIso: IsoDate | null | undefined,
+): Partial<Pick<RepeatRuleParams, "weekdays" | "monthly" | "yearly">> {
+  const weekdays = deriveWeeklyWeekdays(rule, anchorIso);
+  const monthly = deriveMonthlyAnchor(rule, anchorIso);
+  const yearly = deriveYearlyAnchor(rule, anchorIso);
+  return {
+    ...(weekdays !== undefined && { weekdays }),
+    ...(monthly !== undefined && { monthly }),
+    ...(yearly !== undefined && { yearly }),
+  };
 }
 
 /**
