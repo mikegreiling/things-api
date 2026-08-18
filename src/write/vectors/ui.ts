@@ -32,8 +32,10 @@ import { noteInflightStep, trace, traceActive, tracePath } from "../../trace/tra
 import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
 import {
+  createReachabilityCache,
   H_UI_SESSION_UNREACHABLE,
   probeSessionReachability,
+  type ReachabilityProbeCache,
   type ReachabilityVerdict,
 } from "./session-reachability.ts";
 import { certificationOf } from "./ui-certification.ts";
@@ -494,11 +496,15 @@ async function clearDialog(run: UiRunner): Promise<ClearResult> {
  */
 async function ensureWindowReachable(
   run: UiRunner,
+  reachCache: ReachabilityProbeCache,
 ): Promise<
   | { ok: true; relocated: boolean }
   | { ok: false; verdict: Extract<ReachabilityVerdict, { reachable: false }> }
 > {
-  const first = await probeSessionReachability(run, STEP_TIMEOUT_MS);
+  // First probe MAY be served from the pre-seed gate's memo (PERF1) — but only a
+  // reachable verdict is ever memoized, so every refusal/relocation below is still
+  // decided on a fresh probe (see ReachabilityProbeCache).
+  const first = await reachCache.probe(run, STEP_TIMEOUT_MS);
   if (first.reachable) return { ok: true, relocated: false };
   if (first.scope === "session") return { ok: false, verdict: first };
   // scope "window": Things' window is on another Space (or absent) while the
@@ -511,6 +517,9 @@ async function ensureWindowReachable(
     },
     STEP_TIMEOUT_MS,
   );
+  // The relocation just changed window state — drop any memo and re-probe LIVE
+  // (a closed-loop verify of the maneuver, never a cached verdict).
+  reachCache.invalidate();
   const second = await probeSessionReachability(run, STEP_TIMEOUT_MS);
   if (second.reachable) return { ok: true, relocated: true };
   return { ok: false, verdict: second.reachable ? first : second };
@@ -940,6 +949,7 @@ async function drive(
   run: UiRunner,
   aux: UiDriveAux,
   budgetMs: number = DEFAULT_UI_DRIVE_BUDGET_MS,
+  reachCache: ReachabilityProbeCache = createReachabilityCache(),
 ): Promise<ExecuteResult> {
   const done: string[] = [];
   // The overall-drive WATCHDOG (TRACE1 #487). A drive can outlast the caller's
@@ -1039,7 +1049,7 @@ async function drive(
   //     full-screen session REFUSES (blocked, zero mutation); a window merely on
   //     another Space is RELOCATED back and disclosed. Menu-only recipes skip this.
   if (recipe.needsWindowReachability === true) {
-    const reach = await ensureWindowReachable(run);
+    const reach = await ensureWindowReachable(run, reachCache);
     if (!reach.ok) return blockedReachability(reach.verdict);
     if (reach.relocated) {
       relocationNote =
@@ -1325,6 +1335,12 @@ export function createUiVector(
   // in-flight marker (for the signal handler) and, when tracing is on, records a
   // start/end pair with timing/outcome (TRACE1 #487).
   const tracedRun = tracingRun(run);
+  // Intra-invocation reachability memo (PERF1), shared between the pre-seed gate
+  // (probeReachability) and the in-drive gate (ensureWindowReachable) so a promote
+  // composite does not probe the session — seconds-long on a busy desktop — twice.
+  // The vector is rebuilt per client-open, so this is naturally scoped to one CLI
+  // invocation; the memo's own TTL bounds reuse for a long-lived programmatic client.
+  const reachCache = createReachabilityCache();
   return {
     id: "ui",
     matrix: enabled ? enabledMatrix() : disabledMatrix(),
@@ -1337,12 +1353,13 @@ export function createUiVector(
       if (invocation.recipe === undefined) {
         return refusal("ui invocation carried no recipe (compile bug).");
       }
-      return drive(invocation.recipe, tracedRun, aux, budgetMs);
+      return drive(invocation.recipe, tracedRun, aux, budgetMs, reachCache);
     },
     // Pre-seed gate seam for the promote orchestrators (SESSGATE, #480): probe the
     // live session BEFORE they seed a row, so a locked/full-screen session refuses
     // with zero mutation. Present regardless of `enabled` (the orchestrator has
-    // already cleared the H-UI-DRIVE ack by the time it consults this).
-    probeReachability: () => probeSessionReachability(tracedRun, STEP_TIMEOUT_MS),
+    // already cleared the H-UI-DRIVE ack by the time it consults this). Populates
+    // the memo the in-drive gate reuses (PERF1).
+    probeReachability: () => reachCache.probe(tracedRun, STEP_TIMEOUT_MS),
   };
 }
