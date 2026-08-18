@@ -28,6 +28,7 @@ import { describe, expect, it } from "vitest";
 import type { RepeatRuleParams } from "../../src/write/operations.ts";
 import { composeRepeatRuleSpec, ruleXml } from "../../src/write/recurrence-rule-blob.ts";
 import { assertRepeatRule } from "../../src/write/repeat-rule.ts";
+import { deriveFixedAnchor } from "../../src/write/repeat-anchor.ts";
 import { expectedRuleAssertions } from "../../src/write/repeat-asserts.ts";
 import { createDbReader, evaluateDelta, type DeltaSpec } from "../../src/write/verify/delta.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -255,6 +256,40 @@ describe("DISCRIMINATION: minimal-footprint axes (unit, type, deadline flag)", (
       const plain: Bag = { frequency: "daily", interval: 1, deadline: false };
       expect(satisfies(db, deadlined, simulateTemplate(db, plain))).toBe(false);
       expect(satisfies(db, plain, simulateTemplate(db, deadlined))).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("DISCRIMINATION: derived calendar anchor closes the #493 verify-hole (YANCH1)", () => {
+  // promote-clone derives the anchor from --when when none is given; the effective
+  // params carry it, so the anchorKey assertion catches a DROPPED anchor — the
+  // exact hole that let a January-1 yearly rule verify `ok` (#493).
+  it("a --when-derived yearly Oct-16 anchor REJECTS a January-1 landing", () => {
+    const db = buildFixtureDb();
+    try {
+      const requested: Bag = { frequency: "yearly", interval: 1 };
+      const effective: Bag = { ...requested, ...deriveFixedAnchor(requested, "2027-10-16") };
+      expect(effective.yearly).toEqual({ month: 10, day: 16 });
+      // The #493 bug landing: the dialog's untouched January-1 default anchor.
+      const janOne: Bag = { frequency: "yearly", interval: 1, yearly: { month: 1, day: 1 } };
+      expect(satisfies(db, effective, simulateTemplate(db, janOne))).toBe(false);
+      // ...and SATISFIED by the correctly-anchored Oct-16 state.
+      expect(satisfies(db, effective, simulateTemplate(db, effective))).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+  it("a --when-derived monthly day-16 anchor REJECTS a 1st-of-month landing", () => {
+    const db = buildFixtureDb();
+    try {
+      const requested: Bag = { frequency: "monthly", interval: 1 };
+      const effective: Bag = { ...requested, ...deriveFixedAnchor(requested, "2027-10-16") };
+      expect(effective.monthly).toEqual({ day: 16 });
+      const firstOfMonth: Bag = { frequency: "monthly", interval: 1, monthly: { day: 1 } };
+      expect(satisfies(db, effective, simulateTemplate(db, firstOfMonth))).toBe(false);
+      expect(satisfies(db, effective, simulateTemplate(db, effective))).toBe(true);
     } finally {
       db.close();
     }

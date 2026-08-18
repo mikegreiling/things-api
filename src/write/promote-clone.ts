@@ -24,7 +24,7 @@
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { undoToken } from "../audit/schema.ts";
-import { decodePackedDate, type IsoDate } from "../model/dates.ts";
+import { addDaysIso, decodePackedDate, type IsoDate } from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
 import { byUuid } from "../read/detail.ts";
@@ -46,7 +46,7 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
-import { deriveWeeklyWeekdays, isIsoDate } from "./repeat-anchor.ts";
+import { deriveFixedAnchor, isIsoDate } from "./repeat-anchor.ts";
 import { assertRepeatRule, ruleToInverseParams } from "./repeat-rule.ts";
 import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
@@ -179,14 +179,24 @@ async function cleanupSeed(
 }
 
 /**
- * Pick the rule fields (frequency/interval + calendar anchors) as a
- * RepeatRuleParams, plus the requested first-occurrence date to drive into the
- * dialog's "Next:" field (ANCH2, issue #476). `nextIso` is the item's scheduled
- * date; omitted (or after-completion) leaves Next at the app default.
+ * Pick the rule fields (frequency/interval + calendar anchors + deadline offset)
+ * as a RepeatRuleParams, plus the requested first-occurrence date to drive into
+ * the dialog's "Next:" field (ANCH2, issue #476). `nextIso` is the item's
+ * scheduled date; omitted (or after-completion) leaves Next at the app default.
+ *
+ * The `rule` bag is the SUPERSET the make/add legs actually carry: make-repeating
+ * passes a full {@link RepeatRuleParams} (rule-level `deadline`/`startDaysEarlier`
+ * included), add-repeating an {@link AddRepeatingRuleFields} (which OMITS those —
+ * the base add owns the item's own deadline). Every field is copied THROUGH so
+ * neither is silently dropped: an earlier version keyed the param type to
+ * AddRepeatingRuleFields and stripped `deadline`/`startDaysEarlier` from the
+ * make-repeating promote entirely (the same class as the RRX1 reminder drop —
+ * a deadlined make-repeating produced a NON-deadlined template, YANCH1 #493).
  */
 function ruleParamsFor(
   uuid: string,
-  rule: AddRepeatingRuleFields & Partial<Pick<RepeatRuleParams, "reminder">>,
+  rule: AddRepeatingRuleFields &
+    Partial<Pick<RepeatRuleParams, "reminder" | "deadline" | "startDaysEarlier">>,
   nextIso?: IsoDate,
 ): RepeatRuleParams {
   return {
@@ -203,8 +213,52 @@ function ruleParamsFor(
     // --reminder here too (ADR1 #480), since the dialog conversion otherwise drops
     // the seed's one-off reminder from the series.
     ...(rule.reminder !== undefined && { reminder: rule.reminder }),
+    // The deadline offset is a rule-level field on make-repeating (the "Add
+    // deadlines" checkbox + "start N days earlier"); it must ride the promote or a
+    // `make-repeating --deadline` lands a non-deadlined series (YANCH1 #493).
+    ...(rule.deadline !== undefined && { deadline: rule.deadline }),
+    ...(rule.startDaysEarlier !== undefined && { startDaysEarlier: rule.startDaysEarlier }),
     ...(nextIso !== undefined && rule.afterCompletion !== true && { next: nextIso }),
   };
+}
+
+const UNIT_SINGULAR: Record<RepeatRuleParams["frequency"], string> = {
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
+};
+const UNIT_PLURAL: Record<RepeatRuleParams["frequency"], string> = {
+  daily: "days",
+  weekly: "weeks",
+  monthly: "months",
+  yearly: "years",
+};
+
+/**
+ * A one-line echo of the LANDED series so a caller can eyeball what actually
+ * committed — the cadence, the verified first-occurrence START, and the deadline
+ * offset (YANCH1 #493 item 5). It rides the verified data (the anchor is asserted
+ * == requested by the post-drive verify), so it describes the START date rather
+ * than the internal deadline anchor, which for a deadlined rule is N days later.
+ */
+function landedRuleEcho(rule: RepeatRuleParams, startIso: IsoDate | null): string {
+  const cadence =
+    rule.interval === 1
+      ? `every ${UNIT_SINGULAR[rule.frequency]}`
+      : `every ${rule.interval} ${UNIT_PLURAL[rule.frequency]}`;
+  if (rule.afterCompletion === true) {
+    return `landed: the series repeats ${cadence} after each occurrence is completed`;
+  }
+  const first = startIso !== null ? `; the first occurrence is ${startIso}` : "";
+  const offset = rule.startDaysEarlier ?? 0;
+  const deadlineNote =
+    offset > 0
+      ? `, with a deadline ${offset} day${offset === 1 ? "" : "s"} later`
+      : rule.deadline === true
+        ? ", with a deadline on each occurrence"
+        : "";
+  return `landed: the series repeats ${cadence}${first}${deadlineNote}`;
 }
 
 /**
@@ -384,13 +438,30 @@ async function makeRepeatingViaClone(
   // field; its default is the today-anchored next match, but it is editable and
   // honored (docs/lab/anch2-next-field.md). Drive it with the requested first
   // occurrence — an explicit `--when` if given, else the item's own scheduled
-  // date — and derive the weekly weekday from it so the recurring day is the
-  // intended one (not the app's Sunday default).
-  const anchorIso = isIsoDate(params.next) ? params.next : src.startDate;
-  const nextIso = isIsoDate(anchorIso) ? anchorIso : undefined;
-  const derivedWeekdays = deriveWeeklyWeekdays(params, anchorIso);
-  const effParams: RepeatRuleParams =
-    derivedWeekdays !== undefined ? { ...params, weekdays: derivedWeekdays } : params;
+  // date. YANCH1 (issue #493): also DERIVE the calendar anchor (weekly weekday /
+  // monthly day / yearly month+day) from that date when no explicit anchor was
+  // given, and drive the anchor pop-ups — otherwise the recurring rule keeps the
+  // dialog's untouched default (weekly Sunday, monthly 1st, yearly January 1) and
+  // only the first occurrence is correct (the #493 anchor-drop).
+  //
+  // DEADLINE-MODE ANCHORING (YANCH1 #493, in-lab golden-v3): a deadlined rule
+  // anchors on the DEADLINE, and each instance's START = anchor − startDaysEarlier
+  // (probe: anchor+Next driven to Oct-16 with start-14 → of=[Oct-16], instance
+  // start = Oct-02). `--when` is the scheduled START, so the date the dialog's
+  // anchor pop-ups + "Next:" field must carry is when + startDaysEarlier (the
+  // deadline); the app then back-shifts the start to `when`. For a non-deadlined
+  // rule the shift is 0 and the drive date equals `--when` (unchanged).
+  const whenIso = isIsoDate(params.next) ? params.next : src.startDate;
+  const deadlineShift =
+    params.deadline === true || (params.startDaysEarlier ?? 0) > 0
+      ? (params.startDaysEarlier ?? 0)
+      : 0;
+  const driveIso = isIsoDate(whenIso) ? addDaysIso(whenIso, deadlineShift) : undefined;
+  // The dialog is driven with the deadline-adjusted date; the verify below expects
+  // the START to land back on the requested `--when`.
+  const nextIso = driveIso;
+  const expectedStartIso = isIsoDate(whenIso) ? whenIso : undefined;
+  const effParams: RepeatRuleParams = { ...params, ...deriveFixedAnchor(params, driveIso) };
 
   // The promote leg drives the GUI — block before minting a clone if the ack is missing.
   if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
@@ -536,14 +607,20 @@ async function makeRepeatingViaClone(
   }
   const { templateUuid, instanceUuid } = discoveryOf(promote);
 
-  // Post-drive verify (ANCH2): the driven Next must have landed as the first
-  // occurrence — fail closed on mismatch rather than report a wrong-phase ok.
-  if (nextIso !== undefined) {
+  // Post-drive verify (ANCH2 + YANCH1): the instance START must have landed on the
+  // requested `--when` — for a deadlined rule the driven Next is the deadline
+  // (when + startDaysEarlier) and the app back-shifts the start to `--when`, so the
+  // check is against `expectedStartIso`, not the raw drive date. Fail closed on
+  // mismatch rather than report a wrong-phase ok.
+  if (expectedStartIso !== undefined) {
     const landed = firstOccurrenceOf(deps.db, templateUuid);
-    if (landed !== nextIso) return nextMismatch(op, templateUuid, nextIso, landed);
+    if (landed !== expectedStartIso) {
+      return nextMismatch(op, templateUuid, expectedStartIso, landed);
+    }
   }
 
   const warnings: string[] = [
+    landedRuleEcho(effParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
     `the original ${expectedType} (uuid ${srcUuid}) was moved to the Trash; \`things undo\` ` +
       "removes the new series (trash-both) and restores it",
     PLACEMENT_NOTE,
@@ -609,13 +686,14 @@ async function addRepeatingViaCreate(
 
   // ANCH2 (issue #476): drive the Repeat dialog's "Next:" field with --when so the
   // series starts on the requested date (the field's default is today-anchored but
-  // it is editable and honored), and derive the weekly weekday from --when so the
-  // recurring day is the intended one (not the app's Sunday default).
+  // it is editable and honored). YANCH1 (issue #493): also DERIVE the calendar
+  // anchor (weekly weekday / monthly day / yearly month+day) from --when when no
+  // explicit anchor was given, and drive the anchor pop-ups — otherwise the
+  // recurring rule keeps the dialog's untouched default (weekly Sunday, monthly
+  // 1st, yearly January 1) and only the first occurrence is correct.
   const anchorIso = isIsoDate(addParams["when"]) ? (addParams["when"] as IsoDate) : null;
   const nextIso = anchorIso ?? undefined;
-  const derivedWeekdays = deriveWeeklyWeekdays(rule, anchorIso);
-  const effRule: AddRepeatingRuleFields =
-    derivedWeekdays !== undefined ? { ...rule, weekdays: derivedWeekdays } : rule;
+  const effRule: AddRepeatingRuleFields = { ...rule, ...deriveFixedAnchor(rule, anchorIso) };
 
   // ADR1 (issue #480, requested behavior #3): carry the base to-do's --reminder
   // onto the SERIES. The create leg sets a one-off reminderTime on the seed, but
@@ -728,7 +806,10 @@ async function addRepeatingViaCreate(
     if (landed !== nextIso) return nextMismatch(op, templateUuid, nextIso, landed);
   }
 
-  const warnings: string[] = [PLACEMENT_NOTE];
+  const warnings: string[] = [
+    landedRuleEcho(ruleParams, nextIso ?? firstOccurrenceOf(deps.db, templateUuid)),
+    PLACEMENT_NOTE,
+  ];
   if (promote.warnings !== undefined) warnings.push(...promote.warnings);
 
   appendPromoteSummary(deps, {

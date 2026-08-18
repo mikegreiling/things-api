@@ -252,9 +252,11 @@ function addDriveGuiFlag(cmd: Command): Command {
     "--dangerously-drive-gui",
     "required: visibly drives the Things app to make a change it offers nowhere else; " +
       "also needs `things config set ui-enabled true`. Driving the app can take over a " +
-      "minute on a large database, so allow a generous timeout (120s or more) — if your own " +
-      "timeout stops the command first you get empty output, not a result; the change may still " +
-      "have landed, so re-check with `things show <ref>` before retrying",
+      "minute on a large database, so allow a generous timeout (180s or more) — if your own " +
+      "timeout stops the command first you get empty output, not a result. A timeout or empty " +
+      "output is not a success: the change may still have landed, so re-check with " +
+      "`things show <ref>` before retrying, and never fire an identical retry (it can duplicate " +
+      "the change) — stop and report if the state is wrong or unclear",
   );
 }
 

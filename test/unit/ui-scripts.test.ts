@@ -9,6 +9,7 @@ import {
   axAssertEligibleScript,
   axSelectPopupCandidatesScript,
   axSelectPopupScript,
+  axSetDateTimeScript,
   axSetValueScript,
   axSheetOpenScript,
 } from "../../src/write/vectors/ui.ts";
@@ -63,6 +64,34 @@ describe("axSetValueScript — closed-loop read-back retry (interval-field race,
 
   it("honors a custom attempt count", () => {
     expect(axSetValueScript("f", "5", 1)).toContain("repeat 1 times");
+  });
+});
+
+describe("axSetDateTimeScript — named-error + read-back rejection detection (YANCH1 #493)", () => {
+  const dateScript = axSetDateTimeScript("date:2027-10-30", "next");
+  const timeScript = axSetDateTimeScript("time:18:00", "reminder");
+
+  it("guards the empty date-area set so an absent control cannot bubble as a raw -2700", () => {
+    // collect() is wrapped in try/catch and pick() guards the empty set, so a
+    // missing control yields a NAMED error, never `-[__NSArray0 objectAtIndex:]`.
+    expect(dateScript).toContain("try{ collect(app,'AXDateTimeArea',16,areas); }catch(e){");
+    expect(dateScript).toContain("this Repeat-dialog state presents ");
+    expect(dateScript).toContain("date area(s)"); // reports the inventory
+  });
+
+  it("reads the control back after a date write and fails loudly on a rejected value", () => {
+    expect(dateScript).toContain("ymdStr(dt,cal)");
+    expect(dateScript).toContain("rejected: the control committed");
+    expect(dateScript).toContain("the write did not take");
+  });
+
+  it("reads the control back after a time write (reminder) and fails on a mismatch", () => {
+    expect(timeScript).toContain("hmStr(dt,cal)");
+    expect(timeScript).toContain("rejected: the control committed");
+  });
+
+  it("names the target in every failure path", () => {
+    expect(dateScript).toContain("set-datetime '+target+'");
   });
 });
 
