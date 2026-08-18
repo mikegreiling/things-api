@@ -24,7 +24,7 @@
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { undoToken } from "../audit/schema.ts";
-import { addDaysIso, decodePackedDate, type IsoDate } from "../model/dates.ts";
+import { addDaysIso, decodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
 import { byUuid } from "../read/detail.ts";
@@ -46,7 +46,12 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
-import { assessOffRuleFirst, deriveFixedAnchor, isIsoDate } from "./repeat-anchor.ts";
+import {
+  assessOffRuleFirst,
+  daysBetweenIso,
+  deriveFixedAnchor,
+  isIsoDate,
+} from "./repeat-anchor.ts";
 import { assertRepeatRule, ruleToInverseParams } from "./repeat-rule.ts";
 import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
@@ -285,6 +290,74 @@ function firstOccurrenceOf(db: WriteDeps["db"], templateUuid: string): IsoDate |
     .get(templateUuid) as { ic: number | null } | undefined;
   if (row === undefined || row.ic === null) return null;
   return decodePackedDate(row.ic);
+}
+
+/** A repeating instance's own scheduled start date (`startDate`) as ISO, or null. */
+function instanceStartDate(db: WriteDeps["db"], instanceUuid: string): IsoDate | null {
+  const row = db.prepare("SELECT startDate AS s FROM TMTask WHERE uuid = ?").get(instanceUuid) as
+    | { s: number | null }
+    | undefined;
+  if (row === undefined || row.s === null) return null;
+  return decodePackedDate(row.s);
+}
+
+/**
+ * DBLSPAWN1 (docs/lab/dblspawn1-preserved-instance.md, golden-v3 / Things 3.22.14):
+ * a promote whose source is PRESERVED (SRCFATE deadline / terminal-element trigger)
+ * relinks that source IN PLACE as the current-occurrence instance. When the first
+ * occurrence is FUTURE-dated this double-books: the hidden template's cursor
+ * (`rt1_nextInstanceStartDate`) points at the SAME occurrence with
+ * `rt1_instanceCreationCount = 0` — the cursor does not know the occurrence is already
+ * materialized — so when the date ARRIVES the app spawns a SECOND instance alongside
+ * the preserved one (cell C: two rows dated the same day, icCount 0→1). A genuine
+ * duplicate factory, not cosmetic.
+ *
+ * So a promote composite trashes the redundant preserved FUTURE instance inside the
+ * txn: its content mirrors the template, and the cursor will mint the single real
+ * occurrence when the date arrives (matching a normal future-first series, which holds
+ * no materialized instance until then). A today/past-dated preserved instance is the
+ * LEGITIMATE current occurrence (the cursor has already advanced past it) — left
+ * untouched. Returns the disclosure warning (and the trashed uuid) or null when the
+ * promote did not preserve a future instance. Best-effort: a failed trash is reported
+ * in the warning rather than failing the whole compound (the series is already sound).
+ */
+async function trashRedundantFuturePreservedInstance(
+  deps: WriteDeps,
+  kind: "todo" | "project",
+  promote: Extract<MutationResult, { kind: "ok" }>,
+  options: WriteOptions,
+  txnId: string,
+  now: Date,
+): Promise<{ warning: string; trashedUuid: string } | null> {
+  const rep = promote.repeating;
+  // Preserved iff the native promote relinked the source (replacedUuid === null) AND
+  // there is a materialized instance. A DELETE-fate promote reports replacedUuid !==
+  // null and never leaves a future instance to double-book.
+  if (rep === undefined || rep.replacedUuid !== null || rep.instanceUuid === null) return null;
+  const instanceUuid = rep.instanceUuid;
+  const startIso = instanceStartDate(deps.db, instanceUuid);
+  if (startIso === null) return null;
+  const todayIso = localToday(now, deps.zone);
+  if (daysBetweenIso(todayIso, startIso) <= 0) return null; // today or past — legitimate
+
+  const trashOp: OperationKind = kind === "project" ? "project.delete" : "todo.delete";
+  const trashed = await runMutation(
+    deps,
+    trashOp,
+    { uuid: instanceUuid },
+    legOptions(options, txnId),
+  );
+  const kindWord = kind === "project" ? "project" : "to-do";
+  const warning =
+    trashed.kind === "ok"
+      ? `the source ${kindWord} was kept by the app as a pre-materialized first occurrence dated ` +
+        `${startIso}; because that date is in the future the series would have spawned a DUPLICATE ` +
+        `there, so the redundant occurrence was moved to the Trash — the series mints a single ` +
+        `occurrence when ${startIso} arrives`
+      : `the app kept the source ${kindWord} as a pre-materialized first occurrence dated ${startIso} ` +
+        `(a future date the series would DUPLICATE), and it could NOT be auto-trashed — remove it ` +
+        `with \`things ${kind} delete ${instanceUuid}\``;
+  return { warning, trashedUuid: instanceUuid };
 }
 
 /**
@@ -618,7 +691,8 @@ async function makeRepeatingViaClone(
         : {}),
     } as MutationResult;
   }
-  const { templateUuid, instanceUuid } = discoveryOf(promote);
+  const { templateUuid } = discoveryOf(promote);
+  let { instanceUuid } = discoveryOf(promote);
 
   // Post-drive verify (ANCH2 + YANCH1): the instance START must have landed on the
   // requested `--when` — for a deadlined rule the driven Next is the deadline
@@ -638,6 +712,14 @@ async function makeRepeatingViaClone(
       "removes the new series (trash-both) and restores it",
     PLACEMENT_NOTE,
   ];
+  // DBLSPAWN1: if the promote PRESERVED the source (deadline / terminal-element
+  // trigger) as a FUTURE-dated instance, the app would spawn a duplicate on that date
+  // — trash the redundant occurrence and disclose (cursor mints the single real one).
+  const dbl = await trashRedundantFuturePreservedInstance(deps, kind, promote, options, txnId, now);
+  if (dbl !== null) {
+    warnings.push(dbl.warning);
+    if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
+  }
   const offRule = offRuleFirstNote(effParams);
   if (offRule !== null) warnings.push(offRule);
   if (promote.warnings !== undefined) warnings.push(...promote.warnings);
@@ -692,7 +774,7 @@ async function addRepeatingViaCreate(
   deps: WriteDeps,
   kind: "todo" | "project",
   addParams: Record<string, unknown>,
-  rule: AddRepeatingRuleFields,
+  rule: AddRepeatingRuleFields & Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">>,
   title: string,
   options: WriteOptions,
 ): Promise<MutationResult> {
@@ -706,9 +788,26 @@ async function addRepeatingViaCreate(
   // explicit anchor was given, and drive the anchor pop-ups — otherwise the
   // recurring rule keeps the dialog's untouched default (weekly Sunday, monthly
   // 1st, yearly January 1) and only the first occurrence is correct.
-  const anchorIso = isIsoDate(addParams["when"]) ? (addParams["when"] as IsoDate) : null;
-  const nextIso = anchorIso ?? undefined;
-  const effRule: AddRepeatingRuleFields = { ...rule, ...deriveFixedAnchor(rule, anchorIso) };
+  //
+  // DEADLINE-MODE (DBLSPAWN1): a deadlined rule anchors on the DEADLINE, and each
+  // instance's START = deadline − startDaysEarlier (DACON1 DC4). `--when` is the
+  // scheduled START, so the date the dialog's "Next:" field + anchor pop-ups must
+  // carry is when + startDaysEarlier (the deadline); the app back-shifts the start to
+  // `--when`. `runAddRepeatingTodo` maps a concrete item-level `--deadline` into the
+  // rule's deadline/startDaysEarlier here (and strips it from the seed, so the source
+  // is not SRCFATE-preserved as a double-booking future instance). For a non-deadlined
+  // rule the shift is 0 and the drive date equals `--when` (unchanged).
+  const whenIso = isIsoDate(addParams["when"]) ? (addParams["when"] as IsoDate) : null;
+  const deadlineShift =
+    rule.deadline === true || (rule.startDaysEarlier ?? 0) > 0 ? (rule.startDaysEarlier ?? 0) : 0;
+  const driveIso = whenIso !== null ? addDaysIso(whenIso, deadlineShift) : null;
+  const nextIso = driveIso ?? undefined;
+  const expectedStartIso = whenIso ?? undefined;
+  const effRule: AddRepeatingRuleFields &
+    Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">> = {
+    ...rule,
+    ...deriveFixedAnchor(rule, driveIso),
+  };
 
   // ADR1 (issue #480, requested behavior #3): carry the base to-do's --reminder
   // onto the SERIES. The create leg sets a one-off reminderTime on the seed, but
@@ -721,7 +820,8 @@ async function addRepeatingViaCreate(
   // so addParams never carries one there.
   const baseReminder =
     typeof addParams["reminder"] === "string" ? (addParams["reminder"] as string) : undefined;
-  const effRuleWithReminder: AddRepeatingRuleFields & Partial<Pick<RepeatRuleParams, "reminder">> =
+  const effRuleWithReminder: AddRepeatingRuleFields &
+    Partial<Pick<RepeatRuleParams, "reminder" | "deadline" | "startDaysEarlier">> =
     baseReminder !== undefined ? { ...effRule, reminder: baseReminder } : effRule;
 
   // The promote leg drives the GUI — block before creating anything if the ack is missing.
@@ -810,21 +910,40 @@ async function addRepeatingViaCreate(
     const patch = await cleanupSeed(deps, kind, createdUuid, promote, options, txnId);
     return { ...promote, op, ...patch } as MutationResult;
   }
-  const { templateUuid, instanceUuid } = discoveryOf(promote);
+  const { templateUuid } = discoveryOf(promote);
+  let { instanceUuid } = discoveryOf(promote);
 
-  // Post-drive verify (ANCH2): the driven Next must have landed as the first
-  // occurrence — fail closed on mismatch rather than report a wrong-phase ok.
-  // The series EXISTS here (promote landed) but on the wrong phase, so this is a
-  // genuine partial success, NOT a seed to trash — reported for correction.
-  if (nextIso !== undefined) {
+  // Post-drive verify (ANCH2 + DBLSPAWN1): the instance START must have landed on the
+  // requested `--when` — for a deadlined rule the driven Next is the deadline (when +
+  // startDaysEarlier) and the app back-shifts the start to `--when`, so the check is
+  // against `expectedStartIso`, not the raw drive date. Fail closed on mismatch rather
+  // than report a wrong-phase ok. The series EXISTS here (promote landed) but on the
+  // wrong phase, so this is a genuine partial success, NOT a seed to trash.
+  if (expectedStartIso !== undefined) {
     const landed = firstOccurrenceOf(deps.db, templateUuid);
-    if (landed !== nextIso) return nextMismatch(op, templateUuid, nextIso, landed);
+    if (landed !== expectedStartIso)
+      return nextMismatch(op, templateUuid, expectedStartIso, landed);
   }
 
   const warnings: string[] = [
-    landedRuleEcho(ruleParams, nextIso ?? firstOccurrenceOf(deps.db, templateUuid)),
+    landedRuleEcho(ruleParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
     PLACEMENT_NOTE,
   ];
+  // DBLSPAWN1 backstop: the deadline-mapping above keeps the seed deadline-free (no
+  // SRCFATE preserve), but any OTHER preserve trigger reaching the seed (defensive)
+  // would double-book a future first occurrence — trash the redundant instance.
+  const dbl = await trashRedundantFuturePreservedInstance(
+    deps,
+    kind,
+    promote,
+    options,
+    txnId,
+    startedAt,
+  );
+  if (dbl !== null) {
+    warnings.push(dbl.warning);
+    if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
+  }
   const offRule = offRuleFirstNote(ruleParams);
   if (offRule !== null) warnings.push(offRule);
   if (promote.warnings !== undefined) warnings.push(...promote.warnings);
@@ -850,13 +969,13 @@ async function addRepeatingViaCreate(
   });
 }
 
-export function runAddRepeatingTodo(
+export async function runAddRepeatingTodo(
   deps: WriteDeps,
   params: TodoAddRepeatingParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
   const { frequency, interval, afterCompletion, weekdays, monthly, yearly, ends, ...add } = params;
-  const rule: AddRepeatingRuleFields = {
+  const baseRule: AddRepeatingRuleFields = {
     frequency,
     interval,
     ...(afterCompletion !== undefined && { afterCompletion }),
@@ -865,12 +984,45 @@ export function runAddRepeatingTodo(
     ...(yearly !== undefined && { yearly }),
     ...(ends !== undefined && { ends }),
   };
+
+  // DBLSPAWN1 (docs/lab/dblspawn1-preserved-instance.md): a concrete item-level
+  // `--deadline <date>` on add-repeating maps to the RULE's deadline — each occurrence
+  // is due `deadline − when` days after its start (the "Add deadlines" + "start N days
+  // earlier" dialog fields). This is the deadline the series actually wants, and it
+  // keeps the SEED deadline-free: a seed carrying a deadline is SRCFATE-preserved as a
+  // materialized instance, and when that first occurrence is future-dated the app
+  // DOUBLE-BOOKS it against the template cursor and spawns a duplicate on the date
+  // (cell C). The seed owning the deadline was the two-step dance the live agent hit
+  // (add-repeating dropped the rule deadline, forcing a follow-up reschedule-repeat);
+  // mapping it up front makes that unnecessary. A deadline needs a concrete `--when`
+  // (the per-occurrence offset is deadline − start) and must be on/after it.
+  let rule: AddRepeatingRuleFields &
+    Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">> = baseRule;
+  let seedDeadline = add.deadline;
+  if (add.deadline !== undefined && afterCompletion !== true) {
+    if (!isIsoDate(add.when)) {
+      throw new RangeError(
+        "a repeating --deadline needs a concrete --when date (the deadline sets each occurrence's " +
+          "due date relative to its start) — schedule the series on a YYYY-MM-DD --when, or drop --deadline",
+      );
+    }
+    const startEarlier = daysBetweenIso(add.when, add.deadline);
+    if (startEarlier < 0) {
+      throw new RangeError(
+        `--deadline (${add.deadline}) must be on or after --when (${add.when}) — a deadline cannot ` +
+          "precede the occurrence's own start",
+      );
+    }
+    rule = { ...baseRule, deadline: true, startDaysEarlier: startEarlier };
+    seedDeadline = undefined; // the RULE owns the deadline; the seed carries none
+  }
+
   const addParams: Record<string, unknown> = {
     title: add.title,
     ...(add.notes !== undefined && { notes: add.notes }),
     ...(add.when !== undefined && { when: add.when }),
     ...(add.reminder !== undefined && { reminder: add.reminder }),
-    ...(add.deadline !== undefined && { deadline: add.deadline }),
+    ...(seedDeadline !== undefined && { deadline: seedDeadline }),
     ...(add.tags !== undefined && { tags: add.tags }),
     ...(add.checklistItems !== undefined && { checklistItems: add.checklistItems }),
     ...(add.project !== undefined && { project: add.project }),

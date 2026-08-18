@@ -1930,7 +1930,11 @@ export function registerWriteCommands(program: Command): void {
           .option("--notes <text>", "notes body")
           .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
           .option("--reminder <time>", "HH:mm reminder (needs a schedulable --when)")
-          .option("--deadline <date>", "YYYY-MM-DD")
+          .option(
+            "--deadline <date>",
+            "YYYY-MM-DD — deadlines EVERY occurrence: each starts (deadline − --when) days " +
+              "before its own deadline (needs a concrete --when, on or before the deadline)",
+          )
           .option("--tag <name>", "tag to attach (repeatable)", collect, [])
           .option("--checklist-item <title>", "checklist item (repeatable)", collect, [])
           .option("--project <ref>", "destination project (uuid or unique name)")

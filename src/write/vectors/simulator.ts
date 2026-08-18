@@ -1120,15 +1120,28 @@ function applyMakeRepeatingFixed(
             instanceCount: 1 as 0 | 1,
           };
 
-  // A PRESERVED source is relinked as the current-occurrence instance (count 1); a
-  // DELETE-fate source spawns a fresh instance only when today is an occurrence.
-  const sourceBecomesInstance =
-    (type === 0 && src.deadline !== null) ||
-    (subtree !== null && fixedProjectPreservesSource(subtree));
-  const instanceCount: 0 | 1 = sourceBecomesInstance ? 1 : plan.instanceCount;
+  // A PRESERVED source (deadline / terminal-element trigger, decided per-branch below)
+  // is relinked in place as the current-occurrence instance; a DELETE-fate source spawns
+  // a fresh instance only when today is an occurrence.
+  // DBLSPAWN1 (docs/lab/dblspawn1-preserved-instance.md, golden-v3 / Things 3.22.14):
+  // the template's instance-creation COUNTER follows the plan (1 iff TODAY is the
+  // occurrence, else 0), NOT the source-preserve relink. When the first occurrence is
+  // FUTURE the app leaves icCount=0 even though the preserved source ALREADY exists as
+  // a materialized instance at that date — the cursor "does not know" it is
+  // materialized (rt1_nextInstanceStartDate == the occurrence, icCount == 0), which is
+  // the double-book that spawns a DUPLICATE when the date arrives (cell A/C). The prior
+  // model forced icCount=1 on any preserve, contradicting the observed at-rest state.
+  const instanceCount: 0 | 1 = plan.instanceCount;
 
   const spec = composeRepeatRuleSpec(params, plan.refIso, epochOfIso(plan.refIso));
   const templateUuid = genUuid();
+
+  // The template's cursor/creation-start columns store the occurrence START date. A
+  // DEADLINED rule DROVE the Repeat dialog's "Next:" with the DUE date (start +
+  // startDaysEarlier), so plan.cursorIso is that due date — back-shift it to the START
+  // (DACON1 DC4, golden-v3: sr = icStart = the START, not the deadline). Non-deadlined:
+  // unchanged (the drive date IS the start).
+  const templateStartIso = deadlined ? addDaysIso(plan.cursorIso, -startEarlier) : plan.cursorIso;
 
   // The hidden template row is identical in both fixed-project fates.
   insertRecurrenceRow(sim, ctx, {
@@ -1142,8 +1155,8 @@ function applyMakeRepeatingFixed(
     deadline: deadlined ? encodePackedDate(DEADLINE_SENTINEL_ISO) : null,
     recurrenceRuleXml: ruleXml(spec),
     instanceCreationCount: instanceCount,
-    instanceCreationStartDate: encodePackedDate(plan.cursorIso),
-    nextInstanceStartDate: encodePackedDate(plan.cursorIso),
+    instanceCreationStartDate: encodePackedDate(templateStartIso),
+    nextInstanceStartDate: encodePackedDate(templateStartIso),
   });
   copyTaskTags(sim, params.uuid, templateUuid);
 
