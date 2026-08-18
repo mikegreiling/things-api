@@ -10,7 +10,7 @@ version: 0.0.0-dev
 
 `things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `move`, `output`, `repeating`, `writes`.
 
-**This skill's reference files** are exactly `data-model`, `contracts`, `ordering`, `errors`, `banner`, `gui` (all `references/*.md`) — do not guess other names. Read *shapes* (every view's JSON, `stage`/`when`, the compact/full tiers) live in `data-model`; the envelope, exit codes, undo, batch, and recurrence in `contracts`; move/reorder axes in `ordering`; the error contract in `errors`. There is no `reads`/`writes`/`recurrence`/`safety` file. Most tasks need only this page — open a reference only when a link below sends you there.
+**This skill's reference files** are exactly `data-model`, `contracts`, `repeating`, `ordering`, `errors`, `banner`, `gui` (all `references/*.md`) — do not guess other names. Read *shapes* (every view's JSON, `stage`/`when`, the compact/full tiers) live in `data-model`; the envelope, exit codes, undo, batch, and the recurrence contract in `contracts`; the repeating model, scheduling vocabulary, and deadline law in `repeating`; move/reorder axes in `ordering`; the error contract in `errors`. There is no `reads`/`writes`/`recurrence`/`safety` file. Most tasks need only this page — open a reference only when a link below sends you there.
 
 ## Data model (read this first)
 
@@ -74,6 +74,7 @@ Namespaced verb families — run `things <group> --help` for the verbs and `thin
 
 - [references/data-model.md](references/data-model.md) — the full data model, `stage`/`when` derivation, the compact/full tiers, view membership, and filters.
 - [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/idempotency, batch chaining, and recurrence.
+- [references/repeating.md](references/repeating.md) — repeating series in depth: template vs instances, the scheduling vocabulary, off-schedule first occurrences, the deadline law (the anchor names the DUE date), ends bounds, and the GUI-drive operational rules.
 - [references/ordering.md](references/ordering.md) — move vs reorder in depth: axes, gates, caps, automatic fallbacks, placement guarantees, and the one dead class (templates).
 - [references/errors.md](references/errors.md) — the error contract: the candidate shape, dead-row hints, hazard acknowledgments, and the error-code registry.
 - [references/banner.md](references/banner.md) — the Today "new to-dos" banner, the provisional `•` pip, reminder/evening liveness, and what a watcher sees.
