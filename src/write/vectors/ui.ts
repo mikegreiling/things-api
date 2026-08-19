@@ -619,6 +619,24 @@ function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(n
 function rolestr(el){ var v=attr(el,'AXRole'); return v? v.js : ''; }
 function kids(el){ var c=attr(el,'AXChildren'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a; }
 function collect(el,role,depth,out){ if(depth<0) return; if(rolestr(el)===role) out.push(el); var ks=kids(el); for(var i=0;i<ks.length;i++) collect(ks[i],role,depth-1,out); }
+function subrole(el){ var v=attr(el,'AXSubrole'); return v? v.js : ''; }
+function windowsOf(el){ var c=attr(el,'AXWindows'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a; }
+function sizeWH(el){ var s=attr(el,'AXSize'); if(!s) return null; var d=ObjC.castRefToObject($.CFCopyDescription(s)).js; var mw=String(d).match(/w:([-0-9.]+)/); var mh=String(d).match(/h:([-0-9.]+)/); return (mw&&mh)? {w:+mw[1], h:+mh[1]} : null; }
+// Resolve the Repeat-dialog SHELL so the AXDateTimeArea collect walks only its
+// small subtree — never the app-wide tree, whose main-window list content is the
+// 4.4s app-root descent PERF2 removed (docs/lab/perf2-step-latency.md). The dialog
+// presents in TWO shapes (ui-recipes DIALOG_SHELLS, UIC4-a), tried in the SAME
+// priority order the System-Events pathCandidates use: an attached AXSheet on the
+// standard window (Things frontmost), then a detached top-level AXUnknown window
+// that is not the 40x40 utility window (Things backgrounded). null when neither is
+// present — the caller then falls through to the same named "presents 0 date
+// area(s)" error the app-root walk threw when the dialog was absent.
+function findShell(app){
+  var wins=windowsOf(app);
+  for(var i=0;i<wins.length;i++){ if(subrole(wins[i])==='AXStandardWindow'){ var sh=[]; collect(wins[i],'AXSheet',3,sh); if(sh.length) return sh[0]; } }
+  for(var i=0;i<wins.length;i++){ if(subrole(wins[i])==='AXUnknown'){ var wh=sizeWH(wins[i]); if(!wh || !(wh.w===40 && wh.h===40)) return wins[i]; } }
+  return null;
+}
 function posY(el){ var p=attr(el,'AXPosition'); if(!p) return 0; var d=ObjC.castRefToObject($.CFCopyDescription(p)).js; var m=String(d).match(/y:([-0-9.]+)/); return m? +m[1] : 0; }
 function timeOfDay(el){ var v=attr(el,'AXValue'); if(!v) return -1; var cal=$.NSCalendar.currentCalendar; return cal.componentFromDate($.NSCalendarUnitHour,v)*60 + cal.componentFromDate($.NSCalendarUnitMinute,v); }
 function pick(areas,target){
@@ -641,11 +659,15 @@ function run(){
   var app=$.AXUIElementCreateApplication(apps.objectAtIndex(0).processIdentifier);
   var target=${JSON.stringify(target)};
   var spec=${JSON.stringify(spec)};
-  // Poll for the addressed area. collect is wrapped so a stale-element ObjC
-  // exception during traversal cannot bubble as a raw -2700; pick guards the
-  // empty set, so dt is null (never a crash) when the target is absent.
+  // Poll for the addressed area WITHIN THE DIALOG SHELL (PERF2): resolve the sheet
+  // / detached editor first, then collect only its subtree — the app-root descent
+  // this replaced cost ~4.4s on the busy host by walking the main window's list
+  // content. collect is wrapped so a stale-element ObjC exception during traversal
+  // cannot bubble as a raw -2700; pick guards the empty set, so dt is null (never a
+  // crash) when the target is absent. When no shell resolves (dialog absent), areas
+  // stays empty and the loop falls through to the SAME named error below.
   var areas=[]; var dt=null;
-  for(var t=0;t<20 && !dt;t++){ areas=[]; try{ collect(app,'AXDateTimeArea',16,areas); }catch(e){ areas=[]; } dt=pick(areas,target); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
+  for(var t=0;t<20 && !dt;t++){ areas=[]; try{ var shell=findShell(app); if(shell) collect(shell,'AXDateTimeArea',16,areas); }catch(e){ areas=[]; } dt=pick(areas,target); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
   if(!dt) throw new Error('set-datetime '+target+': this Repeat-dialog state presents '+areas.length+' date area(s) ['+inv(areas)+'] but none is the '+target+' control — the requested first occurrence / bound cannot be set in this dialog shape');
   var cal=$.NSCalendar.currentCalendar;
   var d;

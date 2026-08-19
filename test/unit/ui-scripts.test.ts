@@ -106,11 +106,40 @@ describe("axSetDateTimeScript — named-error + read-back rejection detection (Y
   const timeScript = axSetDateTimeScript("time:18:00", "reminder");
 
   it("guards the empty date-area set so an absent control cannot bubble as a raw -2700", () => {
-    // collect() is wrapped in try/catch and pick() guards the empty set, so a
-    // missing control yields a NAMED error, never `-[__NSArray0 objectAtIndex:]`.
-    expect(dateScript).toContain("try{ collect(app,'AXDateTimeArea',16,areas); }catch(e){");
+    // The collect walk is wrapped in try/catch and pick() guards the empty set, so
+    // a missing control yields a NAMED error, never `-[__NSArray0 objectAtIndex:]`.
+    expect(dateScript).toContain(
+      "try{ var shell=findShell(app); if(shell) collect(shell,'AXDateTimeArea',16,areas); }catch(e){",
+    );
     expect(dateScript).toContain("this Repeat-dialog state presents ");
     expect(dateScript).toContain("date area(s)"); // reports the inventory
+  });
+
+  it("scopes the AXDateTimeArea walk to the resolved dialog shell, not the app root (PERF2)", () => {
+    // The collect must start from the shell findShell resolves — never the app
+    // element — so the walk avoids the main window's large list content (the ~4.4s
+    // app-root descent). The app is still the argument to findShell, never to collect.
+    expect(dateScript).toContain("collect(shell,'AXDateTimeArea',16,areas)");
+    expect(dateScript).not.toContain("collect(app,");
+    expect(dateScript).toContain("function findShell(app)");
+  });
+
+  it("resolves the shell in DIALOG_SHELLS priority order: attached sheet, then detached AXUnknown window", () => {
+    // Sheet first (Things frontmost), then the detached editor (backgrounded) that
+    // is not the 40x40 utility window — matching the ui-recipes pathCandidates order.
+    const sheetIdx = dateScript.indexOf("'AXStandardWindow'");
+    const detachedIdx = dateScript.indexOf("'AXUnknown'");
+    expect(sheetIdx).toBeGreaterThan(-1);
+    expect(detachedIdx).toBeGreaterThan(sheetIdx);
+    expect(dateScript).toContain("collect(wins[i],'AXSheet',3,sh)");
+    expect(dateScript).toContain("wh.w===40 && wh.h===40");
+  });
+
+  it("falls through to the SAME named error when no shell resolves (dialog absent)", () => {
+    // findShell null → areas stays empty → pick returns null → the named error
+    // reports "presents 0 date area(s)" — byte-identical to the app-root miss shape.
+    expect(dateScript).toContain("if(shell) collect(shell,'AXDateTimeArea',16,areas)");
+    expect(dateScript).toContain("but none is the '+target+' control");
   });
 
   it("reads the control back after a date write and fails loudly on a rejected value", () => {
