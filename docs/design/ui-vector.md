@@ -220,6 +220,14 @@ The viable home for this vector is a **dedicated always-on Mac** ("closet mini")
 - `things config set ui-enabled true`.
 - Grant **Accessibility** to the process running things-api (System Settings ▸ Privacy & Security ▸ Accessibility) — the grantee is the driving process, mirroring the existing Full Disk Access / Automation guidance (terminal app for interactive use, `sshd-keygen-wrapper` for SSH).
 - `things doctor --probe-accessibility` to confirm the grant.
+- **Speed the drives with reduced motion (PERF2).** On a dedicated host nobody watches, enable Reduce Motion + disable window animations — sheet present+settle roughly HALVES (~532 → ~260ms on a golden clone, [PERF2 S6](../lab/perf2-step-latency.md)), compounding across the ~10–12 step Repeat drive:
+
+  ```sh
+  defaults write com.apple.universalaccess reduceMotion -bool true
+  defaults write -g NSAutomaticWindowAnimationsEnabled -bool false
+  ```
+
+  **CERT-PARITY caveat:** this is standing configuration for the *deployment* host, but the certification environment (goldens / lab clones) must MATCH the deployment host's animation state — a trim or a drive certified under reduced motion would mask a re-click/re-layout race a default-animation host still hits. If this host runs reduced motion, the next golden mint should too (see [harness.md](../lab/harness.md) — Animation settings); until the host adopts it, cert stays on DEFAULT animations. Never bake reduced motion into a cert clone while the deployment host runs default animations.
 - Understand that the ops are **uncertified** until the sitting.
 
 The dedicated-machine framing predates AXVM1, which showed the AX path is much milder than the VNC research suggested — element presses steal no focus and work under a locked session, so the "yanks Things forward and grabs keyboard focus mid-work" disruption belonged to the *VNC* path, not this one. The two-key gate and dedicated-machine framing remain because the vector still drives the real GUI (and the row-selection `things:///show` handle does bring Things forward), and because certification is still pending — not because a mid-work focus-steal is inherent.
