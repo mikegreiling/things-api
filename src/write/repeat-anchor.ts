@@ -319,9 +319,9 @@ type AnchorParams = Pick<
 
 /** The disclosure of a HONORED off-rule first occurrence (both halves of the landed pattern). */
 export interface OffRuleFirstDisclosure {
-  /** The date the first occurrence APPEARS (the start = `--when`). */
+  /** The date the first occurrence APPEARS (the start): `--when` with an explicit or no deadline; `--when − preservedOffset` when the reschedule preserves the template's deadline (RSPA1-D). */
   appearsIso: IsoDate;
-  /** The first occurrence's DUE date (`--when + startDaysEarlier`), or null when not deadlined. */
+  /** The first occurrence's DUE date, or null when not deadlined: `--when + startDaysEarlier` with an explicit deadline; `--when` itself when a preserved deadline makes the driven Next the due date (RSPA1-D). */
   dueIso: IsoDate | null;
   /** Behavioral one-line summary of both halves (warning + echo copy). */
   message: string;
@@ -340,7 +340,10 @@ export type OffRuleFirstAssessment =
   | { kind: "honored"; disclosure: OffRuleFirstDisclosure }
   | { kind: "dishonored"; refusal: string };
 
-export function assessOffRuleFirst(p: AnchorParams): OffRuleFirstAssessment | null {
+export function assessOffRuleFirst(
+  p: AnchorParams,
+  preservedDeadlineOffset?: number | null,
+): OffRuleFirstAssessment | null {
   if (p.afterCompletion === true) return null;
   if (!isIsoDate(p.next)) return null;
   const driveIso = deadlineDriveNext(p);
@@ -348,12 +351,24 @@ export function assessOffRuleFirst(p: AnchorParams): OffRuleFirstAssessment | nu
   if (driveDateOnAnchor(p, driveIso)) return null; // on-rule — the common case
 
   const shift = anchorShiftDays(p);
-  const dueIso = shift > 0 ? addDaysIso(p.next, shift) : null;
+  // RSPA1-D: a reschedule that PRESERVES the template's existing deadline (the
+  // request carries no --deadline / --start-days-earlier) drives "Next:" verbatim
+  // (shift 0), but the app reads that driven date as the DUE date of the still-
+  // deadlined rule and back-shifts the START by the preserved offset. So the first
+  // occurrence APPEARS `preserved` days BEFORE --when and is DUE on --when — the
+  // inverse of the explicit-deadline case (where --when is the start and the due is
+  // `shift` days later). `assessOffRuleFirst` is otherwise deadline-shift-aware only
+  // via the params' own flags; the caller threads the pre-state template's offset so
+  // the disclosure states the true appear/due dates the app actually lands.
+  const preservedShift =
+    shift === 0 && preservedDeadlineOffset != null ? Math.abs(preservedDeadlineOffset) : 0;
   const pattern = describeRulePattern(p);
 
   // MONTHLY off-rule first is INEXPRESSIBLE — the month row's "Next:" field snaps
   // to the anchor day (dacon1-deadline-contradiction.md cell DC2). Fail closed at
-  // validation with the two nearest expressible alternatives.
+  // validation with the two nearest expressible alternatives. (When the deadline is
+  // preserved, --when IS the due date the anchor names, so the shift-0 hint — "set
+  // --when to a date on <anchor>" — is the correct guidance, exactly as here.)
   if (p.frequency === "monthly") {
     const onRuleHint =
       shift > 0
@@ -369,18 +384,38 @@ export function assessOffRuleFirst(p: AnchorParams): OffRuleFirstAssessment | nu
     };
   }
 
-  // WEEKLY / YEARLY off-rule first is HONORED — allow + disclose both halves.
+  // WEEKLY / YEARLY off-rule first is HONORED — allow + disclose both halves. The
+  // appear/due assignment depends on which deadline mode applies: an explicit
+  // deadline makes --when the START (due `shift` days later); a preserved deadline
+  // makes --when the DUE date (start `preservedShift` days earlier).
+  let appearsIso: IsoDate;
+  let dueIso: IsoDate | null;
+  let earlierDays: number;
+  if (shift > 0) {
+    appearsIso = p.next;
+    dueIso = addDaysIso(p.next, shift);
+    earlierDays = shift;
+  } else if (preservedShift > 0) {
+    dueIso = p.next;
+    appearsIso = addDaysIso(p.next, -preservedShift);
+    earlierDays = preservedShift;
+  } else {
+    appearsIso = p.next;
+    dueIso = null;
+    earlierDays = 0;
+  }
+
   const dueClause = dueIso !== null ? `, due ${dueIso}` : "";
   const ongoing =
-    dueIso !== null
-      ? `thereafter: ${pattern}, appearing ${shift} day${shift === 1 ? "" : "s"} earlier`
+    earlierDays > 0
+      ? `thereafter: ${pattern}, appearing ${earlierDays} day${earlierDays === 1 ? "" : "s"} earlier`
       : `thereafter: ${pattern}`;
   return {
     kind: "honored",
     disclosure: {
-      appearsIso: p.next,
+      appearsIso,
       dueIso,
-      message: `off-rule first occurrence — appears ${p.next}${dueClause}; ${ongoing}`,
+      message: `off-rule first occurrence — appears ${appearsIso}${dueClause}; ${ongoing}`,
     },
   };
 }

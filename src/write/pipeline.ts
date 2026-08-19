@@ -459,6 +459,23 @@ async function defaultEnsureRunning(
   return true;
 }
 
+/**
+ * The template's PRESERVED deadline offset (`startOffsetDays`, ≤ 0) for a
+ * reschedule that carries NO deadline flag — so the off-rule-first disclosure can
+ * state the true appear/due dates the app lands (RSPA1-D). `null` when the request
+ * addresses the deadline itself (an explicit --deadline / --start-days-earlier), or
+ * the target is not a deadlined template — cases where the params already carry the
+ * shift and no preserved offset applies.
+ */
+function preservedDeadlineOffsetFor(pre: PreState, params: RepeatRuleParams): number | null {
+  if (params.deadline !== undefined || (params.startDaysEarlier ?? 0) > 0) return null;
+  const target = pre.target;
+  if (target === null || !("repeating" in target)) return null;
+  const rep = target.repeating;
+  if (rep.deadlined !== true) return null;
+  return rep.rule?.startOffsetDays ?? 0;
+}
+
 /** Capture pre-values of asserted fields + movement tripwires for the spec. */
 function capturePre(
   spec: DeltaSpec,
@@ -877,7 +894,11 @@ export async function runMutation<K extends OperationKind>(
       // two-phase pattern the executed write would (the dishonored monthly shape is
       // already refused before reaching here).
       const planNotes: string[] = [];
-      const dryOffRule = assessOffRuleFirst(params as unknown as RepeatRuleParams);
+      const dryRuleParams = params as unknown as RepeatRuleParams;
+      const dryOffRule = assessOffRuleFirst(
+        dryRuleParams,
+        preservedDeadlineOffsetFor(pre, dryRuleParams),
+      );
       if (dryOffRule?.kind === "honored") planNotes.push(dryOffRule.disclosure.message);
       return {
         kind: "dry-run",
@@ -1321,7 +1342,11 @@ export async function runMutation<K extends OperationKind>(
       // monthly shape was already refused at validation. (make/add-repeating carry
       // their own disclosure via the promote result.)
       if (op === "todo.reschedule-repeat" || op === "project.reschedule-repeat") {
-        const offRule = assessOffRuleFirst(params as unknown as RepeatRuleParams);
+        const offRuleParams = params as unknown as RepeatRuleParams;
+        const offRule = assessOffRuleFirst(
+          offRuleParams,
+          preservedDeadlineOffsetFor(pre, offRuleParams),
+        );
         if (offRule?.kind === "honored") warnings.push(offRule.disclosure.message);
       }
       // #V11 heading-reorder disclosure: re-ranking an archived heading also
