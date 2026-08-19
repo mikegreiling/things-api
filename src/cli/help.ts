@@ -45,6 +45,7 @@ export const HELP_GROUPS: ReadonlyArray<{ title: string; commands: readonly stri
     commands: [
       "config",
       "doctor",
+      "op-result",
       "capabilities",
       "setup",
       "install-skill",
@@ -93,6 +94,7 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   // Setup & diagnostics
   config: { args: "<verb>", desc: "show, get, or set configuration keys" },
   doctor: { args: "", desc: "check environment health and pending setup" },
+  "op-result": { args: "<id>", desc: "recover a write's outcome by its --op-id" },
   capabilities: { args: "", desc: "what each write operation supports" },
   setup: { args: "<verb>", desc: "one-time setup (install the Shortcuts)" },
   "install-skill": { args: "", desc: "install the agent skill for coding agents" },

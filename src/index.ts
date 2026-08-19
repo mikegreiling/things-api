@@ -27,6 +27,8 @@ export type {
 } from "./read/truncation.ts";
 export { diagnose } from "./diagnose.ts";
 export type { DiagnoseOptions, DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
+export { opResult } from "./op-result.ts";
+export type { OpResultData, OpResultOptions, OpResultStatus } from "./op-result.ts";
 export { probeAutomation } from "./write/automation-probe.ts";
 export type {
   AutomationProbeDeps,

@@ -40,6 +40,7 @@ import {
   omitEmpty,
   OMIT_EMPTY_NOTE,
   OP_ID_RE,
+  opResult,
   OPERATION_KINDS,
   openThings,
   PKG_VERSION,
@@ -3274,6 +3275,22 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ? jsonResult(report)
           : errorResult(error ?? { code: "unexpected", message: "no report" });
       }),
+  );
+
+  server.registerTool(
+    "op_result",
+    {
+      description:
+        "Look up what happened to a write you dispatched with op_id, from the local change history " +
+        "alone (opens no database, changes nothing). Use it to recover the outcome when the write " +
+        "call was interrupted before it returned: report FOUND (the final result + target + " +
+        "observation), INTENT-ONLY (the op started but no outcome was written — still running or " +
+        "the process died mid-flight, outcome UNCERTAIN — re-read the target, do not blind-retry), " +
+        "or UNKNOWN (no such op_id in history).",
+      inputSchema: { op_id: z.string().describe("the op_id the original write carried") },
+      annotations: READ_ONLY,
+    },
+    async (args) => guard(() => readResult(opResult(assertOpId(args.op_id)))),
   );
 
   return server;

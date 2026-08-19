@@ -295,6 +295,7 @@ const EXPECTED_TOOLS = [
   "undo",
   "capabilities",
   "doctor",
+  "op_result", // read-only caller-recovery lookup over the change history
 ];
 
 describe("things MCP server", () => {
