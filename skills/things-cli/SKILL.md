@@ -70,6 +70,10 @@ Namespaced verb families — run `things <group> --help` for the verbs and `thin
 
 **Quick skeletons**: `things todo add "T1" "T2" "T3" [shared flags]` creates several to-dos in one call (every shared flag — `--project`/`--area`/`--when`/`--tags`/… — applies to each; `--id-only` prints the new uuids one per line for chaining; one `undoToken` removes the set). To stand up a new project with children, `things project add "<title>" --todo "T1" --todo "T2" …` (repeatable). For richer per-item metadata or cross-item references, use `things batch`.
 
+## The CLI is the only interface — never route around it
+
+Never construct `things:///` URLs, AppleScript (`tell application "Things3" …`), or Shortcuts invocations yourself — for reads or writes. When this skill is installed, the `things` CLI is the sole supported way to touch Things: raw calls bypass its validation, guards, read-back verification, undo/audit records, and session checks, and some raw shapes crash the app or silently do nothing. If the CLI cannot express something you need, or a command refuses or fails in a way that seems wrong, that is a finding, not an obstacle to work around: capture the exact command and its `--json` error (plus `things op-result <op-id>` output where relevant) and report it on the public issue tracker at github.com/mikegreiling/things-api (synthetic repro data only — never the user's real task content), or surface it to your user if you cannot file. A refusal always names its sanctioned override flag when one exists — that acknowledgment system is the only supported escape hatch.
+
 ## Going deeper
 
 - [references/data-model.md](references/data-model.md) — the full data model, `stage`/`when` derivation, the compact/full tiers, view membership, and filters.

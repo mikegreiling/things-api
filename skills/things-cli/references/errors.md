@@ -55,3 +55,7 @@ Every `error.code` is drawn from a frozen registry. Route on the code, and for t
 | `verify-failed` | A multi-leg move/reorder failed mid-way (`detail.failed`/`completed`). | 3 |
 
 A consumer that does not recognize a specific suffix routes on the prefix (`blocked:` / `verify-failed:`) and the exit code.
+
+## A failure is never a license to bypass the CLI
+
+Whatever the error, do not fall back to hand-built `things:///` URLs, AppleScript, or Shortcuts calls — those bypass the validation, verification, and undo/audit layers this tool exists to provide, and several raw shapes crash the app or fail silently. Refusals that support an override name their acknowledgment flag in the message; that flag system is the only sanctioned escape hatch. Anything else the CLI cannot do is a reportable finding (see the main skill document), not an invitation to improvise.
