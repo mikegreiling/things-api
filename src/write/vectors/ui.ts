@@ -52,7 +52,13 @@ import type {
 
 /** GUI driving can stall on an unanswered sheet; give each step headroom. */
 const STEP_TIMEOUT_MS = 15_000;
-/** Poll interval while waiting for a dynamic element (sheet/popover). */
+/**
+ * Poll interval while waiting for a dynamic element (sheet/popover). KEPT at 300ms
+ * after the PERF2 audit: the control a mode switch reveals takes ~462ms to appear
+ * on the golden (S5b, [docs/lab/perf2-step-latency.md]), which EXCEEDS this
+ * interval — so a 300ms poll catches it on its second round; a finer interval
+ * would only add osascript hops for a marginal detection gain (UIC6 confirmed).
+ */
 const WAIT_POLL_MS = 300;
 /**
  * How long `resolveStepPath` polls a candidate-addressed control before failing
@@ -65,9 +71,15 @@ const RESOLVE_CANDIDATE_TIMEOUT_MS = 5_000;
  * Settle after the reveal/activate preamble so the menu bar repopulates for the
  * newly-selected target before the canary reads it (UIC1: the Items ▸ Repeat
  * submenu appears only once a repeating item is selected, and the update is not
- * instantaneous).
+ * instantaneous). TRIMMED 1500 → 1000 by the PERF2 audit (S5a,
+ * [docs/lab/perf2-step-latency.md]): on a warm running app under DEFAULT macOS
+ * animations the menu repopulates in ~92ms median / 116ms max (N=10) — a ~13×
+ * margin at 1500. Menu-bar repopulation is a LOCAL UI operation (not a DB-commit /
+ * sync-bound one), so it does not scale with DB size the way the OK commit does;
+ * 1000ms keeps ~8.6× the golden max as host headroom. Under-margining only ever
+ * costs a fail-closed spurious drive refusal (the canary miss), never a bad write.
  */
-const SETTLE_AFTER_REVEAL_MS = 1500;
+const SETTLE_AFTER_REVEAL_MS = 1000;
 
 /**
  * Command-level primitives. Extends the recipe `UiPrimitive` set with the
