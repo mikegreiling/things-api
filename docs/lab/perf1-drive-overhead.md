@@ -54,3 +54,5 @@ So the ~15.2s / 53% collapses to a single sub-second probe — the bulk of the 2
 ## Deferred (PERF1 brief deliverables 2 & 3)
 
 The set-datetime `AXDateTimeArea` collect scoping (the 4390ms app-root tree walk) and the per-step delay audit (settle delays, redundant re-polls, spawn overhead) are deferred to a follow-up — see [docs/up-next.md](../up-next.md) (small code). This doc will be extended (not re-stamped) when they land, or a sibling campaign doc will be added if they run under a new golden.
+
+**LANDED (PERF2, golden-v3):** both deferrals shipped as the sibling campaign [perf2-step-latency.md](perf2-step-latency.md) — the collect is subtree-scoped to the dialog shell (the "Next" step 619→312ms on the golden; the ~4.4s app-root descent removed on the busy host), `SETTLE_AFTER_REVEAL_MS` trimmed 1500→1000, `WAIT_POLL_MS` kept (measurement-justified), and the reduced-motion animation doctrine documented. Drive-cert byte-identical.
