@@ -54,7 +54,7 @@ import {
 import { resolveTagRefs } from "./tag-refs.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { assertRepeatRule } from "./repeat-rule.ts";
-import { assessOffRuleFirst, deadlineDriveNext } from "./repeat-anchor.ts";
+import { assessOffRuleFirst, deadlineDriveNext, deriveFixedAnchor } from "./repeat-anchor.ts";
 import { expectedRuleAssertions } from "./repeat-asserts.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
@@ -2171,16 +2171,40 @@ function ruleExtras(params: RepeatRuleParams): RepeatRuleExtras {
 }
 
 /**
- * Recipe extras for a RESCHEDULE, with the "Next:" drive date deadline-adjusted
- * (YANCH1 #493): `--when` is the scheduled START, but a deadlined rule anchors on
- * the DEADLINE, so the dialog's "Next:" field is driven with `when +
- * startDaysEarlier` and the app back-shifts the instance start to `--when`. The
- * expectedDelta keeps the RAW `params.next` (the cursor asserts the START).
- * make/add-repeating apply this shift upstream (promote-clone.ts) and pass an
- * already-adjusted rule, so only the reschedule compile needs it here.
+ * The reschedule's EFFECTIVE rule params: the requested params PLUS the calendar
+ * anchor DERIVED from `--when` when none was given explicitly (YANCH1 #493 — the
+ * SAME derive-and-drive make/add-repeating apply upstream in promote-clone.ts).
+ * The anchor is derived from the deadline-shifted drive date (`deadlineDriveNext`
+ * = when + startDaysEarlier) so a deadlined rule's anchor names the DUE date,
+ * exactly as make/add. A rule-only reschedule (no `--when`) or an explicit anchor
+ * flag leaves params UNCHANGED (deriveFixedAnchor returns an empty patch).
+ *
+ * This is the single source of truth used by BOTH the compile (`reschedRuleExtras`
+ * → the recipe DRIVES the anchor pop-ups) AND expectedDelta (`expectedRuleAssertions`
+ * ASSERTS the same anchor), so the drive vocabulary and the verify vocabulary
+ * derive IDENTICALLY. Without it a `--when`-only reschedule left the anchor at the
+ * dialog's untouched default (yearly January 1, monthly 1st, weekly Sunday) — the
+ * DRIVE never touched the anchor pop-ups while the reschedule silently kept the old
+ * placement (the RSPA1 live failure: a yearly `--when`-only reschedule whose anchor
+ * was never driven).
+ */
+function reschedEffParams(params: RepeatRuleParams): RepeatRuleParams {
+  return { ...params, ...deriveFixedAnchor(params, deadlineDriveNext(params)) };
+}
+
+/**
+ * Recipe extras for a RESCHEDULE: the derived-anchor effective params (so the
+ * recipe drives the weekly/monthly/yearly anchor pop-ups for a `--when`-only
+ * reschedule), with the "Next:" drive date deadline-adjusted (YANCH1 #493) —
+ * `--when` is the scheduled START, but a deadlined rule anchors on the DEADLINE,
+ * so the dialog's "Next:" field is driven with `when + startDaysEarlier` and the
+ * app back-shifts the instance start to `--when`. The expectedDelta keeps the RAW
+ * `params.next` (the cursor asserts the START). make/add-repeating apply this shift
+ * upstream (promote-clone.ts) and pass an already-adjusted rule, so only the
+ * reschedule compile needs it here.
  */
 function reschedRuleExtras(params: RepeatRuleParams): RepeatRuleExtras {
-  const base = ruleExtras(params);
+  const base = ruleExtras(reschedEffParams(params));
   const drive = deadlineDriveNext(params);
   return drive !== undefined ? { ...base, next: drive } : base;
 }
@@ -2256,7 +2280,10 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
     // the post-drive verify catches a wrong-anchor landing. A shallow unit+interval
     // subset false-noop'd a reschedule that changed only the monthly anchor /
     // deadline / ends (#491). ALSO capture the whole prior rule (+ deadline flag)
-    // so the undo can re-drive it faithfully.
+    // so the undo can re-drive it faithfully. The DERIVED-anchor effective params
+    // (reschedEffParams) are asserted — the SAME bag the compile drives — so a
+    // `--when`-only reschedule verifies the derived anchor the drive lands (RSPA1).
+    const eff = reschedEffParams(params);
     return {
       mode: "update",
       uuid: params.uuid,
@@ -2266,8 +2293,8 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
       // anchor cursors to the next aligned start, 2029-10-02), so asserting it would
       // false-fail an honored off-rule reschedule — drop the cursor assertion there
       // and verify the rule anchor only.
-      assert: expectedRuleAssertions(params, {
-        includeCursor: assessOffRuleFirst(params)?.kind !== "honored",
+      assert: expectedRuleAssertions(eff, {
+        includeCursor: assessOffRuleFirst(eff)?.kind !== "honored",
       }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
@@ -2350,7 +2377,10 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
     // capture the prior rule (+ deadline flag) for the faithful undo. Assert the
     // FULL requested rule (#491) via expectedRuleAssertions — same completeness as
     // todo.reschedule-repeat (a shallow unit+interval subset false-noop'd an
-    // anchor/deadline/ends-only reschedule).
+    // anchor/deadline/ends-only reschedule). The DERIVED-anchor effective params
+    // (reschedEffParams) are asserted — the SAME bag the compile drives — so a
+    // `--when`-only reschedule verifies the derived anchor the drive lands (RSPA1).
+    const eff = reschedEffParams(params);
     return {
       mode: "update",
       uuid: params.uuid,
@@ -2360,8 +2390,8 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
       // anchor cursors to the next aligned start, 2029-10-02), so asserting it would
       // false-fail an honored off-rule reschedule — drop the cursor assertion there
       // and verify the rule anchor only.
-      assert: expectedRuleAssertions(params, {
-        includeCursor: assessOffRuleFirst(params)?.kind !== "honored",
+      assert: expectedRuleAssertions(eff, {
+        includeCursor: assessOffRuleFirst(eff)?.kind !== "honored",
       }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };

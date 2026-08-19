@@ -16,6 +16,8 @@ import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate } from "../../src/model/dates.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import type { RepeatRuleParams } from "../../src/write/operations.ts";
+import { COMMANDS } from "../../src/write/commands.ts";
+import { anchorKeyOfOffsets, decodeOffsetEntry } from "../../src/model/recurrence.ts";
 import {
   composeRepeatRuleSpec,
   ruleXml as composeRuleXml,
@@ -734,6 +736,143 @@ describe("ui vector — RRD1 checkbox convergence (reschedule on a pre-populated
     expect(res.kind).toBe("ok");
     const steps = rescheduleDialogSteps(cap.recipe());
     expect(steps.some((s) => s.label === "Add reminders")).toBe(false);
+  });
+});
+
+// ---- RSPA1: reschedule derives + DRIVES the anchor for a --when-only rule -----
+//
+// The live failure: a yearly deadlined `reschedule-repeat --when <date>` with NO
+// explicit anchor flag drove Next (deadline-shifted) but NEVER the yearly month/day
+// anchor pop-ups — so the reschedule kept the dialog's untouched anchor while the
+// verify (which now derives the anchor from --when) expected the derived placement.
+// The fix wires deriveFixedAnchor into the reschedule compile (via reschedEffParams)
+// so the SAME derived anchor make/add-repeating drive is driven here, and the
+// coherence lock below proves the DRIVE vocabulary == the ASSERT vocabulary.
+
+/** The anchorKey the verify asserts for an op's rule params (or undefined if none). */
+function assertedAnchorKey(
+  op: "todo.reschedule-repeat",
+  params: RepeatRuleParams,
+): string | undefined {
+  const pre = COMMANDS[op].preRead(fixture.db, params, NOW);
+  const delta = COMMANDS[op].expectedDelta(pre, params, {
+    nowEpoch: Math.floor(NOW.getTime() / 1000),
+    todayIso: "2026-07-05",
+  });
+  if (delta.mode !== "update") throw new Error("expected an update delta");
+  const anchor = delta.assert.find((a) => a.field === "repeating.rule.anchorKey");
+  return anchor !== undefined && "equals" in anchor ? (anchor.equals as string) : undefined;
+}
+
+/** The anchorKey a landed {frequency, anchor} rule carries (independent of the CLI derive). */
+function anchorKeyOf(bag: Bag): string {
+  const spec = composeRepeatRuleSpec({ uuid: "x", ...bag }, bag.next ?? "2000-01-01", 0);
+  return anchorKeyOfOffsets(
+    (spec.of ?? []).map((o) => decodeOffsetEntry(o as Record<string, unknown>)),
+  );
+}
+
+describe("ui vector — RSPA1 reschedule derives + drives the calendar anchor (--when only)", () => {
+  // A yearly template ALREADY carrying a (stale) anchor + a pending cursor — the
+  // live shape. Reschedule with --when only (no --yearly-month/--on-day) + deadline.
+  const YEARLY_PREV: Bag = {
+    frequency: "yearly",
+    interval: 1,
+    yearly: { month: 10, day: 2 },
+    deadline: true,
+    startDaysEarlier: 14,
+    next: "2028-10-02",
+  };
+
+  function seedYearly(): string {
+    const s = bagState(YEARLY_PREV);
+    return seedTodo(fixture.db, {
+      title: "Annual review",
+      start: "someday",
+      recurrenceRuleXml: s.xml,
+      deadline: s.deadline,
+      nextInstanceStartDate: s.cursor,
+    });
+  }
+
+  it("drives the DERIVED yearly month+day anchor and the verify asserts the SAME anchor", async () => {
+    const uuid = seedYearly();
+    // --when 2028-10-16 + start-14 ⇒ the DUE anchor is 2028-10-30 (Oct 30) — the
+    // dialog's yearly month/day pop-ups must be driven there, not left at the stale
+    // Oct-2 / January-1 default.
+    const NEW: RepeatRuleParams = {
+      uuid,
+      frequency: "yearly",
+      interval: 1,
+      deadline: true,
+      startDaysEarlier: 14,
+      next: "2028-10-16",
+    };
+    const cap = capturingUiVector();
+    const res = await runMutation(deps(cap.vector, config(true)), "todo.reschedule-repeat", NEW, {
+      dangerouslyDriveGui: true,
+      verifyTimeoutMs: 1,
+    });
+    // (verify may not converge on the untouched fixture — we inspect the COMPILE, not the DB.)
+    expect(["ok", "verify-failed"]).toContain(res.kind);
+    const steps = (cap.recipe()?.steps ?? []) as { label?: string }[];
+    // DRIVE side: the yearly anchor pop-ups are driven to the DUE date Oct 30.
+    expect(steps.some((s) => s.label === "yearly month = 10")).toBe(true);
+    expect(steps.some((s) => s.label === "monthly mode = day")).toBe(true);
+    expect(steps.some((s) => s.label === "monthly day = 30")).toBe(true);
+    // The deadline-shifted Next is driven to the same DUE date.
+    expect(
+      (cap.recipe()?.steps ?? []).some(
+        (s) => s.dtTarget === "next" && s.value === "date:2028-10-30",
+      ),
+    ).toBe(true);
+
+    // ASSERT side: the verify expects an anchorKey — and it is the SAME anchor the
+    // drive lands (Oct 30), computed independently from a {yearly Oct-30} rule blob.
+    const asserted = assertedAnchorKey("todo.reschedule-repeat", NEW);
+    const driven = anchorKeyOf({
+      frequency: "yearly",
+      interval: 1,
+      yearly: { month: 10, day: 30 },
+    });
+    expect(asserted).toBe(driven);
+  });
+
+  it("an explicit --yearly-month anchor still wins over the --when derivation", async () => {
+    const uuid = seedYearly();
+    // Explicit Nov-5 anchor + --when 2028-10-16 (off-rule first, honored for yearly).
+    const NEW: RepeatRuleParams = {
+      uuid,
+      frequency: "yearly",
+      interval: 1,
+      yearly: { month: 11, day: 5 },
+      next: "2028-10-16",
+    };
+    const cap = capturingUiVector();
+    await runMutation(deps(cap.vector, config(true)), "todo.reschedule-repeat", NEW, {
+      dangerouslyDriveGui: true,
+      verifyTimeoutMs: 1,
+    });
+    const steps = (cap.recipe()?.steps ?? []) as { label?: string }[];
+    expect(steps.some((s) => s.label === "yearly month = 11")).toBe(true);
+    expect(steps.some((s) => s.label === "yearly month = 10")).toBe(false);
+    const asserted = assertedAnchorKey("todo.reschedule-repeat", NEW);
+    expect(asserted).toBe(
+      anchorKeyOf({ frequency: "yearly", interval: 1, yearly: { month: 11, day: 5 } }),
+    );
+  });
+
+  it("a rule-only reschedule (no --when) drives NO anchor pop-up and asserts NO anchorKey", async () => {
+    const uuid = seedYearly();
+    const NEW: RepeatRuleParams = { uuid, frequency: "yearly", interval: 2 };
+    const cap = capturingUiVector();
+    await runMutation(deps(cap.vector, config(true)), "todo.reschedule-repeat", NEW, {
+      dangerouslyDriveGui: true,
+      verifyTimeoutMs: 1,
+    });
+    const steps = (cap.recipe()?.steps ?? []) as { label?: string }[];
+    expect(steps.some((s) => (s.label ?? "").startsWith("yearly month"))).toBe(false);
+    expect(assertedAnchorKey("todo.reschedule-repeat", NEW)).toBeUndefined();
   });
 });
 

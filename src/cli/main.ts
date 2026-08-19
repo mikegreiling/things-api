@@ -11,6 +11,7 @@ import { Command } from "commander";
 import { registerHelp } from "./help.ts";
 import { installExcessArgsHelp } from "./excess-args.ts";
 import { registerDoctor } from "./commands/doctor.ts";
+import { registerOpResult } from "./commands/op-result.ts";
 import { registerMcp } from "./commands/mcp.ts";
 import { registerAreaCommands } from "./commands/area.ts";
 import { registerProjectCommands } from "./commands/project.ts";
@@ -43,6 +44,7 @@ export function buildProgram(): Command {
     // did-you-mean instead, this covers the subcommand groups).
     .showSuggestionAfterError(true);
   registerDoctor(program);
+  registerOpResult(program);
   registerReadCommands(program);
   registerShowCommands(program);
   registerProjectCommands(program);
