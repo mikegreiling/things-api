@@ -214,6 +214,64 @@ describe("assessOffRuleFirst — off-rule-first classification (DACON1, golden-v
     }
   });
 
+  it("RSPA1-D: a PRESERVED deadline (no --deadline flag) makes --when the DUE date — appears offset days earlier", () => {
+    // The exact RSPA1 cell (b) shape: reschedule an already-deadlined (ts=-14) yearly
+    // template with an explicit Oct-16 anchor + --when 2028-11-05 and NO --deadline. The
+    // request carries no shift (params shift 0), so the drive sets Next=2028-11-05 verbatim;
+    // the app reads that as the DUE date of the still-deadlined rule and back-shifts the
+    // START to 2028-10-22 (Nov 5 − 14). Threading the template's preserved -14 offset makes
+    // the disclosure state the TRUE appear (Oct 22) / due (Nov 5), not the old "appears Nov 5".
+    const a = assessOffRuleFirst(
+      {
+        frequency: "yearly",
+        interval: 1,
+        next: "2028-11-05",
+        yearly: { month: 10, day: 16 },
+      },
+      -14,
+    );
+    expect(a?.kind).toBe("honored");
+    if (a?.kind === "honored") {
+      expect(a.disclosure.appearsIso).toBe("2028-10-22");
+      expect(a.disclosure.dueIso).toBe("2028-11-05");
+      expect(a.disclosure.message).toMatch(
+        /appears 2028-10-22, due 2028-11-05.*thereafter.*month 10 on day 16.*14 days earlier/s,
+      );
+    }
+  });
+
+  it("RSPA1-D: no preserved offset (or a non-deadlined template) keeps the plain --when appear date", () => {
+    // Without a preserved offset the disclosure is unchanged: appears --when, no due.
+    const noOffset = assessOffRuleFirst({
+      frequency: "yearly",
+      interval: 1,
+      next: "2028-11-05",
+      yearly: { month: 10, day: 16 },
+    });
+    expect(noOffset?.kind).toBe("honored");
+    if (noOffset?.kind === "honored") {
+      expect(noOffset.disclosure.appearsIso).toBe("2028-11-05");
+      expect(noOffset.disclosure.dueIso).toBeNull();
+    }
+    // An EXPLICIT deadline still wins over a (redundant) preserved offset: --when is the start.
+    const explicit = assessOffRuleFirst(
+      {
+        frequency: "yearly",
+        interval: 1,
+        next: "2028-10-16",
+        yearly: { month: 10, day: 16 },
+        deadline: true,
+        startDaysEarlier: 14,
+      },
+      -14,
+    );
+    expect(explicit?.kind).toBe("honored");
+    if (explicit?.kind === "honored") {
+      expect(explicit.disclosure.appearsIso).toBe("2028-10-16");
+      expect(explicit.disclosure.dueIso).toBe("2028-10-30");
+    }
+  });
+
   it("monthly off-rule first is DISHONORED — fail-closed refusal naming the alternatives", () => {
     const a = assessOffRuleFirst({
       frequency: "monthly",
