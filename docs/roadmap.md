@@ -13,7 +13,11 @@ The whole contract is ALPHA until v1.0 (break freely, no compat machinery — [d
 - **Error-code freeze.** The `ErrorCode` union in `src/contracts.ts` (the compiler-enforced registry) is frozen at v1.0 — additions stay possible, removals/renames become breaking.
 - **Entity-vs-shaper programmatic-contract ruling.** Settle what the *programmatic* TS contract promises about entity shapes vs the emission-time shaping layer (the read-shape doctrine draws the wire boundary; the library-return boundary needs its own explicit v1.0 promise) before the covenant binds.
 - **CC report send** (the oddities package) — held until v1.0; the submission itself is an up-next needs-human item, but v1.0 is its release gate.
-- **`things watch` ships first** (maintainer gate, 2026-08-11): the change-watch command (up-next feature item) is a v1.0 prerequisite — it must be built, field-used, and stable before the contract freezes.
+- **`things watch` ships first** (maintainer gate, 2026-08-11): the change-watch command is a v1.0 prerequisite — built, field-used, and stable before the contract freezes. **Design of record + phasing: [design/agent-daemon.md](design/agent-daemon.md)** (ratified direction 2026-08-19): phase α builds the watch ENGINE in-process (`things changes` first), phase γ hosts the watch loop in the agent daemon — the gate is satisfied across α+γ.
+
+## Agent daemon (`things-agentd`) — PROPOSED, plan awaiting ratification
+
+One resident signed launchd helper solving three converged problems: agent-harness timeout caps (async op contract + `accepted` results), TCC grant churn (the daemon becomes the stable responsible process — grants attach to its persistent signing identity, surviving harness updates), and `things watch` residency. Full design, signing/secrets posture (paid Developer ID needed only for distribution; a persistent self-signed cert suffices personally), failure-surface + QA strategy (the engine stays in-process-testable; the daemon is a transport host with a sync fallback and kill switch), and the α→δ phase plan: **[design/agent-daemon.md](design/agent-daemon.md)**. Next step: maintainer ratifies the phase plan (post-compaction), then phase α.
 - **Field mileage** (maintainer, 2026-08-11): v1.0 is deliberately unhurried — the pre-1.0 period keeps producing design corrections (the deadlines view, the Today-order field bugs), and the contract freezes only after the surface has been driven hard for a while longer.
 
 ## Cloud-account probes — durable account LIVE; only on-hardware residuals remain
