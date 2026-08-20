@@ -189,6 +189,42 @@ final class Server {
           script: script, lang: lang, timeoutMs: timeoutMs,
           binPath: config.osascriptPath ?? "/usr/bin/osascript", id: id)
       }
+    case "shortcuts":
+      let op = obj["op"] as? String
+      let timeoutMs = obj["timeoutMs"] as? Int ?? 30_000
+      let bin = config.shortcutsPath ?? "/usr/bin/shortcuts"
+      if op == "list" {
+        result = osaQueue.sync { runChildTool(binPath: bin, args: ["list"], timeoutMs: timeoutMs, id: id) }
+        break
+      }
+      guard op == "run", let name = obj["name"] as? String,
+        let inputPath = obj["inputPath"] as? String,
+        let outputPath = obj["outputPath"] as? String
+      else {
+        result = errorResponse(
+          id: id, code: "bad-request",
+          message: "shortcuts verb requires op=list, or op=run with name/inputPath/outputPath")
+        break
+      }
+      // The deputy only runs this library's bundled proxy shortcuts — it is a
+      // paired tool, not a general shortcut runner. (Same spirit as the
+      // osascript shell-execution lint: a same-user process could run
+      // arbitrary shortcuts itself; it just cannot do so AS the deputy.)
+      guard name.hasPrefix("things-proxy-"), !inputPath.hasPrefix("-"), !outputPath.hasPrefix("-")
+      else {
+        audit(["event": "rejected-shortcut", "name": name, "peerPid": Int(peerPid)])
+        result = errorResponse(
+          id: id, code: "shortcut-denied",
+          message: "the deputy only runs bundled things-proxy-* shortcuts")
+        break
+      }
+      auditExtra["shortcut"] = name
+      result = osaQueue.sync {
+        runChildTool(
+          binPath: bin,
+          args: ["run", name, "--input-path", inputPath, "--output-path", outputPath],
+          timeoutMs: timeoutMs, id: id)
+      }
     case "read-file":
       guard let path = obj["path"] as? String else {
         result = errorResponse(id: id, code: "bad-request", message: "read-file verb requires a path string")

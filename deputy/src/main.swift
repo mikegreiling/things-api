@@ -42,6 +42,7 @@ struct DeputyPaths {
 struct DeputyConfig {
   var dbPath: String?
   var osascriptPath: String?
+  var shortcutsPath: String?
   var home: String?
 
   static func load(path: String) -> DeputyConfig {
@@ -51,6 +52,7 @@ struct DeputyConfig {
     else { return cfg }
     cfg.dbPath = obj["dbPath"] as? String
     cfg.osascriptPath = obj["osascriptPath"] as? String
+    cfg.shortcutsPath = obj["shortcutsPath"] as? String
     cfg.home = obj["home"] as? String
     return cfg
   }

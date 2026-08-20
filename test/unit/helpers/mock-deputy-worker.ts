@@ -48,6 +48,14 @@ function respond(req: Record<string, unknown>): Record<string, unknown> {
       return { id, ok: true, rows: cfg.sqlRows };
     case "osascript":
       return { id, ok: true, ...cfg.osaResult };
+    case "shortcuts":
+      return {
+        id,
+        ok: true,
+        exitCode: 0,
+        stdout: `${String(req["op"])}:${String(req["name"] ?? "")}`,
+        stderr: "",
+      };
     case "read-file":
       return { id, ok: true, b64: Buffer.from(`mock:${String(req["path"])}`).toString("base64") };
     case "locate":

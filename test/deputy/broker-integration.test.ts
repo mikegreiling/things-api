@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PKG_VERSION } from "../../src/contracts.ts";
 import { createDeputyDbFacade } from "../../src/deputy/db-facade.ts";
 import { osaExecSync } from "../../src/deputy/osa.ts";
+import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-exec.ts";
 import { DeputySyncBridge } from "../../src/deputy/bridge.ts";
 import { deputySocketPath, deputyTokenPath } from "../../src/deputy/protocol.ts";
 import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
@@ -101,9 +102,22 @@ esac
     );
     chmodSync(stub, 0o755);
 
+    const shortcutsStub = join(tmp, "stub-shortcuts");
+    writeFileSync(
+      shortcutsStub,
+      `#!/bin/bash
+if [ "$1" = "list" ]; then printf 'things-proxy-alpha\\nother-shortcut\\n'; exit 0; fi
+echo "$1:$2:$3:$4:$5:$6"
+`,
+    );
+    chmodSync(shortcutsStub, 0o755);
+
     const deputyDir = join(tmp, "deputy");
     mkdirSync(deputyDir, { recursive: true });
-    writeFileSync(join(deputyDir, "deputy.json"), JSON.stringify({ dbPath, osascriptPath: stub }));
+    writeFileSync(
+      join(deputyDir, "deputy.json"),
+      JSON.stringify({ dbPath, osascriptPath: stub, shortcutsPath: shortcutsStub }),
+    );
 
     child = spawn(join(repoRoot, "deputy/build/things-deputy"), ["--state-dir", deputyDir], {
       stdio: "ignore",
@@ -230,6 +244,28 @@ esac
     const res = request({ verb: "osascript", script: 'do shell script "id"', timeoutMs: 5000 });
     expect(res["ok"]).toBe(false);
     expect((res["error"] as { code: string }).code).toBe("script-denied");
+  });
+
+  it("shortcuts: run carries the fixed argv shape and list censuses (stub proves both)", async () => {
+    const run = await shortcutsRunExec("things-proxy-alpha", "/tmp/in.json", "/tmp/out.json", 5000);
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe(
+      "run:things-proxy-alpha:--input-path:/tmp/in.json:--output-path:/tmp/out.json\n",
+    );
+    expect(shortcutsListSync(5000)).toContain("things-proxy-alpha");
+  });
+
+  it("shortcuts: refuses names outside the bundled things-proxy-* family", () => {
+    const res = request({
+      verb: "shortcuts",
+      op: "run",
+      name: "Evil Exfiltrator",
+      inputPath: "/tmp/in",
+      outputPath: "/tmp/out",
+      timeoutMs: 5000,
+    });
+    expect(res["ok"]).toBe(false);
+    expect((res["error"] as { code: string }).code).toBe("shortcut-denied");
   });
 
   it("read-file: confined to the container subtree", () => {

@@ -32,7 +32,7 @@ Rebuild flow after pulling changes: `bash scripts/build-deputy.sh && things depu
 
 ## Protocol
 
-JSON lines over the UNIX socket; one request → one response. Verbs: `hello` (handshake: protocol + versions + resolved db path), `sql` (`{sql, params}` → `{rows}`; BLOBs as `{"$b64": …}`), `osascript` (`{script, lang, timeoutMs}` → `{exitCode, stdout, stderr, timedOut?, signal?}` — the deputy kills the child at the deadline, so a dead caller never leaves an unbounded osascript), `read-file`, `locate`. TypeScript twin: `src/deputy/protocol.ts`.
+JSON lines over the UNIX socket; one request → one response. Verbs: `hello` (handshake: protocol + versions + resolved db path), `sql` (`{sql, params}` → `{rows}`; BLOBs as `{"$b64": …}`), `osascript` (`{script, lang, timeoutMs}` → `{exitCode, stdout, stderr, timedOut?, signal?}` — the deputy kills the child at the deadline, so a dead caller never leaves an unbounded osascript), `shortcuts` (`op: "list"`, or `op: "run"` restricted to the bundled `things-proxy-*` names, fixed argv, same deadline-kill), `read-file`, `locate`. TypeScript twin: `src/deputy/protocol.ts`.
 
 ## Tests
 

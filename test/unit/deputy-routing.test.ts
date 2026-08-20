@@ -16,6 +16,7 @@ import { PKG_VERSION } from "../../src/contracts.ts";
 import { createDeputyDbFacade } from "../../src/deputy/db-facade.ts";
 import { readContainerFileSync } from "../../src/deputy/files.ts";
 import { osaExec, osaExecSync } from "../../src/deputy/osa.ts";
+import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-exec.ts";
 import { deputySocketPath, deputyTokenPath, reviveRow } from "../../src/deputy/protocol.ts";
 import {
   deputyRoutesDb,
@@ -264,6 +265,15 @@ describe("osascript routing", () => {
     }
     expect(caught?.killed).toBe(true);
     expect(caught?.signal).toBe("SIGTERM");
+  });
+});
+
+describe("shortcuts routing", () => {
+  it("run and list ride the deputy when active", async () => {
+    await startMock();
+    const run = await shortcutsRunExec("things-proxy-create-heading", "/tmp/in", "/tmp/out", 5000);
+    expect(run).toEqual({ exitCode: 0, stdout: "run:things-proxy-create-heading", stderr: "" });
+    expect(shortcutsListSync(5000)).toBe("list:");
   });
 });
 

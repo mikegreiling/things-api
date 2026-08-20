@@ -26,10 +26,18 @@ private final class Flag {
 func runOsascript(script: String, lang: String, timeoutMs: Int, binPath: String, id: Any?)
   -> [String: Any]
 {
+  runChildTool(
+    binPath: binPath,
+    args: lang == "javascript" ? ["-l", "JavaScript", "-e", script] : ["-e", script],
+    timeoutMs: timeoutMs, id: id)
+}
+
+/// Generic deadline-bounded child runner shared by the osascript and
+/// shortcuts verbs. Argv is always assembled deputy-side from a fixed shape.
+func runChildTool(binPath: String, args: [String], timeoutMs: Int, id: Any?) -> [String: Any] {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: binPath)
-  process.arguments =
-    lang == "javascript" ? ["-l", "JavaScript", "-e", script] : ["-e", script]
+  process.arguments = args
   let outPipe = Pipe()
   let errPipe = Pipe()
   process.standardOutput = outPipe
