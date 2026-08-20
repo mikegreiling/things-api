@@ -48,6 +48,7 @@ function config(): ThingsApiConfig {
     bounceEnabled: true,
     bounceMaxItems: 30,
     autoLaunch: true,
+    deputyEnabled: false,
     ui: { enabled: true },
     host: "test-host",
   };

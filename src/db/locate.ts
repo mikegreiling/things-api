@@ -15,7 +15,8 @@ const CONTAINER_GLOB = join(
 
 export interface LocateResult {
   path: string;
-  source: "option" | "env" | "container";
+  /** "deputy" = resolved by the things-deputy broker (its handshake names the container db). */
+  source: "option" | "env" | "container" | "deputy";
   /** Additional candidate paths that also matched (warn when >1). */
   otherCandidates: string[];
 }

@@ -28,6 +28,7 @@
 import { execFile } from "node:child_process";
 
 import { DEFAULT_UI_DRIVE_BUDGET_MS, type ThingsApiConfig } from "../../config.ts";
+import { osaExec } from "../../deputy/osa.ts";
 import { noteInflightStep, trace, traceActive, tracePath } from "../../trace/tracer.ts";
 import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
@@ -726,28 +727,30 @@ function revealUrl(uuid: string): string {
   return `things:///show?id=${encodeURIComponent(uuid)}`;
 }
 
-function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunResult> {
-  return new Promise((resolve) => {
-    let bin: string;
-    let args: string[];
-    if (command.primitive === "reveal") {
-      [bin, args] = ["open", [command.url ?? ""]];
-    } else if (command.lang === "javascript") {
-      // JXA (ObjC bridge) for the mouse-synthesis primitive; one stable shape.
-      [bin, args] = ["osascript", ["-l", "JavaScript", "-e", command.script ?? ""]];
-    } else {
-      [bin, args] = ["osascript", ["-e", command.script ?? ""]];
-    }
-    execFile(bin, [...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
-      const timedOut = err !== null && (err as { killed?: boolean }).killed === true;
-      resolve({
-        ok: err === null,
-        stdout: String(stdout),
-        stderr: String(stderr),
-        ...(timedOut && { timedOut: true }),
+async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunResult> {
+  if (command.primitive === "reveal") {
+    // `open` is consent-free (LaunchServices, no AppleEvent) — never routed.
+    return new Promise((resolve) => {
+      execFile("open", [command.url ?? ""], { timeout: timeoutMs }, (err, stdout, stderr) => {
+        const timedOut = err !== null && (err as { killed?: boolean }).killed === true;
+        resolve({
+          ok: err === null,
+          stdout: String(stdout),
+          stderr: String(stderr),
+          ...(timedOut && { timedOut: true }),
+        });
       });
     });
-  });
+  }
+  // JXA (ObjC bridge) for the mouse-synthesis primitive; one stable shape.
+  const lang = command.lang === "javascript" ? ("javascript" as const) : ("applescript" as const);
+  const res = await osaExec(command.script ?? "", { lang, timeoutMs });
+  return {
+    ok: res.exitCode === 0 && res.timedOut !== true,
+    stdout: res.stdout,
+    stderr: res.stderr,
+    ...(res.timedOut === true && { timedOut: true }),
+  };
 }
 
 /**

@@ -10,6 +10,7 @@ import { Command } from "commander";
 
 import { registerHelp } from "./help.ts";
 import { installExcessArgsHelp } from "./excess-args.ts";
+import { registerDeputy } from "./commands/deputy.ts";
 import { registerDoctor } from "./commands/doctor.ts";
 import { registerOpResult } from "./commands/op-result.ts";
 import { registerMcp } from "./commands/mcp.ts";
@@ -42,7 +43,19 @@ export function buildProgram(): Command {
     // Unknown-command typos are answered with "did you mean …" (default on;
     // stated for the record — most top-level typos route through the bare-noun
     // did-you-mean instead, this covers the subcommand groups).
-    .showSuggestionAfterError(true);
+    .showSuggestionAfterError(true)
+    // Per-invocation deputy routing override. Highest precedence: the hook
+    // writes THINGS_API_DEPUTY before any command action loads config, so an
+    // explicit flag outranks both the environment and the stored key.
+    .option(
+      "--deputy",
+      "route database reads and app automation through the things-deputy helper for this invocation",
+    )
+    .option("--no-deputy", "run direct for this invocation, even when the helper is enabled");
+  program.hook("preAction", (thisCommand) => {
+    const flag = thisCommand.opts()["deputy"] as boolean | undefined;
+    if (flag !== undefined) process.env["THINGS_API_DEPUTY"] = flag ? "true" : "false";
+  });
   registerDoctor(program);
   registerOpResult(program);
   registerReadCommands(program);
@@ -52,6 +65,7 @@ export function buildProgram(): Command {
   registerTodoCommands(program);
   registerWriteCommands(program);
   registerSetup(program);
+  registerDeputy(program);
   registerInstallSkill(program);
   registerSnapshot(program);
   registerMcp(program);

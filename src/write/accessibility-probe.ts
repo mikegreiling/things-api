@@ -12,8 +12,7 @@
  * resolves the "Items" menu every recipe enters through, so a missing menu
  * (a Things update, or a non-English app) surfaces here too.
  */
-import { execFileSync } from "node:child_process";
-
+import { osaExecSync } from "../deputy/osa.ts";
 import { isThingsRunning } from "./automation-probe.ts";
 import { simFenceActive } from "./vectors/simulator.ts";
 
@@ -43,7 +42,9 @@ const PROBE_SCRIPT =
   'tell application "System Events" to tell process "Things3" to return (exists menu "Items" of menu bar 1)';
 
 function defaultRun(script: string, timeoutMs: number): string {
-  return execFileSync("osascript", ["-e", script], { encoding: "utf8", timeout: timeoutMs });
+  // Deputy-routed when active (see automation-probe.ts) — in that mode the
+  // Accessibility question is about the deputy's grant, the one that matters.
+  return osaExecSync(script, timeoutMs);
 }
 
 export function probeAccessibility(deps: AccessibilityProbeDeps = {}): AccessibilityProbeResult {

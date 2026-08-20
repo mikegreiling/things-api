@@ -26,6 +26,7 @@ bench/artifacts/
 
 # Build artifacts (source + build.sh are the record)
 lab/guest/disruption-monitor/disruption-monitor
+deputy/build/
 
 # Python bytecode
 __pycache__/
