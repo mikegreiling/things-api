@@ -26,16 +26,29 @@ EOF
 echo "building things-deputy $VERSION..."
 swiftc -O deputy/src/*.swift "$BUILD_DIR/Version.swift" -o "$BUILD_DIR/things-deputy"
 
-IDENTITY="things-deputy-signing"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
-  echo "signing with $IDENTITY..."
+# Identity preference: Developer ID Application (distribution-grade, 5-year,
+# notarizable) > Apple Development (Apple-issued dev cert) > the self-signed
+# ceremony cert. All three are STABLE identities so TCC grants survive
+# rebuilds; ad-hoc signing is never used (identity would churn per build).
+IDENTITY=""
+for candidate in "Developer ID Application" "Apple Development" "things-deputy-signing"; do
+  if security find-identity -v -p codesigning 2>/dev/null | grep -q "$candidate"; then
+    IDENTITY="$candidate"
+    break
+  fi
+done
+
+if [ -n "$IDENTITY" ]; then
+  echo "signing with '$IDENTITY' (hardened runtime + timestamp)..."
   codesign --force --sign "$IDENTITY" \
     --identifier com.pixelcog.things-deputy \
+    --options runtime --timestamp \
     "$BUILD_DIR/things-deputy"
   codesign --verify --verbose=1 "$BUILD_DIR/things-deputy"
 else
-  echo "WARNING: signing identity '$IDENTITY' not found — binary is UNSIGNED." >&2
-  echo "TCC grants will not survive rebuilds. Run scripts/deputy-cert-setup.sh once, then rebuild." >&2
+  echo "WARNING: no signing identity found — binary is UNSIGNED." >&2
+  echo "TCC grants will not survive rebuilds. Create a Developer ID Application cert in Xcode," >&2
+  echo "or run scripts/deputy-cert-setup.sh for a local self-signed one, then rebuild." >&2
 fi
 
 echo "built $BUILD_DIR/things-deputy"

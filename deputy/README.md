@@ -17,7 +17,7 @@ things config set deputy-enabled true   # opt the CLI into routing (per-call: --
 
 Rebuild flow after pulling changes: `bash scripts/build-deputy.sh && things deputy install`.
 
-**Never ad-hoc sign.** TCC identity follows the certificate; an ad-hoc identity changes per build, which silently re-introduces the grant churn this helper exists to end. The build script signs with the ceremony cert when present and warns loudly when it is absent.
+**Never ad-hoc sign.** TCC identity follows the certificate; an ad-hoc identity changes per build, which silently re-introduces the grant churn this helper exists to end. The build script picks the best stable identity present — **Developer ID Application** (distribution-grade, 5-year, notarizable) > **Apple Development** (Apple-issued dev cert) > the self-signed ceremony cert — signing with hardened runtime + timestamp, and warns loudly when none exists. Mint the Developer ID cert BEFORE running the TCC grant ceremony so grants attach to the durable identity from day one (an identity switch later means one re-grant pass). Verified 2026-08-20: an Apple-chain signature also stops the EDR exec-time conviction that killed unsigned builds (see design §3a).
 
 ## Security posture
 
