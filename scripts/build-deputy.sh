@@ -24,7 +24,13 @@ let DEPUTY_VERSION = "$VERSION"
 EOF
 
 echo "building things-deputy $VERSION..."
-swiftc -O deputy/src/*.swift "$BUILD_DIR/Version.swift" -o "$BUILD_DIR/things-deputy"
+# Compile to a temp name and only move the SIGNED result into place: swiftc
+# output is deterministic, so the unsigned intermediate reproduces a hash an
+# EDR may already have convicted — signing before the final path exists keeps
+# the deliverable path clean and shrinks the unsigned-on-disk window.
+UNSIGNED="$BUILD_DIR/.things-deputy.build.$$"
+trap 'rm -f "$UNSIGNED"' EXIT
+swiftc -O deputy/src/*.swift "$BUILD_DIR/Version.swift" -o "$UNSIGNED"
 
 # Identity preference: Developer ID Application (distribution-grade, 5-year,
 # notarizable) > Apple Development (Apple-issued dev cert) > the self-signed
@@ -43,12 +49,16 @@ if [ -n "$IDENTITY" ]; then
   codesign --force --sign "$IDENTITY" \
     --identifier com.pixelcog.things-deputy \
     --options runtime --timestamp \
-    "$BUILD_DIR/things-deputy"
-  codesign --verify --verbose=1 "$BUILD_DIR/things-deputy"
+    "$UNSIGNED"
+  codesign --verify --verbose=1 "$UNSIGNED"
 else
   echo "WARNING: no signing identity found — binary is UNSIGNED." >&2
   echo "TCC grants will not survive rebuilds. Create a Developer ID Application cert in Xcode," >&2
   echo "or run scripts/deputy-cert-setup.sh for a local self-signed one, then rebuild." >&2
 fi
+
+rm -f "$BUILD_DIR/things-deputy"
+mv "$UNSIGNED" "$BUILD_DIR/things-deputy"
+trap - EXIT
 
 echo "built $BUILD_DIR/things-deputy"
