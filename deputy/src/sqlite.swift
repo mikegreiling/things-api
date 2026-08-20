@@ -42,13 +42,24 @@ final class SqliteReader {
   func query(sql: String, params: [Any]) throws -> [[String: Any]] {
     guard let h = handle else { throw SqliteError(message: "connection closed") }
     var stmt: OpaquePointer?
-    var tail: UnsafePointer<CChar>?
-    guard sqlite3_prepare_v2(h, sql, -1, &stmt, &tail) == SQLITE_OK, let prepared = stmt else {
+    // The tail pointer aims into the C string handed to prepare, so it MUST be
+    // read inside withCString — Swift's implicit bridging buffer is deallocated
+    // the moment the call returns (a read-after-free otherwise).
+    var trailingStatement = false
+    let rc = sql.withCString { (cSql: UnsafePointer<CChar>) -> Int32 in
+      var tail: UnsafePointer<CChar>? = nil
+      let result = sqlite3_prepare_v2(h, cSql, -1, &stmt, &tail)
+      if let t = tail {
+        trailingStatement = !String(cString: t)
+          .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      }
+      return result
+    }
+    guard rc == SQLITE_OK, let prepared = stmt else {
       throw SqliteError(message: String(cString: sqlite3_errmsg(h)))
     }
     defer { sqlite3_finalize(prepared) }
-    if let t = tail,
-      !String(cString: t).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    if trailingStatement {
       throw SqliteError(message: "only a single SQL statement is accepted per request")
     }
 
