@@ -60,5 +60,28 @@ fi
 rm -f "$BUILD_DIR/things-deputy"
 mv "$UNSIGNED" "$BUILD_DIR/things-deputy"
 trap - EXIT
-
 echo "built $BUILD_DIR/things-deputy"
+
+# --- things-reader: the sandboxed file half (deputy/reader/) -----------------
+# Ships as a minimal .app bundle (secinit refuses bare executables) and MUST
+# carry a real certificate chain (amfid refuses ad-hoc on sandboxed code) —
+# SANDBOX1, docs/lab/sandbox1-scoped-reader.md. Unsigned hosts skip the reader
+# rather than produce a bundle macOS would kill at exec.
+if [ -n "$IDENTITY" ]; then
+  echo "building things-reader $VERSION..."
+  APP="$BUILD_DIR/things-reader.app"
+  rm -rf "$APP"
+  mkdir -p "$APP/Contents/MacOS"
+  sed "s/<string>0\.0\.0<\/string>/<string>$VERSION<\/string>/" \
+    deputy/reader/Info.plist > "$APP/Contents/Info.plist"
+  swiftc -O deputy/reader/main.swift deputy/src/sqlite.swift "$BUILD_DIR/Version.swift" \
+    -o "$APP/Contents/MacOS/things-reader"
+  codesign --force --sign "$IDENTITY" \
+    --options runtime --timestamp \
+    --entitlements deputy/reader/entitlements.plist \
+    "$APP"
+  codesign --verify --verbose=1 "$APP"
+  echo "built $APP"
+else
+  echo "WARNING: skipping things-reader — sandboxed code cannot run without a real signing chain." >&2
+fi

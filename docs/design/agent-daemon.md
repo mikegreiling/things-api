@@ -60,6 +60,21 @@ The maintainer re-scoped the first build slice mid-plan: **before** the op-hosti
 
 **EDR reality (discovered during certification):** the maintainer's managed workstation runs Cylance, which auto-quarantines every freshly built `things-deputy` (`execution_control`, score −1000 — logged 2026-08-19 22:09, hash `1a367e6e…c1025c`). Local execution of the live broker is therefore blocked until IT excludes the build path or (better) allow-lists the persistent signing certificate. Consequences: the live-broker suite is opt-in (`THINGS_DEPUTY_LIVE=1`) and runs on CI's clean `deputy-macos` hosted runner; the real-TCC validation (grants surviving a rebuild under the ceremony cert) must happen on an unmanaged Mac (the maintainer's M1) or post-exclusion.
 
+## 3b. The reader split (`things-reader`) — durable, OS-scoped file reads (2026-08-21)
+
+The live grant ceremony falsified a β1 assumption: **`kTCCServiceSystemPolicyAppData` grants are allow-once-per-process** (pid + boot_uuid-pinned; three prompts across three deputy instances on the maintainer's host; the reason his terminal never prompts is that Ghostty holds Full Disk Access). A headless helper cannot ride that class, and the only unsandboxed durable alternative is FDA — which the maintainer rejected as over-broad ("I cannot scope some permanent grant to a narrowly scoped directory?"). He can — via the one mechanism macOS offers: **App Sandbox + powerbox selection + app-scoped security bookmark**, VM-certified end-to-end by **SANDBOX1** ([../lab/sandbox1-scoped-reader.md](../lab/sandbox1-scoped-reader.md)): durable across processes, reboots, and re-signed rebuilds; scoped to exactly the granted directory; OS-enforced (the sandbox denies everything else outright, promptlessly).
+
+So the deputy is now a PAIR:
+
+| | **things-reader** (sandboxed .app) | **things-deputy** (unsandboxed) |
+|---|---|---|
+| verbs | `hello` / `sql` / `read-file` / `locate` | all (files as interim fallback) + `osascript` / `shortcuts` |
+| privilege | security-scoped bookmark to the Things group container, minted once by `things deputy grant` (NSOpenPanel presented BY the sandboxed process — that is what makes it durable) | TCC Automation/Accessibility grants (durable classes) |
+| state | its sandbox container (`~/Library/Containers/com.pixelcog.things-reader/Data`): bookmark, token, socket, log | `~/.local/state/things-api/deputy/` |
+| packaging | minimal LSUIElement .app (secinit refuses bare executables) signed with a REAL chain (amfid refuses ad-hoc on sandboxed code) | bare Mach-O, same identity |
+
+Routing (src/deputy/routing.ts): file verbs ride the reader when present AND granted, else the deputy (whose file access consent-stalls per process — acceptable only as interim), else direct. Automation verbs ride the deputy only. A present-but-ungranted reader is skipped with `status` pointing at the ceremony. The reader's handshake carries `granted` explicitly, and an ungranted reader refuses file verbs with `not-granted` naming the ceremony — never a prompt, never a stall (its class has no prompts). The FDA path remains documented as a fallback for hosts that reject the ceremony, no longer as the recommendation.
+
 ## 4. New failure surface — and the debug/QA strategy (the maintainer's headline concern)
 
 New states the daemon introduces, each with its mitigation:

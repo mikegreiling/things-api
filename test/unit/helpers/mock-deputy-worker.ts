@@ -21,6 +21,8 @@ interface MockConfig {
   dbPath: string | null;
   /** hello's dbPath (the deputy's CACHE — null until a locate/sql resolved it). */
   helloDbPath: string | null;
+  /** Mock a READER: hello carries role+granted; automation verbs refuse. */
+  reader?: { granted: boolean };
   sqlRows: Record<string, unknown>[];
   osaResult: Record<string, unknown>;
 }
@@ -45,9 +47,15 @@ function respond(req: Record<string, unknown>): Record<string, unknown> {
         pid: 4242,
         dbPath: cfg.helloDbPath,
         uptimeMs: 7,
+        ...(cfg.reader !== undefined && { role: "reader", granted: cfg.reader.granted }),
       };
     case "sql":
-      return { id, ok: true, rows: cfg.sqlRows };
+      // Reader mocks tag rows so tests can assert WHICH transport served them.
+      return {
+        id,
+        ok: true,
+        rows: cfg.reader !== undefined ? [{ servedBy: "reader" }, ...cfg.sqlRows] : cfg.sqlRows,
+      };
     case "osascript":
       return { id, ok: true, ...cfg.osaResult };
     case "shortcuts":

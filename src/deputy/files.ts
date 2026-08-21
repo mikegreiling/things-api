@@ -7,10 +7,10 @@
  */
 import { readFileSync } from "node:fs";
 
-import { deputyRouting, deputySyncRequest } from "./routing.ts";
+import { deputyFilesActive, fileSyncRequest } from "./routing.ts";
 
 export function readContainerFileSync(path: string): Buffer {
-  if (!deputyRouting().active) return readFileSync(path);
-  const res = deputySyncRequest({ verb: "read-file", path }, 10_000);
+  if (!deputyFilesActive()) return readFileSync(path);
+  const res = fileSyncRequest({ verb: "read-file", path }, 10_000);
   return Buffer.from(res["b64"] as string, "base64");
 }

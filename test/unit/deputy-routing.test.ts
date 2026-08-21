@@ -17,9 +17,16 @@ import { createDeputyDbFacade } from "../../src/deputy/db-facade.ts";
 import { readContainerFileSync } from "../../src/deputy/files.ts";
 import { osaExec, osaExecSync } from "../../src/deputy/osa.ts";
 import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-exec.ts";
-import { deputySocketPath, deputyTokenPath, reviveRow } from "../../src/deputy/protocol.ts";
+import {
+  deputySocketPath,
+  deputyTokenPath,
+  readerSocketPath,
+  readerTokenPath,
+  reviveRow,
+} from "../../src/deputy/protocol.ts";
 import {
   deputyDbPath,
+  deputyFilesActive,
   deputyRoutesDb,
   deputyRouting,
   resetDeputyRoutingForTests,
@@ -77,14 +84,42 @@ async function startMock(overrides: MockOverrides = {}): Promise<void> {
   await new Promise((resolve) => worker.once("message", resolve));
 }
 
+/** A second mock at the READER socket (its own container dir in prod; a temp dir here). */
+async function startMockReader(
+  overrides: { granted?: boolean; helloDbPath?: string | null } = {},
+): Promise<void> {
+  mkdirSync(join(stateDir, "reader"), { recursive: true });
+  writeFileSync(readerTokenPath(process.env), TOKEN);
+  const worker = new Worker(new URL("./helpers/mock-deputy-worker.ts", import.meta.url), {
+    workerData: {
+      socketPath: readerSocketPath(process.env),
+      token: TOKEN,
+      deputyVersion: PKG_VERSION,
+      protocol: 1,
+      dbPath: "/tmp/mock-things/D.thingsdatabase/main.sqlite",
+      helloDbPath:
+        overrides.helloDbPath === undefined
+          ? "/tmp/mock-things/D.thingsdatabase/main.sqlite"
+          : overrides.helloDbPath,
+      reader: { granted: overrides.granted ?? true },
+      sqlRows: [],
+      osaResult: { exitCode: 0, stdout: "", stderr: "" },
+    },
+  });
+  workers.push(worker);
+  await new Promise((resolve) => worker.once("message", resolve));
+}
+
 beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "dep-"));
   savedEnv = {
     THINGS_API_STATE_DIR: process.env["THINGS_API_STATE_DIR"],
+    THINGS_API_READER_DIR: process.env["THINGS_API_READER_DIR"],
     THINGS_API_DEPUTY: process.env["THINGS_API_DEPUTY"],
     THINGS_DB: process.env["THINGS_DB"],
   };
   process.env["THINGS_API_STATE_DIR"] = stateDir;
+  process.env["THINGS_API_READER_DIR"] = join(stateDir, "reader");
   process.env["THINGS_API_DEPUTY"] = "true";
   delete process.env["THINGS_DB"];
 });
@@ -183,7 +218,7 @@ describe("db routing rules", () => {
     await startMock({ helloDbPath: null });
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(deputyDbPath()).toContain("main.sqlite");
-    expect(stderrSpy.mock.calls.map((c) => String(c[0])).join("")).toContain("consent prompt");
+    expect(stderrSpy.mock.calls.map((c) => String(c[0])).join("")).toContain("consent dialog");
     stderrSpy.mockRestore();
   });
 
@@ -192,6 +227,43 @@ describe("db routing rules", () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(deputyDbPath()).toBeNull();
     stderrSpy.mockRestore();
+  });
+});
+
+describe("reader transport (file verbs)", () => {
+  it("a granted reader is preferred over the deputy for sql", async () => {
+    await startMock({ sqlRows: [{ x: 1 }] });
+    await startMockReader({ granted: true });
+    const db = createDeputyDbFacade();
+    const rows = db.prepare("SELECT 1").all() as Record<string, unknown>[];
+    expect(rows[0]?.["servedBy"]).toBe("reader");
+  });
+
+  it("a present-but-UNGRANTED reader is skipped — the deputy serves", async () => {
+    await startMock({ sqlRows: [{ x: 1 }] });
+    await startMockReader({ granted: false });
+    const db = createDeputyDbFacade();
+    const rows = db.prepare("SELECT 1").all() as Record<string, unknown>[];
+    expect(rows[0]?.["servedBy"]).toBeUndefined();
+    expect(rows[0]?.["x"]).toBe(1);
+  });
+
+  it("reader alone: file verbs route, automation runs direct", async () => {
+    await startMockReader({ granted: true });
+    expect(deputyFilesActive()).toBe(true);
+    expect(deputyRoutesDb(undefined)).toBe(true);
+    // No deputy: the automation half is honestly inactive.
+    expect(deputyRouting().active).toBe(false);
+  });
+
+  it("deputyDbPath resolves through the reader's handshake cache", async () => {
+    await startMockReader({ granted: true });
+    expect(deputyDbPath()).toContain("main.sqlite");
+  });
+
+  it("neither half up: files inactive, everything direct", () => {
+    expect(deputyFilesActive()).toBe(false);
+    expect(deputyRoutesDb(undefined)).toBe(false);
   });
 });
 
