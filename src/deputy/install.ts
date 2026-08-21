@@ -5,7 +5,7 @@
  * crashed deputy relaunches with its identity (and therefore its macOS
  * permission grants) intact.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -99,22 +99,13 @@ export interface DeputySigning {
 
 /** codesign facts about a binary (diagnostic output — may name mechanisms). */
 export function deputySigningInfo(binaryPath: string): DeputySigning {
-  let out: string;
-  try {
-    out = execFileSync("codesign", ["-dvv", binaryPath], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
-    });
-  } catch (err) {
-    const e = err as { stderr?: string; stdout?: string };
-    const text = `${e.stdout ?? ""}${e.stderr ?? ""}`;
-    if (/not signed at all/i.test(text)) return { state: "unsigned", authority: null };
-    // codesign prints details on stderr and still exits 0 on success — a
-    // nonzero exit with no recognizable marker is an unknown state.
-    out = text;
-    if (out === "") return { state: "unknown", authority: null };
-  }
+  // spawnSync, not execFileSync: codesign prints its details on STDERR while
+  // exiting 0, and execFileSync only surfaces stderr on the failure path — the
+  // success case must read both streams.
+  const res = spawnSync("codesign", ["-dvv", binaryPath], { encoding: "utf8", timeout: 10_000 });
+  const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  if (res.error !== undefined || out === "") return { state: "unknown", authority: null };
+  if (/not signed at all/i.test(out)) return { state: "unsigned", authority: null };
   if (/Signature=adhoc/i.test(out)) return { state: "adhoc", authority: null };
   const authority = /Authority=(.+)/.exec(out)?.[1]?.trim() ?? null;
   return authority !== null

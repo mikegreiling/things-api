@@ -10,7 +10,7 @@ import { PKG_VERSION, type GroupBlock, type Truncation } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
 import { createDeputyDbFacade } from "./deputy/db-facade.ts";
-import { deputyRoutesDb, deputyRouting } from "./deputy/routing.ts";
+import { deputyDbPath, deputyRoutesDb } from "./deputy/routing.ts";
 import {
   compareToBaseline,
   observeSchema,
@@ -911,7 +911,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     options.dbPath !== undefined ? { dbPath: options.dbPath } : undefined,
     env,
   )
-    ? (deputyRouting(env).hello?.dbPath ?? null)
+    ? deputyDbPath(env)
     : null;
   const located =
     routedDbPath !== null
