@@ -45,7 +45,6 @@ function renderStatus(status: DeputyStatus): string {
   if (status.hello !== null) {
     lines.push(
       `  version: ${status.hello.deputyVersion} (protocol ${status.hello.protocol}, pid ${status.hello.pid})`,
-      `  database: ${status.hello.dbPath ?? "not yet resolved (resolved on first read)"}`,
     );
   }
   if (status.signing !== null) {
@@ -117,6 +116,11 @@ export function registerDeputy(program: Command): void {
         process.stdout.write(
           `installed ${result.binaryPath}\nlaunchd agent: ${result.plistPath}\n`,
         );
+        if (result.readerInstalled) {
+          process.stdout.write(
+            "installed things-reader.app (file reads) — run `things deputy grant` once if you have not\n",
+          );
+        }
         for (const warning of result.warnings) {
           process.stderr.write(`warning: ${warning}\n`);
         }

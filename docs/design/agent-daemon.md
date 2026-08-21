@@ -68,12 +68,12 @@ So the deputy is now a PAIR:
 
 | | **things-reader** (sandboxed .app) | **things-deputy** (unsandboxed) |
 |---|---|---|
-| verbs | `hello` / `sql` / `read-file` / `locate` | all (files as interim fallback) + `osascript` / `shortcuts` |
+| verbs | `hello` / `sql` / `read-file` / `locate` | `hello` / `osascript` / `shortcuts` — MUTATIONS ONLY |
 | privilege | security-scoped bookmark to the Things group container, minted once by `things deputy grant` (NSOpenPanel presented BY the sandboxed process — that is what makes it durable) | TCC Automation/Accessibility grants (durable classes) |
 | state | its sandbox container (`~/Library/Containers/com.pixelcog.things-reader/Data`): bookmark, token, socket, log | `~/.local/state/things-api/deputy/` |
 | packaging | minimal LSUIElement .app (secinit refuses bare executables) signed with a REAL chain (amfid refuses ad-hoc on sandboxed code) | bare Mach-O, same identity |
 
-Routing (src/deputy/routing.ts): file verbs ride the reader when present AND granted, else the deputy (whose file access consent-stalls per process — acceptable only as interim), else direct. Automation verbs ride the deputy only. A present-but-ungranted reader is skipped with `status` pointing at the ceremony. The reader's handshake carries `granted` explicitly, and an ungranted reader refuses file verbs with `not-granted` naming the ceremony — never a prompt, never a stall (its class has no prompts). The FDA path remains documented as a fallback for hosts that reject the ceremony, no longer as the recommendation.
+Routing (src/deputy/routing.ts): file verbs ride the reader when present AND granted, else DIRECT — the deputy never serves them (maintainer's ruling 2026-08-21: no multi-step fallback chains; its container access would ride the per-process consent class this pair exists to end, and retiring it deleted the whole consent-stall machinery — the 90s first-contact budget, the watch-for-the-dialog notices, the stall-proof handshake caching). Automation verbs ride the deputy only. A present-but-ungranted reader is skipped with `status` pointing at the ceremony. The reader's handshake carries `granted` explicitly, and an ungranted reader refuses file verbs with `not-granted` naming the ceremony — never a prompt, never a stall (its class has no prompts). The FDA path remains documented as a fallback for hosts that reject the ceremony, no longer as the recommendation.
 
 ## 4. New failure surface — and the debug/QA strategy (the maintainer's headline concern)
 

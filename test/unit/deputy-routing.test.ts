@@ -86,7 +86,11 @@ async function startMock(overrides: MockOverrides = {}): Promise<void> {
 
 /** A second mock at the READER socket (its own container dir in prod; a temp dir here). */
 async function startMockReader(
-  overrides: { granted?: boolean; helloDbPath?: string | null } = {},
+  overrides: {
+    granted?: boolean;
+    helloDbPath?: string | null;
+    sqlRows?: Record<string, unknown>[];
+  } = {},
 ): Promise<void> {
   mkdirSync(join(stateDir, "reader"), { recursive: true });
   writeFileSync(readerTokenPath(process.env), TOKEN);
@@ -102,7 +106,7 @@ async function startMockReader(
           ? "/tmp/mock-things/D.thingsdatabase/main.sqlite"
           : overrides.helloDbPath,
       reader: { granted: overrides.granted ?? true },
-      sqlRows: [],
+      sqlRows: overrides.sqlRows ?? [],
       osaResult: { exitCode: 0, stdout: "", stderr: "" },
     },
   });
@@ -202,58 +206,55 @@ describe("activation matrix", () => {
 
 describe("db routing rules", () => {
   it("routes only the default container database", async () => {
-    await startMock();
+    await startMockReader({ granted: true });
     expect(deputyRoutesDb(undefined)).toBe(true);
     expect(deputyRoutesDb({ dbPath: "/tmp/explicit.sqlite" })).toBe(false);
     process.env["THINGS_DB"] = "/tmp/env.sqlite";
     expect(deputyRoutesDb(undefined)).toBe(false);
   });
 
-  it("deputyDbPath uses the handshake cache when warm", async () => {
+  it("deputyDbPath uses the reader's handshake cache when warm", async () => {
+    await startMockReader({ granted: true });
+    expect(deputyDbPath()).toContain("main.sqlite");
+  });
+
+  it("deputyDbPath resolves via locate on a cold reader handshake", async () => {
+    await startMockReader({ granted: true, helloDbPath: null });
+    expect(deputyDbPath()).toContain("main.sqlite");
+  });
+
+  it("deputyDbPath is null without a granted reader (reads run direct)", async () => {
     await startMock();
-    expect(deputyDbPath()).toContain("main.sqlite");
-  });
-
-  it("deputyDbPath falls back to locate on a cold handshake (first contact)", async () => {
-    await startMock({ helloDbPath: null });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    expect(deputyDbPath()).toContain("main.sqlite");
-    expect(stderrSpy.mock.calls.map((c) => String(c[0])).join("")).toContain("consent dialog");
-    stderrSpy.mockRestore();
-  });
-
-  it("deputyDbPath is null (direct fallback) when locate cannot resolve", async () => {
-    await startMock({ helloDbPath: null, dbPath: null });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(deputyDbPath()).toBeNull();
-    stderrSpy.mockRestore();
   });
 });
 
 describe("reader transport (file verbs)", () => {
-  it("a granted reader is preferred over the deputy for sql", async () => {
-    await startMock({ sqlRows: [{ x: 1 }] });
-    await startMockReader({ granted: true });
+  it("file verbs ride the reader — never the deputy (mutations-only)", async () => {
+    await startMock({ sqlRows: [{ fromDeputy: true }] });
+    await startMockReader({ granted: true, sqlRows: [{ fromReader: true }] });
     const db = createDeputyDbFacade();
     const rows = db.prepare("SELECT 1").all() as Record<string, unknown>[];
-    expect(rows[0]?.["servedBy"]).toBe("reader");
+    expect(rows).toEqual([{ fromReader: true }]);
   });
 
-  it("a present-but-UNGRANTED reader is skipped — the deputy serves", async () => {
-    await startMock({ sqlRows: [{ x: 1 }] });
+  it("a present-but-UNGRANTED reader means reads run DIRECT (no deputy fallback)", async () => {
+    await startMock({ sqlRows: [{ fromDeputy: true }] });
     await startMockReader({ granted: false });
+    expect(deputyFilesActive()).toBe(false);
+    expect(deputyRoutesDb(undefined)).toBe(false);
     const db = createDeputyDbFacade();
-    const rows = db.prepare("SELECT 1").all() as Record<string, unknown>[];
-    expect(rows[0]?.["servedBy"]).toBeUndefined();
-    expect(rows[0]?.["x"]).toBe(1);
+    expect(() => db.prepare("SELECT 1").all()).toThrow(/reader is not active/);
   });
 
   it("reader alone: file verbs route, automation runs direct", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await startMockReader({ granted: true });
     expect(deputyFilesActive()).toBe(true);
     expect(deputyRoutesDb(undefined)).toBe(true);
     // No deputy: the automation half is honestly inactive.
     expect(deputyRouting().active).toBe(false);
+    stderrSpy.mockRestore();
   });
 
   it("deputyDbPath resolves through the reader's handshake cache", async () => {
@@ -269,7 +270,7 @@ describe("reader transport (file verbs)", () => {
 
 describe("db facade", () => {
   it("prepare().all/get round-trip with blob revival", async () => {
-    await startMock({
+    await startMockReader({
       sqlRows: [
         {
           uuid: "u1",
@@ -292,13 +293,13 @@ describe("db facade", () => {
   });
 
   it("get() is undefined when no rows come back", async () => {
-    await startMock({ sqlRows: [] });
+    await startMockReader({ sqlRows: [] });
     const db = createDeputyDbFacade();
     expect(db.prepare("SELECT x").get()).toBeUndefined();
   });
 
   it("write/unknown members throw teaching errors, never a silent no-op", async () => {
-    await startMock();
+    await startMockReader({});
     const db = createDeputyDbFacade();
     expect(() => db.prepare("SELECT 1").run()).toThrow(/not available on a deputy-routed/);
     expect(() => db.exec("VACUUM")).toThrow(/not available/);
@@ -307,7 +308,7 @@ describe("db facade", () => {
   });
 
   it("rejects parameters it cannot carry faithfully", async () => {
-    await startMock();
+    await startMockReader({});
     const db = createDeputyDbFacade();
     expect(() => db.prepare("SELECT ?").all(new Uint8Array([1]) as never)).toThrow(
       /unsupported object parameter/,
@@ -379,8 +380,8 @@ describe("shortcuts routing", () => {
 });
 
 describe("container file reads", () => {
-  it("routes through the deputy when active", async () => {
-    await startMock();
+  it("routes through the granted reader when active", async () => {
+    await startMockReader({});
     const bytes = readContainerFileSync("/mock/container/prefs.plist");
     expect(bytes.toString()).toBe("mock:/mock/container/prefs.plist");
   });

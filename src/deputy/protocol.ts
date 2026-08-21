@@ -84,7 +84,8 @@ export interface DeputyHello {
   protocol: number;
   deputyVersion: string;
   pid: number;
-  dbPath: string | null;
+  /** Reader only: its cached container-db resolution (absent on the deputy). */
+  dbPath?: string | null;
   uptimeMs: number;
 }
 

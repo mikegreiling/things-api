@@ -50,12 +50,7 @@ function respond(req: Record<string, unknown>): Record<string, unknown> {
         ...(cfg.reader !== undefined && { role: "reader", granted: cfg.reader.granted }),
       };
     case "sql":
-      // Reader mocks tag rows so tests can assert WHICH transport served them.
-      return {
-        id,
-        ok: true,
-        rows: cfg.reader !== undefined ? [{ servedBy: "reader" }, ...cfg.sqlRows] : cfg.sqlRows,
-      };
+      return { id, ok: true, rows: cfg.sqlRows };
     case "osascript":
       return { id, ok: true, ...cfg.osaResult };
     case "shortcuts":
