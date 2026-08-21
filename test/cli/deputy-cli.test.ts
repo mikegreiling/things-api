@@ -56,7 +56,8 @@ describe("things deputy status", () => {
   it("reports a bare machine honestly (nothing installed, not running, routing disabled)", async () => {
     await run(["deputy", "status"]);
     const out = stdout.join("");
-    expect(out).toContain("deputy: not running");
+    expect(out).toContain("deputy: does not appear to be running");
+    expect(out).not.toContain("detail:");
     expect(out).toContain("routing: disabled");
     expect(process.exitCode).toBe(0);
   });
