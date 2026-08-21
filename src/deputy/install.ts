@@ -49,7 +49,14 @@ function launchTarget(): string {
 
 function launchctl(args: string[]): { ok: boolean; output: string } {
   try {
-    const output = execFileSync("launchctl", args, { encoding: "utf8", timeout: 10_000 });
+    // stderr must be captured, never inherited: a routine negative probe
+    // ("Could not find service … in domain") is a state we REPORT, not noise
+    // the child gets to print over our own output.
+    const output = execFileSync("launchctl", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    });
     return { ok: true, output };
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string; message?: string };

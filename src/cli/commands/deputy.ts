@@ -29,13 +29,18 @@ function envelopeMeta(started: number): EnvelopeMeta {
 }
 
 function renderStatus(status: DeputyStatus): string {
-  const lines = [
-    `deputy: ${status.running ? "running" : status.detail}`,
+  const lines = [`deputy: ${status.running ? "running" : "does not appear to be running"}`];
+  // The plain no-socket case needs no elaboration; a socket that exists but
+  // misbehaves (not answering, handshake refused) is worth its own line.
+  if (!status.running && !status.detail.startsWith("not running")) {
+    lines.push(`  detail: ${status.detail}`);
+  }
+  lines.push(
     `  routing: ${status.enabled ? "enabled" : "disabled (things config set deputy-enabled true)"}`,
     `  launchd: ${status.plistInstalled ? (status.loaded ? "installed + loaded" : "installed, NOT loaded") : "not installed (things deputy install)"}`,
     `  binary: ${status.binaryInstalled ? "installed" : "not installed"}`,
     `  socket: ${status.socketPath}`,
-  ];
+  );
   if (status.hello !== null) {
     lines.push(
       `  version: ${status.hello.deputyVersion} (protocol ${status.hello.protocol}, pid ${status.hello.pid})`,
