@@ -13,7 +13,7 @@ import { decodeRecurrenceRule } from "./model/recurrence.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
 import { createDeputyDbFacade } from "./deputy/db-facade.ts";
-import { deputyRoutesDb, deputyRouting } from "./deputy/routing.ts";
+import { deputyDbPath, deputyRoutesDb } from "./deputy/routing.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
 import {
@@ -262,7 +262,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
   // Mirror openThings: deputy-brokered database access for the default
   // container db, local open for explicit paths (src/deputy/routing.ts).
   const routedDbPath = deputyRoutesDb(dbPath !== undefined ? { dbPath } : undefined)
-    ? (deputyRouting().hello?.dbPath ?? null)
+    ? deputyDbPath()
     : null;
   let located: ReturnType<typeof locateThingsDb>;
   try {

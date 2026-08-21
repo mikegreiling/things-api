@@ -19,6 +19,7 @@ import { osaExec, osaExecSync } from "../../src/deputy/osa.ts";
 import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-exec.ts";
 import { deputySocketPath, deputyTokenPath, reviveRow } from "../../src/deputy/protocol.ts";
 import {
+  deputyDbPath,
   deputyRoutesDb,
   deputyRouting,
   resetDeputyRoutingForTests,
@@ -38,6 +39,8 @@ interface MockOverrides {
   deputyVersion?: string;
   protocol?: number;
   dbPath?: string | null;
+  /** hello's cached-path field; defaults to dbPath (warm-cache deputy). */
+  helloDbPath?: string | null;
   sqlRows?: Record<string, unknown>[];
   osaResult?: Record<string, unknown>;
   token?: string;
@@ -60,6 +63,12 @@ async function startMock(overrides: MockOverrides = {}): Promise<void> {
         overrides.dbPath === undefined
           ? "/tmp/mock-things/D.thingsdatabase/main.sqlite"
           : overrides.dbPath,
+      helloDbPath:
+        overrides.helloDbPath !== undefined
+          ? overrides.helloDbPath
+          : overrides.dbPath === undefined
+            ? "/tmp/mock-things/D.thingsdatabase/main.sqlite"
+            : overrides.dbPath,
       sqlRows: overrides.sqlRows ?? [],
       osaResult: overrides.osaResult ?? { exitCode: 0, stdout: "ok\n", stderr: "" },
     },
@@ -163,6 +172,26 @@ describe("db routing rules", () => {
     expect(deputyRoutesDb({ dbPath: "/tmp/explicit.sqlite" })).toBe(false);
     process.env["THINGS_DB"] = "/tmp/env.sqlite";
     expect(deputyRoutesDb(undefined)).toBe(false);
+  });
+
+  it("deputyDbPath uses the handshake cache when warm", async () => {
+    await startMock();
+    expect(deputyDbPath()).toContain("main.sqlite");
+  });
+
+  it("deputyDbPath falls back to locate on a cold handshake (first contact)", async () => {
+    await startMock({ helloDbPath: null });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyDbPath()).toContain("main.sqlite");
+    expect(stderrSpy.mock.calls.map((c) => String(c[0])).join("")).toContain("consent prompt");
+    stderrSpy.mockRestore();
+  });
+
+  it("deputyDbPath is null (direct fallback) when locate cannot resolve", async () => {
+    await startMock({ helloDbPath: null, dbPath: null });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyDbPath()).toBeNull();
+    stderrSpy.mockRestore();
   });
 });
 

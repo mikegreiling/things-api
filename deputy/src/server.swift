@@ -15,6 +15,23 @@ final class Server {
   private let osaQueue = DispatchQueue(label: "things-deputy.osa")
   private let logQueue = DispatchQueue(label: "things-deputy.log")
   private var reader: SqliteReader?  // guarded by dbQueue
+  /// Last successful container resolution. Guarded by its OWN lock — never by
+  /// dbQueue — so hello's cache read can never queue behind a locate/sql that
+  /// is mid-stall awaiting TCC consent on that queue.
+  private let cacheLock = NSLock()
+  private var cachedDbPath: String?
+
+  private func readCachedDbPath() -> String? {
+    cacheLock.lock()
+    defer { cacheLock.unlock() }
+    return cachedDbPath
+  }
+
+  private func storeCachedDbPath(_ path: String) {
+    cacheLock.lock()
+    cachedDbPath = path
+    cacheLock.unlock()
+  }
   private var listenFd: Int32 = -1
 
   init(paths: DeputyPaths, config: DeputyConfig, token: String) {
@@ -275,13 +292,22 @@ final class Server {
       "protocol": PROTOCOL_VERSION,
       "deputyVersion": DEPUTY_VERSION,
       "pid": Int(getpid()),
-      "dbPath": resolveDbPath() ?? NSNull(),
+      // Cheap cached read ONLY — the handshake must never touch the protected
+      // container. On an ungranted machine that touch blocks in the kernel
+      // awaiting TCC consent, and a handshake that can hang on a consent
+      // dialog deadlocks every client (observed live 2026-08-21). The client
+      // resolves the path with the `locate` verb, which is allowed to stall.
+      "dbPath": readCachedDbPath() ?? NSNull(),
       "uptimeMs": Int(Date().timeIntervalSince(startedAt) * 1000),
     ]
   }
 
   private func handleLocate(id: Any?) -> [String: Any] {
+    // The first locate on an ungranted machine BLOCKS in open() until the
+    // user answers the macOS consent prompt — deliberate: this is the verb
+    // the grant ceremony rides. Result cached for hello.
     let candidates = locateCandidates()
+    if let first = candidates.first { storeCachedDbPath(first) }
     guard let first = candidates.first else {
       return errorResponse(
         id: id, code: "not-found",
@@ -298,6 +324,7 @@ final class Server {
       guard let dbPath = resolveDbPath() else {
         return errorResponse(id: id, code: "not-found", message: "no Things database to query (locate failed and no dbPath configured)")
       }
+      storeCachedDbPath(dbPath)
       do {
         reader = try SqliteReader(path: dbPath)
       } catch {

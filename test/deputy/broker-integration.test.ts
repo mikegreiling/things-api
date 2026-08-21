@@ -146,12 +146,14 @@ echo "$1:$2:$3:$4:$5:$6"
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("handshakes with the package version and the configured db path", () => {
+  it("handshakes with the package version; dbPath is null until a locate/sql resolves it", () => {
     const res = request({ verb: "hello" });
     expect(res["ok"]).toBe(true);
     expect(res["protocol"]).toBe(1);
     expect(res["deputyVersion"]).toBe(PKG_VERSION);
-    expect(res["dbPath"]).toBe(dbPath);
+    // The handshake never touches the (TCC-protected) container — the path is
+    // unresolved until the first locate/sql, then cached (asserted below).
+    expect(res["dbPath"]).toBeNull();
   });
 
   it("rejects a bad token", () => {
@@ -282,9 +284,11 @@ echo "$1:$2:$3:$4:$5:$6"
     expect(res["ok"]).toBe(false);
   });
 
-  it("locate answers with the configured database", () => {
+  it("locate answers with the configured database, and hello then reports the cached path", () => {
     const res = request({ verb: "locate" });
     expect(res["ok"]).toBe(true);
     expect(res["path"]).toBe(dbPath);
+    const hello = request({ verb: "hello" });
+    expect(hello["dbPath"]).toBe(dbPath);
   });
 });

@@ -47,6 +47,8 @@ interface ActiveState {
   token: string;
   bridge: DeputySyncBridge;
   client: DeputyAsyncClient;
+  /** Memoized `locate` result (undefined = not asked yet this process). */
+  dbPathMemo?: string | null;
 }
 
 interface InactiveState {
@@ -233,6 +235,40 @@ export async function deputyAsyncRequest(
       timeoutMs,
     ),
   );
+}
+
+/**
+ * A first container touch on an ungranted machine blocks in the kernel until
+ * the user answers the macOS consent prompt — give the human time to find it.
+ */
+const FIRST_CONTACT_LOCATE_TIMEOUT_MS = 90_000;
+
+/**
+ * The deputy-resolved container database path, or null when the deputy is
+ * inactive or cannot resolve one. The handshake never touches the protected
+ * container (a consent stall there would deadlock every client), so on first
+ * contact this asks the `locate` verb — the request the grant ceremony rides,
+ * deliberately allowed to stall while the user answers the consent prompt.
+ */
+export function deputyDbPath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const active = activeState(env);
+  if (active === null) return null;
+  if (active.hello.dbPath !== null) return active.hello.dbPath;
+  if (active.dbPathMemo !== undefined) return active.dbPathMemo;
+  process.stderr.write(
+    "things-api deputy: first database access through the helper — if macOS shows a consent prompt for things-deputy, approve it (waiting up to 90s)\n",
+  );
+  try {
+    const res = deputySyncRequest({ verb: "locate" }, FIRST_CONTACT_LOCATE_TIMEOUT_MS, env);
+    active.dbPathMemo = typeof res["path"] === "string" ? res["path"] : null;
+  } catch (err) {
+    active.dbPathMemo = null;
+    const why = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `things-api deputy: could not resolve the database through the helper (${why}) — this read runs DIRECT\n`,
+    );
+  }
+  return active.dbPathMemo;
 }
 
 /**

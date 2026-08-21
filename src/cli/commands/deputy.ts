@@ -44,7 +44,7 @@ function renderStatus(status: DeputyStatus): string {
   if (status.hello !== null) {
     lines.push(
       `  version: ${status.hello.deputyVersion} (protocol ${status.hello.protocol}, pid ${status.hello.pid})`,
-      `  database: ${status.hello.dbPath ?? "not found"}`,
+      `  database: ${status.hello.dbPath ?? "not yet resolved (resolved on first read)"}`,
     );
   }
   if (status.signing !== null) {

@@ -19,6 +19,8 @@ interface MockConfig {
   deputyVersion: string;
   protocol: number;
   dbPath: string | null;
+  /** hello's dbPath (the deputy's CACHE — null until a locate/sql resolved it). */
+  helloDbPath: string | null;
   sqlRows: Record<string, unknown>[];
   osaResult: Record<string, unknown>;
 }
@@ -41,7 +43,7 @@ function respond(req: Record<string, unknown>): Record<string, unknown> {
         protocol: cfg.protocol,
         deputyVersion: cfg.deputyVersion,
         pid: 4242,
-        dbPath: cfg.dbPath,
+        dbPath: cfg.helloDbPath,
         uptimeMs: 7,
       };
     case "sql":
