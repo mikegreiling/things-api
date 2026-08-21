@@ -8,6 +8,7 @@
  */
 import { execFileSync } from "node:child_process";
 
+import { osaExecSync } from "../deputy/osa.ts";
 import { automationGrantee } from "./failure-hints.ts";
 import { simFenceActive } from "./vectors/simulator.ts";
 
@@ -51,7 +52,10 @@ export function isThingsRunning(): boolean {
 const defaultIsAppRunning = isThingsRunning;
 
 function defaultRun(script: string, timeoutMs: number): string {
-  return execFileSync("osascript", ["-e", script], { encoding: "utf8", timeout: timeoutMs });
+  // Routed through the deputy when it is active: the probe then answers the
+  // right question — whether the DEPUTY (the process that sends every
+  // AppleEvent in that mode) holds the grant, not this transient CLI process.
+  return osaExecSync(script, timeoutMs);
 }
 
 export function probeAutomation(deps: AutomationProbeDeps = {}): AutomationProbeResult {

@@ -1,6 +1,6 @@
 # The agent daemon (`things-agentd`) — async ops, stable automation identity, and the watch host
 
-**STATUS: PROPOSED — direction ratified by the maintainer 2026-08-19; implementation NOT started; the phase plan below awaits explicit ratification before any build.** This document is the durable home for the design so it survives context compaction. Companion queue items live in [../up-next.md](../up-next.md); the v1.0 sequencing pin lives in [../roadmap.md](../roadmap.md).
+**STATUS: β1 (the permission deputy) IMPLEMENTED 2026-08-19 at the maintainer's direction — see §3a. The remaining phases (α watch engine, β async-op contract, γ watch hosted, δ polish) stay PROPOSED and await explicit ratification before any build.** This document is the durable home for the design so it survives context compaction. Companion queue items live in [../up-next.md](../up-next.md); the v1.0 sequencing pin lives in [../roadmap.md](../roadmap.md).
 
 ## 1. Why — three problems, one architecture
 
@@ -42,6 +42,24 @@ One signed, launchd-supervised helper — the **agent daemon** — solves all th
 - **Grant ceremony (one-time per machine):** Accessibility + Automation (→ Things3, → System Events) + the group-container read for the daemon identity. `things agent doctor` reports each grant's state prompt-free (the `things onboard` item in up-next is the natural shared machinery — the daemon becomes its primary beneficiary). setup.md's hardening ladder gains the daemon as the recommended rung above per-host grants.
 - **launchd environment hygiene:** LaunchAgents inherit no user shell environment — the daemon must resolve node/binary/DB paths absolutely (plist-embedded), and the "signed single-binary `things`" idea from the July hardening notes is the natural hardening step here (a compiled binary removes the node-path fragility entirely; keep it as an option, not a prerequisite).
 
+## 3a. β1 — the permission deputy (`things-deputy`), implemented 2026-08-19
+
+The maintainer re-scoped the first build slice mid-plan: **before** the op-hosting daemon, ship a *deliberately dumb privileged broker* — "just a proxy for issuing AppleScript commands and reading the Things SQLite database," logic stays in the CLI, opt-in via config with env/flag overrides. That slice is now implemented (deputy/, src/deputy/, `things deputy`); [deputy/README.md](../../deputy/README.md) is the operational doc.
+
+**What β1 delivers vs. what remains β:**
+
+| | β1 deputy (shipped) | still β (proposed) |
+|---|---|---|
+| TCC churn (reads + AppleEvents + AX + container files) | **solved** — grants attach to the signed deputy | — |
+| Mid-step orphan bounding | deputy owns each osascript child and kills it at its deadline even if the caller died | — |
+| Async `accepted` contract, spool/lease, `op-result --wait` | not included | yes |
+| Composite ops SIGKILL-immune end-to-end | no — the CLI still orchestrates steps; a killed caller abandons the op *between* steps (op-result reports intent-only, as today) | yes |
+| Watch residency | no | γ |
+
+**Key implementation facts (details in deputy/README.md and src/deputy/):** wire protocol v1 (JSON lines, UNIX socket, per-request token, same-UID peer check); verbs `hello`/`sql`/`osascript`/`read-file`/`locate` only; read-only SQLite with ATTACH denied; fixed osascript argv shapes + a `do shell script` refusal lint; routing decided once per process at activation (enabled-but-unreachable → DIRECT with one stderr notice, never a mid-op transport switch); a DatabaseSync-shaped facade keeps the entire read layer untouched (the sync bridge is a worker thread + Atomics.wait); the async client carries vector/ui dispatch so watchdogs and signal handlers keep running. Skew: protocol mismatch deactivates; package-version mismatch on matching protocol kickstarts once then proceeds with a notice (dumb verbs are skew-safe by construction — this is precisely why the broker shape was chosen).
+
+**EDR reality (discovered during certification):** the maintainer's managed workstation runs Cylance, which auto-quarantines every freshly built `things-deputy` (`execution_control`, score −1000 — logged 2026-08-19 22:09, hash `1a367e6e…c1025c`). Local execution of the live broker is therefore blocked until IT excludes the build path or (better) allow-lists the persistent signing certificate. Consequences: the live-broker suite is opt-in (`THINGS_DEPUTY_LIVE=1`) and runs on CI's clean `deputy-macos` hosted runner; the real-TCC validation (grants surviving a rebuild under the ceremony cert) must happen on an unmanaged Mac (the maintainer's M1) or post-exclusion.
+
 ## 4. New failure surface — and the debug/QA strategy (the maintainer's headline concern)
 
 New states the daemon introduces, each with its mitigation:
@@ -80,7 +98,8 @@ Established analysis (2026-08-15 session, pre-compaction) — the evidence-backe
 | Phase | Contents | Acceptance gate |
 |---|---|---|
 | **α — watch engine (in-process)** | snapshot primitive + pure diff + baseline persistence + `things changes`; skill/MCP read exposure | golden diff-suite (fixture goldens for every event class + coalescing cases); live-clone cell: scripted mutations → expected event stream; zero write-path changes |
-| **β — daemon core** | launchd agent + spool/lease + socket + signing (`agent setup` cert ceremony) + async contract (`--timeout`/env/`accepted`) + `agent status/doctor` + sync fallback + kill switch | transport-diff harness (async path ≡ sync path outcomes on a representative op set, in-VM); skew/lease/fallback unit suites; TCC: grants proven attached to the daemon identity across a rebuild (the churn test) |
+| **β1 — permission deputy** (SHIPPED 2026-08-19, §3a) | dumb privileged broker (sql/osascript/read-file/locate) + launchd install + signing scripts + routing with direct fallback + `things deputy status/install/restart/uninstall` | mock-broker suites (all platforms) + live-binary suite on CI macOS; REMAINING GATE: real-TCC churn test (grants survive a rebuild under the ceremony cert) on an EDR-free Mac |
+| **β — daemon core** | spool/lease + async contract (`--timeout`/env/`accepted`) + `op-result --wait` + composite ops hosted whole (rides the β1 deputy's identity and transport) | transport-diff harness (async path ≡ sync path outcomes on a representative op set, in-VM); skew/lease/fallback unit suites |
 | **γ — watch hosted** | layer-4 loop in the daemon; `things watch` CLI (NDJSON, scope flags, `--once/--until`); baseline continuity across daemon restarts | event-stream cert in a clone (mutations while watching); restart-continuity cell; idle-exit + relaunch behavior |
 | **δ — polish** | harness-detected timeout defaults; MCP async/watch exposure; resident AX-driver option inside the daemon (subsumes the deferred per-step spawn overhead idea); `things onboard` integration | per-item; no gate binds the earlier phases |
 

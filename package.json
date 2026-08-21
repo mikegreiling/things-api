@@ -16,8 +16,11 @@
   },
   "files": [
     "bin",
+    "deputy/src",
     "dist",
     "schema",
+    "scripts/build-deputy.sh",
+    "scripts/deputy-cert-setup.sh",
     "shortcuts",
     "skills"
   ],

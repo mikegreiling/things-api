@@ -13,11 +13,11 @@
  * run that HANGS against the deadline is the shape of an unanswered first-run
  * consent dialog (classified as consent-needed by failure-hints).
  */
-import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { shortcutsRunExec } from "../../deputy/shortcuts-exec.ts";
 import type { CompiledInvocation, ExecuteResult, VectorMatrix, WriteVector } from "./types.ts";
 
 /** First-run consent can stall the run; give it generous headroom. */
@@ -68,24 +68,10 @@ function defaultRun(
   inputPath: string,
   outputPath: string,
 ): Promise<ExecuteResult> {
-  return new Promise((resolve) => {
-    execFile(
-      "shortcuts",
-      ["run", shortcut, "--input-path", inputPath, "--output-path", outputPath],
-      { timeout: SHORTCUTS_TIMEOUT_MS },
-      (err, stdout, stderr) => {
-        // A deadline kill (err.killed) is the signature of an unanswered
-        // first-run consent dialog — surfaced distinctly for attribution.
-        const timedOut = err !== null && (err as { killed?: boolean }).killed === true;
-        resolve({
-          exitCode: err === null ? 0 : ((err as { code?: number }).code ?? 1),
-          stdout: String(stdout),
-          stderr: String(stderr),
-          ...(timedOut && { timedOut: true }),
-        });
-      },
-    );
-  });
+  // Deputy-routed when active (src/deputy/shortcuts-exec.ts) so the Shortcuts
+  // surface shares the deputy's stable identity; direct otherwise. The
+  // deadline-kill consent signature (timedOut) survives both paths.
+  return shortcutsRunExec(shortcut, inputPath, outputPath, SHORTCUTS_TIMEOUT_MS);
 }
 
 export function createShortcutsVector(run: ShortcutsRunner = defaultRun): WriteVector {

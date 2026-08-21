@@ -19,3 +19,20 @@ jobs:
       - run: npm run lint
       - run: npm run fmt:check
       - run: npm run test
+
+  # The real Swift broker (deputy/) certifies on a macOS runner: build with
+  # swiftc, run it as a child, exercise the wire protocol end-to-end. Gated by
+  # THINGS_DEPUTY_LIVE because managed dev machines with EDR cannot execute
+  # freshly built unknown binaries — hosted runners can.
+  deputy-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run test/deputy test/unit/deputy-routing.test.ts test/unit/deputy-protocol.test.ts
+        env:
+          THINGS_DEPUTY_LIVE: "1"

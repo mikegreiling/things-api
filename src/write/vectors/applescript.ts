@@ -5,8 +5,7 @@
  * Things launches it with focus steal (A40/A41), which the pipeline's
  * ensure-running step prevents.
  */
-import { execFile } from "node:child_process";
-
+import { osaExec } from "../../deputy/osa.ts";
 import type { CompiledInvocation, ExecuteResult, VectorMatrix, WriteVector } from "./types.ts";
 
 export const APPLESCRIPT_MATRIX: VectorMatrix = {
@@ -254,21 +253,12 @@ export function escapeAppleScript(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
-function runOsascript(script: string): Promise<ExecuteResult> {
-  return new Promise((resolve) => {
-    execFile("osascript", ["-e", script], { timeout: 30_000 }, (err, stdout, stderr) => {
-      // A deadline kill (err.killed) is a distinct signal from a nonzero
-      // exit: an osascript that never returns is the shape of an unanswered
-      // macOS consent dialog — surfaced for failure attribution.
-      const timedOut = err !== null && (err as { killed?: boolean }).killed === true;
-      resolve({
-        exitCode: err === null ? 0 : ((err as { code?: number }).code ?? 1),
-        stdout: String(stdout),
-        stderr: String(stderr),
-        ...(timedOut && { timedOut: true }),
-      });
-    });
-  });
+async function runOsascript(script: string): Promise<ExecuteResult> {
+  // The deadline kill (timedOut) is a distinct signal from a nonzero exit: an
+  // osascript that never returns is the shape of an unanswered macOS consent
+  // dialog — surfaced for failure attribution. osaExec preserves that signal
+  // on both the direct and the deputy-routed path.
+  return osaExec(script, { timeoutMs: 30_000 });
 }
 
 export function createAppleScriptVector(): WriteVector {

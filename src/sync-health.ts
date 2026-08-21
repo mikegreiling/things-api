@@ -18,9 +18,10 @@
  * command shape the URL-scheme availability read already uses.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { readContainerFileSync } from "./deputy/files.ts";
 import { isThingsRunning } from "./write/automation-probe.ts";
 
 /** The minimal read surface this module needs — satisfied by node:sqlite's DatabaseSync. */
@@ -174,7 +175,10 @@ function defaultForegroundPlistPath(dbPath: string): string {
 function defaultReadForegroundMs(plistPath: string): number | null {
   let bytes: Buffer;
   try {
-    bytes = readFileSync(plistPath);
+    // Container-scoped read: rides the deputy when it is active, so the TCC
+    // file grant stays the deputy's (plutil below parses bytes locally and is
+    // consent-free either way).
+    bytes = readContainerFileSync(plistPath);
   } catch {
     return null;
   }

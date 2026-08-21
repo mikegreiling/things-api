@@ -12,6 +12,8 @@ import { readAuditRecords, scanAuditIntegrity } from "./write/undo.ts";
 import { decodeRecurrenceRule } from "./model/recurrence.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
+import { createDeputyDbFacade } from "./deputy/db-facade.ts";
+import { deputyRoutesDb, deputyRouting } from "./deputy/routing.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
 import {
@@ -91,7 +93,7 @@ function scanRecurrenceRules(db: {
 export interface DiagnoseReport {
   db: {
     path: string;
-    source: "option" | "env" | "container";
+    source: "option" | "env" | "container" | "deputy";
     otherCandidates: string[];
     databaseVersion: number | null;
   };
@@ -257,9 +259,17 @@ export function shortcutProxies(deps: AvailabilityDeps = {}): ShortcutsState {
 }
 
 export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): DiagnoseResult {
+  // Mirror openThings: deputy-brokered database access for the default
+  // container db, local open for explicit paths (src/deputy/routing.ts).
+  const routedDbPath = deputyRoutesDb(dbPath !== undefined ? { dbPath } : undefined)
+    ? (deputyRouting().hello?.dbPath ?? null)
+    : null;
   let located: ReturnType<typeof locateThingsDb>;
   try {
-    located = locateThingsDb(dbPath ? { dbPath } : undefined);
+    located =
+      routedDbPath !== null
+        ? { path: routedDbPath, source: "deputy", otherCandidates: [] }
+        : locateThingsDb(dbPath ? { dbPath } : undefined);
   } catch (err) {
     if (err instanceof ThingsDbNotFoundError) {
       return {
@@ -278,7 +288,10 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
 
   let conn: ReturnType<typeof openConnection>;
   try {
-    conn = openConnection(located.path);
+    conn =
+      routedDbPath !== null
+        ? { db: createDeputyDbFacade(), path: routedDbPath, close() {} }
+        : openConnection(located.path);
   } catch (err) {
     if (err instanceof ThingsDbOpenError) {
       return {

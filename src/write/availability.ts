@@ -8,9 +8,11 @@
  * shape is introduced.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+import { readContainerFileSync } from "../deputy/files.ts";
+import { shortcutsListSync } from "../deputy/shortcuts-exec.ts";
 
 const PREFS_PLIST = join(
   "Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac",
@@ -57,7 +59,8 @@ function defaultExtract(plistBytes: Buffer): string {
 }
 
 function defaultListShortcuts(): string {
-  return execFileSync("shortcuts", ["list"], { encoding: "utf8", timeout: 10000 });
+  // Deputy-routed when active (src/deputy/shortcuts-exec.ts); direct otherwise.
+  return shortcutsListSync(10000);
 }
 
 /**
@@ -69,7 +72,9 @@ export function readUrlSchemeEnabled(deps: AvailabilityDeps = {}): UrlSchemeStat
   const path = deps.plistPath ?? join(homedir(), PREFS_PLIST);
   let bytes: Buffer;
   try {
-    bytes = readFileSync(path);
+    // Deputy-routed when active (the prefs plist lives in the TCC-protected
+    // group container); plutil below parses the bytes locally, consent-free.
+    bytes = readContainerFileSync(path);
   } catch {
     return {
       enabled: null,

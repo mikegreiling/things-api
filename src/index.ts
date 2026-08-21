@@ -48,7 +48,7 @@ export type {
 export type { FailureHint, LikelyCause } from "./write/failure-hints.ts";
 export { capabilitiesTable } from "./write/capabilities.ts";
 export type { CapabilityEntry } from "./write/capabilities.ts";
-export { describeConfig, getConfigKey, saveConfigKey } from "./config.ts";
+export { describeConfig, getConfigKey, loadConfig, saveConfigKey } from "./config.ts";
 export type { ConfigKeyView } from "./config.ts";
 export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/undo.ts";
 export type { BatchItemResult, BatchOp, BatchOptions, BatchResult } from "./write/batch.ts";
@@ -214,6 +214,27 @@ export type { WhenSugar, WhenSugarLabels } from "./model/when-sugar.ts";
 
 export { ThingsDbNotFoundError } from "./db/locate.ts";
 export { ThingsDbOpenError } from "./db/connection.ts";
+
+// things-deputy broker (docs/design/agent-daemon.md §β1): lifecycle + routing
+// state for the CLI `things deputy` command group and doctor.
+export {
+  deputyDefaultBuildPath,
+  deputyInstalledBinaryPath,
+  deputyPlistPath,
+  deputySigningInfo,
+  deputyStatus,
+  installDeputy,
+  restartDeputy,
+  uninstallDeputy,
+} from "./deputy/install.ts";
+export type {
+  DeputyInstallResult,
+  DeputySigning,
+  DeputyStatus,
+  DeputyUninstallResult,
+} from "./deputy/install.ts";
+export { deputyRouting } from "./deputy/routing.ts";
+export type { DeputyRouting } from "./deputy/routing.ts";
 export type { Baseline, FingerprintStatus, SchemaObservation } from "./db/fingerprint.ts";
 
 export {

@@ -9,6 +9,8 @@ import { resolveClock, clockMeta as buildClockMeta, type ClockMeta } from "./mod
 import { PKG_VERSION, type GroupBlock, type Truncation } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
+import { createDeputyDbFacade } from "./deputy/db-facade.ts";
+import { deputyRoutesDb, deputyRouting } from "./deputy/routing.ts";
 import {
   compareToBaseline,
   observeSchema,
@@ -899,9 +901,26 @@ export type { ChecklistEdit, ChecklistTarget, ChecklistItemAction } from "./writ
 export { applyChecklistEdit } from "./write/checklist.ts";
 
 export function openThings(options: OpenOptions = {}): ThingsClient {
-  const located = locateThingsDb(options.dbPath ? { dbPath: options.dbPath } : undefined);
-  const conn: ThingsConnection = openConnection(located.path);
   const env = options.env ?? process.env;
+  // Deputy routing (docs/design/agent-daemon.md §β1): when the broker is
+  // active and the caller wants the default container database, reads flow
+  // through the deputy's read-only connection so the TCC grant is the
+  // deputy's, not this process's. An explicit dbPath/THINGS_DB always opens
+  // locally — the deputy only ever brokers the real container db.
+  const routedDbPath = deputyRoutesDb(
+    options.dbPath !== undefined ? { dbPath: options.dbPath } : undefined,
+    env,
+  )
+    ? (deputyRouting(env).hello?.dbPath ?? null)
+    : null;
+  const located =
+    routedDbPath !== null
+      ? { path: routedDbPath, source: "deputy" as const, otherCandidates: [] }
+      : locateThingsDb(options.dbPath ? { dbPath: options.dbPath } : undefined);
+  const conn: ThingsConnection =
+    routedDbPath !== null
+      ? { db: createDeputyDbFacade(env), path: routedDbPath, close() {} }
+      : openConnection(located.path);
   // The effective clock, resolved once from the environment (THINGS_TZ /
   // THINGS_NOW) plus any explicit embedding overrides. Every read/write date
   // boundary rides `now` + `defaultZone`; a per-read `zone` overrides the zone.
