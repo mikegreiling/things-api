@@ -141,6 +141,12 @@ export function installDeputy(
 
   // Stop a running deputy before overwriting its binary (ignore "not loaded").
   launchctl(["bootout", launchTarget()]);
+  // Unlink FIRST: the kernel caches code-signature state per vnode, so
+  // copying over an inode that has ever been executed makes every future exec
+  // die with SIGKILL "Taskgated Invalid Signature" — even though the new
+  // bytes' signature verifies clean on disk (observed live 2026-08-21, a
+  // launchd 10s crash-respawn loop). A fresh inode resets the cache.
+  rmSync(target, { force: true });
   copyFileSync(source, target);
   chmodSync(target, 0o755);
 
