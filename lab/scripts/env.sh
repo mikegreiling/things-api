@@ -39,18 +39,23 @@ lab_scp() {
 
 lab_wait_for_ssh() {
   # lab_wait_for_ssh <vm-name> [timeout-seconds] -> echoes IP on success
-  local vm="$1" timeout="${2:-180}" ip="" waited=0
-  while [ "$waited" -lt "$timeout" ]; do
+  #
+  # The deadline is WALL-CLOCK, not iteration count: each probe can itself burn
+  # ~30s (lab_ssh retries a 10s-ConnectTimeout three times), so counting loops
+  # turned a nominal 300s wait into ~55 minutes on a VM that never opened
+  # sshd (observed while minting golden-v4, 2026-08-22).
+  local vm="$1" timeout="${2:-180}" ip="" start="$SECONDS"
+  while [ $((SECONDS - start)) -lt "$timeout" ]; do
     ip="$(tart ip "$vm" 2>/dev/null || true)"
-    if [ -n "$ip" ]; then
+    # cheap TCP probe first, so a dead guest costs 3s per loop, not 30
+    if [ -n "$ip" ] && nc -z -G 3 "$ip" 22 2>/dev/null; then
       if lab_ssh "$ip" true 2>/dev/null; then
         echo "$ip"
         return 0
       fi
     fi
     sleep 3
-    waited=$((waited + 3))
   done
-  echo "timed out waiting for SSH on $vm" >&2
+  echo "timed out waiting for SSH on $vm after ${timeout}s" >&2
   return 1
 }
