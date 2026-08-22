@@ -1,0 +1,85 @@
+{
+  "golden": "things-lab-golden-v4",
+  "builtAt": "2026-08-22T08:20:00Z",
+  "buildMethod": "in-place Things update in a things-lab-golden-v3 clone (drift-runbook DRIFT-1 in-place path, scripted as lab/scripts/golden-inplace-swap.sh): airgap + clock pin to 2026-07-05 BEFORE any launch, then swapped Things3.app 3.22.14->3.23 via `ditto -xk` of the pristine Cultured Code direct-download zip (rm -rf the old bundle first — never overwrite an app bundle in place), warm-up launch (which RAN the database migration, 26 -> 27), fingerprint + sdef re-verified. All v3 human-seeded layers (seed dataset, TCC AppleEvents/FDA/Screen-Recording/Accessibility, disruption-monitor LaunchAgent, six Shortcuts proxies, AXVM1 L3-accessibility grant, trial clock) inherited byte-for-byte via APFS COW clone.",
+  "buildMethodNote": "A from-L0 rebuild (golden-build.sh v4 against a fresh Cirrus base) was NOT taken: the ghcr.io/cirruslabs/macos-sequoia-vanilla:latest OCI layers total 23.7 GB compressed and the host volume had 31 GB free, so cache + materialized disk (~49 GB peak) does not fit — and the pull would have left the volume under the runner's own 10 GB preflight floor. A from-L0 golden would additionally carry NONE of the human-seeded layers (L2 settings/token, L3-accessibility, L5 Shortcuts proxies, L6 seed dataset), which the regression suites and the AX census both require.",
+  "derivedFrom": "things-lab-golden-v3",
+  "baseImage": "ghcr.io/cirruslabs/macos-sequoia-vanilla:latest",
+  "guestOs": "macOS 15.7.7 (24G720)",
+  "thingsVersion": "3.23",
+  "thingsCfBundleVersion": "32300036",
+  "thingsZipSha256": "56e2858c4311963acede507ab346e7dbf1154d8279fa9f73f30624d04b6d3733",
+  "thingsZipNote": "Cultured Code direct-download build (static.culturedcode.com/things/Things3.zip, downloaded 2026-08-22); CFBundleShortVersionString 3.23 / CFBundleVersion 32300036. Direct-download channel; the maintainer's host is the MAS channel (32300536). Signature: Developer ID Application: Cultured Code GmbH & Co. KG (JLMPQHK86H), notarized, signing timestamp 2026-08-21 20:20:50 — LATER than the golden's pinned clock (2026-07-05), so `codesign -dv` reports \"postdated timestamp or bad system clock\" while `spctl -a -vv` still returns `accepted / source=Notarized Developer ID`. Launch is unaffected. LSMinimumSystemVersion rose 10.15.0 -> 13.3 with 3.23.",
+  "thingsSdefSha256": "1b6752334207f68cdcb7e71dfc34a21407095bd239afe5df6b3cdd8e2c70cde0",
+  "sdefNote": "byte-identical to the 3.22.11 (v1), 3.22.12 (v2) and 3.22.14 (v3) golden sdef; still declares `_private_experimental_ reorder to dos in` (reorder canary surface unchanged). Every 3.23 feature is GUI-only: ZERO scripting-dictionary delta.",
+  "trialFirstLaunch": "2026-07-03 03:14:28 +0000",
+  "trialFirstLaunchIso": "2026-07-03T03:14:28Z",
+  "pinnedDate": "2026-07-05",
+  "guestClockNote": "guest free-runs (networktime off); all trial math uses GUEST wall-clock. Trial data inherited from v3/v2/v1 and re-read AFTER the 3.23 swap — an in-place app update does NOT reset the trial (firstAppLaunchDate byte-identical); 13 days remaining at the pinned date.",
+  "uriSchemeAuthToken": "9dFi9fY-QBuqFq59yAUxOg",
+  "settings": {
+    "groupTodayByParent": false,
+    "thingsCloudDeclined": true,
+    "thingsUrlsEnabled": true,
+    "shortcutsBulkEditWithoutConfirmation": true,
+    "thingsAutoUpdateDisabled": true
+  },
+  "schemaFingerprint": "sha256:784bd2f6533e6f85e053b0ec68958083d4ebca11c152ad1d2935178240d4c52b",
+  "schemaNote": "databaseVersion 27 (migrated 26 -> 27 by the 3.23 warm-up launch, in-lab, observed live). Fingerprint byte-identical to golden-v1/v2/v3 — the DBV27 migration is index-only in DDL terms, so the depended tables/columns are unchanged and the existing src/db/baselines/db-v27.ts baseline covers this golden. Verified host-side with observeSchema() on the pulled pre- and post-swap guest DB copies.",
+  "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
+  "humanLayersDone": [
+    "L2",
+    "L3-appleevents",
+    "L3-fulldisk",
+    "L3-accessibility",
+    "L4-launchagent",
+    "L6-seed-dataset",
+    "L5-shortcuts"
+  ],
+  "consentResidue": "one trashed L5-CONSENT-PROJ (type=1) from the v1 L5 consent absorption run — not in the seed manifest; probe assertions tolerate it (inherited through v1->v2->v3->v4).",
+  "shortcutsConsent": "output-class actions Always-Allowed on the golden (headless in clones); delete-class actions have no Always-Allow and re-prompt every run (tier-3, oddities 5j).",
+  "tcc": {
+    "appleEvents_sshd": "granted (inherited; re-read after the swap: kTCCServiceAppleEvents /usr/libexec/sshd-keygen-wrapper auth_value=2)",
+    "fullDiskAccess_sshd": "granted (kTCCServiceSystemPolicyAllFiles /usr/libexec/sshd-keygen-wrapper auth_value=2)",
+    "accessibility": "granted to /usr/libexec/sshd-keygen-wrapper (kTCCServiceAccessibility auth_value=2, SIP enabled). Baked in v2 (AXVM1), re-read intact after the 3.23 swap.",
+    "screenRecording": "granted (kTCCServiceScreenCapture: /Users/admin/things-lab/bin/disruption-monitor and /usr/libexec/sshd-keygen-wrapper, both auth_value=2)."
+  },
+  "inheritedLayerVerification": {
+    "disruptionMonitorAgent": "launchctl print gui/501/com.thingslab.disruption-monitor -> state = running",
+    "shortcutsProxies": "shortcuts list -> all six things-proxy-* present",
+    "trialClock": "firstAppLaunchDate = 2026-07-03 03:14:28 +0000, unchanged by the 3.23 swap",
+    "settingsRow": "TMSettings groupTodayByParent=0, uriSchemeAuthenticationToken present, logInterval=0"
+  },
+  "migrationObservedInLab": {
+    "databaseVersion": "26 -> 27 on the first 3.23 launch",
+    "ddl": "index-only: ADDED index_TMTask_id_where_recurrenceRuleNotNull ON TMTask(uuid) WHERE rt1_recurrenceRule IS NOT NULL; index_TMTask_repeatingTemplate REPLACED by index_TMTask_repeatingTemplate_and_creationDate ON TMTask(rt1_repeatingTemplate, creationDate). Zero table/column/trigger delta.",
+    "data": "37 TMTask rows, 0 inserted/deleted. rt1_nextInstanceStartDate: 35 non-template rows carrying the sentinel 69760 -> NULL; the 2 repeating templates KEPT their real packed values byte-identical. untrashed/openUntrashedLeafActionsCount: -1 -> 0 on 28 type=0 rows. checklistItemsCount/openChecklistItemsCount: -1 -> 0 on 7 type=1 + 2 type=2 rows. rt1_instanceCreationStartDate: ZERO changed rows. No other column moved.",
+    "evidence": "docs/lab/gv4-323-campaign.md"
+  },
+  "seedCounts": {
+    "areas": 2,
+    "tags": 10,
+    "todos": 26,
+    "projects": 5,
+    "headings": 2,
+    "checklistItems": 3,
+    "trashed": 1,
+    "repeatingTemplates": 2
+  },
+  "l5Progress": {
+    "sittingCompleted": "2026-07-09 (inherited through v1->v2->v3->v4)",
+    "proxies": [
+      "things-proxy-create-heading {title, project(uuid)}",
+      "things-proxy-edit-title {id(uuid), title}",
+      "things-proxy-delete-items {id(uuid)}",
+      "things-proxy-delete-items-permanently {id(uuid), Delete Immediately}",
+      "things-proxy-set-detail {id(uuid), detail, value}",
+      "things-proxy-find-items {search}"
+    ]
+  },
+  "certification": {
+    "status": "MINTED + SWEPT, NOT YET CERTIFIED — 2026-08-22",
+    "note": "Structural gates PASSED (dbVersion 27, fingerprint unchanged and baseline-covered, sdef byte-identical, every inherited human layer re-verified). The behavioral sweep is recorded in docs/lab/gv4-323-campaign.md and the repeat-dialog census in docs/lab/rdlg1-323-repeat-dialog-census.md. Certification is deliberately WITHHELD pending the maintainer's reconciliation of the sweep deltas (no suite expectation, assumption-register or oddities entry was edited by the minting campaign).",
+    "regressRun": "see docs/lab/gv4-323-campaign.md"
+  }
+}
