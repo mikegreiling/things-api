@@ -952,7 +952,8 @@ export function fetchTaskRows(db: DatabaseSync, where: string, params: unknown[]
   // inputs (TEMPLATE_PROJECTION_COLUMNS). Every task row carries the projection
   // inputs because every task row may BE a template: `repeating.nextOccurrence`
   // is mapped from templateProjectionDay(row), which needs the spawn cursor and
-  // spawn tally on Things 3.23 (the cached column it used to read is retired).
+  // spawn tally whenever the cached column is NULL — the paused / trashed /
+  // never-populated cohort every app version carries (GV4 §2.1).
   const sql = `SELECT ${selectList("TMTask")
     .split(", ")
     .map((c) => `t.${c}`)

@@ -10,7 +10,12 @@
 # normalize, compare, verdict) happens host-side and is unit-tested
 # (test/unit/simfid-normalize.test.ts).
 #
-# Usage: bash lab/scripts/simfid.sh [--keep-vm]
+# Usage: bash lab/scripts/simfid.sh [--keep-vm] [-- <args forwarded to the comparator>]
+#   e.g. bash lab/scripts/simfid.sh -- --gate     (exit 1 on any DIVERGENT)
+#
+# Clones the ACTIVE golden (override with GOLDEN=…), so the drive certifies the
+# appliers against the Things build the lab is currently certifying — which is
+# the whole point of the drift-runbook's step-5 re-certification.
 #
 # VM ETIQUETTE (macOS 2-VM limit; a sibling campaign may hold one slot):
 #   - Boots exactly ONE clone (things-run-simfid-<stamp>); NEVER the golden.
@@ -23,7 +28,16 @@ cd "$(dirname "$0")/../.."
 source lab/scripts/env.sh
 
 KEEP_VM=0
-[ "${1:-}" = "--keep-vm" ] && KEEP_VM=1
+COMPARE_ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep-vm) KEEP_VM=1; shift ;;
+    --) shift; COMPARE_ARGS=("$@"); break ;;
+    *) echo "[simfid] unknown argument: $1 (use --keep-vm, and -- for comparator args)" >&2; exit 2 ;;
+  esac
+done
+
+GOLDEN="${GOLDEN:-things-lab-golden-v4}"
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 VM="things-run-simfid-$STAMP"
@@ -94,8 +108,8 @@ else
   echo "[simfid] guest node: $NODE_BIN ($GUEST_NODE_VERSION, self-contained)"
 fi
 
-echo "[simfid] cloning golden -> $VM"
-if ! tart clone things-lab-golden-v1 "$VM" 2>"$ARTIFACTS/clone.err"; then
+echo "[simfid] cloning $GOLDEN -> $VM"
+if ! tart clone "$GOLDEN" "$VM" 2>"$ARTIFACTS/clone.err"; then
   if grep -qi "exceeds the system limit" "$ARTIFACTS/clone.err"; then
     echo "[simfid] ABORT: VM limit hit on clone. Live tart processes (do NOT blind-kill):" >&2
     pgrep -fl 'com.apple.Virtualization.VirtualMachine' >&2 || true
@@ -143,6 +157,9 @@ echo "[simfid] ingesting → normalized app deltas"
 node lab/simfid/ingest-clone.ts "$ARTIFACTS/guest-run" "$APP_DELTAS"
 
 echo "[simfid] comparing sim replay vs fresh clone app deltas"
-node lab/simfid/main.ts --app-deltas "$APP_DELTAS" | tee "$ARTIFACTS/verdicts.txt"
+node lab/simfid/main.ts --app-deltas "$APP_DELTAS" "${COMPARE_ARGS[@]+"${COMPARE_ARGS[@]}"}" \
+  | tee "$ARTIFACTS/verdicts.txt"
+COMPARE_EXIT=${PIPESTATUS[0]}
 
-echo "[simfid] DONE — artifacts in $ARTIFACTS"
+echo "[simfid] DONE ($GOLDEN, comparator exit $COMPARE_EXIT) — artifacts in $ARTIFACTS"
+exit "$COMPARE_EXIT"

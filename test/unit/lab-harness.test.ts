@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { evaluateAssertions } from "../../lab/runner/assertions.ts";
 import { diffSnapshots } from "../../lab/runner/differ.ts";
-import { activeProbes, compareVerdicts, evaluateProbe } from "../../lab/runner/evaluate.ts";
+import {
+  activeProbes,
+  compareVerdicts,
+  evaluateProbe,
+  resolveExpectation,
+} from "../../lab/runner/evaluate.ts";
 import { computeDisruption, parseEventLog, sliceEvents } from "../../lab/runner/tier.ts";
 import type {
   DbSnapshot,
@@ -425,6 +430,128 @@ describe("evaluateProbe + compareVerdicts", () => {
     const cmp = compareVerdicts(a, b);
     expect(cmp.identical).toBe(false);
     expect(cmp.diffs).toEqual(["U02: tier 3 vs 2"]);
+  });
+});
+
+const execWithDoomedWait = (satisfied: boolean): ExecutionRecord => ({
+  probe: "O04",
+  startedAt: "2026-07-05T12:00:00.000Z",
+  endedAt: "2026-07-05T12:00:02.000Z",
+  appState: "running-background",
+  appRunningBefore: true,
+  commands: [{ resolved: "osascript …", exitCode: 0, stdout: "", stderr: "", durationMs: 10 }],
+  waits: [{ sql: "SELECT 1 WHERE …", satisfied, waitedMs: 10_000 }],
+  snapshotBefore: "snapshots/O04-before.json",
+  snapshotAfter: "snapshots/O04-after.json",
+  crash: { pidDied: false, ipsFiles: [] },
+  errors: [],
+});
+
+const envAt = (thingsVersion: string) => ({
+  thingsVersion,
+  golden: "things-lab-golden-v4",
+  schemaFingerprint: "sha256:test",
+  pinnedDate: "2026-07-05",
+  runId: "test-run",
+});
+
+describe("version-conditional expectations (expectFrom)", () => {
+  const base: ProbeSpec = {
+    id: "O04",
+    title: "native project reorder",
+    vector: "applescript",
+    operation: "order.project",
+    appState: "running-background",
+    commands: [{ osascript: "…reorder…" }],
+    expect: {
+      verdict: "supported",
+      tier: 0,
+      assertions: [],
+    },
+    expectFrom: [
+      {
+        fromVersion: "3.23",
+        because: "the private reorder is accepted and inert (GV4 §3.1)",
+        expect: {
+          verdict: "silent-noop",
+          tier: 0,
+          allowUnsatisfiedWaits: true,
+          assertions: [{ kind: "deltaEmpty" }],
+        },
+      },
+    ],
+  };
+
+  const moved: DbSnapshot = { TMTask: { p1: { uuid: "p1", title: "P", index: -17 } } };
+
+  it("picks the base expectation below the bound and the override at or above it", () => {
+    expect(resolveExpectation(base, "3.22.14").appliedFrom).toBeNull();
+    expect(resolveExpectation(base, "3.22.14").expect.verdict).toBe("supported");
+    expect(resolveExpectation(base, "3.23").appliedFrom).toBe("3.23");
+    expect(resolveExpectation(base, "3.23").expect.verdict).toBe("silent-noop");
+    expect(resolveExpectation(base, "3.24.1").appliedFrom).toBe("3.23");
+  });
+
+  it("picks the HIGHEST matching bound, whatever order they are listed in", () => {
+    const multi: ProbeSpec = {
+      ...base,
+      expectFrom: [
+        { fromVersion: "3.25", because: "restored", expect: { ...base.expect } },
+        ...(base.expectFrom ?? []),
+      ],
+    };
+    expect(resolveExpectation(multi, "3.23").appliedFrom).toBe("3.23");
+    expect(resolveExpectation(multi, "3.25").appliedFrom).toBe("3.25");
+  });
+
+  it("an unreadable app version falls back to the base expectation (never invents a claim)", () => {
+    expect(resolveExpectation(base, null).appliedFrom).toBeNull();
+    expect(resolveExpectation(base, "unknown-build").appliedFrom).toBeNull();
+  });
+
+  const same: DbSnapshot = { TMTask: { p1: { uuid: "p1", title: "P", index: 0 } } };
+  const events = [mark("O04", "start"), mark("O04", "end")];
+  const context = { seed: {}, ctx: {} };
+
+  it("the override's allowUnsatisfiedWaits lets an inert command read green, and is recorded", () => {
+    const record = evaluateProbe(
+      base,
+      { execution: execWithDoomedWait(false), before: same, after: structuredClone(same) },
+      events,
+      context,
+      envAt("3.23"),
+    );
+    expect(record.failures).toEqual([]);
+    expect(record.verdict).toBe("silent-noop");
+    expect(record.expected.appliedFrom).toBe("3.23");
+    expect(record.expected.because).toContain("inert");
+  });
+
+  it("the SAME run judged as 3.22.14 stays red — the override is version-scoped, not a blanket pass", () => {
+    const record = evaluateProbe(
+      base,
+      { execution: execWithDoomedWait(false), before: same, after: structuredClone(same) },
+      events,
+      context,
+      envAt("3.22.14"),
+    );
+    expect(record.verdict).toBe("mismatch");
+    expect(record.failures.some((f) => f.includes("wait not satisfied"))).toBe(true);
+  });
+
+  it("the deltaEmpty assertion — not the wait — is what catches the app restoring the behavior", () => {
+    // A later Things release re-implements the command: the wire now moves a row.
+    // allowUnsatisfiedWaits would happily absorb the wait either way, so the
+    // POSITIVE inertness assertion is the canary that fires.
+    const record = evaluateProbe(
+      base,
+      { execution: execWithDoomedWait(true), before: same, after: moved },
+      events,
+      context,
+      envAt("3.23"),
+    );
+    expect(record.verdict).toBe("mismatch");
+    expect(record.failures.some((f) => f.includes("deltaEmpty"))).toBe(true);
   });
 });
 

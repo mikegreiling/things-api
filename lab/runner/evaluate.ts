@@ -2,6 +2,7 @@
 // and the monitor event log into one evidence record per probe, then judges
 // each against the suite's expectations.
 
+import { compareAppVersions } from "../../src/write/experimental.ts";
 import type { AssertionContext } from "./assertions.ts";
 import { evaluateAssertions } from "./assertions.ts";
 import { diffSnapshots } from "./differ.ts";
@@ -12,6 +13,7 @@ import type {
   EvidenceRecord,
   ExecutionRecord,
   MonitorEvent,
+  ProbeExpectation,
   ProbeSpec,
   VerdictsFile,
 } from "./types.ts";
@@ -38,6 +40,45 @@ export interface EvaluatedRun {
  */
 export function activeProbes(probes: ProbeSpec[]): ProbeSpec[] {
   return probes.filter((p) => p.group !== "interactive");
+}
+
+export interface ResolvedExpectation {
+  expect: ProbeExpectation;
+  /** The `fromVersion` of the override that applied, or null for the base `expect`. */
+  appliedFrom: string | null;
+  because: string | null;
+}
+
+/**
+ * Pick the expectation that describes THIS app version: the `expectFrom`
+ * override with the highest `fromVersion` that the golden's version is at or
+ * past, else the base `expect`.
+ *
+ * An unreadable/unparseable app version resolves to the base expectation —
+ * the same fail-open posture the shipped version gate takes
+ * (`privateReorderIsNoOp`): we never invent a behavioral claim about a version
+ * we cannot identify.
+ */
+export function resolveExpectation(
+  probe: ProbeSpec,
+  thingsVersion: string | null,
+): ResolvedExpectation {
+  let best: ResolvedExpectation = { expect: probe.expect, appliedFrom: null, because: null };
+  for (const candidate of probe.expectFrom ?? []) {
+    if ((compareAppVersions(thingsVersion, candidate.fromVersion) ?? -1) < 0) continue;
+    if (
+      best.appliedFrom !== null &&
+      (compareAppVersions(candidate.fromVersion, best.appliedFrom) ?? 0) <= 0
+    ) {
+      continue;
+    }
+    best = {
+      expect: candidate.expect,
+      appliedFrom: candidate.fromVersion,
+      because: candidate.because,
+    };
+  }
+  return best;
 }
 
 export function evaluateRun(
@@ -70,6 +111,7 @@ export function evaluateRun(
       verdict: record.verdict,
       tier: record.disruption.tier,
       crash: record.crash?.pidDied ?? false,
+      appliedFrom: record.expected.appliedFrom,
       failures: record.failures,
     };
   }
@@ -90,19 +132,23 @@ export function evaluateProbe(
 
   const delta = diffSnapshots(before, after);
   const disruption = computeDisruption(sliceEvents(events, probe.id));
-  const expectCrash = probe.expect.crash ?? false;
+  const resolved = resolveExpectation(probe, env.thingsVersion);
+  const expect = resolved.expect;
+  const expectCrash = expect.crash ?? false;
 
   // Transport: every exec must have run; non-zero exits fail unless allowed.
   for (const err of execution.errors) failures.push(`guest error: ${err}`);
-  if (probe.expect.allowNonzeroExit !== true) {
+  if (expect.allowNonzeroExit !== true) {
     for (const cmd of execution.commands) {
       if (cmd.exitCode !== 0) {
         failures.push(`command exited ${cmd.exitCode}: ${cmd.resolved}`);
       }
     }
   }
-  for (const wait of execution.waits) {
-    if (!wait.satisfied) failures.push(`wait not satisfied: ${wait.sql}`);
+  if (expect.allowUnsatisfiedWaits !== true) {
+    for (const wait of execution.waits) {
+      if (!wait.satisfied) failures.push(`wait not satisfied: ${wait.sql}`);
+    }
   }
 
   // Crash expectation must match observation exactly.
@@ -115,11 +161,11 @@ export function evaluateProbe(
   }
 
   // Disruption tier must match exactly — tier drift is a real finding.
-  if (disruption.tier !== probe.expect.tier) {
-    failures.push(`tier ${disruption.tier} observed, expected ${probe.expect.tier}`);
+  if (disruption.tier !== expect.tier) {
+    failures.push(`tier ${disruption.tier} observed, expected ${expect.tier}`);
   }
 
-  const results = evaluateAssertions(probe.expect.assertions, before, after, delta, {
+  const results = evaluateAssertions(expect.assertions, before, after, delta, {
     ...context,
     commands: execution.commands,
     before,
@@ -144,8 +190,14 @@ export function evaluateProbe(
     db_delta: delta,
     disruption,
     crash: execution.crash.pidDied || execution.crash.ipsFiles.length > 0 ? execution.crash : null,
-    verdict: failures.length === 0 ? probe.expect.verdict : "mismatch",
-    expected: { verdict: probe.expect.verdict, tier: probe.expect.tier, crash: expectCrash },
+    verdict: failures.length === 0 ? expect.verdict : "mismatch",
+    expected: {
+      verdict: expect.verdict,
+      tier: expect.tier,
+      crash: expectCrash,
+      appliedFrom: resolved.appliedFrom,
+      because: resolved.because,
+    },
     failures,
     env,
   };

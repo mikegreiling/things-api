@@ -26,7 +26,16 @@ import type { AppGolden, CellValue, NormalizedDelta, NormalizedRow, Provenance }
 
 const REPO_ROOT = new URL("../..", import.meta.url).pathname;
 
-/** The app's uninitialized junk value on a minted instance's next-start column. */
+/**
+ * The app's uninitialized junk value on a minted instance's next-start column.
+ *
+ * ≤3.22-derived (RSIM). Under Things 3.23 the 26→27 migration NULLs this column on
+ * every non-template row (GV4 §2.1), but nothing has measured what 3.23 writes on a
+ * FRESHLY minted instance — and the rows this constant is layered onto are the
+ * rsim-evidence recurrence/subtree family, all captured under ≤3.22. It is layered
+ * in to keep those goldens honest to the evidence they came from; an AX-capable
+ * 3.23 clone drive is what would replace it.
+ */
 const INSTANCE_NEXT_SENTINEL = 69760;
 
 function clone(delta: NormalizedDelta): NormalizedDelta {

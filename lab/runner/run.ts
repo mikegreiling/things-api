@@ -181,6 +181,12 @@ async function bootstrap(
     throw new Error("bootstrap: guest still has internet access after route deletion");
   }
 
+  // Mute the guest before anything can make a sound. A Tart guest plays
+  // through the HOST's speakers, so an alert beep from an unattended overnight
+  // clone wakes the maintainer. Best-effort: a guest that cannot set volume is
+  // not a reason to fail a run.
+  ssh(ip, `osascript -e 'set volume output muted true'`, { allowFailure: true });
+
   // Pin the clock BEFORE Things ever launches in this clone: neutralizes
   // trial expiry and freezes Today/Upcoming semantics (docs/design/lab.md §1.6).
   const [y = "2026", m = "07", d = "05"] = metadata.pinnedDate.split("-");
@@ -345,13 +351,14 @@ function printSummary(probes: ProbeSpec[], verdicts: VerdictsFile): void {
   for (const probe of probes) {
     const v = verdicts[probe.id];
     if (v === undefined) continue;
+    const gated = v.appliedFrom == null ? "" : `  [>=${v.appliedFrom}]`;
     const row = [
       probe.id.padEnd(6),
       (probe.legacyRef ?? "—").padEnd(7),
       String(v.verdict).padEnd(13),
       String(v.tier).padEnd(5),
       String(v.crash).padEnd(6),
-      v.ok ? "ok" : "FAIL",
+      (v.ok ? "ok" : "FAIL") + gated,
     ].join(" ");
     console.log(row);
     if (!v.ok) for (const f of v.failures) console.log(`         · ${f}`);

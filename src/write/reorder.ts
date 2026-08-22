@@ -1002,8 +1002,8 @@ async function runBounce(
               } & TemplateProjectionRow)
             | undefined)
         : undefined;
-    // The day D: a template's PROJECTION day (its cached rt1_nextInstanceStartDate,
-    // else derived from the rule + spawn cursor — Things 3.23 retired the cache),
+    // The day D: a template's PROJECTION day (its cached rt1_nextInstanceStartDate
+    // where it has one, else derived from the rule + spawn cursor),
     // else a scheduled row's startDate, else a forecast row's deadline (mirrors
     // computeReorderPre so the when= legs and the member set agree on D).
     dayPacked =
@@ -1135,10 +1135,18 @@ async function runBounce(
   }
   for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
   if (legOp === "todo.update") {
+    // The bounce re-schedules via `todo.update`, validated for to-dos only: a
+    // project row's daytime `when=today` landing is mid-pack, not the front-insert
+    // this protocol needs (ORD-12 / SIT3 EVEPROJ). The native wire is the only one
+    // that carries a project row on this axis (O12) — so when the version gate has
+    // taken the native path away, name THAT rather than advise an unreachable one.
+    const projectRemedy = nativeVersionGated(deps)
+      ? `and the native path that carries a project row here is unavailable (${nativeUnavailableReason(deps)}), so this set has no working order surface — reorder it without the project row, or arrange it in the app`
+      : "use the native strategy for Today lists containing projects";
     for (const uuid of pre.projectMembers) {
       problems.push(
         `${uuid} is a project — bounce re-schedules via todo.update, which is only validated ` +
-          "for to-dos; use the native strategy for Today lists containing projects",
+          `for to-dos; ${projectRemedy}`,
       );
     }
   }

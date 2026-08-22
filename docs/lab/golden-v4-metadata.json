@@ -78,8 +78,12 @@
     ]
   },
   "certification": {
-    "status": "MINTED + SWEPT, NOT YET CERTIFIED — 2026-08-22",
-    "note": "Structural gates PASSED (dbVersion 27, fingerprint unchanged and baseline-covered, sdef byte-identical, every inherited human layer re-verified). The behavioral sweep is recorded in docs/lab/gv4-323-campaign.md and the repeat-dialog census in docs/lab/rdlg1-323-repeat-dialog-census.md. Certification is deliberately WITHHELD pending the maintainer's reconciliation of the sweep deltas (no suite expectation, assumption-register or oddities entry was edited by the minting campaign).",
-    "regressRun": "see docs/lab/gv4-323-campaign.md"
+    "status": "CERTIFIED — 2026-08-22",
+    "note": "Structural gates PASSED (dbVersion 27, fingerprint unchanged and baseline-covered, sdef byte-identical, every inherited human layer re-verified). Behavioral certification completed 2026-08-22: `npm run lab:regress` GREEN across all eight suites (u/a/x/o/r/e/p/s) plus the 132-step write-layer e2e smoke; the assumption register walked ROW BY ROW rather than blanket-amended, because Things 3.23 CHANGED a law instead of merely re-passing every one; the simulator/bench chain re-modelled to databaseVersion 27 and SIMFID re-certified both host-side and against a fresh golden-v4 clone (30 MATCH / 5 TOLERATED / 0 DIVERGENT).",
+    "notCertified": "The ordering laws resting on `_private_experimental_ reorder to dos in` (ORD-1/2/3/7/8/9/12-HEADSORT/19/20/22) are recorded SUSPENDED, not confirmed: Things 3.23 accepts that command, exits 0, and produces a byte-empty delta. Their o-suite rows are green ONLY because version-conditional `expectFrom` overrides now assert that inertness — which makes the suite the behavioral canary the sdef declaration check cannot be. Two shipped reaches consequently have no surface on 3.23 and refuse honestly: heading order (`project move-heading`) and any day-group holding a repeating template. A third, `reorder --in today` over a Today list containing a project row, was found by this campaign and is queued as a probe (docs/lab/gv4-323-certification.md section 1.5).",
+    "standingResidue": "Laws whose only lock is unit/engine/evidence-level, or a rig lab:regress cannot host, accrue no version stamp under a row-by-row audit and are enumerated in the assumption register's 3.23 audit block, item 3 (every RD-* row except RD-5; WG-1/7/8/10; ORD-10/13/14/21 and the EVEORD/PRJMIX rows; every SYNC-* row, which needs a live Things Cloud account rig). This is the same standing residue 3.22.14 shipped with, now enumerated rather than implied.",
+    "certificationCampaign": "docs/lab/gv4-323-certification.md",
+    "regressRun": "u-20260822-151245 and the sibling per-suite runs of the same sweep; write-layer e2e things-run-e2e-20260822-100336; SIMFID clone drive simfid-clone-20260822-101032 (comparator run simfid-20260822-151139)",
+    "certifiedAppVersionStamp": "NOT applied by the lab. `things config set certified-app-version 3.23` is the maintainer's action on the live host after review — it stamps the operator's own config and silences doctor's passive behavioral-drift notice."
   }
 }

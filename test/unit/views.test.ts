@@ -2512,33 +2512,39 @@ describe("deadlinesView — repeating-template projections", () => {
 });
 
 /**
- * DBV27 READ EQUIVALENCE — Things 3.23 (`Meta.databaseVersion` 27) RETIRED
- * `rt1_nextInstanceStartDate`: the migration nulled the per-row next-instance
- * cache library-wide and the app no longer maintains it. Every read that used
- * to consume the column now asks `templateProjectionDay`
- * (src/model/template-projection.ts) for a template's PROJECTION DAY, so the
- * two LIVE database shapes must render IDENTICALLY:
+ * READ EQUIVALENCE ACROSS THE TWO PROJECTION SHAPES — a template with a cached
+ * `rt1_nextInstanceStartDate` and one without must render IDENTICALLY. Every read
+ * that used to consume the raw column now asks `templateProjectionDay`
+ * (src/model/template-projection.ts) for a template's PROJECTION DAY:
  *
- *   - `cached`  — Things ≤ 3.22: the column populated (what every projection
- *     law was probed against);
- *   - `derived` — Things 3.23: the column NULL, the rule + the
+ *   - `cached`  — the column populated (what every projection law was probed
+ *     against, and still the common case);
+ *   - `derived` — the column NULL, the rule + the
  *     `rt1_instanceCreationStartDate` spawn cursor carrying the same day.
  *
- * The `derived` arm is the regression guard: read off the raw column, a 3.23
- * template silently left its Upcoming day block, fell into the trailing
- * "Repeating To-Dos" section, and reported a null `repeating.nextOccurrence`
- * even for a healthy series.
+ * The two arms are NOT "before and after 3.23". The dbv-27 migration did not
+ * retire the column — it SCOPED it to repeating templates (NULL on every
+ * non-template row, byte-identical on every template that had a value) and the
+ * 3.23 app keeps maintaining it: 73 of 114 templates on a live library, 8 of 10
+ * on the RDLG2e corpus (docs/lab/gv4-323-campaign.md §2.1, correcting the first
+ * host reading in docs/lab/dbv27-migration-diff.md). The NULL-cache cohort is
+ * PRE-EXISTING and generation-independent — after-completion rules have no
+ * calendar next, paused and trashed series carry none, and ~24% of live templates
+ * simply never had one — which is exactly why the `derived` arm is the regression
+ * guard: read off the raw column, such a template silently left its Upcoming day
+ * block, fell into the trailing "Repeating To-Dos" section, and reported a null
+ * `repeating.nextOccurrence` even for a healthy series.
  *
  * The biweekly-Sunday rule's ts=-4 means an instance STARTS four days before
  * its Sunday event, so the on-grid 2026-07-19 event has start day 2026-07-15 —
- * the day the retired column held, and the day the cursor derives.
+ * the day the cached column holds, and the day the cursor derives.
  */
 const PROJECTION_SHAPES: [string, SeedTaskOpts][] = [
-  ["cached (Things <= 3.22)", { nextInstanceStartDate: "2026-07-15" }],
-  ["derived (Things 3.23)", { instanceCreationStartDate: "2026-07-15" }],
+  ["cached (the app maintains a projection day)", { nextInstanceStartDate: "2026-07-15" }],
+  ["derived (no cached day; cursor + rule only)", { instanceCreationStartDate: "2026-07-15" }],
 ];
 
-describe.each(PROJECTION_SHAPES)("DBV27 read equivalence — %s", (_shapeName, shape) => {
+describe.each(PROJECTION_SHAPES)("projection-day read equivalence — %s", (_shapeName, shape) => {
   /** The same deadlined biweekly template, in whichever DB shape is under test. */
   const seedTemplate = (over: SeedTaskOpts = {}) =>
     seedTodo(fx.db, {

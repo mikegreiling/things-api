@@ -1,6 +1,13 @@
--- Things 3 database schema, Meta.databaseVersion=26
+-- Things 3 database schema, Meta.databaseVersion = 26 AND 27
 -- Captured 2026-07-02 from Things 3.22.11 (structure only; comments are Cultured Code's own)
 -- Regenerate: sqlite3 -readonly <main.sqlite> with the query in docs/atlas/schema-v26.md
+--
+-- ONE file for both generations: the 26→27 migration (Things 3.23) has ZERO
+-- table/column/trigger delta — its whole DDL delta is the three index changes at
+-- the bottom of this file, which the schema fingerprint excludes by design
+-- (observeSchema hashes PRAGMA table_info only). The index set below is the v27
+-- one; the fixture stamps Meta.databaseVersion = 27 (test/fixtures/build-db.ts).
+-- Evidence: docs/lab/dbv27-migration-diff.md + docs/lab/gv4-323-campaign.md §2.
 
 CREATE TABLE "BSSyncronyMetadata" (          'uuid'                 TEXT PRIMARY KEY,               'value'                BLOB                            );
 CREATE TABLE 'Meta' (                    'key'                 TEXT PRIMARY KEY,                'value'               TEXT                             );
@@ -97,6 +104,9 @@ CREATE INDEX index_TMTaskTag_tasks ON TMTaskTag (tasks);
 CREATE INDEX index_TMTask_area ON TMTask(area);
 CREATE INDEX index_TMTask_heading ON TMTask(heading);
 CREATE INDEX index_TMTask_project ON TMTask(project);
-CREATE INDEX index_TMTask_repeatingTemplate ON TMTask(rt1_repeatingTemplate);
+-- v27 (Things 3.23): `index_TMTask_repeatingTemplate ON TMTask(rt1_repeatingTemplate)`
+-- was REBUILT as the two-column form below, and the partial template index added.
+CREATE INDEX index_TMTask_repeatingTemplate_and_creationDate ON TMTask (rt1_repeatingTemplate, creationDate);
+CREATE INDEX index_TMTask_id_where_recurrenceRuleNotNull ON TMTask (uuid) WHERE rt1_recurrenceRule IS NOT NULL;
 CREATE INDEX index_TMTask_stopDate ON TMTask(stopDate);
 CREATE INDEX index_TMTombstone_deletedObjectUUID ON TMTombstone (deletedObjectUUID);

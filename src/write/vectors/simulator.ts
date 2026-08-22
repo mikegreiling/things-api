@@ -133,8 +133,23 @@ export function simulatorFenceReason(
  * Things update bumps the real database version, the fence refuses to
  * simulate until the whole modeling chain is consciously re-verified —
  * a schema tripwire, not a compatibility claim.
+ *
+ * 27 (Things 3.23) since 2026-08-22. The 26→27 DDL delta is INDEX-ONLY (the
+ * fingerprint is unchanged by construction — src/db/baselines/db-v27.ts), but
+ * the DATA semantics moved, which is what these appliers model:
+ *   - every TMTask row now carries all four maintained counters; the `-1`
+ *     "uninitialised" sentinel is back-filled with a computed 0 on the classes
+ *     that can never hold one (leaf counts on to-dos, checklist counts on
+ *     projects/headings). Rows with real counts were untouched.
+ *   - `rt1_nextInstanceStartDate` is TEMPLATE-SCOPED, not retired: NULL on every
+ *     non-template row, retained byte-identical on every repeating template
+ *     that had one.
+ * Both were re-measured in-lab and confirmed against a live 3.23 library
+ * (docs/lab/gv4-323-campaign.md §2.1/§2.2, correcting the first host reading in
+ * docs/lab/dbv27-migration-diff.md). The migration-time spawn-cursor rewrite the
+ * host appeared to show did NOT reproduce (§2.3) and is deliberately NOT modeled.
  */
-export const SIMULATED_DATABASE_VERSION = 26;
+export const SIMULATED_DATABASE_VERSION = 27;
 
 function fixtureDatabaseVersion(dbPath: string): number | null {
   let db: DatabaseSync | undefined;
@@ -209,7 +224,18 @@ function genUuid(): string {
 
 // ---------------------------------------------------- shared appliers
 
-/** Full TMTask row insert, mirroring test/fixtures/seed.ts insertTask columns. */
+/**
+ * Full TMTask row insert, mirroring test/fixtures/seed.ts insertTask columns.
+ *
+ * v27 counter semantics (GV4 §2.2): a fresh row carries a COMPUTED count in all
+ * four maintained counters — never the `-1` "uninitialised" sentinel Things ≤3.22
+ * left on the classes that can hold none. A newly inserted row has no leaf
+ * children, so `untrashed/openUntrashedLeafActionsCount` are literal 0 for every
+ * type; the checklist counters default to 0 and are set by the caller when the row
+ * is born with items. `rt1_nextInstanceStartDate` is NULL here by construction —
+ * this helper never inserts a repeating TEMPLATE (see insertRecurrenceRow), and
+ * under 27 the column is template-scoped.
+ */
 function insertTask(
   sim: DatabaseSync,
   type: 0 | 1 | 2,
@@ -712,7 +738,19 @@ interface RecurrenceRowOpts {
   afterCompletionReferenceDate?: number | null;
 }
 
-/** Insert a template or instance row, covering the full rt1_* recurrence column set. */
+/**
+ * Insert a template or instance row, covering the full rt1_* recurrence column set.
+ *
+ * `nextInstanceStartDate` is passed ONLY for template rows (a fixed rule's cached
+ * projection day); every INSTANCE this helper mints leaves it NULL. That is the
+ * v27 law measured in GV4 §2.1 — the 26→27 migration scopes
+ * `rt1_nextInstanceStartDate` to `rt1_recurrenceRule IS NOT NULL` and nulls it
+ * everywhere else — and it is also what the simulator already did under 26, when
+ * the app instead left an uninitialised `69760` on freshly minted instances (the
+ * `instance-next-sentinel` SIMFID tolerance; see docs/lab/simfid-results.md).
+ * A tp=1 (after-completion) template legitimately carries NULL: it has no
+ * calendar next until a completion (RDLG2e §6.1).
+ */
 function insertRecurrenceRow(sim: DatabaseSync, ctx: ApplyCtx, o: RecurrenceRowOpts): void {
   sim
     .prepare(

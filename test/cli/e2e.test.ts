@@ -178,7 +178,7 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.apiVersion).toBe(1);
     expect(envelope.ok).toBe(true);
     expect(envelope.kind).toBe("today");
-    expect(envelope.meta.dbVersion).toBe(26);
+    expect(envelope.meta.dbVersion).toBe(27);
     expect(envelope.meta.fingerprint).toBe("ok");
     // v2: two keyed bucket records under `children`, no `sections` array, no `badge`.
     expect(envelope.data.sections).toBeUndefined();

@@ -152,10 +152,10 @@ const DISTANT_FUTURE_EPOCH = 32503680000;
  * `remainingCount === 0` test was unreachable. After-completion rules rest with
  * no next occurrence BETWEEN instances (that is `waiting`, not `ended`), so the
  * cursor test is gated on fixed rules. `nextOccurrence` is the template's
- * PROJECTION DAY (model/template-projection.ts), so the same reading holds on
- * Things 3.23, which retired the cursor column: the derivation itself returns
- * nothing for an exhausted ends-after or a past ends-on series (RRX1), exactly
- * as the cleared column did. Live-verified 2026-07-11 (Ended = fixed
+ * PROJECTION DAY (model/template-projection.ts), so the same reading holds when
+ * the cached column is absent: the derivation itself returns nothing for an
+ * exhausted ends-after or a past ends-on series (RRX1), exactly as the cleared
+ * column does. Live-verified 2026-07-11 (Ended = fixed
  * rule with a past endDate; Waiting = after-completion rule) + RRX1 2026-08-15
  * (ends-after / ends-on exhaustion end-states, golden-v2 / 3.22.12).
  */

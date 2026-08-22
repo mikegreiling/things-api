@@ -73,8 +73,20 @@ export const TOLERANCES: Tolerance[] = [
     // `rt1_nextInstanceStartDate=69760` sentinel; only the TEMPLATE's next-date
     // drives generation. The simulator leaves the instance's value NULL/0.
     // Ignore this column's value on any instance row.
+    //
+    // KEPT UNDER v27, deliberately (2026-08-22 re-certification). Things 3.23's
+    // 26→27 migration NULLs `rt1_nextInstanceStartDate` on every non-template row
+    // (GV4 §2.1), so a MIGRATED instance carries NULL on both sides. But that is a
+    // statement about the migration, not about what 3.23 writes when it mints a
+    // FRESH instance — nothing has measured that, and every app-side golden this
+    // tolerance currently fires against (the rsim-evidence recurrence/subtree
+    // family) was captured under ≤3.22, where the sentinel is real. Removing it
+    // would silently re-classify those five rows as DIVERGENT against their own
+    // banked evidence. It is retired only when an AX-capable 3.23 clone drive
+    // shows a freshly minted instance carrying NULL.
     name: "instance-next-sentinel",
-    evidence: "RSIM (docs/lab/rsim-results.md — instance junk next=69760)",
+    evidence:
+      "RSIM (docs/lab/rsim-results.md — instance junk next=69760); still ≤3.22-derived under v27 (GV4 §2.1)",
     applies(ctx) {
       return ctx.field === "rt1_nextInstanceStartDate" && rowIsInstance(ctx.rowFields);
     },

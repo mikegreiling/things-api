@@ -557,7 +557,18 @@ interface TemplateSpec {
   rule: Omit<RuleSpec, "anchor">;
   /** Template deadline sentinel → deadlined rule (atlas §8a discriminator). */
   deadlined?: boolean;
-  /** Days until the next visible spawned instance (null = no live instance). */
+  /**
+   * Days until the next visible spawned instance (null = no live instance).
+   *
+   * Also selects the template's CACHED-PROJECTION cohort, and that is v27-faithful
+   * on purpose: Things 3.23 did not retire `rt1_nextInstanceStartDate` — it scoped
+   * it to templates and keeps maintaining it (GV4 §2.1), while a real library still
+   * carries a live cohort of templates with no cached day at all (~24% of the
+   * maintainer's, and 2 of 10 on the RDLG2e corpus: after-completion and paused
+   * series). The `nextOffset: null` templates below ARE that cohort, so the world
+   * exercises `src/model/template-projection.ts`'s derived path as well as its
+   * cache-first path.
+   */
   nextOffset: number | null;
   area?: string;
 }

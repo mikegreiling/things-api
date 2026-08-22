@@ -637,9 +637,11 @@ export function upcomingView(
     return sortDated([...scheduled, ...forecast], [...rows, ...forecastRows]);
 
   // UI parity: repeating templates surface at their PROJECTION DAY — the app's
-  // materialized next occurrence while a running Things maintains that cache
-  // (≤ 3.22), else the day derived from the decoded rule + spawn cursor (3.23
-  // retired the cache); {@link templateProjectionDay} answers for both, and
+  // materialized next occurrence when the template carries that cache, else the
+  // day derived from the decoded rule + spawn cursor (the cache is NULL on the
+  // paused / trashed / never-populated cohort on every app version — GV4 §2.1
+  // corrects the earlier "3.23 retired it" reading); templateProjectionDay
+  // answers for both, and
   // fails closed (no day → no row) rather than guessing. Fixed rules only —
   // after-completion templates carry no next date until the prior instance
   // resolves; paused templates are excluded. The occurrence deadline follows
