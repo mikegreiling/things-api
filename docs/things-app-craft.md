@@ -151,6 +151,40 @@ The craft is in what is *not* there. The completed occurrence is a fully-formed 
 
 `Items ▸ Repeat ▸ Pause` on a three-template selection writes exactly the bytes a single-target pause writes — `rt1_instanceCreationPaused 0→1`, cursor cleared to NULL, anchor and rule blob untouched — **on each row, with the three `userModificationDate` stamps landing inside 50 µs of one another**. No confirmation, no partial application, no aggregate-specific side effect, and `Resume` inverts it precisely. The multi-selection path is not a re-implementation of the single-item path; it is the same write, looped inside one transaction. (Contrast the reorder family's *aggregate* specifiers, whose list-scope behavior genuinely diverges from their container-scope behavior — §5.) Evidence: [lab/repx1-instance-semantics.md](lab/repx1-instance-semantics.md) §5.3. Things 3.23.
 
+### 6f. The Make-Exception chooser CONSUMES the rule slot — a real one-time exception, and it only offers the branches the rule could actually express
+
+Editing the schedule of a series' **projection row** (the pseudo-row Upcoming renders at the template's cursor day) raises a *Repeating To-Do* alert: `Make Exception` / `Update Rule` / `Cancel`. The craft is in what `Make Exception` then does — not "copy the to-do to the new date", which is what every automation surface produces (oddities §13), but a genuine **move of the occurrence out of the schedule**:
+
+```
+INSERTED  status=0  startDate=<the chosen day>  rt1_repeatingTemplate=<template>
+CHANGED   template  rt1_nextInstanceStartDate     2026-07-06 -> 2026-07-07   <- the slot is CONSUMED
+CHANGED   template  rt1_instanceCreationStartDate 2026-07-06 -> 2026-07-07
+CHANGED   template  rt1_instanceCreationCount     1 -> 2
+```
+
+When the clock reaches the vacated 07-06 slot, **nothing spawns** — measured against an identically-built series whose chooser was cancelled, which spawns on the same roll. The rule blob is untouched, the pending occurrence is untouched, and the series resumes its ordinary cadence at 07-07. One occurrence was moved; none was duplicated and none was lost. Getting that right needs the cursor and the materialized rows to be reconciled in exactly the way the instance-re-date path fails to (oddities §13) — the app has the machinery, it just does not reach it from the other row.
+
+A second, quieter piece of care: **the chooser's branch set is a function of what the rule could express.** A calendar date offers three buttons ("…make a one-time exception, or update the repeating rule?"); a target the rule cannot name — the `Today` bucket, `Someday` — offers two, with copy that says so ("…make a one-time exception? This will not change its repeating rule."). Time-of-day makes no difference; five arms separate the variables. A dialog that offered `Update Rule` for "move this to Someday" would have had to either refuse on press or invent a meaning; not offering it is the honest design. (For a driver, the consequence is that the buttons must be addressed by title — `Cancel` is `action-button-3` in the three-button sheet and `action-button-2` in the two-button one.) Evidence: [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §1.3/§1.5/§2.3. Things 3.23.
+
+### 6g. The app's own ⌘Z fully reverses a just-in-time materialization — the cursor included
+
+A projection check-off (§6d) writes in two places: it inserts a completed instance and it advances the series' cursor, watermark and count. Undo puts back **both**:
+
+```
+DELETED   the minted instance row                                  <- hard-deleted, not trashed
+CHANGED   template  rt1_instanceCreationCount     2 -> 1
+CHANGED   template  rt1_instanceCreationStartDate 2026-07-07 -> 2026-07-06
+CHANGED   template  rt1_nextInstanceStartDate     2026-07-07 -> 2026-07-06
+```
+
+Net delta against the pre-gesture snapshot, after a relaunch: **no field changed on any surviving row**. The compound gesture has a true inverse, and it survives a restart — no tombstone residue, no "uncompleted" orphan sitting on a day the series never scheduled, no permanently skipped slot.
+
+This is the entry with the sharpest lesson for us: it is a capability we structurally **cannot** match. Nothing on any official automation surface hard-deletes a single row (oddities §5i) and nothing writes the cursor columns backwards, so any op we built on this gesture would have to be irreversible and say so. The app can be this clean because it owns its own undo stack; we get to admire it. Evidence: [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §4.3. Things 3.23.
+
+### 6h. One natural-language date parser, shared by the GUI picker and the URL scheme
+
+The 3.23 `When`/`Deadline` pickers are search fields, not calendars-first: typing filters to a single resolved row that names its own resolution (`in 11 days` → `Thu, Jul 16`), so the user always sees what the phrase became before committing. The same parser is evidently wired behind the URL scheme's `when=`: `things:///add?…&when=second tuesday in november` lands 2026-11-10, and `next thursday`, `in 3 days`, `july 9`, `next week` all resolve correctly — 6 of 6, none documented. A URL handler that accepted only its documented keywords plus ISO dates would have been perfectly defensible; routing it through the same parser the GUI uses means the two surfaces cannot drift. (For a *client* the read-back discipline is still mandatory — the resolution is clock- and locale-relative, and `next thursday` means the following week's, which is not everyone's first guess.) Evidence: [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §1.2/§6.2. Things 3.23.
+
 ---
 
 ## Edge cases this project routed through

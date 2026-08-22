@@ -250,7 +250,7 @@ Systematic incoherent-mutation sweep (P14, 2026-07-09, PID-watched on a clean VM
 
 | # | Operation | Result | Evidence |
 |---|---|---|---|
-| C1 | URL `update?...&when=` on a repeating TO-DO | **CRASH** (SIGTRAP) | §1 (U12/R09), re-standing |
+| C1 | URL `update?...&when=` on a repeating TO-DO | **CRASH** (SIGTRAP) | §1 (U12/R09), re-standing. **Re-confirmed on Things 3.23 / build 32300036** (REPX2, 2026-08-22, golden-v4, against a series minted under 3.23): `when=today` and `when=today@18:00` each kill the process with `EXC_BREAKPOINT` and a fresh `.ips` (`Things3-2026-07-05-120127.ips`, `app_version 3.23`), the template stays byte-identical, and the AppleScript guard still returns 302 on the same row — while `deadline=` is still silently dropped (§2i). NOT fixed; the `H-REPEAT-SCHEDULE` refusal stands. [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §5 |
 | C2 | URL `update-project?...&when=` on a repeating PROJECT | **CRASH**, fresh `.ips` | P14-A4 (NEW 2026-07-09) |
 | C3 | AppleScript `schedule to do id <heading>` | **CRASH** (process death, −609) | §6 (P11e), re-confirmed P14-A1 |
 | C4 | Shortcuts **Find Items** with an unrecognized predicate `Property` OR `Operator` | **CRASH — CONFIRMED, 4/4 reproducible** (EXC_BREAKPOINT/SIGTRAP, a Swift trap inside the app's Base/FoundationAdditions frameworks; `shortcuts run` reports "the 'Things' app quit unexpectedly") | SX5 (2026-07-10, `lab/artifacts/things-run-sx5-20260710-140641/`, four `.ips` captured). Triggers: `Property="name"` (nonexistent — the entity's field is `title`; this was the 2026-07-10 real-hardware crash, now explained), `Property="zzzNotAProperty"`, and `Operator=987654` on the VALID `title` property. A well-formed hand-authored predicate (`Property="title"`, Operator 4) runs perfectly — the crash is the app failing to guard unknown predicate identifiers, not a serialization-format problem. Ordinary GUI-built shortcuts can't hit this; a hand-authored/corrupted workflow can. |
@@ -718,6 +718,29 @@ The complementary cell (C3a) shows the same mechanism from the other side: an oc
 **Why this matters more than §9ff.** §9ff needs a preserve trigger at series-creation time, which 3.23 no longer produces via the deadline path ([lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §5.5 left open whether the reconciliation had been *fixed* or the precondition merely *changed shape*). This cell settles it: **the reconciliation is not fixed** — it is reachable in 3.23 from a bare re-date, with no deadline, no checklist element, and no automation involved. Both cells are honest negatives for any workaround on our side: the re-date is byte-for-byte an ordinary `when` write (`startDate`, `todayIndexReferenceDate`, `umd`, and `start` when leaving today), the `rt1_repeatingTemplate` FK is retained, the template is untouched, and **no chooser prompt appears on any automation vector** — so nothing we drive can express "make this an exception".
 
 **Data note:** no corruption; the two rows are independent instances of one template, both `trashed=0`, both live in every view. Evidence: [lab/repx1-instance-semantics.md](lab/repx1-instance-semantics.md) §3.2/§3.3; preceding class [§9ff](#9ff) and [lab/dblspawn1-preserved-instance.md](lab/dblspawn1-preserved-instance.md).
+
+**ADDENDUM 2026-08-22 (REPX2, golden-v4 / Things 3.23) — the exception EXISTS, which makes this entry stronger, not weaker.** The paragraph above says "nothing we drive can express 'make this an exception'". That was measured against five vectors, all aimed at a materialized INSTANCE. The chooser's real trigger is a scheduling edit on the series' **PROJECTION** row (the pseudo-row Upcoming renders at the template's cursor day): highlight it, `Items ▸ When…`, commit a date, and the app raises the *Repeating To-Do* alert with `Make Exception` / `Update Rule` / `Cancel`. Driven, `Make Exception` has **true exception semantics** — it mints the occurrence at the chosen date AND advances the cursor past the original slot, so when the clock reaches that slot **nothing spawns** (a Cancel control on the same clock roll spawns normally). So the app is not missing the concept: **it implements exactly the reconciliation this entry asks for, one code path over.** The defect is that the same user intent expressed on an *already-materialized* occurrence — the ordinary drag or `When…` a user reaches for far more often, because that is the row they can see in Today — silently takes the copy path instead, with no prompt and no reconciliation. Suggested remedy accordingly narrows: **raise the same chooser (or apply the same slot consumption) when a re-date targets or vacates a live rule slot**, rather than only when the edit happens to be made on the projection row. Evidence: [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §1.2/§1.3/§1.5.
+
+## 14. Things 3.23: CONTENT edits on a projection row silently rewrite the series template — no chooser, and the visible occurrence does not change (REPX2, 2026-08-22, golden-v4 / Things 3.23 build 32300036)
+
+A repeating series shows up in Upcoming as one **projection row** at its next-occurrence day. §13's addendum records that a *schedule* edit on that row stops and asks the user: exception, or rule? A **content** edit on the very same row, from the very same selection, asks nothing and silently takes the rule branch.
+
+Measured one edit at a time on a daily series (fixture built on 3.23, full 41-column row diff around each gesture, no other change on any row):
+
+| edit on the highlighted projection | prompt | what actually changed |
+|---|---|---|
+| title (Return → type → Return) | **none** | the TEMPLATE's `title` (+ `userModificationDate`) |
+| notes (Return → Tab → type) | **none** | the TEMPLATE's `notes` (+ `umd`) |
+| tag (`Items ▸ Tags…` → pick) | **none** | the TEMPLATE's `cachedTags` + one `TMTaskTag` row on the TEMPLATE uuid (+ `umd`) |
+| checklist item (Return → ⌘⇧C → type) | **none** | the TEMPLATE's `checklistItemsCount`/`openChecklistItemsCount` + `TMChecklistItem` rows (and **no `umd` bump**) |
+
+**Two things are wrong with this from a user's seat.** First, the asymmetry: moving the row one day forward is treated as a decision worth a modal, while renaming it — which rewrites *every future occurrence* — is not. Second, the edit **looks like it did nothing**. On every arm the series' already-materialized current occurrence stayed byte-identical, so a user who renames tomorrow's projected copy sees today's copy in Today keep the old name, with no indication that the rename landed on the series at all. (The maintainer's own first read of this behavior was that these edits "do not do anything".)
+
+**Reproduce (pure GUI):** create a daily repeating to-do. Go to Upcoming, click the series' row there (not the one in Today), press Return, and rename it. No prompt appears. Today still shows the old name; every future copy has the new one.
+
+**Expected:** either the same *Repeating To-Do* chooser (the edit does change the rule's content for all future occurrences), or at minimum some indication that the change applies to the series rather than to the row that was clicked. **Actual:** a silent template write.
+
+**Data note:** no corruption, and the write itself is coherent — the projection row IS the template, so editing it editing the template is defensible; the report is about the missing disclosure and the inconsistency with §13's own chooser. Evidence: [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §3.
 
 ## Suggested report to Cultured Code
 
