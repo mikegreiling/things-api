@@ -22,8 +22,8 @@
     "shortcutsBulkEditWithoutConfirmation": true,
     "thingsAutoUpdateDisabled": true
   },
-  "schemaFingerprint": "sha256:784bd2f6533e6f85e053b0ec68958083d4ebca11c152ad1d2935178240d4c52b",
-  "schemaNote": "databaseVersion 26, fingerprint byte-identical to golden-v1/v2 under Things 3.22.14 — 3.22.14 is a BEHAVIORAL-only update (zero schema delta); no new baseline required. Verified host-side via `doctor --db --json` on the pulled guest DB (fingerprint.status=ok, value matches; extraColumns warn-only, excluded from hash).",
+  "schemaFingerprint": "sha256:d2b7e98c6d384ef1ecd256b1410a11652e80c5860cc48370ec9b4d6956c7d4df",
+  "schemaNote": "databaseVersion 26, fingerprint byte-identical to golden-v1/v2 under Things 3.22.14 — 3.22.14 is a BEHAVIORAL-only update (zero schema delta); no new baseline required. Verified host-side via `doctor --db --json` on the pulled guest DB (fingerprint.status=ok, value matches; extraColumns warn-only, excluded from hash). Re-recorded 2026-08-23 (784bd2f6… -> d2b7e98c…) for the manifest widening — the depended-column list gained TMTask.rt1_instanceCreationStartDate + rt1_instanceCreationCount, both pre-existing in this golden; the value is fixture-derived and the next `lab:run` bootstrap re-verifies it against the clone.",
   "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
   "humanLayersDone": [
     "L2",

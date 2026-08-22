@@ -56,7 +56,7 @@ import {
 import type { ReorderParams, ReorderScope, WhenValue } from "./operations.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { computeReorderPre, resolveArea, resolveProject, todayEveningFlagOf } from "./pre-state.ts";
-import { sdefDeclaresPrivateReorder } from "./experimental.ts";
+import { privateReorderIsNoOp, sdefDeclaresPrivateReorder } from "./experimental.ts";
 import {
   fingerprintLabel,
   readAuthToken,
@@ -403,14 +403,39 @@ type StrategyDecision =
   | { kind: "blocked"; result: MutationResult };
 
 /**
+ * The installed Things marketing version, from the environment tuple the client
+ * already captures per write (write/environment.ts — memoized for the process).
+ * Null when the tracker is not wired or the app version is unreadable.
+ */
+function installedThingsVersion(deps: WriteDeps): string | null {
+  return deps.environment?.capture().thingsVersion ?? null;
+}
+
+/**
+ * True when the native path is off because the installed Things executes the
+ * private reorder command as a silent no-op (3.23+) — the arm whose remedy is
+ * NEITHER `allow-experimental` NOR an app update.
+ */
+function nativeVersionGated(deps: WriteDeps): boolean {
+  if (simFenceActive()) return false;
+  return privateReorderIsNoOp(installedThingsVersion(deps));
+}
+
+/**
  * Why the native `_private_experimental_ reorder` command is unavailable, for the
- * fallback disclosure note. Either the config gate is off or the sdef canary
- * failed — the two triggers {@link resolveStrategy} routes a fallback for.
+ * fallback disclosure note. The config gate is off, the installed Things applies
+ * the command as a silent no-op, or the sdef canary failed — the three triggers
+ * {@link resolveStrategy} routes a fallback for.
  */
 function nativeUnavailableReason(deps: WriteDeps): string {
-  return deps.config.allowExperimental
-    ? "the app no longer declares the private reorder command (sdef canary failed)"
-    : "allow-experimental is off";
+  if (!deps.config.allowExperimental) return "allow-experimental is off";
+  if (nativeVersionGated(deps)) {
+    return (
+      `Things ${installedThingsVersion(deps) ?? "on this host"} applies the private reorder ` +
+      "command without changing anything, so the native path is disabled"
+    );
+  }
+  return "the app no longer declares the private reorder command (sdef canary failed)";
 }
 
 /** The fallback disclosure warning — which protocol ran, and why native could not. */
@@ -422,7 +447,13 @@ function fallbackNoteFor(deps: WriteDeps, protocol: string): string {
 }
 
 /** A blocked result for a move-based SIT7 fallback while the shared move gate is off. */
-function moveFallbackDisabled(what: string): { kind: "blocked"; result: MutationResult } {
+function moveFallbackDisabled(
+  deps: WriteDeps,
+  what: string,
+): { kind: "blocked"; result: MutationResult } {
+  // Turning allow-experimental back on is only a remedy when the config gate is
+  // what took the native path away — under the version gate it changes nothing.
+  const nativeRemedy = nativeVersionGated(deps) ? "" : ", or turn allow-experimental back on";
   return {
     kind: "blocked",
     result: {
@@ -435,7 +466,7 @@ function moveFallbackDisabled(what: string): { kind: "blocked"; result: Mutation
         "it was NOT attempted (no destructive or unverified fallback exists)",
       remediation:
         "re-enable it with `things config set bounce-enabled true`" +
-        " (each moved item costs a park + re-enter leg), or turn allow-experimental back on",
+        ` (each moved item costs a park + re-enter leg)${nativeRemedy}`,
     },
   };
 }
@@ -447,7 +478,7 @@ function fallbackOk(
   kind: FallbackKind,
   protocol: string,
 ): StrategyDecision {
-  if (!deps.config.bounceEnabled) return moveFallbackDisabled(what);
+  if (!deps.config.bounceEnabled) return moveFallbackDisabled(deps, what);
   return {
     kind: "ok",
     strategy: "fallback",
@@ -497,7 +528,8 @@ function bounceFallbackOk(
 
 /**
  * Whether the native `_private_experimental_ reorder` command is available — the
- * config gate is on AND the app still declares it in its sdef (the canary). The
+ * config gate is on, the installed Things still APPLIES the command (the GV4
+ * version gate), AND the app still declares it in its sdef (the canary). The
  * `day`-scope template leg family gates on this too: a repeating TO-DO template's
  * only safe day-block placement is the native single-id `list "Upcoming"` front-
  * insert (a dated when= leg CRASHES a template, §1), so a day-group carrying any
@@ -507,12 +539,19 @@ function nativeReorderAvailable(deps: WriteDeps): boolean {
   if (!deps.config.allowExperimental) return false;
   // Under the bench simulator fence the simulator STANDS IN for the private
   // reorder surface (its `reorder` applier performs the native index re-rank
-  // directly), so the real-app sdef canary is neither reachable nor relevant —
-  // treat the command as declared. This keeps native-scope reorders hermetic and
-  // host-independent, mirroring planner.ts letting a simulating vector satisfy a
-  // forced vector and the accessibility/automation probes short-circuiting on the
-  // fence. Production (fence inactive) still consults the real sdef canary.
+  // directly), so neither the real-app sdef canary nor the installed app's
+  // version is reachable or relevant — treat the command as declared and
+  // working. This keeps native-scope reorders hermetic and host-independent
+  // (the bench must behave the same on a 3.22 and a 3.23 host), mirroring
+  // planner.ts letting a simulating vector satisfy a forced vector and the
+  // accessibility/automation probes short-circuiting on the fence. Production
+  // (fence inactive) still consults the version gate and the real sdef canary.
   if (simFenceActive()) return true;
+  // GV4 version gate: 3.23 and later accept the private command and change
+  // nothing (docs/lab/gv4-323-campaign.md §3.1). The sdef still declares it, so
+  // the declaration canary below cannot see the breakage — hence a version gate
+  // until the behavioral canary lands.
+  if (privateReorderIsNoOp(installedThingsVersion(deps))) return false;
   return (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
 }
 
@@ -1176,8 +1215,10 @@ async function runBounce(
         `the ${dayIso} day-group contains repeating template(s) [${tmpls.join(", ")}] whose ` +
           "day-block placement needs the native private reorder surface (a dated when= leg CRASHES " +
           `a template — §1/§9e), but it is unavailable (${nativeUnavailableReason(deps)})`,
-        "enable it with `things config set allow-experimental true` (and keep Things updated so the " +
-          "sdef canary passes), or reorder the day-group without the template(s)",
+        nativeVersionGated(deps)
+          ? "reorder the day-group without the template(s)"
+          : "enable it with `things config set allow-experimental true` (and keep Things updated " +
+              "so the sdef canary passes), or reorder the day-group without the template(s)",
       );
     }
     // PROJECT-template SUFFIX RULE.

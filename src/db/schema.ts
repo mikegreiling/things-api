@@ -39,6 +39,15 @@ export const DEPENDED_TABLES = {
     "rt1_recurrenceRule",
     "rt1_nextInstanceStartDate",
     "rt1_instanceCreationPaused",
+    // The spawn cursor and the spawn tally became load-bearing reads when the
+    // projection-day helper (src/model/template-projection.ts, #520/#522)
+    // started DERIVING a template's next occurrence from the decoded rule when
+    // the cached `rt1_nextInstanceStartDate` is absent: the cursor is where the
+    // derivation starts, the count is what an ends-AFTER rule is measured
+    // against. In the manifest, their loss in a future migration is a drift
+    // block with remediation instead of a raw SQLite error mid-read.
+    "rt1_instanceCreationStartDate",
+    "rt1_instanceCreationCount",
     "repeater",
   ],
   TMArea: ["uuid", "title", "visible", "index"],
