@@ -57,10 +57,22 @@ describe("schema fingerprint", () => {
     expect(tmtask?.extraColumns).toContain("somethingNew");
   });
 
-  it("unknown databaseVersion is its own status", () => {
+  it("databaseVersion 27 (Things 3.23) matches on the identical-DDL v27 baseline", () => {
+    // Things 3.23 bumped the version stamp 26 → 27 with a byte-identical
+    // schema (live-captured 2026-08-22) — the v26 fixture under a 27 stamp
+    // must therefore be `ok` against the shipped registry.
     fixture = buildFixtureDb();
     fixture.db.exec(
       "UPDATE Meta SET value = replace(value, '26', '27') WHERE key = 'databaseVersion'",
+    );
+    const status = compareToBaseline(observeSchema(fixture.db), BASELINES);
+    expect(status.kind).toBe("ok");
+  });
+
+  it("unknown databaseVersion is its own status", () => {
+    fixture = buildFixtureDb();
+    fixture.db.exec(
+      "UPDATE Meta SET value = replace(value, '26', '99') WHERE key = 'databaseVersion'",
     );
     const status = compareToBaseline(observeSchema(fixture.db), BASELINES);
     expect(status.kind).toBe("unknown-version");
@@ -85,10 +97,10 @@ describe("toSchemaStatus (read-path verdict)", () => {
   it("names the unrecognized databaseVersion", () => {
     fixture = buildFixtureDb();
     fixture.db.exec(
-      "UPDATE Meta SET value = replace(value, '26', '27') WHERE key = 'databaseVersion'",
+      "UPDATE Meta SET value = replace(value, '26', '99') WHERE key = 'databaseVersion'",
     );
     const status = toSchemaStatus(compareToBaseline(observeSchema(fixture.db), BASELINES));
     expect(status.status).toBe("unknown-version");
-    expect(status.detail[0]).toContain("27");
+    expect(status.detail[0]).toContain("99");
   });
 });
