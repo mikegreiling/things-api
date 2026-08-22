@@ -1164,7 +1164,8 @@ export function computeReorderPre(
     rowsOf(where, binds, "todayIndex", "1=1", "status = 0", []);
   // The day-block TEMPLATE cohort: every template row (to-do or project) whose
   // PROJECTION DAY is the packed day D. The day cannot be a SQL predicate any more
-  // — Things 3.23 retired `rt1_nextInstanceStartDate`, so the day is derived per
+  // — `rt1_nextInstanceStartDate` is NULL on the paused / trashed / never-populated
+  // template cohort every app version carries (GV4 §2.1), so the day is derived per
   // row from the rule + spawn cursor (templateProjectionDay) and matched in host
   // math. Templates are a tiny cohort (the v27 partial index on
   // `rt1_recurrenceRule IS NOT NULL` covers the scan), and a template that

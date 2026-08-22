@@ -112,9 +112,11 @@ function repeatContextFor(db: DatabaseSync, templateUuid: string): RepeatContext
     }
   }
   // FIXED mode only: the template's projected next occurrence IS the "Aug 19".
-  // Read through templateProjectionDay — the app's cache while it maintains one
-  // (Things ≤ 3.22), the day derived from the rule + spawn cursor once 3.23
-  // retired it; absent when the series projects nowhere.
+  // Read through templateProjectionDay — the app's cached day when the row has
+  // one, else the day derived from the rule + spawn cursor; absent when the
+  // series projects nowhere. The cache is missing on a real library's paused,
+  // trashed and never-populated templates on EVERY app version (GV4 §2.1: the
+  // dbv-27 migration scoped the column to templates, it did not retire it).
   if (ctx.rule?.type === "fixed") {
     const next = decodePackedDate(templateProjectionDay(tmpl));
     if (next !== null) ctx.next = next;

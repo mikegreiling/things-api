@@ -79,7 +79,7 @@ describe("read schema warning (non-blocking)", () => {
   it("--json: an unrecognized databaseVersion adds meta.warnings", () => {
     fx = buildFixtureDb();
     seedArea(fx.db, "Work");
-    fx.db.exec("UPDATE Meta SET value = replace(value, '26', '99') WHERE key = 'databaseVersion'");
+    fx.db.exec("UPDATE Meta SET value = replace(value, '27', '99') WHERE key = 'databaseVersion'");
 
     const { stdout, exitCode } = runCli(["areas", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);

@@ -38,7 +38,7 @@ const CONFIG: ThingsApiConfig = {
 function okFingerprint(): FingerprintStatus {
   return {
     kind: "ok",
-    observation: { databaseVersion: 26, tables: [], fingerprint: "sha256:simfid" },
+    observation: { databaseVersion: 27, tables: [], fingerprint: "sha256:simfid" },
   };
 }
 

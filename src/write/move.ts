@@ -210,9 +210,9 @@ interface MoveeRow {
   /**
    * A repeating template's projection day (packed) — the Upcoming day-block its
    * rendered projection row sits in (TMPLSORT/PTMPL), from
-   * {@link templateProjectionDay} (the app's `rt1_nextInstanceStartDate` cache on
-   * Things ≤ 3.22, derived from the rule + spawn cursor on 3.23, which retired
-   * that column). NULL for a non-template — and for a template that projects
+   * {@link templateProjectionDay} (the app's `rt1_nextInstanceStartDate` cache
+   * where the template carries one, derived from the rule + spawn cursor where it
+   * does not). NULL for a non-template — and for a template that projects
    * nowhere (paused, ended, undecodable rule): the fail-closed contract, treated
    * exactly as a NULL column always was. It is the template's day-group key: a
    * strictly-future projection makes the template a first-class member of that
@@ -2202,8 +2202,8 @@ async function runAreaReorderUniversal(
  */
 function rowDayKey(row: MoveeRow, packedToday: number): number | null {
   // A repeating TEMPLATE contributes its PROJECTION day (the app's cached
-  // rt1_nextInstanceStartDate, or — on Things 3.23, which retired that column —
-  // the day derived from its rule + spawn cursor; see templateProjectionDay),
+  // rt1_nextInstanceStartDate where it has one, else the day derived from its
+  // rule + spawn cursor; see templateProjectionDay),
   // the Upcoming day-block its rendered projection row sits in (TMPLSORT/PTMPL). Its
   // startDate/deadline are NULL (or non-block), so it would otherwise contribute null;
   // strictly-future gate mirrors the scheduled/forecast branches (an arrived/absent

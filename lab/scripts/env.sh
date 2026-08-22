@@ -37,8 +37,20 @@ lab_scp() {
   sshpass -p "$LAB_SSH_PASS" scp "${LAB_SSH_OPTS[@]}" "$@"
 }
 
+lab_mute_guest() {
+  # lab_mute_guest <ip> — silence the guest's audio output.
+  #
+  # A Tart guest plays through the HOST's speakers, so a single alert beep from
+  # an unattended overnight clone wakes whoever is asleep next to the machine.
+  # Every clone-boot path mutes; best-effort, never fatal.
+  lab_ssh "$1" "osascript -e 'set volume output muted true'" >/dev/null 2>&1 || true
+}
+
 lab_wait_for_ssh() {
   # lab_wait_for_ssh <vm-name> [timeout-seconds] -> echoes IP on success
+  #
+  # This is the shared clone-boot chokepoint for every bash campaign driver, so
+  # it MUTES the guest the moment SSH answers (see lab_mute_guest).
   #
   # The deadline is WALL-CLOCK, not iteration count: each probe can itself burn
   # ~30s (lab_ssh retries a 10s-ConnectTimeout three times), so counting loops
@@ -50,6 +62,7 @@ lab_wait_for_ssh() {
     # cheap TCP probe first, so a dead guest costs 3s per loop, not 30
     if [ -n "$ip" ] && nc -z -G 3 "$ip" 22 2>/dev/null; then
       if lab_ssh "$ip" true 2>/dev/null; then
+        lab_mute_guest "$ip"
         echo "$ip"
         return 0
       fi

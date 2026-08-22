@@ -130,6 +130,43 @@ def kill_things(wait_seconds: float = 10.0) -> None:
         time.sleep(0.25)
 
 
+def wait_for_main_window(wait_seconds: float = 20.0) -> bool:
+    """Block until Things has materialized its main window (a CLOSED LOOP, not a sleep).
+
+    A background launch always ends with Things opening its main window, but HOW
+    LONG that takes is a per-version property: measured 2026-08-22, Things 3.23
+    takes ~3.5s from launch to `window-new "Today"`, where the old fixed 2.0s
+    post-launch settle (+1.0s in enforce_app_state) returned at ~3.0s. The window
+    therefore landed INSIDE the first probe's evidence window and flipped its
+    disruption tier 0 -> 3 with a bare `window-new` and no launch/activate — the
+    A10/R01 signature reported as a 3.23 behavior change in gv4-323-campaign.md
+    §3.3. It is not a behavior change; it is a RACE, which is why it appeared on
+    some runs and not others (RDLG2's a-suite run read tier 0).
+
+    Waiting for the window itself rather than lengthening the sleep is the fix
+    the determinism doctrine requires: no probe's tier can depend on how fast the
+    host booted. `count windows` is a pure read; if the AppleEvent itself is what
+    prompts the window on some future build, the loop still exits with the window
+    materialized OUTSIDE the evidence window, which is the property we need.
+
+    Best-effort: on timeout we fall through rather than fail the run — a tier
+    assertion is the right place for that to surface, not a harness abort.
+    """
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        r = subprocess.run(
+            ["osascript", "-e", f'tell application "{THINGS_PROCESS}" to count windows'],
+            capture_output=True,
+            text=True,
+        )
+        count = r.stdout.strip()
+        if r.returncode == 0 and count.isdigit() and int(count) >= 1:
+            time.sleep(1.0)  # let the monitor record window-new before MARK start
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def launch_things_background(wait_seconds: float = 30.0) -> None:
     subprocess.run(["open", "-g", "-a", THINGS_PROCESS], capture_output=True)
     deadline = time.time() + wait_seconds
@@ -138,6 +175,7 @@ def launch_things_background(wait_seconds: float = 30.0) -> None:
             try:
                 q("SELECT COUNT(*) FROM TMTask")
                 time.sleep(2.0)  # post-launch settle: let startup maintenance finish
+                wait_for_main_window()
                 return
             except sqlite3.Error:
                 pass

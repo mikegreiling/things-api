@@ -36,6 +36,53 @@ json_get() {
   printf '%s' "$LAST_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"
 }
 
+# assert_out <needle> <ok-msg> <fail-msg> — grep LAST_OUT, counted into FAILURES.
+assert_out() {
+  if grep -q "$1" <<<"$LAST_OUT"; then
+    echo "ok   $2"
+  else
+    echo "FAIL $3"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+# --- Things version gate -----------------------------------------------------
+# From Things 3.23 the app ACCEPTS `_private_experimental_ reorder to dos in`
+# and changes nothing (docs/lab/gv4-323-campaign.md §3.1), while STILL declaring
+# it — so the sdef canary is blind and the shipped engine stands a VERSION gate
+# in front of it (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM). Scopes
+# with a SIT7 fallback degrade silently and their steps are unchanged; the three
+# native-ONLY reaches (heading order, and any day-group holding a repeating
+# template) refuse pre-dispatch instead. Those steps branch here rather than
+# hard-coding the pre-3.23 answer, so ONE script certifies both app generations.
+THINGS_VERSION=$(defaults read /Applications/Things3.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo "")
+if python3 -c "
+import sys
+sys.exit(0 if tuple(int(p) for p in '$THINGS_VERSION'.split('.')) >= (3, 23) else 1)
+" 2>/dev/null; then
+  NATIVE_REORDER=no
+else
+  # <=3.22.x — or an UNREADABLE version, which fails OPEN exactly as the shipped
+  # gate does (privateReorderIsNoOp never gates a version it cannot parse).
+  NATIVE_REORDER=yes
+fi
+echo "== Things ${THINGS_VERSION:-<unreadable>} — native private reorder available: $NATIVE_REORDER =="
+
+if [ "$NATIVE_REORDER" = "no" ]; then
+  # Native-only reaches refuse pre-dispatch: blocked, exit 4.
+  EXIT_HEADING_ORDER=4   # `project move-heading` — heading order has no fallback
+  EXIT_TEMPLATE_DAY=4    # any day-group holding a repeating template
+  # A Today set containing a PROJECT row has no fallback either: the today
+  # BOUNCE re-schedules via todo.update, and a project's daytime `when=today`
+  # landing is mid-pack rather than the front-insert the protocol needs
+  # (ORD-12 / SIT3 EVEPROJ), so it fails CLOSED rather than land a wrong order.
+  EXIT_TODAY_WITH_PROJECT=4
+else
+  EXIT_HEADING_ORDER=0
+  EXIT_TEMPLATE_DAY=0
+  EXIT_TODAY_WITH_PROJECT=0
+fi
+
 echo "== doctor =="
 run_step 0 "doctor" doctor
 
@@ -111,7 +158,10 @@ R3=$(json_get "d['data']['uuid']")
 # loose Anytime index, SIT6 LOOSEPARK) — REFUSED without --in (blocked, exit 4).
 run_step 4 "loose Today reorder REFUSES without --in (dual-axis ambiguity)" reorder "$R3" "$R1"
 # --in disambiguation success: name the Today view axis → native todayIndex re-rank.
-run_step 0 "today reorder with --in today (native re-rank, partial list)" reorder "$R3" "$R1" --in today
+# The golden's Today list holds a seed PROJECT row, which only the native wire can
+# carry (O12 intermix) — so from 3.23 this is the one Today shape with no working
+# path and the op refuses instead (see EXIT_TODAY_WITH_PROJECT above).
+run_step "$EXIT_TODAY_WITH_PROJECT" "today reorder with --in today (native re-rank, partial list)" reorder "$R3" "$R1" --in today
 # Flag-aware routing newly expressible (Phase B): --in anytime reorders the loose
 # Anytime index via the flag-safe LOOSEPARK MOVE protocol, preserving the Today flag.
 run_step 0 "loose Today reorder with --in anytime (flag-safe LOOSEPARK)" reorder "$R3" "$R1" --in anytime
@@ -182,7 +232,12 @@ else
   echo "FAIL heading fixtures did not appear (json url seed)"
   FAILURES=$((FAILURES + 1))
 fi
-run_step 0 "native reorder of a project's HEADINGS (scf P1)" project move-heading "$HPROJ" "$H2" "$H1" --first
+run_step "$EXIT_HEADING_ORDER" "native reorder of a project's HEADINGS (scf P1)" project move-heading "$HPROJ" "$H2" "$H1" --first
+if [ "$NATIVE_REORDER" = "no" ]; then
+  assert_out 'blocked:environment' \
+    "heading order refuses pre-dispatch on this Things (no fallback protocol exists)" \
+    "heading-order refusal is not the pre-dispatch environment block"
+fi
 run_step 0 "seed top-level project TP1" project add "E2E-TP1"
 TP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed top-level project TP2" project add "E2E-TP2"
@@ -213,11 +268,19 @@ run_step 0 "seed GI scheduled to-do (07-06)" todo add "E2E-GI-S1" --when 2026-07
 GI_S1=$(json_get "d['data']['uuid']")
 run_step 0 "seed GI deadline-forecast to-do (07-06)" todo add "E2E-GI-F1" --when someday --deadline 2026-07-06
 GI_F1=$(json_get "d['data']['uuid']")
-run_step 0 "grand interleave: scheduled+forecast+to-do-template in ONE --in day op" reorder "$GI_F1" "$TEMPLATE_UUID" "$GI_S1" --in 2026-07-06
-if grep -q 'userModificationDate-SILENT' <<<"$LAST_OUT"; then
-  echo "ok   to-do-template leg discloses the umd-silent warning (§9r)"
+run_step "$EXIT_TEMPLATE_DAY" "grand interleave: scheduled+forecast+to-do-template in ONE --in day op" reorder "$GI_F1" "$TEMPLATE_UUID" "$GI_S1" --in 2026-07-06
+if [ "$NATIVE_REORDER" = "yes" ]; then
+  assert_out 'userModificationDate-SILENT' \
+    "to-do-template leg discloses the umd-silent warning (§9r)" \
+    "to-do-template interleave missing the umd-silent disclosure"
 else
-  echo "FAIL to-do-template interleave missing the umd-silent disclosure"; FAILURES=$((FAILURES + 1))
+  # ORD-19's template day-block wiring is SUSPENDED: the to-do-template leg IS
+  # the native `list "Upcoming"` front-insert, and a dated when=/deadline= leg
+  # CRASHES a template (§1/§9e), so the whole day-group refuses NAMING the
+  # template rather than land a partial order or take the crash path.
+  assert_out "$TEMPLATE_UUID" \
+    "template day-set refuses NAMING the template (no partial order, no crash leg)" \
+    "template day-set refusal does not name the template"
 fi
 # #393 gate fix: a MIXED to-do + PROJECT + to-do TEMPLATE day set now interleaves in
 # ONE op. Before the fix `globalAxisIntermix` gated only on scheduleBucket/forecast, so
@@ -227,11 +290,18 @@ fi
 # different day, so it can't join this 07-06 op — that's why this uses a plain project).
 run_step 0 "seed GI scheduled PROJECT (07-06)" project add "E2E-GI-P1" --when 2026-07-06
 GI_P1=$(json_get "d['data']['uuid']")
-run_step 0 "mixed-kind grand interleave: to-do + PROJECT + to-do-template in ONE op (#393 gate)" reorder "$GI_S1" "$GI_P1" "$TEMPLATE_UUID" "$GI_F1" --in 2026-07-06
-if grep -q 'userModificationDate-SILENT' <<<"$LAST_OUT"; then
-  echo "ok   mixed-kind interleave accepted (was refused pre-fix) + umd-silent disclosure"
+run_step "$EXIT_TEMPLATE_DAY" "mixed-kind grand interleave: to-do + PROJECT + to-do-template in ONE op (#393 gate)" reorder "$GI_S1" "$GI_P1" "$TEMPLATE_UUID" "$GI_F1" --in 2026-07-06
+if [ "$NATIVE_REORDER" = "yes" ]; then
+  assert_out 'userModificationDate-SILENT' \
+    "mixed-kind interleave accepted (was refused pre-fix) + umd-silent disclosure" \
+    "mixed-kind to-do+project+template interleave refused or missing disclosure"
 else
-  echo "FAIL mixed-kind to-do+project+template interleave refused or missing disclosure"; FAILURES=$((FAILURES + 1))
+  # The #393 gate fix is still proven: the set gets PAST the "one kind at a time"
+  # upstream refusal and reaches the day-axis resolver — which is where it now
+  # refuses, on the TEMPLATE, exactly like the single-kind arm above.
+  assert_out 'day-group contains repeating template' \
+    "mixed-kind set clears the kind gate and refuses at the DAY resolver, not on kind-mixing" \
+    "mixed-kind refusal is not the day-resolver template refusal (kind gate may have re-tightened)"
 fi
 # project arm: SCHEDULED + DEADLINE-FORECAST projects + the PROJECT template — the
 # project template is the byte-untouched SUFFIX (no headless reach on a non-tomorrow
@@ -240,21 +310,37 @@ run_step 0 "seed GP scheduled project (07-12)" project add "E2E-GP-S1" --when 20
 GP_S1=$(json_get "d['data']['uuid']")
 run_step 0 "seed GP deadline-forecast project (07-12)" project add "E2E-GP-F1" --when someday --deadline 2026-07-12
 GP_F1=$(json_get "d['data']['uuid']")
-run_step 0 "project-template SUFFIX ACCEPT (template last, byte-untouched)" project move "$GP_F1" "$GP_S1" "$PROJ_TEMPLATE_UUID" --first
-if grep -q 'byte-untouched' <<<"$LAST_OUT"; then
-  echo "ok   project-template suffix accept discloses the byte-untouched warning"
+run_step "$EXIT_TEMPLATE_DAY" "project-template SUFFIX ACCEPT (template last, byte-untouched)" project move "$GP_F1" "$GP_S1" "$PROJ_TEMPLATE_UUID" --first
+if [ "$NATIVE_REORDER" = "yes" ]; then
+  assert_out 'byte-untouched' \
+    "project-template suffix accept discloses the byte-untouched warning" \
+    "project-template suffix accept missing the byte-untouched disclosure"
 else
-  echo "FAIL project-template suffix accept missing the byte-untouched disclosure"; FAILURES=$((FAILURES + 1))
+  # The suffix rule needs the day dispatch, and the day dispatch is template-gated
+  # on the native surface — so from 3.23 even the CONFORMANT suffix refuses. The
+  # movables' own order stays reachable by omitting the template.
+  assert_out 'day-group contains repeating template' \
+    "conformant project-template suffix also refuses (the day dispatch itself is native-gated)" \
+    "project-template suffix refusal is not the day-resolver template refusal"
 fi
 # Non-conformant suffix: the project template requested ABOVE a movable → refused with
 # the ratified H-REORDER-SCOPE copy naming the one achievable arrangement. The block now
 # HOISTS to the CANONICAL top-level refusal (blocked → exit 4, code blocked:H-REORDER-
 # SCOPE) instead of being buried under a generic verify-failed (exit 3) — the surfacing fix.
 run_step 4 "project-template suffix REFUSE (template above a movable)" project move "$GP_S1" "$PROJ_TEMPLATE_UUID" "$GP_F1" --first
-if grep -q 'blocked:H-REORDER-SCOPE' <<<"$LAST_OUT" && grep -q 'cannot be placed above a movable' <<<"$LAST_OUT"; then
-  echo "ok   non-conformant suffix surfaces the canonical top-level blocked:H-REORDER-SCOPE refusal"
+assert_out 'blocked:H-REORDER-SCOPE' \
+  "non-conformant suffix surfaces the canonical top-level blocked:H-REORDER-SCOPE refusal" \
+  "non-conformant suffix missing the canonical top-level refusal code"
+if [ "$NATIVE_REORDER" = "yes" ]; then
+  assert_out 'cannot be placed above a movable' \
+    "non-conformant suffix names the one achievable arrangement" \
+    "non-conformant suffix missing the achievable-arrangement copy"
 else
-  echo "FAIL non-conformant suffix missing the canonical top-level refusal copy/code"; FAILURES=$((FAILURES + 1))
+  # From 3.23 the native gate fires FIRST, so the refusal names the unavailable
+  # surface rather than the suffix rule. Same canonical code + exit, earlier cause.
+  assert_out 'day-group contains repeating template' \
+    "non-conformant suffix refuses at the earlier native-surface cause" \
+    "non-conformant suffix refusal is not the day-resolver template refusal"
 fi
 # Experimental-off: a template-bearing day-group needs the native surface (a dated
 # when= leg CRASHES a template) — with allow-experimental off it refuses NAMING the

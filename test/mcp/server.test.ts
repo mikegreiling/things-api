@@ -1954,7 +1954,7 @@ describe("things MCP server", () => {
 
     it("an unrecognized databaseVersion surfaces a warning in a read tool's meta", async () => {
       fixture.db.exec(
-        "UPDATE Meta SET value = replace(value, '26', '99') WHERE key = 'databaseVersion'",
+        "UPDATE Meta SET value = replace(value, '27', '99') WHERE key = 'databaseVersion'",
       );
       await connect([fakeVector(null).vector]);
       const result = await client.callTool({ name: "read_view", arguments: { view: "today" } });
@@ -2978,7 +2978,7 @@ describe("things MCP server", () => {
         db: { databaseVersion: number };
         fingerprint: { status: string };
       };
-      expect(report.db.databaseVersion).toBe(26);
+      expect(report.db.databaseVersion).toBe(27);
       expect(typeof report.fingerprint.status).toBe("string");
     });
   });

@@ -106,7 +106,47 @@ export interface ProbeExpectation {
   crash?: boolean;
   /** Non-zero transport exit codes that are acceptable (e.g. osascript failures under test). */
   allowNonzeroExit?: boolean;
+  /**
+   * `waitSql` steps that never become true are acceptable. Reserved for cells
+   * whose wait ASSERTS the very effect the app has stopped producing: a wire
+   * command the app now accepts and ignores exits 0, so the only observable is
+   * a wait that times out and a delta that stays empty. Without this the probe
+   * could not express "the command ran and nothing happened".
+   *
+   * DISCIPLINE: because this removes the wait oracle, an expectation that sets
+   * it MUST carry a POSITIVE assertion of the inertness in its place —
+   * `deltaEmpty` for a cell whose whole command list is the dead wire, or a
+   * `fieldUnchanged` over the rows the dead leg would have moved for a cell
+   * that mixes live and dead legs. That assertion is what goes RED when a later
+   * app release restores the behavior; a wait that merely stops timing out
+   * would not (some waits are satisfiable by the fixture's pre-existing order).
+   */
+  allowUnsatisfiedWaits?: boolean;
   assertions: Assertion[];
+}
+
+/**
+ * A version-conditional expectation: from `fromVersion` of the Things app
+ * onward, THIS is what the probe's own wire command does, and the top-level
+ * `expect` describes the older app.
+ *
+ * The suites drive RAW wire commands, not the shipped engine, so an override
+ * here is not a restatement of a shipped guard — it is the app-behavior fact
+ * the guard was built on top of. That makes the suite the BEHAVIORAL arm the
+ * sdef canary cannot be: if a later Things release restores the behavior, the
+ * override goes red and tells us to lift the corresponding shipped gate.
+ *
+ * Bounds are lower-only and evaluated against the golden's `thingsVersion`
+ * with the SAME comparator the shipped version gate uses
+ * (`src/write/experimental.ts` `compareAppVersions`). The highest matching
+ * entry wins; none matching leaves `expect` in force.
+ */
+export interface VersionedExpectation {
+  /** Inclusive lower bound on the golden's Things marketing version, e.g. "3.23". */
+  fromVersion: string;
+  /** One line: what the app does differently from this version on, and the evidence. */
+  because: string;
+  expect: ProbeExpectation;
 }
 
 export interface ProbeSpec {
@@ -131,6 +171,13 @@ export interface ProbeSpec {
   /** Executed after the after-snapshot (e.g. clear modals with a reset). */
   cleanup?: ProbeCommand[];
   expect: ProbeExpectation;
+  /**
+   * Version-conditional overrides of `expect`, newest-app-last is NOT required
+   * (the resolver picks the highest matching `fromVersion`). See
+   * {@link VersionedExpectation} and docs/reference/suite-audit.md
+   * ("Version-conditional expectations").
+   */
+  expectFrom?: VersionedExpectation[];
 }
 
 export interface SuiteSpec {
@@ -196,7 +243,15 @@ export interface EvidenceRecord {
   disruption: Disruption;
   crash: { pidDied: boolean; ipsFiles: string[] } | null;
   verdict: Verdict | "mismatch";
-  expected: { verdict: Verdict; tier: number; crash: boolean };
+  expected: {
+    verdict: Verdict;
+    tier: number;
+    crash: boolean;
+    /** The `fromVersion` of the override that applied, or null for the base `expect`. */
+    appliedFrom: string | null;
+    /** The override's `because`, carried into the evidence so the row explains itself. */
+    because: string | null;
+  };
   failures: string[];
   env: EvidenceEnv;
 }
@@ -206,6 +261,8 @@ export interface ProbeVerdict {
   verdict: Verdict | "mismatch";
   tier: number;
   crash: boolean;
+  /** The `expectFrom` bound that judged this probe, or null for the base `expect`. */
+  appliedFrom?: string | null;
   failures: string[];
 }
 

@@ -1,6 +1,8 @@
-# Things Database Atlas — schema v26
+# Things Database Atlas — schema v26 / v27
 
-The living map of Things 3's SQLite database (`Meta.databaseVersion` = 26, observed with Things 3.22.11 on 2026-07-02), annotated with how each field drives what the user sees in the app. Structure and enum values here were probed live (read-only) against a real, long-lived Things library; behavioral semantics come from the validated research in [`../research/`](../research/) (especially `validation-notes-step3.md`).
+The living map of Things 3's SQLite database, annotated with how each field drives what the user sees in the app. Structure and enum values here were probed live (read-only) against a real, long-lived Things library; behavioral semantics come from the validated research in [`../research/`](../research/) (especially `validation-notes-step3.md`).
+
+**One document, two generations.** The body below was captured at `Meta.databaseVersion` = **26** (Things 3.22.11, 2026-07-02) and every table/column/trigger statement in it is still exact under **27** (Things 3.23, 2026-08-22): the 26→27 migration has **zero** table/column/trigger delta, so the two generations share a schema fingerprint by construction ([`src/db/baselines/db-v27.ts`](../../src/db/baselines/db-v27.ts) reuses `DB_V26.fingerprint`). What DID move — three indexes and two data semantics — is in [§v27 delta](#v27-delta-things-323) below, and the individual rows in the tables carry the v27 note inline. The file is deliberately NOT renamed: ~15 documents link this path, and a rename would be churn, not information.
 
 **Location:** `~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-<suffix>/Things Database.thingsdatabase/main.sqlite` (WAL mode; `-shm`/`-wal` sidecars present whenever Things has run). The `<suffix>` varies per account. Direct-download and MAS builds share this container (bundle-level parity verified; see `../../vendor/manifest.json`).
 
@@ -10,6 +12,26 @@ sqlite3 -readonly "<main.sqlite>" \
   "SELECT sql || ';' FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
    ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name;"
 ```
+Run against a **3.23** library this emits a v27 capture — identical except for the three index lines in §v27 delta. That is the shape the checked-in fixture now carries (its `Meta.databaseVersion` stamp is **27**); the filename keeps the `v26` spelling for the same no-churn reason as this document.
+
+## v27 delta (Things 3.23)
+
+Measured twice: on the maintainer's live library against Things' own pre-update daily backup ([`../lab/dbv27-migration-diff.md`](../lab/dbv27-migration-diff.md)), then re-measured in a clock-pinned golden-v4 clone, which **corrected** two of the three original readings ([`../lab/gv4-323-campaign.md`](../lab/gv4-323-campaign.md) §2). The corrected version is what follows.
+
+**DDL — index-only** (invisible to the fingerprint by design: the hash covers `PRAGMA table_info` for the depended tables, and indexes steer the query planner, not data semantics):
+
+| change | statement |
+|---|---|
+| ADDED | `index_TMTask_id_where_recurrenceRuleNotNull ON TMTask (uuid) WHERE rt1_recurrenceRule IS NOT NULL` — a partial index over exactly the repeating templates |
+| ADDED | `index_TMTask_repeatingTemplate_and_creationDate ON TMTask (rt1_repeatingTemplate, creationDate)` |
+| REMOVED | `index_TMTask_repeatingTemplate ON TMTask (rt1_repeatingTemplate)` — superseded by the two-column form above |
+
+**Data semantics — two changes, both real:**
+
+1. **The counter sentinel is gone.** The migration back-fills the `-1` "uninitialised" sentinel with a computed **`0`** on the row classes that never carried a real count: `untrashedLeafActionsCount` / `openUntrashedLeafActionsCount` on `type = 0` (to-dos, which have no leaf children), `checklistItemsCount` / `openChecklistItemsCount` on `type = 1` and `type = 2` (projects and headings, which can hold no checklist). Rows that already carried a real count are **untouched**. Under 27 every row therefore carries all four counters and **`-1` no longer means "unknown"** — a consumer that read the sentinel that way now sees a genuine `0`. (This CORRECTS the first host reading, which framed the aggregate `-1 → 0` shift as leaf to-dos "counting themselves +1".)
+2. **`rt1_nextInstanceStartDate` is scoped to templates, NOT retired.** The migration NULLs it on every non-template row and leaves every repeating template's cached value **byte-identical**; the set of rows keeping a value is exactly `rt1_recurrenceRule IS NOT NULL` — which is precisely what the new partial index is for. Verified read-only on the live host (0 of 21,962 non-templates carry one; **73 of 114 templates do**) and on a 3.23 lab corpus (8 of 10 templates, every calendar shape — [`../lab/rdlg2-323-recipe-cert.md`](../lab/rdlg2-323-recipe-cert.md) §6.1). The 3.23 app keeps maintaining the cache, so the projection day was **not** broken by the update; templates lacking a cached day (after-completion rules, paused series, and a live cohort that never had one) lacked it under 3.22 too, and are the cohort [`src/model/template-projection.ts`](../../src/model/template-projection.ts) derives for.
+
+**What did NOT move:** `rt1_instanceCreationStartDate` was byte-unchanged on both lab templates (0 rows), so the strictly-forward cursor move seen on the host is best explained as a one-time catch-up to "now" on first launch, **not** a schema-driven rewrite — and is deliberately not modeled anywhere. `repeaterMigrationDate` untouched. Zero rows inserted or deleted; every other table's row count unchanged. Rule blobs still decode (`rrv` unaffected).
 
 ## Table inventory
 
@@ -29,7 +51,7 @@ sqlite3 -readonly "<main.sqlite>" \
 | `TMMetaItem`, `BSSyncronyMetadata` | Sync-engine internals (opaque BLOBs) | Never (do not touch) |
 | `ThingsTouch_ExtensionCommandStore_{Commands,Meta}` | Command queue for app extensions (widgets/share/intents); observed empty (drained). **Not a sanctioned write vector** — reverse-engineering it would be direct-DB-write by another name | Never |
 
-Indexes: `index_TMTask_{area,project,heading,repeatingTemplate,stopDate}`, `index_TMTaskTag_tasks`, `index_TMAreaTag_areas`, `index_TMChecklistItem_task`, `index_TMTombstone_deletedObjectUUID`.
+Indexes (v26): `index_TMTask_{area,project,heading,repeatingTemplate,stopDate}`, `index_TMTaskTag_tasks`, `index_TMAreaTag_areas`, `index_TMChecklistItem_task`, `index_TMTombstone_deletedObjectUUID`. **v27** replaces `index_TMTask_repeatingTemplate` with `index_TMTask_repeatingTemplate_and_creationDate` and adds the partial `index_TMTask_id_where_recurrenceRuleNotNull` — see [§v27 delta](#v27-delta-things-323).
 
 ## TMTask — the everything table
 
@@ -78,8 +100,8 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 | `project` | uuid → TMTask(type=1). **Invariant (verified on 171/171 rows): a to-do under a heading has `project = NULL`** — the heading is the sole parent; the project is reached via `heading → its project`. Flat project-child queries MUST be `project = ? OR heading IN (SELECT uuid FROM TMTask WHERE type=2 AND project = ?)`. |
 | `heading` | uuid → TMTask(type=2). |
 | `contact` | uuid → TMContact ("delegated to" — the hidden contacts feature). |
-| `untrashedLeafActionsCount`, `openUntrashedLeafActionsCount` | Materialized child counts on projects (drive progress pies in UI). |
-| `checklistItemsCount`, `openChecklistItemsCount` | Materialized checklist counts on to-dos. |
+| `untrashedLeafActionsCount`, `openUntrashedLeafActionsCount` | Materialized child counts on projects (drive progress pies in UI). **v27:** back-filled from the `-1` sentinel to a computed `0` on `type = 0` rows, so every row now carries a real value; `-1` no longer means "uninitialised". |
+| `checklistItemsCount`, `openChecklistItemsCount` | Materialized checklist counts on to-dos. **v27:** same back-fill on `type = 1` / `type = 2` (projects and headings hold no checklist → computed `0`). |
 
 ### Ordering
 
@@ -94,7 +116,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 |---|---|
 | `rt1_recurrenceRule` | BLOB (**XML plist**, decoded READ-ONLY by `src/model/recurrence.ts`) on **templates**. `IS NOT NULL` ⇒ this row is a repeating template (91 observed). Keys (91-rule corpus + instance cross-validation, 2026-07-04): `tp` 0=fixed/1=after-completion · `fu` 16=daily/256=weekly/8=monthly/4=yearly · `fa` interval · `ts` start offset in days vs. the event date (≤0; **spawned instance deadline = startDate − ts**, held on every live instance) · `of` offsets: `dy` 0-based day (−1=last of month), `mo` 0-based month, `wd` weekday (0=Sunday), `wdo` nth weekday (−1=last) · `ed` end (unix seconds; ~year-4001 sentinel = forever) · `rc` remaining count (0=unlimited) · `rrv` version (4) · `sr`/`ia` anchors. NEVER write this blob. Templates are invisible in normal list views. Template rows may carry a `deadline` column sentinel (4001-01-01 observed) — ignore it; only the rule-derived deadline is real. |
 | `rt1_repeatingTemplate` | uuid on **instances** pointing at their template (1,936 observed). |
-| `rt1_instanceCreation*`, `rt1_nextInstanceStartDate`, `rt1_afterCompletionReferenceDate` | Instance-generation bookkeeping. `rt1_nextInstanceStartDate` uses the packed-date encoding (lab-verified: decodes to the configured next occurrence). |
+| `rt1_instanceCreation*`, `rt1_nextInstanceStartDate`, `rt1_afterCompletionReferenceDate` | Instance-generation bookkeeping. `rt1_nextInstanceStartDate` uses the packed-date encoding (lab-verified: decodes to the configured next occurrence). **v27:** the column is **template-scoped** — NULL on every non-template row, byte-identical on every template that had a value, and still maintained by the 3.23 app. Under ≤3.22 a freshly minted INSTANCE carried an uninitialised junk `69760` there; the migration clears it. Only the TEMPLATE's value ever drove generation. |
 | `repeater`, `repeaterMigrationDate` | Newer repeater representation (BLOB) + migration marker. **Lab-verified (3.22.11): new repeat rules are authored into `rt1_recurrenceRule`; `repeater` stays NULL.** Templates live in `start=2` (why list views never show them); spawned instances materialize as `start=2 + startDate=<occurrence>` and get promoted to `start=1` by app maintenance (same pending-promotion mechanics observed on live data). |
 
 **Hazard tie-in:** scheduling writes against rows with recurrence fields are vector-dependent (lab, 2026-07-03): URL `when=` **crashes Things** (T12/U12, reproduced deterministically); AppleScript `schedule` is **guarded** — clean error `Cannot schedule to-do (302)`, zero DB delta (A21). Guard `H-REPEAT-SCHEDULE` keys off `rt1_recurrenceRule`/`rt1_repeatingTemplate`/`repeater`; the URL path stays hard-blocked, the AppleScript path can surface the app's own error. Templates are invisible to AppleScript list reads but directly addressable by id (A12); the private `_private_experimental_ json` property exposes their recurrence config (A51).

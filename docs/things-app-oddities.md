@@ -672,6 +672,27 @@ Under 3.23 that control is an `AXPopUpButton` offering `Today`, then the rule's 
 
 Evidence: [lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §1.1 (the AX capture of the cascade) and cells C8/C9 (an on-rule first occurrence lands; an off-rule one is unreachable and our drive fails closed naming why), against the ≤3.22 arm cell D5 (the same request still lands there).
 
+## 12. Things 3.23: the scripting dictionary still DECLARES `_private_experimental_ reorder to dos in`, but the command now exits 0 and does nothing (GV4, 2026-08-22, golden-v4 / Things 3.23 build 32300036)
+
+A declared AppleScript command that succeeds and changes nothing is the worst failure shape a scripting interface can have: every correctness check a client can perform still passes.
+
+Measured on a fresh golden-v4 clone against a project scope whose order the fixture provably did NOT already have:
+
+```
+project LAB-PROJ-PLAIN children by index:  LAB-P-1:-665  LAB-P-2:-283  LAB-P-3:0
+drive: _private_experimental_ reorder to dos in project id "<uuid>" with ids "<P-3,P-2,P-1>"
+osascript EXIT=0
+after:                                     LAB-P-1:-665  LAB-P-2:-283  LAB-P-3:0
+```
+
+Byte-identical. Re-measured across the whole ordering suite: **15 probes whose entire command list is this wire produce a byte-EMPTY row delta** (0 inserted, 0 deleted, 0 changed) on every scope it reaches — `list "Today"`, `list "Tomorrow"`, `list "Someday"`, `list "Upcoming"`, `project id`, `area id` — while `osascript` exits 0 each time (run `o-20260822-145020`). It was fully functional through 3.22.14.
+
+**The reportable part is the DECLARATION, not the feature.** This is a private, undocumented, `_private_experimental_`-prefixed command; Cultured Code owes nobody its continued existence, and retiring it is entirely their call. But `Things.sdef` is **byte-identical to 3.22.11** — sha256 `1b675233…`, the command still declared, 7 hits — so a client that does the responsible thing and re-checks the declaration before every use (exactly what we ship) is told the surface is present and is then silently ignored. Withdrawing the declaration alongside the implementation would let every such client detect the retirement on its own, instead of discovering it as unexplained no-ops in user data. The same asymmetry as items 2a–2c, one layer up: the app is not lying about the RESULT of a write here, it is lying about the EXISTENCE of a capability.
+
+For us the consequence is concrete: the declaration canary is blind, so the engine now gates on the installed app's marketing version instead (Things ≥ 3.23 ⇒ the native path is treated as absent), every ordering scope that has a proven non-experimental protocol degrades to it automatically, and the three scopes that have none refuse rather than write. Nothing lands wrong — the fail-closed read-after-write verify caught the no-op on every attempt before the gate shipped (exit 3, `app-behavior-change`, zero mutation) — but a user on 3.23 loses heading ordering, repeating-template day-block placement, and the ordering of a Today list that contains a project.
+
+Evidence: [lab/gv4-323-campaign.md](lab/gv4-323-campaign.md) §3.1/§3.5 (discovery + the isolated repro, `lab/scripts/research-ord323.sh`) and [lab/gv4-323-certification.md](lab/gv4-323-certification.md) §1.1 (the byte-empty-delta re-measurement, now locked as a permanent behavioral canary in the o-suite).
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

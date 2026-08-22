@@ -1674,11 +1674,14 @@ describe("simulator fence", () => {
   });
 
   it("gate set but fixture databaseVersion drifted → defaultVectors throws (schema tripwire)", () => {
-    fixture.db.prepare("UPDATE Meta SET value = '27' WHERE key = 'databaseVersion'").run();
+    // The fixture stamps the modeled generation (27); a STALE 26 fixture — the
+    // generation the appliers no longer model — must trip the tripwire, exactly as
+    // a future 28 would.
+    fixture.db.prepare("UPDATE Meta SET value = '26' WHERE key = 'databaseVersion'").run();
     process.env["THINGS_SIM_WRITES"] = "1";
     process.env["THINGS_DB"] = fixture.path;
     expect(() => defaultVectors(CONFIG, {}, fixture.path)).toThrow(
-      /fence is unsatisfied:.*databaseVersion 27.*re-modeled in lockstep/s,
+      /fence is unsatisfied:.*databaseVersion 26.*re-modeled in lockstep/s,
     );
   });
 

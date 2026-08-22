@@ -1,6 +1,11 @@
 /**
  * Typed seed builders for fixture databases. Encodings mirror the atlas:
  * packed dates via the real codec, epoch REAL timestamps, correct enum ints.
+ *
+ * Rows are v27-shaped (Things 3.23, the generation build-db.ts stamps): all four
+ * maintained counters carry a computed value — never the `-1` sentinel ≤3.22 left
+ * on the classes that can hold none — and `rt1_nextInstanceStartDate` is written
+ * on repeating TEMPLATES only. See docs/lab/gv4-323-campaign.md §2.
  */
 import type { DatabaseSync } from "node:sqlite";
 
@@ -35,14 +40,21 @@ export interface SeedTaskOpts {
   project?: string | null;
   heading?: string | null;
   stopDate?: number | null;
-  /** The maintained checklist counters (the app keeps these on the row). */
+  /**
+   * The maintained checklist counters (the app keeps these on the row).
+   * v27 (Things 3.23): a row that can hold no checklist — a project or heading —
+   * carries a computed `0`, never the `-1` "uninitialised" sentinel ≤3.22 left
+   * there (GV4 §2.2), which is what the `?? 0` default below produces.
+   */
   checklistItemsCount?: number;
   openChecklistItemsCount?: number;
   /**
-   * The app-maintained materialized leaf-action counts on a PROJECT row (to-do
-   * children only — headings and checklist items are excluded by construction).
-   * Fixtures do not compute these from real children; set them explicitly to
-   * mirror what the app would maintain.
+   * The app-maintained materialized leaf-action counts (to-do children only —
+   * headings and checklist items are excluded by construction). Meaningful on a
+   * PROJECT row; v27 back-filled the `-1` sentinel with a computed `0` on `type=0`
+   * rows, which have no leaf children, so under 27 EVERY row carries a real value
+   * (GV4 §2.2). Fixtures do not compute these from real children; set them
+   * explicitly to mirror what the app would maintain.
    */
   untrashedLeafActionsCount?: number;
   openUntrashedLeafActionsCount?: number;
@@ -52,9 +64,14 @@ export interface SeedTaskOpts {
   recurrenceRuleXml?: string;
   /**
    * ISO date for rt1_nextInstanceStartDate (templates) — the app's cached
-   * next-instance day. Things ≤ 3.22 maintains it; on 3.23 it is always NULL
-   * (the dbv-27 migration retired the column), so a 3.23-shape template fixture
-   * leaves this unset and carries {@link instanceCreationStartDate} instead.
+   * next-instance day. **Set it on TEMPLATE rows only.** The column is not
+   * retired on 3.23: the dbv-27 migration SCOPES it to repeating templates —
+   * NULL on every non-template row, byte-identical on every template that had a
+   * value — and the 3.23 app keeps maintaining it (GV4 §2.1; RDLG2e §6.1 read a
+   * live cache on 8 of 10 templates). A template legitimately carries NULL when
+   * it has no calendar next (after-completion rules, paused series), which is the
+   * cohort `src/model/template-projection.ts` derives for; an INSTANCE row must
+   * leave this unset under a v27-shape fixture.
    */
   nextInstanceStartDate?: string | null;
   /** ISO date for rt1_instanceCreationStartDate — the template's spawn cursor. */

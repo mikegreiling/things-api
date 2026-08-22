@@ -60,7 +60,23 @@
             "fields": ["startBucket", "start", "startDate", "status"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O03",
@@ -113,7 +129,23 @@
             "value": 0
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O04",
@@ -150,7 +182,23 @@
             "fields": ["project", "status", "start"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O05",
@@ -203,7 +251,23 @@
             "value": "@seed:LAB-AREA-A"
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O06",
@@ -242,7 +306,23 @@
             "value": null
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O07",
@@ -438,7 +518,23 @@
             "fields": ["project", "status", "start", "heading"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O10",
@@ -477,7 +573,23 @@
             "value": "@seed:LAB-AREA-A"
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O11",
@@ -531,7 +643,23 @@
             "fields": ["index", "status", "start"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O12",
@@ -576,7 +704,23 @@
             "fields": ["todayIndex", "startBucket"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O13",
@@ -665,7 +809,23 @@
             "fields": ["area", "type", "status"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O15",
@@ -738,7 +898,23 @@
             "fields": ["start", "startDate", "status", "type"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O16",
@@ -811,7 +987,23 @@
             "fields": ["start", "startDate", "area", "type", "status"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O17",
@@ -885,7 +1077,23 @@
             "fields": ["startDate", "start", "status", "project"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O18",
@@ -1180,7 +1388,23 @@
             "fields": ["startDate", "start"]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O21",
@@ -2672,7 +2896,69 @@
             ]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Only the TEMPLATE leg is inert. The URL legs (scheduled when= bounce, forecast deadline-cycle) still land their exact order; the single-id native `list \"Upcoming\"` front-insert that places the repeating template is the command Things 3.23 accepts and ignores (GV4 3.1), so the template row comes back byte-UNTOUCHED and only the template-relative ordering wait goes unsatisfied (measured, run o-20260822-145020: exactly one unsatisfied wait, zero changed fields on the template row). The interleave degrades to 'every movable ordered, the template left where it was' - ORD-19's template day-block wiring is SUSPENDED on 3.23, and the shipped engine refuses a template-bearing day set outright rather than land a partial order (e2e steps 76/78/81). The movables' own interleave stays locked version-independently by O31/O32/O33.",
+          "expect": {
+            "verdict": "partial",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GI-F1"
+                },
+                "fields": ["index", "start", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GI-F2"
+                },
+                "fields": ["index", "start", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GI-S1"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GI-S2"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "uuid": "@seed:LAB-REPEAT-DAILY"
+                },
+                "fields": [
+                  "todayIndex",
+                  "index",
+                  "start",
+                  "startDate",
+                  "deadline",
+                  "rt1_recurrenceRule",
+                  "rt1_nextInstanceStartDate",
+                  "userModificationDate"
+                ]
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O35",
@@ -2824,7 +3110,69 @@
             ]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Only the TEMPLATE leg is inert. The URL legs (scheduled when= bounce, forecast deadline-cycle) still land their exact order; the single-id native `list \"Upcoming\"` front-insert that places the repeating template is the command Things 3.23 accepts and ignores (GV4 3.1), so the template row comes back byte-UNTOUCHED and only the template-relative ordering wait goes unsatisfied (measured, run o-20260822-145020: exactly one unsatisfied wait, zero changed fields on the template row). The interleave degrades to 'every movable ordered, the template left where it was' - ORD-19's template day-block wiring is SUSPENDED on 3.23, and the shipped engine refuses a template-bearing day set outright rather than land a partial order (e2e steps 76/78/81). The movables' own interleave stays locked version-independently by O31/O32/O33.",
+          "expect": {
+            "verdict": "partial",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GR-F1"
+                },
+                "fields": ["index", "start", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GR-F2"
+                },
+                "fields": ["index", "start", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GR-S1"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GR-S2"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "uuid": "@seed:LAB-REPEAT-DAILY"
+                },
+                "fields": [
+                  "todayIndex",
+                  "index",
+                  "start",
+                  "startDate",
+                  "deadline",
+                  "rt1_recurrenceRule",
+                  "rt1_nextInstanceStartDate",
+                  "userModificationDate"
+                ]
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O36",
@@ -2894,7 +3242,23 @@
             ]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Things 3.23 ACCEPTS `_private_experimental_ reorder to dos in` and changes nothing: osascript exits 0 and the row delta is byte-EMPTY (docs/lab/gv4-323-campaign.md 3.1, re-measured run o-20260822-145020). The shipped engine therefore treats the native surface as ABSENT from 3.23 on (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM) and routes the SIT7 fallbacks, which O22-O30 lock version-independently. deltaEmpty is the positive assertion that makes this cell the BEHAVIORAL canary the sdef declaration check cannot be: the command is still declared, so only its EFFECT can tell us when a later release restores it - at which point this row goes RED and the shipped version gate can be lifted.",
+          "expect": {
+            "verdict": "silent-noop",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "deltaEmpty"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O37",
@@ -3341,7 +3705,125 @@
             ]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Only the TEMPLATE leg is inert. The URL legs (scheduled when= bounce, forecast deadline-cycle) still land their exact order; the single-id native `list \"Upcoming\"` front-insert that places the repeating template is the command Things 3.23 accepts and ignores (GV4 3.1), so the template row comes back byte-UNTOUCHED and only the template-relative ordering wait goes unsatisfied (measured, run o-20260822-145020: exactly one unsatisfied wait, zero changed fields on the template row). The interleave degrades to 'every movable ordered, the template left where it was' - ORD-19's template day-block wiring is SUSPENDED on 3.23, and the shipped engine refuses a template-bearing day set outright rather than land a partial order (e2e steps 76/78/81). The movables' own interleave stays locked version-independently by O31/O32/O33.",
+          "expect": {
+            "verdict": "partial",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-S-LOOSE"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-S-PROJ"
+                },
+                "fields": ["start", "startBucket", "startDate", "project"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-S-HEAD"
+                },
+                "fields": ["start", "startBucket", "startDate", "heading"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-S-AREA"
+                },
+                "fields": ["start", "startBucket", "startDate", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-SP-BARE"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-SP-AREA"
+                },
+                "fields": ["start", "startBucket", "startDate", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-F-LOOSE"
+                },
+                "fields": ["index", "start", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-F-PROJ"
+                },
+                "fields": ["index", "start", "startDate", "deadline", "project"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-F-AREA"
+                },
+                "fields": ["index", "start", "startDate", "deadline", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-FP-BARE"
+                },
+                "fields": ["index", "start", "startBucket", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GX-FP-AREA"
+                },
+                "fields": ["index", "start", "startBucket", "startDate", "deadline", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "uuid": "@seed:LAB-REPEAT-DAILY"
+                },
+                "fields": [
+                  "todayIndex",
+                  "index",
+                  "start",
+                  "startDate",
+                  "deadline",
+                  "rt1_recurrenceRule",
+                  "rt1_nextInstanceStartDate",
+                  "userModificationDate"
+                ]
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": "O39",
@@ -3696,7 +4178,125 @@
             ]
           }
         ]
-      }
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.23",
+          "because": "Only the TEMPLATE leg is inert. The URL legs (scheduled when= bounce, forecast deadline-cycle) still land their exact order; the single-id native `list \"Upcoming\"` front-insert that places the repeating template is the command Things 3.23 accepts and ignores (GV4 3.1), so the template row comes back byte-UNTOUCHED and only the template-relative ordering wait goes unsatisfied (measured, run o-20260822-145020: exactly one unsatisfied wait, zero changed fields on the template row). The interleave degrades to 'every movable ordered, the template left where it was' - ORD-19's template day-block wiring is SUSPENDED on 3.23, and the shipped engine refuses a template-bearing day set outright rather than land a partial order (e2e steps 76/78/81). The movables' own interleave stays locked version-independently by O31/O32/O33.",
+          "expect": {
+            "verdict": "partial",
+            "tier": 0,
+            "allowUnsatisfiedWaits": true,
+            "assertions": [
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-S-LOOSE"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-S-PROJ"
+                },
+                "fields": ["start", "startBucket", "startDate", "project"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-S-HEAD"
+                },
+                "fields": ["start", "startBucket", "startDate", "heading"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-S-AREA"
+                },
+                "fields": ["start", "startBucket", "startDate", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-SP-BARE"
+                },
+                "fields": ["start", "startBucket", "startDate"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-SP-AREA"
+                },
+                "fields": ["start", "startBucket", "startDate", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-F-LOOSE"
+                },
+                "fields": ["index", "start", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-F-PROJ"
+                },
+                "fields": ["index", "start", "startDate", "deadline", "project"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-F-AREA"
+                },
+                "fields": ["index", "start", "startDate", "deadline", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-FP-BARE"
+                },
+                "fields": ["index", "start", "startBucket", "startDate", "deadline"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "title": "GY-FP-AREA"
+                },
+                "fields": ["index", "start", "startBucket", "startDate", "deadline", "area"]
+              },
+              {
+                "kind": "fieldUnchanged",
+                "table": "TMTask",
+                "where": {
+                  "uuid": "@seed:LAB-REPEAT-DAILY"
+                },
+                "fields": [
+                  "todayIndex",
+                  "index",
+                  "start",
+                  "startDate",
+                  "deadline",
+                  "rt1_recurrenceRule",
+                  "rt1_nextInstanceStartDate",
+                  "userModificationDate"
+                ]
+              }
+            ]
+          }
+        }
+      ]
     }
   ]
 }

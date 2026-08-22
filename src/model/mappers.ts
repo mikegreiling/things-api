@@ -21,10 +21,11 @@ import { reminderIsLive } from "../read/stage.ts";
 /**
  * Raw TMTask row shape (subset per schema manifest) PLUS the aliased template
  * projection inputs ({@link TemplateProjectionRow}) every read query splices in
- * (queries.ts `fetchTaskRows`). The retired `rt1_nextInstanceStartDate` is
+ * (queries.ts `fetchTaskRows`). The raw `rt1_nextInstanceStartDate` is
  * deliberately absent from this shape: a template's next occurrence is read
- * ONLY through {@link templateProjectionDay} (the cache while a running app
- * still maintains it, the derived day once Things 3.23 retired it), never off
+ * ONLY through {@link templateProjectionDay} (the app's cached day where the
+ * template carries one, the derived day where it does not — the paused /
+ * trashed / never-populated cohort every app version has, GV4 §2.1), never off
  * the raw column.
  */
 export interface TaskRow extends TemplateProjectionRow {
