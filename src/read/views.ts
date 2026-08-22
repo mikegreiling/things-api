@@ -71,8 +71,10 @@
  *             ONCE under its when-date, never double-emitted (the forecast
  *             cohort requires startDate IS NULL). Forecast rows keep
  *             startDate=null (no faked when-date). PLUS each fixed repeating
- *             template's next occurrence synthesized from
- *             rt1_nextInstanceStartDate (UI parity; opt out via
+ *             template's next occurrence synthesized from its PROJECTION DAY
+ *             (model/template-projection.ts — the app's cached
+ *             rt1_nextInstanceStartDate while a running Things maintains it,
+ *             else derived from the rule + spawn cursor; UI parity; opt out via
  *             repeats:false). Occurrence deadline = start − rule.ts
  *             (instance-validated 2026-07-04).
  * - someday:  start=2 AND startDate IS NULL, MINUS due-deadline-pulled rows
@@ -98,6 +100,7 @@ import type { Project, Ref, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { projectOccurrences } from "../model/occurrences.ts";
 import { decodeRecurrenceRule } from "../model/recurrence.ts";
+import { templateProjectionDay } from "../model/template-projection.ts";
 import {
   directTagScopeSql,
   directUntaggedScopeSql,
@@ -261,6 +264,15 @@ function overdueFilter(
   if (filter?.overdue !== true) return { sql: "", binds: [] };
   return { sql: ` AND ${OVERDUE}`, binds: [packedToday] };
 }
+
+/**
+ * SQLite's `ORDER BY <col> ASC` in host math: ascending, NULLs first. Used where
+ * a cohort's ordering moved out of SQL because its sort key (a repeating
+ * template's projection day) is now computed host-side — the comparator stays
+ * byte-for-byte the one the query used.
+ */
+const ascNullsFirst = (a: number | null, b: number | null): number =>
+  a === b ? 0 : a === null ? -1 : b === null ? 1 : a - b;
 
 // `boundary` is REQUIRED (no wall-clock default): every caller threads the
 // view's injected `now` via logBoundary(db, now) so the `logged` flag it stamps
@@ -624,20 +636,42 @@ export function upcomingView(
   if (filter?.repeats === false)
     return sortDated([...scheduled, ...forecast], [...rows, ...forecastRows]);
 
-  // UI parity: repeating templates surface at their app-materialized next
-  // occurrence (rt1_nextInstanceStartDate). Fixed rules only — after-
-  // completion templates carry no next date until the prior instance
+  // UI parity: repeating templates surface at their PROJECTION DAY — the app's
+  // materialized next occurrence while a running Things maintains that cache
+  // (≤ 3.22), else the day derived from the decoded rule + spawn cursor (3.23
+  // retired the cache); {@link templateProjectionDay} answers for both, and
+  // fails closed (no day → no row) rather than guessing. Fixed rules only —
+  // after-completion templates carry no next date until the prior instance
   // resolves; paused templates are excluded. The occurrence deadline follows
   // the instance-validated model: deadline = startDate − rule.startOffsetDays.
-  const templateRows = fetchTaskRows(
+  //
+  // The day is no longer a SQL predicate, so ONE census of the template cohort
+  // (the templates-with-a-rule set — tiny, and exactly what v27's new partial
+  // index covers) is fetched and split host-side into the PROJECTING rows and
+  // the RESTING rows below. The day predicates, the bounds, and the ORDER BY
+  // are applied verbatim in host math: nothing about WHERE a row lands given a
+  // day changed, only where the day comes from.
+  const templateCensus = fetchTaskRows(
     db,
     `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
-     AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
-     AND t.rt1_instanceCreationPaused = 0
-     AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?${until === undefined ? "" : " AND t.rt1_nextInstanceStartDate <= ?"}${since === undefined ? "" : " AND t.rt1_nextInstanceStartDate >= ?"}${tf.sql}
-     ORDER BY t.rt1_nextInstanceStartDate ASC, t."index" ASC`,
-    [packedToday, ...untilBinds, ...sinceBinds, ...tf.binds],
+     AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)${tf.sql}`,
+    [...tf.binds],
   );
+  const untilPacked = untilBinds[0];
+  const sincePacked = sinceBinds[0];
+  const templateRows = templateCensus
+    .map((row) => ({ row, day: templateProjectionDay(row) }))
+    .filter(
+      (t): t is { row: TaskRow; day: number } =>
+        t.row.rt1_instanceCreationPaused === 0 &&
+        t.day !== null &&
+        t.day > packedToday &&
+        (untilPacked === undefined || t.day <= untilPacked) &&
+        (sincePacked === undefined || t.day >= sincePacked),
+    )
+    // `ORDER BY <day> ASC, t."index" ASC`, in host math (SQLite sorts NULL first).
+    .toSorted((a, b) => a.day - b.day || ascNullsFirst(a.row.index, b.row.index))
+    .map((t) => t.row);
   const horizon = Math.max(1, Math.min(10, Math.trunc(filter?.horizon ?? 1)));
   const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
   const occurrences = materialize(db, templateRows, boundary, packedToday).flatMap((template) => {
@@ -698,16 +732,20 @@ export function upcomingView(
   // The UI's trailing "Repeating To-Dos" section: templates with NO set
   // next occurrence (after-completion rules between instances, rules past
   // their end date) plus paused ones — startDate stays null, the decoded
-  // rule rides along so consumers can derive waiting/paused/ended.
-  const restingRows = fetchTaskRows(
-    db,
-    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
-     AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
-     AND (t.rt1_nextInstanceStartDate IS NULL OR t.rt1_nextInstanceStartDate <= ?
-          OR t.rt1_instanceCreationPaused = 1)${tf.sql}
-     ORDER BY t.todayIndex ASC, t."index" ASC`,
-    [packedToday, ...tf.binds],
-  );
+  // rule rides along so consumers can derive waiting/paused/ended. The
+  // complement of the projecting cohort, over the same census: a template
+  // projecting nowhere, projecting no later than today, or paused. (The
+  // explicit paused arm is kept: on Things ≤ 3.22 a paused template can still
+  // carry a stale cached day, and it rests regardless.)
+  const restingRows = templateCensus
+    .filter((row) => {
+      const day = templateProjectionDay(row);
+      return day === null || day <= packedToday || row.rt1_instanceCreationPaused === 1;
+    })
+    // `ORDER BY t.todayIndex ASC, t."index" ASC`, in host math.
+    .toSorted(
+      (a, b) => ascNullsFirst(a.todayIndex, b.todayIndex) || ascNullsFirst(a.index, b.index),
+    );
   const resting = materialize(db, restingRows, boundary, packedToday).map((item) => {
     const raw = restingRows.find((r) => r.uuid === item.uuid)?.rt1_recurrenceRule;
     if (raw !== null && raw !== undefined) {
@@ -1426,8 +1464,8 @@ export interface DeadlinesFilter extends ViewFilter {
  *
  * REPEATING-TEMPLATE PROJECTION (ratified 2026-08-11): a deadline-bearing
  * template is projected at its next occurrence's deadline using the SAME
- * certified machinery global `upcoming` uses — the app-materialized next
- * occurrence (`rt1_nextInstanceStartDate` → `repeating.nextOccurrence`) with the
+ * certified machinery global `upcoming` uses — the template's projection day
+ * (`templateProjectionDay` → `repeating.nextOccurrence`) with the
  * instance-validated deadline anchor `deadline = nextOccurrence −
  * rule.startOffsetDays` (oddities §8a; the exact horizon-1 derivation
  * upcomingView applies). GUARD RAIL ("unsupported beats guessed"): a template is
@@ -1498,15 +1536,22 @@ export function deadlinesView(
   // projection is strictly future, so it never matches an overdue scope) — this
   // is the by-construction exclusion the guard rail promises.
   if (filter?.repeats !== false && filter?.overdue !== true) {
+    // The projection day is host-side (templateProjectionDay — the app's cache
+    // while it maintains one, else derived from the rule + spawn cursor), so
+    // the census is fetched on its SQL-expressible predicates and the
+    // strictly-future day gate is applied in host math. Membership is
+    // unchanged; only the day's source moved.
     const templateRows = fetchTaskRows(
       db,
       `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
        AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
        AND t.rt1_instanceCreationPaused = 0
-       AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?
        AND t.deadline IS NOT NULL${scopeSql}${tf.sql}`,
-      [packedToday, ...scopeBinds, ...tf.binds],
-    );
+      [...scopeBinds, ...tf.binds],
+    ).filter((r) => {
+      const day = templateProjectionDay(r);
+      return day !== null && day > packedToday;
+    });
     const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
     for (const r of templateRows) todayIndexOf.set(r.uuid, r.todayIndex ?? 0);
     const projections = materialize(db, templateRows, boundary, packedToday).flatMap((template) => {

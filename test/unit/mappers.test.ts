@@ -36,8 +36,14 @@ function row(overrides: Partial<TaskRow> = {}): TaskRow {
     reminderTime: null,
     deadline: null,
     deadlineSuppressionDate: null,
-    rt1_nextInstanceStartDate: null,
     rt1_instanceCreationPaused: null,
+    // The aliased template-projection inputs every read query splices in
+    // (TEMPLATE_PROJECTION_COLUMNS) — a non-template row carries them all null.
+    tpNext: null,
+    tpCursor: null,
+    tpRule: null,
+    tpPaused: null,
+    tpCount: null,
     index: -1731,
     todayIndex: 6000626,
     area: "area-1",

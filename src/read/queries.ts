@@ -7,6 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { q, selectList } from "../db/schema.ts";
 import { TASK_TYPE_FROM_DB, type Ref } from "../model/entities.ts";
 import type { ChecklistRow, TaskRow } from "../model/mappers.ts";
+import { TEMPLATE_PROJECTION_COLUMNS } from "../model/template-projection.ts";
 import {
   candidateRef,
   CANDIDATE_CAP,
@@ -947,10 +948,17 @@ export const EFFECTIVE_AREA = `COALESCE(
 )`;
 
 export function fetchTaskRows(db: DatabaseSync, where: string, params: unknown[] = []): TaskRow[] {
+  // Manifest columns + the effective area + the aliased template-projection
+  // inputs (TEMPLATE_PROJECTION_COLUMNS). Every task row carries the projection
+  // inputs because every task row may BE a template: `repeating.nextOccurrence`
+  // is mapped from templateProjectionDay(row), which needs the spawn cursor and
+  // spawn tally on Things 3.23 (the cached column it used to read is retired).
   const sql = `SELECT ${selectList("TMTask")
     .split(", ")
     .map((c) => `t.${c}`)
-    .join(", ")}, ${EFFECTIVE_AREA} AS effectiveArea FROM TMTask t WHERE ${where}`;
+    .join(
+      ", ",
+    )}, ${EFFECTIVE_AREA} AS effectiveArea, ${TEMPLATE_PROJECTION_COLUMNS} FROM TMTask t WHERE ${where}`;
   return db.prepare(sql).all(...(params as never[])) as unknown as TaskRow[];
 }
 

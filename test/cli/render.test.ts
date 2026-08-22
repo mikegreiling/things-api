@@ -1149,6 +1149,20 @@ describe("instance repeat context — the detail card's lower-corner caption (to
     expect(lines).not.toContain("repeating: instance of ");
   });
 
+  // DBV27: Things 3.23 retired the cached next-instance column, so the caption's
+  // date must come from the PROJECTION DAY (src/model/template-projection.ts) —
+  // identical on both live DB shapes. 2026-08-16 is a Sunday, so on this
+  // weekly-Sunday grid the spawn cursor projects its own day.
+  it.each([
+    ["cached (Things <= 3.22)", { nextInstanceStartDate: "2026-08-16" }],
+    ["derived (Things 3.23)", { instanceCreationStartDate: "2026-08-16" }],
+  ])("FIXED: the caption reads the template's projection day — %s", (_shape, over) => {
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    const { item } = seedSeries(FIXED_WEEKLY_XML, over);
+    expect(item?.repeating.repeats?.next).toBe("2026-08-16");
+    expect(renderDetail(item).join("\n")).toContain("repeats: on Aug 16 (instance of ");
+  });
+
   it("AFTER-COMPLETION: card shows `repeats: N day(s) after completion`, no `next`", () => {
     setRenderClock({ now: () => NOW, zone: "UTC" });
     const { item } = seedSeries(AFTER_COMPLETION_DAILY_XML);
