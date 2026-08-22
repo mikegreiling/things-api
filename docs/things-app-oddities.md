@@ -693,6 +693,32 @@ For us the consequence is concrete: the declaration canary is blind, so the engi
 
 Evidence: [lab/gv4-323-campaign.md](lab/gv4-323-campaign.md) §3.1/§3.5 (discovery + the isolated repro, `lab/scripts/research-ord323.sh`) and [lab/gv4-323-certification.md](lab/gv4-323-certification.md) §1.1 (the byte-empty-delta re-measurement, now locked as a permanent behavioral canary in the o-suite).
 
+## 13. Things 3.23: re-dating a repeating occurrence ONTO its series' next slot DOUBLE-BOOKS that day — the §9ff reconciliation defect, now with no preserve trigger required (REPX1, 2026-08-22, golden-v4 / Things 3.23 build 32300036)
+
+§9ff records the app spawning a duplicate occurrence when a series' cursor points at a date that is **already materialized**, and reaches that state through a source-PRESERVE trigger (a deadline, or a terminal checklist element) at `make-repeating` time. REPX1 reaches the same state through a gesture an ordinary user makes constantly: **moving an occurrence one day forward.**
+
+The cursor tracks slot consumption; a materialized occurrence's date is not consulted. So if you re-date this occurrence onto the day the rule is about to produce, the rule produces it anyway, and the day ends up holding two live copies of the same series.
+
+**Reproduce (pure GUI):** create a daily repeating to-do. Today's occurrence appears. Drag it (or use `When…`) to **tomorrow** — the day the series' next copy is already scheduled for. When tomorrow arrives, the list shows **two** copies of that to-do.
+
+**Probe (REPX1 cell C3b, clock pinned then advanced +1 day).** Daily series, instance dated 2026-07-05, cursor `rt1_nextInstanceStartDate = 2026-07-06`. AppleScript `schedule to do id <instance> for July 6, 2026` moved the instance onto the cursor's slot; the template stayed byte-identical (cursor still 07-06, `rt1_instanceCreationCount = 1`). Advancing the guest clock to 2026-07-06:
+
+```
+INSERTED row  startDate = 2026-07-06  status = 0  creationDate = 1783296000.0 (occurrence midnight)
+CHANGED template.rt1_instanceCreationCount : 1 -> 2
+CHANGED template.rt1_nextInstanceStartDate : 2026-07-06 -> 2026-07-07
+
+untrashed rows of the series dated 2026-07-06 = 2
+```
+
+The complementary cell (C3a) shows the same mechanism from the other side: an occurrence moved **off** its date to a free day does not vacate, suppress or reserve anything either — the rule's next occurrence still arrives on schedule, so a "moved" occurrence is really a copied one.
+
+**Expected:** materializing (or re-dating onto) a rule slot should reconcile with the cursor — either the spawn is suppressed because an occurrence for that date already exists, or the re-date is treated as the exception the GUI's own *Make Exception* chooser implies. **Actual:** the two are independent; the cursor spawns unconditionally.
+
+**Why this matters more than §9ff.** §9ff needs a preserve trigger at series-creation time, which 3.23 no longer produces via the deadline path ([lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §5.5 left open whether the reconciliation had been *fixed* or the precondition merely *changed shape*). This cell settles it: **the reconciliation is not fixed** — it is reachable in 3.23 from a bare re-date, with no deadline, no checklist element, and no automation involved. Both cells are honest negatives for any workaround on our side: the re-date is byte-for-byte an ordinary `when` write (`startDate`, `todayIndexReferenceDate`, `umd`, and `start` when leaving today), the `rt1_repeatingTemplate` FK is retained, the template is untouched, and **no chooser prompt appears on any automation vector** — so nothing we drive can express "make this an exception".
+
+**Data note:** no corruption; the two rows are independent instances of one template, both `trashed=0`, both live in every view. Evidence: [lab/repx1-instance-semantics.md](lab/repx1-instance-semantics.md) §3.2/§3.3; preceding class [§9ff](#9ff) and [lab/dblspawn1-preserved-instance.md](lab/dblspawn1-preserved-instance.md).
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

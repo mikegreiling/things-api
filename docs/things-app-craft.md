@@ -133,6 +133,24 @@ The redesigned `Next:` control (whose *cost* is oddities §11) is, as a piece of
 
 The weekly dialog lets two rows name the same weekday, and the app simply collapses them on commit — the stored rule holds a SET. That is what makes a deterministic weekday drive possible without a remove gesture at all: overwrite surplus rows with a duplicate of a wanted day and the committed rule is exactly the wanted set. A dialog that instead stored the row list verbatim would have made every set-shrink a fragile removal dance. Evidence: [lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §2.4 + cell C12; [lab/vmq1-probe-closeout.md](lab/vmq1-probe-closeout.md) §2. Things 3.22.14 + 3.23.
 
+### 6d. Checking off a future occurrence mints it just-in-time — one click, one coherent row, no phantom state
+
+Things 3.23's Upcoming renders a repeating series as a single projection row at its next occurrence day. That row is not a real to-do — no `TMTask` exists for it — and yet it carries an ordinary checkbox, indistinguishable in the accessibility tree from any materialized row's. Clicking it does the only thing that could be right: the app **mints the occurrence and completes it in the same gesture**, then advances the series exactly as the clock would have.
+
+```
+INSERTED  status=3  stopDate=<the click>  startDate=2026-07-06 (the projection day)
+          start=2   rt1_repeatingTemplate=<template>   leavesTombstone=1
+CHANGED   template  rt1_nextInstanceStartDate     2026-07-06 -> 2026-07-07
+CHANGED   template  rt1_instanceCreationStartDate 2026-07-06 -> 2026-07-07
+CHANGED   template  rt1_instanceCreationCount     1 -> 2
+```
+
+The craft is in what is *not* there. The completed occurrence is a fully-formed instance with a real FK and a real occurrence date, so the Logbook shows the right thing on the right day rather than a "completed projection" special case. The cursor advances by exactly one period — the same bookkeeping `Create Next Copy` (§6a) and the launch-time spawner perform, so three different triggers converge on one state machine. And the series' **currently pending** occurrence is left byte-identical: completing next Tuesday's copy early does not silently consume today's. Two settle windows and a relaunch later the state is unchanged. A design that instead recorded "occurrence N is done" as template-side metadata would have needed a parallel completion model, a parallel Logbook path, and a reconciliation step; minting the row is strictly simpler and strictly more consistent. Evidence: [lab/repx1-instance-semantics.md](lab/repx1-instance-semantics.md) §1.3. Things 3.23.
+
+### 6e. A bulk repeat action is one transaction, applying the single-target bytes per row
+
+`Items ▸ Repeat ▸ Pause` on a three-template selection writes exactly the bytes a single-target pause writes — `rt1_instanceCreationPaused 0→1`, cursor cleared to NULL, anchor and rule blob untouched — **on each row, with the three `userModificationDate` stamps landing inside 50 µs of one another**. No confirmation, no partial application, no aggregate-specific side effect, and `Resume` inverts it precisely. The multi-selection path is not a re-implementation of the single-item path; it is the same write, looped inside one transaction. (Contrast the reorder family's *aggregate* specifiers, whose list-scope behavior genuinely diverges from their container-scope behavior — §5.) Evidence: [lab/repx1-instance-semantics.md](lab/repx1-instance-semantics.md) §5.3. Things 3.23.
+
 ---
 
 ## Edge cases this project routed through
