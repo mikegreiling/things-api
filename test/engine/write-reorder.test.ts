@@ -15,6 +15,7 @@ import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate } from "../../src/model/dates.ts";
+import type { EnvironmentTracker, EnvironmentTuple } from "../../src/write/environment.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import { computeReorderPre } from "../../src/write/pre-state.ts";
 import { BOUNCE_MAX_ITEMS, bounceJsonCollapsible, runReorder } from "../../src/write/reorder.ts";
@@ -109,6 +110,21 @@ function deps(vectors: WriteVector[], overrides: Partial<WriteDeps> = {}): Write
     sdefProbe: () => true,
     ...overrides,
   };
+}
+
+/**
+ * An environment tracker reporting one installed Things version — the seam the
+ * GV4 version gate reads (write/environment.ts). Absent from `deps` by default,
+ * which is the "app version unknown" case (canary-only gating, as before).
+ */
+function fakeEnvironment(thingsVersion: string | null): EnvironmentTracker {
+  const tuple: EnvironmentTuple = {
+    thingsVersion,
+    macosVersion: "26.0",
+    pkgVersion: "0.0.0-test",
+    nodeBinary: "/test/node",
+  };
+  return { capture: () => tuple, load: () => tuple, record: () => {} };
 }
 
 /** Native sim: parse the ids list and assign ascending ranks (O01 semantics). */
@@ -363,6 +379,25 @@ describe("native reorder (private command through the pipeline)", () => {
     if (result.kind === "blocked") {
       expect(result.reason).toBe("environment");
       expect(result.detail).toContain("sdef");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is blocked on a 3.23 host even when explicitly asked for (--strategy native)", async () => {
+    // An explicit --strategy native bypasses the fallback router, so the
+    // pre-dispatch canary carries the version gate too: refuse loudly rather
+    // than spend a dispatch the app will accept and ignore (GV4 §3.1/§3.5).
+    const a = seedToday("A", 10);
+    const { vector, calls } = nativeVector();
+    const result = await runReorder(
+      deps([vector], { sdefProbe: () => true, environment: fakeEnvironment("3.23") }),
+      { scope: "today", uuids: [a], strategy: "native" },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.detail).toContain("Things 3.23");
+      expect(result.detail).not.toContain("sdef");
     }
     expect(calls).toHaveLength(0);
   });
@@ -2713,6 +2748,33 @@ describe.each(TEMPLATE_SHAPES)(
       expect(calls).toHaveLength(0); // nothing dispatched — never a crash-path leg
     });
 
+    it("VERSION-GATED (3.23): the same refusal names the gate, not allow-experimental", async () => {
+      // The template's only safe day-block placement is the native leg, and on
+      // 3.23 that leg does nothing — so the refusal stands, naming the version
+      // gate, and the remediation drops the two remedies that cannot help here
+      // (turning allow-experimental on; updating the app).
+      const s1 = seedDay("S1", 0);
+      const tt = seedDayTemplate("TT", -50, { derived });
+      const { urlVector, tmplVector, calls } = dayTemplateVectors();
+      const result = await runReorder(
+        deps([urlVector, tmplVector], {
+          config: config(true),
+          sdefProbe: () => true,
+          environment: fakeEnvironment("3.23"),
+        }),
+        { scope: "day", uuids: [tt, s1], named: [tt, s1] },
+      );
+      expect(result.kind).toBe("blocked");
+      if (result.kind === "blocked") {
+        expect(result.hazard).toBe("H-REORDER-SCOPE");
+        expect(result.detail).toContain(tt); // still names the template
+        expect(result.detail).toContain("Things 3.23");
+        expect(result.detail).toContain("without changing anything");
+        expect(result.remediation).toBe("reorder the day-group without the template(s)");
+      }
+      expect(calls).toHaveLength(0); // nothing dispatched — never a crash-path leg
+    });
+
     it("GUARD: a template requested in a `project` scope is refused (never onto `project id`)", async () => {
       const proj = seedProject(fixture.db, { title: "P" });
       const child = seedTodo(fixture.db, { title: "c", project: proj, start: "active", index: 10 });
@@ -3847,6 +3909,58 @@ describe("SIT7 fallback routing (experimental on → native, off / canary-fail �
     expect(result.kind).toBe("ok");
     expect(calls).toContain("project.add"); // INBOXBACK ran, not the native command
     expect(ascending(ranks([b, a], `"index"`))).toBe(true);
+  });
+
+  it("inbox: a Things 3.23 host routes to INBOXBACK though the sdef still declares it", async () => {
+    // GV4 version gate: the declaration canary is GREEN on 3.23 (the command is
+    // still in the sdef) and the command does nothing — the version arm is what
+    // takes the native path away, and the disclosure note says so.
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "inbox", index: 20 });
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(
+      deps([url, osa], {
+        config: config(true),
+        sdefProbe: () => true,
+        environment: fakeEnvironment("3.23"),
+      }),
+      { scope: "inbox", uuids: [b, a], named: [b, a] },
+    );
+    expect(result.kind).toBe("ok");
+    expect(calls).toContain("project.add"); // INBOXBACK ran, not the native command
+    expect(ascending(ranks([b, a], `"index"`))).toBe(true);
+    if (result.kind === "ok") {
+      const note = (result.warnings ?? []).join(" ");
+      expect(note).toContain("Things 3.23");
+      expect(note).toContain("without changing anything");
+      expect(note).not.toContain("sdef");
+    }
+  });
+
+  it("inbox: a pre-3.23 host is NOT version-gated (native still runs)", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "inbox", index: 20 });
+    const { vector, calls } = nativeVector(`"index"`);
+    const result = await runReorder(deps([vector], { environment: fakeEnvironment("3.22.14") }), {
+      scope: "inbox",
+      uuids: [b, a],
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain('list "Inbox"');
+  });
+
+  it("gate composition: allow-experimental OFF wins the reason even on 3.23", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "inbox", index: 20 });
+    const { url, osa } = sit7BackVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: config(false), environment: fakeEnvironment("3.23") }),
+      { scope: "inbox", uuids: [b, a], named: [b, a] },
+    );
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect((result.warnings ?? []).join(" ")).toContain("allow-experimental is off");
+    }
   });
 
   it("area: sdef canary FAIL routes to AREABACK", async () => {

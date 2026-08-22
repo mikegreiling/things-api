@@ -24,8 +24,8 @@
     "shortcutsBulkEditWithoutConfirmation": true,
     "thingsAutoUpdateDisabled": true
   },
-  "schemaFingerprint": "sha256:784bd2f6533e6f85e053b0ec68958083d4ebca11c152ad1d2935178240d4c52b",
-  "schemaNote": "databaseVersion 27 (migrated 26 -> 27 by the 3.23 warm-up launch, in-lab, observed live). Fingerprint byte-identical to golden-v1/v2/v3 — the DBV27 migration is index-only in DDL terms, so the depended tables/columns are unchanged and the existing src/db/baselines/db-v27.ts baseline covers this golden. Verified host-side with observeSchema() on the pulled pre- and post-swap guest DB copies.",
+  "schemaFingerprint": "sha256:d2b7e98c6d384ef1ecd256b1410a11652e80c5860cc48370ec9b4d6956c7d4df",
+  "schemaNote": "databaseVersion 27 (migrated 26 -> 27 by the 3.23 warm-up launch, in-lab, observed live). Fingerprint byte-identical to golden-v1/v2/v3 — the DBV27 migration is index-only in DDL terms, so the depended tables/columns are unchanged and the existing src/db/baselines/db-v27.ts baseline covers this golden. Verified host-side with observeSchema() on the pulled pre- and post-swap guest DB copies (as sha256:784bd2f6…, the value under the manifest of the day). Re-recorded 2026-08-23 (784bd2f6… -> d2b7e98c…) for the manifest widening — the depended-column list gained TMTask.rt1_instanceCreationStartDate + rt1_instanceCreationCount, both pre-existing in this golden; the value is fixture-derived and the next `lab:run` bootstrap re-verifies it against the clone.",
   "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
   "humanLayersDone": [
     "L2",

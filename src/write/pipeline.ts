@@ -32,7 +32,7 @@ import {
   type EnvironmentChange,
   type EnvironmentTracker,
 } from "./environment.ts";
-import { sdefDeclaresPrivateReorder } from "./experimental.ts";
+import { privateReorderIsNoOp, sdefDeclaresPrivateReorder } from "./experimental.ts";
 import {
   classifyTransportFailure,
   classifyVerifyFailure,
@@ -836,8 +836,27 @@ export async function runMutation<K extends OperationKind>(
     const { vector, effectiveTier } = plan.candidate;
 
     // 4b. Experimental canary: the private sdef command can vanish in any
-    // Things update — re-check the declaration before every dispatch.
+    // Things update — re-check the declaration before every dispatch. Things
+    // 3.23 broke it WITHOUT withdrawing the declaration (it still exits 0 and
+    // changes nothing — docs/lab/gv4-323-campaign.md §3.1, which caught both
+    // `reorder` and `project.move-heading`), so a version gate stands in front
+    // of the declaration check until the behavioral canary lands.
     if (plan.candidate.support.experimental === true) {
+      const appVersion = deps.environment?.capture().thingsVersion ?? null;
+      if (privateReorderIsNoOp(appVersion)) {
+        audit({ result: blockedCode({ reason: "environment" }) });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          detail:
+            `Things ${appVersion} applies the private reorder command without changing ` +
+            "anything — this operation would report a failed write, so it was NOT attempted",
+          remediation:
+            "use a non-experimental path where one exists (omit --strategy so the " +
+            "bounce/move fallbacks run), or reorder the items in the app",
+        };
+      }
       const declared = (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
       if (!declared) {
         audit({ result: blockedCode({ reason: "environment" }) });

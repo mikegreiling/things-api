@@ -19,6 +19,10 @@ import { DB_V26 } from "./db-v26.ts";
  *
  * The v26 fixture DDL (test/fixtures/schema-v26.sql) reproduces this
  * fingerprint exactly (asserted by test/unit/fingerprint.test.ts).
+ *
+ * The hash is DB_V26's by construction — the two versions' depended shape is
+ * identical — so a manifest widening (2026-08-23: the template spawn cursor +
+ * tally) moves both baselines through the one constant.
  */
 export const DB_V27: Baseline = {
   databaseVersion: 27,
