@@ -167,18 +167,19 @@
     },
     {
       "id": "A01B",
-      "title": "make new to do at a specific locus (beginning of list Today)",
+      "title": "make new to do at a locus (beginning of list Today) — inserts the row but NOT the list's scheduling (3.23)",
       "vector": "applescript",
       "operation": "todo.create-at-locus",
       "appState": "running-background",
       "commands": [
         {
-          "osascript": "tell application \"Things3\" to make new to do at beginning of list \"Today\" with properties {name:\"A01B-TODO\"}"
+          "osascript": "tell application \"Things3\" to make new to do at beginning of list \"Today\" with properties {name:\"A01B-TODO\"}",
+          "note": "Through Things 3.22.14 this both inserted the row AND scheduled it (start=1, startDate=today) — the scripted way to capture into Today. Under 3.23 the same call still succeeds, with the correct title, but leaves the to-do UNSCHEDULED (start=0, startDate NULL): a user's existing automation silently stops scheduling. See docs/things-app-oddities.md §10 and docs/lab/rdlg2-323-recipe-cert.md (cell B6, verified against golden-v4). Our applescript vector is UNAFFECTED — it creates, then issues an explicit `schedule` (B6 confirms that two-step still lands the date)."
         },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A01B-TODO' AND start=1" }
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A01B-TODO'" }
       ],
       "expect": {
-        "verdict": "supported",
+        "verdict": "partial",
         "tier": 0,
         "assertions": [
           { "kind": "inserted", "table": "TMTask", "where": { "title": "A01B-TODO" } },
@@ -187,14 +188,14 @@
             "table": "TMTask",
             "where": { "title": "A01B-TODO" },
             "field": "start",
-            "value": 1
+            "value": 0
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
             "where": { "title": "A01B-TODO" },
             "field": "startDate",
-            "value": 132805248
+            "value": null
           }
         ]
       }

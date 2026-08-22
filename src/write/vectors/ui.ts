@@ -44,6 +44,7 @@ import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } fr
 import type {
   CompiledInvocation,
   ExecuteResult,
+  RepeatDialogShape,
   UiPrimitive,
   UiRecipe,
   UiStep,
@@ -81,6 +82,15 @@ const RESOLVE_CANDIDATE_TIMEOUT_MS = 5_000;
  * costs a fail-closed spurious drive refusal (the canary miss), never a bad write.
  */
 const SETTLE_AFTER_REVEAL_MS = 1000;
+
+/**
+ * A shape-dependent step reached without the dialog having been measured — a
+ * recipe bug (the `probe-dialog-shape` step is missing or ran after its
+ * dependants). Refused, never guessed: the two shapes address DIFFERENT controls
+ * at the same index.
+ */
+const SHAPE_UNPROBED =
+  "the Repeat dialog's shape was never measured, so this control's address is unknown (recipe bug)";
 
 /**
  * Command-level primitives. Extends the recipe `UiPrimitive` set with the
@@ -256,6 +266,281 @@ export function axSelectPopupCandidatesScript(path: string, values: string[]): s
   error "none of the candidate menu items exist: " & {${list}}
 end tell`;
 }
+/**
+ * probe-dialog-shape: MEASURE which Repeat dialog is open (RDLG2) — the whole
+ * version fork, decided by STRUCTURE rather than by the app version, so the
+ * recipe self-selects on any host and a future redesign refuses instead of
+ * silently pressing the wrong control:
+ *
+ *  - `next-popup` (Things 3.23+) — the first occurrence is an `AXPopUpButton`
+ *    listing the rule's own upcoming occurrences. It sits between Ends and every
+ *    per-frequency control, so weekday / monthly / yearly pop-ups are one index
+ *    further along.
+ *  - `legacy` (Things ≤ 3.22) — the first occurrence is a free-form
+ *    `AXDateTimeArea`, and the per-frequency controls follow Ends directly.
+ *
+ * The discriminator is the CONTROL CLASS on the `Next:` row, not the presence of
+ * the label: RDLG2d measured Things 3.22.14 and found it carries the same
+ * `Next:` static text (and the same occurrence-preview line) as 3.23 — only the
+ * control beside it changed. So the probe reads the label's row position and asks
+ * what kind of control shares that row, which also keeps it independent of the
+ * dialog's Ends state (an `Ends: on date` bound adds a SECOND date area, on a
+ * different row, in both shapes). Each branch is a POSITIVE match, so an
+ * unrecognized third dialog returns "unknown" and the driver refuses. Labels are
+ * pinned English, exactly like every other selector here.
+ */
+export function axProbeDialogShapeScript(groupPath: string, rowTolerance = 8): string {
+  const tol = Math.max(1, Math.trunc(rowTolerance));
+  return `${SE}
+  set g to (${groupPath})
+  set nextY to missing value
+  set nStatic to (count of static texts of g)
+  repeat with i from 1 to nStatic
+    set v to ""
+    try
+      set v to (value of static text i of g) as text
+    end try
+    if v is "Next:" then
+      set p to position of static text i of g
+      set nextY to item 2 of p
+    end if
+  end repeat
+  if nextY is missing value then return "unknown"
+  set nPop to (count of pop up buttons of g)
+  repeat with i from 1 to nPop
+    set p to position of pop up button i of g
+    set dy to (item 2 of p) - nextY
+    if dy < 0 then set dy to -dy
+    if dy <= ${tol} then return "next-popup"
+  end repeat
+  try
+    set areas to (every UI element of g whose role is "AXDateTimeArea")
+    repeat with i from 1 to (count of areas)
+      set p to position of (item i of areas)
+      set dy to (item 2 of p) - nextY
+      if dy < 0 then set dy to -dy
+      if dy <= ${tol} then return "legacy"
+    end repeat
+  end try
+  return "unknown"
+end tell`;
+}
+
+/**
+ * select-next-occurrence: set the first occurrence through the Things 3.23
+ * `Next:` POP-UP (RDLG2). 3.23 replaced the free-form first-occurrence date area
+ * with a bounded MENU — `Today`, then the rule's own upcoming occurrences, then a
+ * `More…` item whose submenu carries the next hundred, cascading further the same
+ * way. Two consequences this script encodes:
+ *
+ *  - a requested date is reachable ONLY if the rule itself produces it (or it is
+ *    today): the menu offers nothing else, so an OFF-RULE first occurrence — free
+ *    to set on ≤3.22 — is UNEXPRESSIBLE in this dialog and must fail closed with
+ *    a named reason rather than land some neighbouring date;
+ *  - item titles are localized (`Sun, Jul 12, 2026`), so the match is made by
+ *    PARSING each title to a date (with a leading-weekday retry) and comparing
+ *    calendar components — never by rebuilding the app's display string.
+ *
+ * The cascade is walked to a bounded depth; the click is verified by reading the
+ * pop-up's value back and requiring it to equal the clicked item's own title
+ * (the fail-closed read-back the ANCH2/YANCH1 date drives established).
+ */
+export function axSelectNextOccurrenceScript(
+  popupPath: string,
+  isoDate: string,
+  maxLevels = 6,
+): string {
+  const [y, m, d] = isoDate.split("-").map((part) => Number(part));
+  const levels = Math.max(1, Math.trunc(maxLevels));
+  return `on parsedYMD(t)
+  set s to t as text
+  try
+    set theDate to date s
+    return {year of theDate, (month of theDate) as integer, day of theDate}
+  end try
+  try
+    set ofs to offset of ", " in s
+    if ofs > 0 then
+      set theDate to date (text (ofs + 2) thru -1 of s)
+      return {year of theDate, (month of theDate) as integer, day of theDate}
+    end if
+  end try
+  return missing value
+end parsedYMD
+
+set wantY to ${y}
+set wantM to ${m}
+set wantD to ${d}
+set rightNow to current date
+set isToday to ((year of rightNow) is wantY and ((month of rightNow) as integer) is wantM and (day of rightNow) is wantD)
+${SE}
+  set pu to (${popupPath})
+  repeat 20 times
+    if (exists menu 1 of pu) then exit repeat
+    click pu
+    delay 0.3
+  end repeat
+  set theMenu to menu 1 of pu
+  set clickedTitle to ""
+  set levelsSeen to 0
+  if isToday then
+    set nms to name of every menu item of theMenu
+    if (count of nms) > 0 then
+      set t1 to item 1 of nms
+      if t1 is not missing value then
+        if (my parsedYMD(t1)) is missing value then
+          set clickedTitle to t1 as text
+          click menu item 1 of theMenu
+        end if
+      end if
+    end if
+  end if
+  repeat ${levels} times
+    if clickedTitle is not "" then exit repeat
+    set levelsSeen to levelsSeen + 1
+    set nms to name of every menu item of theMenu
+    set hit to 0
+    repeat with i from 1 to (count of nms)
+      set nm to item i of nms
+      if nm is not missing value then
+        set ymd to my parsedYMD(nm)
+        if ymd is not missing value then
+          if (item 1 of ymd) is wantY and (item 2 of ymd) is wantM and (item 3 of ymd) is wantD then
+            set hit to i
+            exit repeat
+          end if
+        end if
+      end if
+    end repeat
+    if hit > 0 then
+      set clickedTitle to (item hit of nms) as text
+      click menu item hit of theMenu
+      exit repeat
+    end if
+    set lastI to (count of nms)
+    if lastI is 0 then exit repeat
+    if (item lastI of nms) is missing value then exit repeat
+    set deeper to missing value
+    try
+      set deeper to menu 1 of menu item lastI of theMenu
+    end try
+    if deeper is missing value then
+      try
+        click menu item lastI of theMenu
+        delay 0.5
+        set deeper to menu 1 of menu item lastI of theMenu
+      end try
+    end if
+    if deeper is missing value then exit repeat
+    set theMenu to deeper
+  end repeat
+  if clickedTitle is "" then
+    key code 53
+    error "select-next-occurrence: this Repeat dialog offers only the rule's own upcoming occurrences (and today) as the first occurrence, and ${isoDate} is not one of them — searched " & levelsSeen & " level(s) of the Next: menu. Ask for a date the rule actually produces, or change the rule."
+  end if
+  delay 0.4
+  set shown to (value of pu) as text
+  if shown is not clickedTitle then
+    error "select-next-occurrence: the Next: pop-up committed \\"" & shown & "\\", not the requested \\"" & clickedTitle & "\\" — the selection did not take"
+  end if
+  return "OK"
+end tell`;
+}
+
+/**
+ * converge-weekdays: drive the weekly dialog's weekday ROWS onto an exact target
+ * set through a deterministic closed loop (RDLG2 — the RRD1 fix).
+ *
+ * The shipped drive set the FIRST weekday row and then pressed "+" and re-drove
+ * THE SAME row index per extra weekday, which on a PRE-POPULATED reschedule
+ * dialog left the rule's existing weekdays untouched: `{mon,wed}` retargeted to
+ * `{tue,thu,sat}` committed `{mon,tue,thu,sat}` (VMQ1 cell 2Tb — caught only by
+ * the write pipeline's verify). It also had no way to SHRINK a set.
+ *
+ * The loop instead: (1) read the live row count; (2) press the row-add button —
+ * the smaller-x button of a weekday row, resolved from live geometry rather than
+ * a pinned index, because the row buttons enumerate in an unstable order — until
+ * there are at least as many rows as target weekdays; (3) assign EVERY row from
+ * the target set, cycling, so a surplus row duplicates a target weekday instead
+ * of keeping a stale one (the app stores the weekdays as a SET, so duplicates
+ * collapse on commit — this is what makes shrinking possible without the
+ * remove button); (4) read every row back and require the set to match exactly.
+ * Anything else errors — the pipeline re-verifies against the DB regardless.
+ *
+ * `base` is the 1-based group pop-up index of the first weekday row (2 on the
+ * legacy dialog, 3 once the 3.23 `Next:` pop-up sits in front of them).
+ */
+export function axConvergeWeekdaysScript(
+  groupPath: string,
+  base: number,
+  titles: string[],
+): string {
+  const list = titles.map((t) => `"${escapeAppleScript(t)}"`).join(", ");
+  const b = Math.max(1, Math.trunc(base));
+  return `set wantList to {${list}}
+set baseIx to ${b}
+${SE}
+  set g to (${groupPath})
+  set k to (count of wantList)
+  repeat 14 times
+    set n to (count of pop up buttons of g) - baseIx + 1
+    if n >= k then exit repeat
+    set nb to (count of buttons of g)
+    if nb is 0 then error "converge-weekdays: the dialog exposes no weekday row button, so a second weekday cannot be added"
+    set bestI to 0
+    set bestX to 1000000
+    repeat with i from 1 to nb
+      set p to position of button i of g
+      set px to item 1 of p
+      if px < bestX then
+        set bestX to px
+        set bestI to i
+      end if
+    end repeat
+    click button bestI of g
+    delay 0.5
+  end repeat
+  set n to (count of pop up buttons of g) - baseIx + 1
+  if n < k then error "converge-weekdays: the dialog would not grow to " & k & " weekday row(s) — it stopped at " & n
+  repeat with i from 1 to n
+    set wi to ((i - 1) mod k) + 1
+    set wantVal to item wi of wantList
+    set pu to pop up button (baseIx + i - 1) of g
+    if ((value of pu) as text) is not wantVal then
+      repeat 20 times
+        if (exists menu 1 of pu) then exit repeat
+        click pu
+        delay 0.3
+      end repeat
+      if not (exists menu item wantVal of menu 1 of pu) then
+        key code 53
+        error "converge-weekdays: the weekday pop-up offers no item \\"" & wantVal & "\\" (the app may not be in English)"
+      end if
+      click menu item wantVal of menu 1 of pu
+      delay 0.4
+    end if
+  end repeat
+  set absent to ""
+  repeat with wi from 1 to k
+    set wantVal to item wi of wantList
+    set seen to false
+    repeat with i from 1 to n
+      if ((value of pop up button (baseIx + i - 1) of g) as text) is wantVal then set seen to true
+    end repeat
+    if not seen then set absent to absent & wantVal & " "
+  end repeat
+  set strays to ""
+  repeat with i from 1 to n
+    set v to (value of pop up button (baseIx + i - 1) of g) as text
+    if wantList does not contain v then set strays to strays & v & " "
+  end repeat
+  if absent is not "" or strays is not "" then
+    error "converge-weekdays: the weekday rows did not converge — missing: " & absent & "| unexpected: " & strays
+  end if
+  return "OK"
+end tell`;
+}
+
 /**
  * select-row: select a PROJECT row by title, purely via AX (UIC4-a). Walks the
  * content table's rows, issues the row `select` action on each (which REPLACES
@@ -715,6 +1000,21 @@ function run(){
 }`;
 }
 
+/**
+ * The converge-weekdays step encodes both of its inputs in `value` as
+ * `"<base>|<Weekday>,<Weekday>…"`: the base is the group pop-up index of the
+ * FIRST weekday row, which the dialog SHAPE decides (2 legacy / 3 next-popup),
+ * so it rides the same shape-selected `value` the driver merges in.
+ */
+export function weekdayBaseOf(value: string): number {
+  const base = Number(value.split("|", 1)[0]);
+  return Number.isFinite(base) && base > 0 ? Math.trunc(base) : 2;
+}
+export function weekdayTitlesOf(value: string): string[] {
+  const rest = value.slice(value.indexOf("|") + 1);
+  return rest.split(",").filter((t) => t !== "");
+}
+
 /** Parse a resolve-frame "x y w h" line into the frame's center point. */
 export function parseFrameCenter(stdout: string): { x: number; y: number } | null {
   const nums = stdout.trim().split(/\s+/).map(Number);
@@ -883,6 +1183,30 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         primitive: "ensure-checkbox",
         label: step.label,
         script: axEnsureCheckboxScript(step.path ?? "", step.checkboxTarget === true),
+      };
+    case "probe-dialog-shape":
+      return {
+        primitive: "probe-dialog-shape",
+        label: step.label,
+        script: axProbeDialogShapeScript(step.path ?? ""),
+      };
+    case "select-next-occurrence":
+      return {
+        primitive: "select-next-occurrence",
+        label: step.label,
+        script: axSelectNextOccurrenceScript(step.path ?? "", step.value ?? ""),
+      };
+    case "converge-weekdays":
+      return {
+        primitive: "converge-weekdays",
+        label: step.label,
+        // `value` is "<base index>|<Weekday>,<Weekday>…" — the base index is the
+        // shape-selected group pop-up index of the first weekday row (RDLG2).
+        script: axConvergeWeekdaysScript(
+          step.path ?? "",
+          weekdayBaseOf(step.value ?? ""),
+          weekdayTitlesOf(step.value ?? ""),
+        ),
       };
     case "wait":
       return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };
@@ -1129,8 +1453,42 @@ async function drive(
   }
 
   // 2. Execute the remaining steps in order; a dynamic element is waited-for.
+  //
+  // `dialogShape` is the Repeat dialog's MEASURED structure (RDLG2), set by the
+  // recipe's `probe-dialog-shape` step and consumed by the steps that address a
+  // control the 3.23 redesign moved or replaced. It stays null on every recipe
+  // that never probes (no shape-dependent step), and any step that needs it while
+  // it is null fails closed rather than guessing an index.
+  let dialogShape: RepeatDialogShape | null = null;
   for (let i = idx; i < recipe.steps.length; i += 1) {
     let step = recipe.steps[i] as UiStep;
+    // Shape-gated step: the recipe emits BOTH the legacy and the 3.23 drive for a
+    // control whose CLASS changed, and only the matching one runs.
+    if (step.onlyShape !== undefined) {
+      if (dialogShape === null) {
+        const clear = await clearDialog(run);
+        return partial(step.label, SHAPE_UNPROBED, clear);
+      }
+      if (step.onlyShape !== dialogShape) continue;
+    }
+    // Shape-selected paths/values (the +1 index shift the 3.23 "Next:" pop-up
+    // introduced, and the weekday-row base index).
+    if (step.shaped !== undefined) {
+      if (dialogShape === null) {
+        const clear = await clearDialog(run);
+        return partial(step.label, SHAPE_UNPROBED, clear);
+      }
+      const override = step.shaped[dialogShape];
+      if (override === undefined) {
+        const clear = await clearDialog(run);
+        return partial(
+          step.label,
+          `this step has no drive for the "${dialogShape}" Repeat dialog (recipe bug)`,
+          clear,
+        );
+      }
+      step = { ...step, ...override };
+    }
     // Overall-drive watchdog: if the budget is spent, stop at THIS step boundary
     // (the per-step execFile timeouts keep the boundary close), clear any open
     // dialog, and return the honest uncertain-outcome timeout (TRACE1 #487).
@@ -1183,6 +1541,32 @@ async function drive(
       step = { ...step, path: effective };
     }
     const command = commandForStep(step, recipe.targetUuid);
+    if (step.primitive === "probe-dialog-shape") {
+      // MEASURE the dialog (RDLG2) before any shape-dependent control is touched.
+      // A shape we do not recognize refuses the drive with the dialog cleared —
+      // the same fail-closed posture as a canary miss, and for the same reason:
+      // pressing a structural index into an unknown tree is how a GUI driver
+      // writes the wrong rule.
+      const res = await run(command, STEP_TIMEOUT_MS);
+      const verdict = res.stdout.trim();
+      if (!res.ok || (verdict !== "next-popup" && verdict !== "legacy")) {
+        const clear = await clearDialog(run);
+        return partial(
+          step.label,
+          res.ok
+            ? 'its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date ' +
+                "field, so the dialog matched neither known shape — a Things update has redesigned " +
+                "it again; nothing was entered into the rule"
+            : res.timedOut === true
+              ? "the dialog-shape probe timed out"
+              : res.stderr.trim() || "the dialog-shape probe failed",
+          clear,
+        );
+      }
+      dialogShape = verdict;
+      done.push(`${step.label} (${verdict})`);
+      continue;
+    }
     if (step.primitive === "select-row" || step.primitive === "select-heading-row") {
       // Pure-AX row selection with readback verification (UIC4-a / HEADCERT1):
       // "OK" only when the intended row selected (title readback for a project

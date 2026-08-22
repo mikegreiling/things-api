@@ -125,6 +125,44 @@ describe("decodeRecurrenceRule", () => {
     });
   });
 
+  // RDLG2e (golden-v4 / Things 3.23): the app writes `<array/>` — self-closing —
+  // for a rule with no calendar offsets, which is EVERY after-completion series
+  // built through the Repeat dialog. The parser accepted `<array>…</array>` only,
+  // so the whole rule failed to decode: `things doctor` reported the template
+  // "undecodable" and the series lost its occurrence projections and rule
+  // read-back. Verbatim blob from the certification library.
+  it("decodes a rule whose offsets are an EMPTY self-closing <array/> (RDLG2e)", () => {
+    const rule = decodeRecurrenceRule(
+      ruleXml(`
+  <key>ed</key><real>64092211200</real>
+  <key>fa</key><integer>2</integer>
+  <key>fu</key><integer>256</integer>
+  <key>ia</key><real>0.0</real>
+  <key>of</key><array/>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>sr</key><real>1783209600</real>
+  <key>tp</key><integer>1</integer>
+  <key>ts</key><integer>0</integer>`),
+    );
+    expect(rule).toMatchObject({ type: "after-completion", unit: "weekly", interval: 2 });
+    expect(rule.offsets).toEqual([]);
+  });
+
+  it("decodes the other empty self-closing collections the same way", () => {
+    const rule = decodeRecurrenceRule(
+      ruleXml(`
+  <key>fa</key><integer>1</integer>
+  <key>fu</key><integer>16</integer>
+  <key>of</key><array><dict/></array>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>`),
+    );
+    expect(rule.unit).toBe("daily");
+  });
+
   it("fails loudly on unknown units and non-plist blobs", () => {
     expect(() => decodeRecurrenceRule(ruleXml("<key>fu</key><integer>99</integer>"))).toThrow();
     expect(() => decodeRecurrenceRule(new Uint8Array([0x62, 0x70]))).toThrow();

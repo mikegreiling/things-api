@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   axAssertEligibleScript,
+  axConvergeWeekdaysScript,
   axEnsureCheckboxScript,
+  axProbeDialogShapeScript,
+  axSelectNextOccurrenceScript,
   axSelectPopupCandidatesScript,
   axSelectPopupScript,
   axSetDateTimeScript,
@@ -200,5 +203,113 @@ describe("axAssertEligibleScript — reveal-landed-eligible check (ADR1, #480)",
   it("escapes the target uuid into the AppleScript string literals", () => {
     const s = axAssertEligibleScript('u"x', "menu item 1");
     expect(s).toContain('u\\"x');
+  });
+});
+
+// RDLG2 — Things 3.23 redesigned the Repeat dialog. Three new primitives carry
+// the fork: MEASURE the shape, pick the first occurrence out of the new bounded
+// menu, and converge the weekday rows in a closed loop.
+describe("axProbeDialogShapeScript — the STRUCTURAL version fork (RDLG2)", () => {
+  const script = axProbeDialogShapeScript("group 1 of sheet 1");
+
+  it("anchors on the Next: LABEL's row, not on the label's mere presence", () => {
+    // RDLG2d measured 3.22.14: it carries the same "Next:" static text as 3.23 —
+    // only the control beside it changed, so presence alone misreads 3.22 as 3.23.
+    expect(script).toContain('if v is "Next:" then');
+    expect(script).toContain("set nextY to item 2 of p");
+    expect(script).toContain('if nextY is missing value then return "unknown"');
+  });
+
+  it("decides by the CONTROL CLASS sharing that row — both branches a positive match", () => {
+    expect(script).toContain('if dy <= 8 then return "next-popup"');
+    expect(script).toContain('whose role is "AXDateTimeArea"');
+    expect(script).toContain('if dy <= 8 then return "legacy"');
+  });
+
+  it("falls through to an explicit unknown (the driver's fail-closed refusal)", () => {
+    expect(script.trimEnd().endsWith('return "unknown"\nend tell')).toBe(true);
+  });
+
+  it("never reads the app version — the fork is decided by the tree alone", () => {
+    expect(script).not.toMatch(/version/i);
+  });
+});
+
+describe("axSelectNextOccurrenceScript — the 3.23 Next: occurrence menu", () => {
+  const script = axSelectNextOccurrenceScript("pop up button 2 of group 1", "2026-09-22");
+
+  it("self-heals the pop-up open, like every other pop-up drive", () => {
+    expect(script).toContain("if (exists menu 1 of pu) then exit repeat");
+  });
+
+  it("matches by PARSING each localized item title, with a leading-weekday retry", () => {
+    // titles read "Sun, Jul 12, 2026" — locale-shaped, so they are parsed, never rebuilt
+    expect(script).toContain("on parsedYMD(t)");
+    expect(script).toContain('set ofs to offset of ", " in s');
+    expect(script).toContain("set wantY to 2026");
+    expect(script).toContain("set wantM to 9");
+    expect(script).toContain("set wantD to 22");
+  });
+
+  it("descends the More… cascade to a bounded depth", () => {
+    expect(script).toContain("set deeper to menu 1 of menu item lastI of theMenu");
+    expect(script).toContain("repeat 6 times");
+  });
+
+  it("has a today branch — the one option the rule need not produce", () => {
+    expect(script).toContain("set isToday to");
+    expect(script).toContain("click menu item 1 of theMenu");
+  });
+
+  it("FAILS CLOSED when the rule never produces the requested date", () => {
+    expect(script).toContain("only the rule's own upcoming occurrences");
+    expect(script).toContain("2026-09-22 is not one of them");
+  });
+
+  it("reads the pop-up back and refuses a value that is not the clicked item", () => {
+    expect(script).toContain("set shown to (value of pu) as text");
+    expect(script).toContain("if shown is not clickedTitle then");
+  });
+});
+
+describe("axConvergeWeekdaysScript — closed-loop weekday rows (the RRD1 fix)", () => {
+  const script = axConvergeWeekdaysScript("group 1 of sheet 1", 3, [
+    "Tuesday",
+    "Thursday",
+    "Saturday",
+  ]);
+
+  it("counts the live rows from the shape's base index", () => {
+    expect(script).toContain("set baseIx to 3");
+    expect(script).toContain("set n to (count of pop up buttons of g) - baseIx + 1");
+  });
+
+  it("resolves the add button from live GEOMETRY (the row buttons enumerate unstably)", () => {
+    // the position list is bound to a VARIABLE first: `item 1 of (position of …)`
+    // inline builds an element specifier System Events rejects (-1700, live in RDLG2c)
+    expect(script).toContain("set p to position of button i of g");
+    expect(script).toContain("set px to item 1 of p");
+    expect(script).toContain("if px < bestX then");
+    expect(script).toContain("click button bestI of g");
+  });
+
+  it("assigns EVERY row from the target set, cycling — no stale row can survive", () => {
+    expect(script).toContain("set wi to ((i - 1) mod k) + 1");
+    expect(script).toContain('{"Tuesday", "Thursday", "Saturday"}');
+  });
+
+  it("reads every row back and errors on a missing OR an unexpected weekday", () => {
+    expect(script).toContain("if not seen then set absent to absent & wantVal");
+    expect(script).toContain("if wantList does not contain v then");
+    expect(script).toContain("the weekday rows did not converge");
+  });
+
+  it("fails closed when the dialog will not grow, and when the app is not in English", () => {
+    expect(script).toContain("the dialog would not grow to");
+    expect(script).toContain("the weekday pop-up offers no item");
+  });
+
+  it("the legacy dialog's base index is 2 (no Next: pop-up in front of the rows)", () => {
+    expect(axConvergeWeekdaysScript("group 1", 2, ["Monday"])).toContain("set baseIx to 2");
   });
 });

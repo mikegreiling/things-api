@@ -168,7 +168,35 @@ export type UiPrimitive =
    * closed (an `error` the pipeline re-verifies) if the box will not converge
    * within the bounded retries.
    */
-  | "ensure-checkbox";
+  | "ensure-checkbox"
+  /**
+   * MEASURE which shape the open Repeat dialog is (RDLG2) and remember it for
+   * the rest of the drive. Emitted right before the first shape-dependent step;
+   * a dialog matching neither known shape aborts the drive fail-closed rather
+   * than press structural indexes it cannot vouch for.
+   */
+  | "probe-dialog-shape"
+  /**
+   * Choose the first occurrence from the Things 3.23 `Next:` pop-up — a bounded
+   * MENU of `Today` plus the rule's own upcoming occurrences (cascading through
+   * `More…` submenus), not a date field (RDLG2). The driver matches the request
+   * against each item's parsed date, descends the cascade, clicks the match, and
+   * reads the pop-up back. A date the rule never produces is UNREACHABLE in this
+   * dialog and fails closed — 3.23 replaced the free-form first-occurrence field
+   * the ≤3.22 `set-datetime next` drive wrote.
+   */
+  | "select-next-occurrence"
+  /**
+   * Converge the weekly dialog's weekday ROWS onto an exact target set through a
+   * deterministic closed loop (RDLG2, the RRD1 fix): read the live row count,
+   * press the row-add button until there are at least as many rows as target
+   * weekdays, assign EVERY row from the target set (cycling, so a surplus row
+   * duplicates a target weekday instead of keeping a stale one — the app stores
+   * the weekdays as a set), then read every row back and confirm the set matches.
+   * Replaces the blind first-row-then-"+" drive, which left a pre-populated
+   * dialog's stale weekdays in the committed rule.
+   */
+  | "converge-weekdays";
 
 export interface UiStep {
   primitive: UiPrimitive;
@@ -251,7 +279,43 @@ export interface UiStep {
    * confirms convergence (RRD1 closed loop). Required for every ensure-checkbox step.
    */
   checkboxTarget?: boolean;
+  /**
+   * Run this step ONLY under the named Repeat-dialog shape (RDLG2). The two
+   * shapes present the FIRST-OCCURRENCE control as different element CLASSES —
+   * an `AXDateTimeArea` (legacy) versus an `AXPopUpButton` (next-popup) — so the
+   * recipe emits BOTH drives and the driver executes the one matching the shape
+   * its `probe-dialog-shape` step measured. A step carrying this field with no
+   * shape probed fails closed.
+   */
+  onlyShape?: RepeatDialogShape;
+  /**
+   * Per-shape overrides merged into the step once the dialog shape is probed
+   * (RDLG2). The 3.23 `Next:` pop-up sits between Ends and every per-frequency
+   * control, shifting their group indices by +1 — so the SAME step carries both
+   * index sets and the driver picks by measured structure, never by app version.
+   * A step carrying this field whose probed shape has no entry fails closed.
+   */
+  shaped?: Partial<Record<RepeatDialogShape, { pathCandidates?: string[]; value?: string }>>;
 }
+
+/**
+ * The structural SHAPE of the Repeat dialog, MEASURED live (never sniffed from
+ * the app version — a version string says nothing about the tree the driver has
+ * to address, and a point release can move either way):
+ *
+ * - `next-popup` — Things 3.23+: the first occurrence is an `AXPopUpButton`
+ *   listing Today + the rule's own upcoming occurrences; it sits between Ends and
+ *   the per-frequency controls, so those are at +1.
+ * - `legacy` — Things ≤ 3.22: the first occurrence is a free-form
+ *   `AXDateTimeArea` and the per-frequency controls follow Ends directly.
+ *
+ * Both shapes label that row `Next:` (measured on 3.22.14 and 3.23 alike), so the
+ * probe discriminates on the CONTROL CLASS occupying the row, not the label.
+ *
+ * Anything matching NEITHER shape is a third, unknown dialog — the drive
+ * refuses rather than press indexes it cannot vouch for.
+ */
+export type RepeatDialogShape = "next-popup" | "legacy";
 
 export interface VectorSupport {
   support: "yes" | "partial" | "no";

@@ -275,30 +275,48 @@ const DIALOG_INTERVAL = dualForm("text field 1 of group 1");
 /** OK button. */
 const DIALOG_OK = dualForm(`button "OK"`);
 
-// --- UIC6-CERTIFIED controls (corrected from the field-map best-guess) ---
+// --- UIC6-CERTIFIED controls, RE-INDEXED PER DIALOG SHAPE (RDLG2) ----------
 // The dialog's rule controls (except the reminder/end-date pickers) all live in
 // the cadence AXGroup (`group 1`); UIC6 sat the live tree and fixed the
-// provisional structural indices. The invariant that made them addressable:
-// the "Ends" pop-up is ALWAYS `pop up button 1 of group 1`, so the per-frequency
-// pop-ups follow it (weekday=2; monthly mode=2/ordinal=3; yearly month=2/mode=3/
-// ordinal=4). Titles/`_NS:` ids are never used (both drift). See
-// docs/lab/uic6-rule-vocabulary.md for the per-control evidence.
-/** After-completion cadence unit pop-up — the ONLY group pop-up in that mode. */
+// provisional structural indices, and RDLG2 re-derived them for Things 3.23.
+// The invariant that makes them addressable is unchanged — the "Ends" pop-up is
+// ALWAYS `pop up button 1 of group 1` and the per-frequency pop-ups follow it —
+// but 3.23 inserted the new `Next:` occurrence pop-up between the two, shifting
+// every per-frequency index by +1. Both index sets ship, keyed to the SHAPE the
+// driver measures in the open dialog (`probe-dialog-shape`), never to the app
+// version. Titles/`_NS:` ids are never used (both drift). Evidence:
+// docs/lab/uic6-rule-vocabulary.md (≤3.22) and docs/lab/rdlg2-323-recipe-cert.md.
+/** After-completion cadence unit pop-up — the ONLY group pop-up in that mode (both shapes). */
 const DIALOG_AC_UNIT = dualForm("pop up button 1 of group 1");
-/** Weekly day-of-week pop-up — pop up button 2 (Ends is pop up button 1). */
-const DIALOG_WEEKDAY = dualForm("pop up button 2 of group 1");
-/** Weekly "+" button that adds a weekday row (title-less AXButton — button 1 of the group). */
-const DIALOG_ADD_WEEKDAY = dualForm("button 1 of group 1");
-/** Monthly MODE pop-up (`day` · Sunday…Saturday) — pop up button 2. */
-const DIALOG_MONTH_MODE = dualForm("pop up button 2 of group 1");
-/** Monthly ORDINAL pop-up (`last` · 1st…31st) — pop up button 3. */
-const DIALOG_MONTH_ORDINAL = dualForm("pop up button 3 of group 1");
-/** Yearly MONTH pop-up — pop up button 2 (Ends 1, then month/mode/ordinal). */
-const DIALOG_YEAR_MONTH = dualForm("pop up button 2 of group 1");
-const DIALOG_YEAR_MODE = dualForm("pop up button 3 of group 1");
-const DIALOG_YEAR_ORDINAL = dualForm("pop up button 4 of group 1");
 /** "Ends" bound pop-up (`never` · `after` · `on date`) — always pop up button 1 of the group. */
 const DIALOG_ENDS = dualForm("pop up button 1 of group 1");
+/** The cadence group itself — the handle the shape probe and the weekday converge address. */
+const DIALOG_GROUP = dualForm("group 1");
+/** The 3.23 `Next:` first-occurrence pop-up — group pop-up 2 (this shape only). */
+const DIALOG_NEXT_POPUP = dualForm("pop up button 2 of group 1");
+
+/** A group pop-up addressed at DIFFERENT indices in the two dialog shapes (RDLG2). */
+function shapedPopup(nextPopupIndex: number, legacyIndex: number): NonNullable<UiStep["shaped"]> {
+  return {
+    "next-popup": { pathCandidates: dualForm(`pop up button ${nextPopupIndex} of group 1`) },
+    legacy: { pathCandidates: dualForm(`pop up button ${legacyIndex} of group 1`) },
+  };
+}
+
+/** Monthly MODE pop-up (`day` · Sunday…Saturday) — after Ends (+ Next on 3.23). */
+const DIALOG_MONTH_MODE = shapedPopup(3, 2);
+/** Monthly ORDINAL pop-up (`last` · 1st…31st). */
+const DIALOG_MONTH_ORDINAL = shapedPopup(4, 3);
+/** Yearly MONTH pop-up, then its mode + ordinal. */
+const DIALOG_YEAR_MONTH = shapedPopup(3, 2);
+const DIALOG_YEAR_MODE = shapedPopup(4, 3);
+const DIALOG_YEAR_ORDINAL = shapedPopup(5, 4);
+/**
+ * The group pop-up index of the FIRST weekday row, per shape — the one input the
+ * weekday-converge loop needs beyond the target set (it derives the row count and
+ * the add button from live structure).
+ */
+const WEEKDAY_BASE: Record<"next-popup" | "legacy", number> = { "next-popup": 3, legacy: 2 };
 /** "Ends after [n]" count field — becomes text field 1 of the group once shown (interval was set earlier while it was the sole field). */
 const DIALOG_ENDS_COUNT = dualForm("text field 1 of group 1");
 /** "Add reminders" checkbox (sheet-level, title-pinned). The time is an AXDateTimeArea driven by set-datetime. */
@@ -371,6 +389,18 @@ function selectPopup(label: string, pathCandidates: string[], value: string): Ui
   };
 }
 /**
+ * A select-popup whose group INDEX depends on the dialog shape (RDLG2) — the
+ * driver substitutes the measured shape's candidates before dispatch, and refuses
+ * if the shape was never measured.
+ */
+function selectPopupShaped(
+  label: string,
+  shaped: NonNullable<UiStep["shaped"]>,
+  value: string,
+): UiStep {
+  return { primitive: "select-popup", label, shaped, value, dynamic: true, addressing: "title" };
+}
+/**
  * A select-popup that clicks the FIRST of several candidate menu-item LABELS
  * that exists (the after-completion unit's singular/plural pair — defect (c)).
  */
@@ -440,12 +470,16 @@ function setDateTime(label: string, spec: string, target: "next" | "ends" | "rem
 }
 
 /** Steps that drive the day anchor of a monthly rule into the mode + ordinal pop-ups. */
-function monthlyAnchorSteps(anchor: MonthlyAnchor, mode: string[], ordinal: string[]): UiStep[] {
+function monthlyAnchorSteps(
+  anchor: MonthlyAnchor,
+  mode: NonNullable<UiStep["shaped"]>,
+  ordinal: NonNullable<UiStep["shaped"]>,
+): UiStep[] {
   if ("day" in anchor) {
     // mode = "day"; ordinal names the day-of-month (or "last").
     return [
-      selectPopup("monthly mode = day", mode, "day"),
-      selectPopup(
+      selectPopupShaped("monthly mode = day", mode, "day"),
+      selectPopupShaped(
         `monthly day = ${anchor.day}`,
         ordinal,
         anchor.day === "last" ? "last" : ORDINAL_TITLE_ANY(anchor.day),
@@ -453,8 +487,8 @@ function monthlyAnchorSteps(anchor: MonthlyAnchor, mode: string[], ordinal: stri
     ];
   }
   return [
-    selectPopup(`monthly weekday = ${anchor.weekday}`, mode, WEEKDAY_TITLE[anchor.weekday]),
-    selectPopup(`monthly ordinal = ${anchor.ordinal}`, ordinal, ordinalTitle(anchor.ordinal)),
+    selectPopupShaped(`monthly weekday = ${anchor.weekday}`, mode, WEEKDAY_TITLE[anchor.weekday]),
+    selectPopupShaped(`monthly ordinal = ${anchor.ordinal}`, ordinal, ordinalTitle(anchor.ordinal)),
   ];
 }
 
@@ -509,18 +543,47 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
 
   steps.push(setField(`interval = ${rule.interval}`, DIALOG_INTERVAL, String(rule.interval)));
 
+  // MEASURE the dialog before touching any control the 3.23 redesign moved
+  // (RDLG2). Emitted only when such a control is actually addressed, so the
+  // certified two-control path (frequency + interval + OK) costs no extra hop —
+  // and so an after-completion rule, whose cadence group has neither an Ends nor
+  // a Next label to measure, never runs a probe that could only say "unknown".
+  const needsShape =
+    rule.afterCompletion !== true &&
+    ((rule.weekdays !== undefined && rule.weekdays.length > 0) ||
+      rule.monthly !== undefined ||
+      rule.yearly !== undefined ||
+      rule.next !== undefined);
+  if (needsShape) {
+    steps.push({
+      primitive: "probe-dialog-shape",
+      label:
+        "measure the Repeat dialog's shape (an occurrence pop-up on the Next: row, or a date field)",
+      pathCandidates: DIALOG_GROUP,
+      dynamic: true,
+      addressing: "title",
+    });
+  }
+
   if (rule.weekdays !== undefined && rule.weekdays.length > 0) {
-    const [first, ...rest] = rule.weekdays;
-    if (first !== undefined) {
-      steps.push(selectPopup(`weekday = ${first}`, DIALOG_WEEKDAY, WEEKDAY_TITLE[first]));
-    }
-    // Each additional weekday: press "+" to add a row, then the new pop-up. The
-    // added pop-up's index shifts per row; UIC6 confirms the exact addressing —
-    // provisionally the same DIALOG_WEEKDAY pop-up re-driven after the add.
-    for (const day of rest) {
-      steps.push(pressControl(`add weekday row (${day})`, DIALOG_ADD_WEEKDAY));
-      steps.push(selectPopup(`weekday += ${day}`, DIALOG_WEEKDAY, WEEKDAY_TITLE[day]));
-    }
+    // ONE closed-loop converge (RRD1 fix) rather than "set row 1, then press +
+    // and re-drive the same index": the old shape left a PRE-POPULATED dialog's
+    // existing weekdays in the rule and could never shrink a set. The driver
+    // reads the live rows, grows to the target count, assigns every row from the
+    // target set (cycling), and reads them all back. See ui.ts
+    // axConvergeWeekdaysScript for the loop and its evidence.
+    const titles = rule.weekdays.map((day) => WEEKDAY_TITLE[day]).join(",");
+    steps.push({
+      primitive: "converge-weekdays",
+      label: `weekdays = ${rule.weekdays.join(", ")}`,
+      pathCandidates: DIALOG_GROUP,
+      shaped: {
+        "next-popup": { value: `${WEEKDAY_BASE["next-popup"]}|${titles}` },
+        legacy: { value: `${WEEKDAY_BASE.legacy}|${titles}` },
+      },
+      dynamic: true,
+      addressing: "title",
+    });
   }
 
   if (rule.monthly !== undefined) {
@@ -530,7 +593,11 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   if (rule.yearly !== undefined) {
     const y: YearlyAnchor = rule.yearly;
     steps.push(
-      selectPopup(`yearly month = ${y.month}`, DIALOG_YEAR_MONTH, MONTH_TITLE[y.month - 1] ?? ""),
+      selectPopupShaped(
+        `yearly month = ${y.month}`,
+        DIALOG_YEAR_MONTH,
+        MONTH_TITLE[y.month - 1] ?? "",
+      ),
     );
     steps.push(...monthlyAnchorSteps(y, DIALOG_YEAR_MODE, DIALOG_YEAR_ORDINAL));
   }
@@ -587,9 +654,28 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(selectPopup("ends = on date", DIALOG_ENDS, "on date"));
   }
 
-  // After-completion has no calendar, so no Next.
+  // After-completion has no calendar, so no Next. The control's CLASS differs by
+  // dialog shape, so BOTH drives are emitted and the driver runs the one that
+  // matches what it measured (RDLG2):
+  //   - legacy (≤3.22): a free-form `AXDateTimeArea` — ANY date, on-rule or not;
+  //   - next-popup (3.23+): a bounded MENU of the rule's own occurrences, so an
+  //     off-rule first occurrence is UNREACHABLE and the step fails closed with
+  //     the reason (the app removed the affordance; we do not fake it by picking
+  //     a neighbouring date).
   if (rule.next !== undefined && rule.afterCompletion !== true) {
-    steps.push(setDateTime(`Next (first occurrence) = ${rule.next}`, `date:${rule.next}`, "next"));
+    steps.push({
+      ...setDateTime(`Next (first occurrence) = ${rule.next}`, `date:${rule.next}`, "next"),
+      onlyShape: "legacy",
+    });
+    steps.push({
+      primitive: "select-next-occurrence",
+      label: `Next (first occurrence) = ${rule.next}`,
+      pathCandidates: DIALOG_NEXT_POPUP,
+      value: rule.next,
+      onlyShape: "next-popup",
+      dynamic: true,
+      addressing: "title",
+    });
   }
 
   if (endsOnDate !== null) {
@@ -723,11 +809,28 @@ export function rescheduleRepeatRecipe(
     needsWindowReachability: true,
     steps: [
       ...preamble(targetUuid),
-      menuPress(
-        "Items ▸ Repeat ▸ Reschedule…",
-        `menu item "Reschedule…" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`,
-        REPEAT_SUBMENU_ANCHOR,
-      ),
+      // The submenu itself is still canaried (it only materializes on a selected
+      // TEMPLATE, so its presence is the real precondition) …
+      {
+        primitive: "resolve",
+        label: "Items ▸ Repeat submenu",
+        path: REPEAT_SUBMENU_ANCHOR,
+        addressing: "title",
+      },
+      // … but the ITEM was RENAMED: `Reschedule…` through Things 3.22, `Edit
+      // Rule…` from 3.23 (RDLG1). Both spellings ship as candidates so the drive
+      // self-selects on whichever the installed app offers; neither present is a
+      // fail-closed miss naming the step.
+      {
+        primitive: "press",
+        label: "Items ▸ Repeat ▸ Edit Rule… (Reschedule… on Things ≤ 3.22)",
+        pathCandidates: [
+          `menu item "Edit Rule…" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`,
+          `menu item "Reschedule…" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`,
+        ],
+        dynamic: true,
+        addressing: "title",
+      },
       ...repeatDialogEntry({ frequency, interval, ...extras }),
     ],
   };
