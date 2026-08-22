@@ -7,6 +7,11 @@ export default defineConfig({
     exclude: process.env["THINGS_LIVE"] ? [] : ["test/live/**"],
     // Render tests assert the plain-text skeleton; NO_COLOR beats any
     // FORCE_COLOR the invoking environment exports (src/cli/style.ts).
-    env: { NO_COLOR: "1" },
+    // THINGS_API_HELPERS=false: the suite runs DIRECT regardless of the host's
+    // stored `helpers-enabled` — otherwise a machine with live helpers routes
+    // test file reads into the production reader, which refuses paths outside
+    // its granted folder (observed 2026-08-22 when the maintainer enabled
+    // routing). Suites that exercise routing set the env themselves.
+    env: { NO_COLOR: "1", THINGS_API_HELPERS: "false" },
   },
 });

@@ -120,11 +120,16 @@ beforeEach(() => {
     THINGS_API_STATE_DIR: process.env["THINGS_API_STATE_DIR"],
     THINGS_API_READER_DIR: process.env["THINGS_API_READER_DIR"],
     THINGS_API_HELPERS: process.env["THINGS_API_HELPERS"],
+    THINGS_API_CONFIG_DIR: process.env["THINGS_API_CONFIG_DIR"],
     THINGS_DB: process.env["THINGS_DB"],
   };
   process.env["THINGS_API_STATE_DIR"] = stateDir;
   process.env["THINGS_API_READER_DIR"] = join(stateDir, "reader");
   process.env["THINGS_API_HELPERS"] = "true";
+  // Isolate from the host's real config: the default-inactive cell deletes
+  // the env override, which must fall back to a clean stored config, not this
+  // machine's `helpers-enabled`.
+  process.env["THINGS_API_CONFIG_DIR"] = join(stateDir, "config");
   delete process.env["THINGS_DB"];
 });
 

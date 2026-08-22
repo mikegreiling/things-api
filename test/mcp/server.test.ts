@@ -1954,7 +1954,7 @@ describe("things MCP server", () => {
 
     it("an unrecognized databaseVersion surfaces a warning in a read tool's meta", async () => {
       fixture.db.exec(
-        "UPDATE Meta SET value = replace(value, '26', '27') WHERE key = 'databaseVersion'",
+        "UPDATE Meta SET value = replace(value, '26', '99') WHERE key = 'databaseVersion'",
       );
       await connect([fakeVector(null).vector]);
       const result = await client.callTool({ name: "read_view", arguments: { view: "today" } });
