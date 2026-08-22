@@ -73,7 +73,7 @@ Zero table / column / trigger delta; 0 rows inserted or deleted; every other tab
 | `rt1_instanceCreationStartDate` | **0** | untouched |
 | everything else | 0 | — |
 
-### 2.1 Correction 1 — `rt1_nextInstanceStartDate` is NOT retired
+### 2.1 Correction 1 — `rt1_nextInstanceStartDate` is NOT retired, and the migration did not break the projection day
 
 DBV27 reads the host numbers as "the per-row next-instance cache is **RETIRED**", and up-next escalates that into engine break (0): *the TMPLSORT/PTMPL projection day has lost its input.*
 
@@ -85,7 +85,40 @@ The lab says otherwise. Before the migration **all 37 rows** carried a value; 35
 
 So the migration does not retire the column — it **scopes it to repeating templates** and clears the meaningless sentinel everywhere else, which is precisely what the new partial index `… ON TMTask (uuid) WHERE rt1_recurrenceRule IS NOT NULL` is for. The host numbers agree once you do the arithmetic: 22,074 shared rows − 21,960 changed = **114**, exactly the host's repeating-template count.
 
-**Consequence: the "projection day broken" engine break is very likely a FALSE ALARM.** `move.ts` / `reorder.ts` / `pre-state.ts` read `rt1_nextInstanceStartDate` *on templates*, and on templates it is intact. (Template-adjacent reorder IS broken under 3.23 — see §3.2 — but for a completely different reason.) The maintainer should re-read the host DB to confirm the 114 non-null rows are the templates before spending the derivation work item (0) queued in up-next.
+#### Confirmed against the live host
+
+The lab has only two templates, so the claim was checked on the maintainer's own (already-migrated) library, read-only through `scripts/prod-read.sh`:
+
+```
+SELECT (rt1_recurrenceRule IS NOT NULL) AS isTemplate,
+       (rt1_nextInstanceStartDate IS NOT NULL) AS hasNext, COUNT(*)
+FROM TMTask GROUP BY 1,2;
+  0 | 0 | 21962      <- every non-template row: NULL
+  1 | 0 |    41      <- templates WITHOUT a projection value
+  1 | 1 |    73      <- templates WITH one
+```
+
+So on the host too the column survives — on **73 of 114 templates** — and is NULL on every one of the 21,962 non-template rows. It is not retired.
+
+The 41 template NULLs are **not** the migration's doing; they predate it. DBV27's own numbers close exactly: of 22,074 shared rows, 21,960 changed (21,959 val→NULL plus 1 organic val→val), and 73 end non-null, so 21,959 + 73 = 22,032 rows held a value before the migration and **42 were already NULL** — matching the 41 template NULLs measured now to within one row. Every template that had a cached projection kept it, byte-identical, exactly as the lab shows.
+
+Breaking the 41 down (`rt1_recurrenceRule IS NOT NULL`, grouped):
+
+| paused | trashed | count | has a projection? |
+|---|---|---|---|
+| no | no | **73** | yes |
+| no | no | **27** | no |
+| no | yes | 6 | no |
+| yes | no | 3 | no |
+| yes | yes | 5 | no |
+
+All 8 paused and all 11 trashed templates lack one, which is unsurprising. The interesting cohort is the **27 live, unpaused, untrashed templates with no cached projection** — a template class that never had one (after-completion rules have no calendar next; a rule past its Ends bound has none either are the obvious candidates, unverified).
+
+#### What this means for the queued work
+
+- **The 3.23 migration did NOT break the projection day.** Any template lacking a cached projection lacked it under 3.22 as well. If `move.ts` / `reorder.ts` / `pre-state.ts` behaved correctly on 3.22.14 they behave the same on 3.23 — the up-next item (0) framing ("the projection day has lost its input") is wrong.
+- The derivation work that landed on main while this campaign ran — `src/model/template-projection.ts` (#520) and the read routing (#522) — is therefore **a real robustness improvement for a PRE-EXISTING gap covering ~24% of live templates, not a 3.23 regression fix.** It already prefers the cached column when present, which is exactly right; what needs correcting is the premise in its naming and comments ("Things 3.23 has retired `rt1_nextInstanceStartDate`", "takes the cached column while a running app still maintains it (≤3.22)") — 3.23 maintains it too, on 73 of 114 live templates. **Its lab certification still rides steps (2)/(3), and the 27 live templates with no cached projection are the cohort that actually exercises the derivation** — worth a targeted cell rather than assuming the sweep covers it (the golden's two seed templates both carry a cached value, so nothing in this sweep touched the derived path).
+- Template-adjacent reorder IS broken under 3.23 — see §3.1 — but for a completely unrelated reason (the private reorder command no-ops for everything).
 
 ### 2.2 Correction 2 — the counters are sentinel initialisation, not a self-count
 
