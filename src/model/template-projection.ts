@@ -12,16 +12,21 @@
  *     still keeps it, it IS the answer (live-version support, not a legacy
  *     shim).
  *  2. DERIVED from the decoded rule + the `rt1_instanceCreationStartDate` cursor
- *     otherwise. Things **3.23** RETIRED the cache: the dbv-27 migration nulled
- *     it library-wide (21,960 of 22,074 rows) and stopped maintaining it, while
- *     moving the spawn cursor strictly FORWARD on 82% of templates — the cursor
- *     is the app's own surviving anchor for the next occurrence, so the
- *     projection is the first rule occurrence on or after it. The projection
- *     runs through the ONE occurrence generator ({@link projectOccurrences}),
- *     never a second rule evaluator: for an on-grid cursor it returns the cursor
- *     itself; for an off-rule first occurrence (ANCH2 — a typed "Next:" the grid
- *     does not contain) it returns the first rule-ALIGNED occurrence at or after
- *     it, which is exactly what the retired column held.
+ *     otherwise. The NULL-cache case is real but narrower than first measured:
+ *     the dbv-27 migration (Things 3.23) nulled the column on NON-template rows
+ *     only and left every template's cached value byte-identical (GV4 in-lab
+ *     re-measurement + live-host confirmation — docs/lab/gv4-323-campaign.md,
+ *     correcting docs/lab/dbv27-migration-diff.md). What actually lacks the
+ *     cache is a PRE-EXISTING template cohort (~a quarter of the live library:
+ *     paused, trashed, or never populated) — plus whatever a future app version
+ *     chooses to stop maintaining. The cursor is the app's own anchor for the
+ *     next occurrence, so the projection is the first rule occurrence on or
+ *     after it. The projection runs through the ONE occurrence generator
+ *     ({@link projectOccurrences}), never a second rule evaluator: for an
+ *     on-grid cursor it returns the cursor itself; for an off-rule first
+ *     occurrence (ANCH2 — a typed "Next:" the grid does not contain) it returns
+ *     the first rule-ALIGNED occurrence at or after it — exactly what the
+ *     cached column holds when present.
  *
  * FAIL CLOSED — the helper returns `null` (never a guess) whenever the app would
  * not render a projection or the derivation is not sound:
@@ -59,7 +64,7 @@ export const TEMPLATE_PROJECTION_COLUMNS =
 
 /** A template row's projection inputs (see {@link TEMPLATE_PROJECTION_COLUMNS}). */
 export interface TemplateProjectionRow {
-  /** `rt1_nextInstanceStartDate` — packed; always NULL on Things ≥ 3.23. */
+  /** `rt1_nextInstanceStartDate` — packed; NULL on paused/trashed/never-populated templates. */
   tpNext: number | null;
   /** `rt1_instanceCreationStartDate` — the packed spawn cursor. */
   tpCursor: number | null;
@@ -77,9 +82,10 @@ export interface TemplateProjectionRow {
  * returns the day only.
  */
 export function templateProjectionDay(row: TemplateProjectionRow): number | null {
-  // Things ≤ 3.22: the app's own cache is authoritative.
+  // The app's own cache is authoritative whenever it exists (3.23 still
+  // maintains it on templates — GV4 correction).
   if (row.tpNext !== null) return row.tpNext;
-  // Things ≥ 3.23: derive. A paused series renders no projection (its cursor
+  // No cache: derive. A paused series renders no projection (its cursor
   // column was cleared while the anchor stayed) — never resurrect one.
   if (row.tpPaused === 1) return null;
   if (row.tpRule === null || row.tpRule === undefined) return null;

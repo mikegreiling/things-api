@@ -28,3 +28,13 @@ The fingerprint hashes the depended tables/columns, so it is identical across th
 2. **Cursor rewrite intersects the repeater laws:** 82% of templates had their spawn cursor moved forward by the migration — re-walk the spawn-shape / first-occurrence laws (and the #508 oracle) FIRST in the register walk. The strictly-forward pattern is consistent with the app re-anchoring cursors past already-materialized occurrences (possibly addressing the oddities §9ff double-spawn class — verify in the lab, do not assume).
 3. **Counter semantics shift:** `src/read/shape.ts` consumes the leaf-action counters for container progress; only `type = 0` rows changed (+1 self-count), project rows unchanged, so shaped project progress is likely stable — confirm in `lab:regress`.
 4. `rrv` decoding is UNAFFECTED: host doctor reports 114 templates / 0 undecodable under 27.
+
+---
+
+## CORRECTION (2026-08-22, GV4 in-lab re-measurement + live-host verification — [gv4-323-campaign.md](gv4-323-campaign.md))
+
+The body above stands as the original snapshot; three of its readings were **corrected** by re-running the migration inside golden-v4 (clock-pinned, controlled) and verifying read-only against the live host:
+
+1. **`rt1_nextInstanceStartDate` is NOT retired.** The migration nulls the cache on **non-template rows only** (live host: 0 of 21,962 non-templates carry one) and leaves every template's cached value byte-identical (73 of 114 templates still carry one). The template NULLs predate the migration — paused, trashed, or never-populated cohorts; the body's own arithmetic closes on ~42 pre-existing NULLs. The projection-day engine work (#520/#522) therefore fixes a **pre-existing** gap (~24% of live templates), not a 3.23 regression; its cache-first preference is correct on 3.23 too.
+2. **The counter change is a `-1` sentinel → computed `0`** on row classes that never carried a real count — not a leaf self-count. Rows with real counts are untouched.
+3. **The spawn-cursor rewrite did not reproduce** on a clock-pinned library (0 changed rows in-lab) — the 94 forward moves on the host are consistent with a one-time cursor **catch-up to "now"** at migration, not a rule re-anchor.
