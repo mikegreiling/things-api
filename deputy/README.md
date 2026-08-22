@@ -1,6 +1,6 @@
 # things-helpers — the permission broker pair (one bundle)
 
-Two small launchd-supervised Swift helpers, shipped inside ONE signed bundle (`things-helpers.app`), that perform the CLI's privileged primitives so macOS permission grants attach to **stable signed identities** instead of whichever agent harness happens to invoke `things` this week. Design of record: [docs/design/agent-daemon.md](../docs/design/agent-daemon.md) (§β1, §3b).
+Two small launchd-supervised Swift helpers, shipped inside ONE signed bundle (`Things API Helper.app`), that perform the CLI's privileged primitives so macOS permission grants attach to **stable signed identities** instead of whichever agent harness happens to invoke `things` this week. Design of record: [docs/design/agent-daemon.md](../docs/design/agent-daemon.md) (§β1, §3b).
 
 - **things-deputy** (`src/`, the bundle's main executable, unsandboxed) — app automation: `osascript` execution and the bundled `things-proxy-*` Shortcuts. Mutations only; file verbs answer `unsupported-verb`.
 - **things-reader** (`reader/`, nested at `Contents/Helpers/things-reader.app`, SANDBOXED) — database/file reads through a durable security-scoped bookmark to the Things folder, minted once by `things helpers grant` (SANDBOX1, [docs/lab/sandbox1-scoped-reader.md](../docs/lab/sandbox1-scoped-reader.md)). Serves `sql`/`read-file`/`locate` from its container socket (`~/Library/Containers/com.pixelcog.things-reader/Data/reader.sock`). Ships as a signed minimal .app because amfid refuses ad-hoc/self-signed roots on sandboxed code and secinit refuses bare executables. Its bundle identifier keys the user's bookmark grant and must never change.
@@ -10,7 +10,7 @@ Two small launchd-supervised Swift helpers, shipped inside ONE signed bundle (`t
 ## Build, sign, install
 
 ```sh
-bash scripts/build-helpers.sh        # swiftc → deputy/build/things-helpers.app, signed when an identity exists
+bash scripts/build-helpers.sh        # swiftc → deputy/build/Things API Helper.app, signed when an identity exists
 things helpers install               # copy to the stable path + launchd bootstrap (both halves)
 things helpers grant                 # ONCE: accept the panel → durable scoped read grant for the reader
 things helpers status                # verify: running, signed, granted

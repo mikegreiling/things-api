@@ -22,7 +22,7 @@ import { readerSocketPath, readerTokenPath } from "../../src/deputy/protocol.ts"
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const appBinary = join(
   repoRoot,
-  "deputy/build/things-helpers.app/Contents/Helpers/things-reader.app/Contents/MacOS/things-reader",
+  "deputy/build/Things API Helper.app/Contents/Helpers/things-reader.app/Contents/MacOS/things-reader",
 );
 
 function hasSigningIdentity(): boolean {

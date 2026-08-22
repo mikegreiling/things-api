@@ -131,7 +131,7 @@ echo "$1:$2:$3:$4:$5:$6"
     );
 
     child = spawn(
-      join(repoRoot, "deputy/build/things-helpers.app/Contents/MacOS/things-deputy"),
+      join(repoRoot, "deputy/build/Things API Helper.app/Contents/MacOS/things-deputy"),
       ["--state-dir", deputyDir],
       {
         stdio: "ignore",

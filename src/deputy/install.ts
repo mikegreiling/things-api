@@ -6,7 +6,7 @@
  * crashed helper relaunches with its identity (and therefore its macOS
  * permission grants) intact.
  *
- * Both halves ship inside ONE bundle (things-helpers.app): things-deputy
+ * Both halves ship inside ONE bundle (Things API Helper.app): things-deputy
  * (automation, unsandboxed) is the bundle's main executable and the sandboxed
  * things-reader.app nests under Contents/Helpers with its own bundle identity
  * — that identity (com.pixelcog.things-reader) keys the user's security-scoped
@@ -54,7 +54,7 @@ export function helpersInstallDir(env: NodeJS.ProcessEnv = process.env): string 
 
 /** Where `helpers install` places the bundle. */
 export function helpersInstalledBundlePath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(helpersInstallDir(env), "things-helpers.app");
+  return join(helpersInstallDir(env), "Things API Helper.app");
 }
 
 /** The installed deputy executable (the bundle's main executable). */
@@ -69,7 +69,7 @@ export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): st
 
 /** The build output of scripts/build-helpers.sh in this package checkout. */
 export function helpersDefaultBuildPath(): string {
-  return fileURLToPath(new URL("../../deputy/build/things-helpers.app", import.meta.url));
+  return fileURLToPath(new URL("../../deputy/build/Things API Helper.app", import.meta.url));
 }
 
 function readerLaunchTarget(): string {

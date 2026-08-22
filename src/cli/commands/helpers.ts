@@ -112,7 +112,7 @@ export function registerHelpers(program: Command): void {
     )
     .option(
       "--bundle <path>",
-      "path to a built things-helpers.app (default: deputy/build/things-helpers.app in this package)",
+      "path to a built Things API Helper.app (default: deputy/build/Things API Helper.app in this package)",
     )
     .action((opts: { bundle?: string }) => {
       try {

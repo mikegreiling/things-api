@@ -4,7 +4,7 @@
 # executable, and the sandboxed things-reader.app (file verbs) nested under
 # Contents/Helpers with its own bundle identity + entitlements.
 #
-# Output: deputy/build/things-helpers.app
+# Output: deputy/build/Things API Helper.app
 #
 # Signing: TCC grants attach to the responsible code identity, so the bundle
 # MUST carry a stable identity for grants to survive rebuilds — ad-hoc is
@@ -55,7 +55,7 @@ fi
 STAGE="$BUILD_DIR/.things-helpers.build.$$"
 trap 'rm -rf "$STAGE"' EXIT
 rm -rf "$STAGE"
-APP="$STAGE/things-helpers.app"
+APP="$STAGE/Things API Helper.app"
 mkdir -p "$APP/Contents/MacOS"
 
 echo "building things-deputy $VERSION..."
@@ -83,9 +83,9 @@ else
 fi
 
 if [ -n "$IDENTITY" ]; then
-  echo "signing things-helpers.app with '$IDENTITY' (hardened runtime + timestamp)..."
+  echo "signing Things API Helper.app with '$IDENTITY' (hardened runtime + timestamp)..."
   codesign --force --sign "$IDENTITY" \
-    --identifier com.pixelcog.things-helpers \
+    --identifier com.pixelcog.things-api-helper \
     --options runtime --timestamp \
     "$APP"
   codesign --verify --verbose=1 "$APP"
@@ -97,8 +97,8 @@ fi
 
 # Fresh inode for the deliverable (the kernel caches signature state per
 # vnode), and clear any pre-bundle build outputs so nothing stale lingers.
-rm -rf "$BUILD_DIR/things-helpers.app" "$BUILD_DIR/things-deputy" "$BUILD_DIR/things-reader.app"
-mv "$APP" "$BUILD_DIR/things-helpers.app"
+rm -rf "$BUILD_DIR/Things API Helper.app" "$BUILD_DIR/things-helpers.app" "$BUILD_DIR/things-deputy" "$BUILD_DIR/things-reader.app"
+mv "$APP" "$BUILD_DIR/Things API Helper.app"
 rm -rf "$STAGE"
 trap - EXIT
-echo "built $BUILD_DIR/things-helpers.app"
+echo "built $BUILD_DIR/Things API Helper.app"
