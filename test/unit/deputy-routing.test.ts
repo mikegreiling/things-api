@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PKG_VERSION } from "../../src/contracts.ts";
+import { EXPECTED_HELPERS_VERSION } from "../../src/deputy/protocol.ts";
 import { createDeputyDbFacade } from "../../src/deputy/db-facade.ts";
 import { readContainerFileSync } from "../../src/deputy/files.ts";
 import { osaExec, osaExecSync } from "../../src/deputy/osa.ts";
@@ -64,7 +64,7 @@ async function startMock(overrides: MockOverrides = {}): Promise<void> {
     workerData: {
       socketPath: deputySocketPath(process.env),
       token: overrides.token ?? TOKEN,
-      deputyVersion: overrides.deputyVersion ?? PKG_VERSION,
+      deputyVersion: overrides.deputyVersion ?? EXPECTED_HELPERS_VERSION,
       protocol: overrides.protocol ?? 1,
       dbPath:
         overrides.dbPath === undefined
@@ -98,7 +98,7 @@ async function startMockReader(
     workerData: {
       socketPath: readerSocketPath(process.env),
       token: TOKEN,
-      deputyVersion: PKG_VERSION,
+      deputyVersion: EXPECTED_HELPERS_VERSION,
       protocol: 1,
       dbPath: "/tmp/mock-things/D.thingsdatabase/main.sqlite",
       helloDbPath:
@@ -119,12 +119,12 @@ beforeEach(() => {
   savedEnv = {
     THINGS_API_STATE_DIR: process.env["THINGS_API_STATE_DIR"],
     THINGS_API_READER_DIR: process.env["THINGS_API_READER_DIR"],
-    THINGS_API_DEPUTY: process.env["THINGS_API_DEPUTY"],
+    THINGS_API_HELPERS: process.env["THINGS_API_HELPERS"],
     THINGS_DB: process.env["THINGS_DB"],
   };
   process.env["THINGS_API_STATE_DIR"] = stateDir;
   process.env["THINGS_API_READER_DIR"] = join(stateDir, "reader");
-  process.env["THINGS_API_DEPUTY"] = "true";
+  process.env["THINGS_API_HELPERS"] = "true";
   delete process.env["THINGS_DB"];
 });
 
@@ -141,15 +141,15 @@ afterEach(async () => {
 
 describe("activation matrix", () => {
   it("is inactive by default (no env, no config)", () => {
-    delete process.env["THINGS_API_DEPUTY"];
+    delete process.env["THINGS_API_HELPERS"];
     const routing = deputyRouting();
     expect(routing.active).toBe(false);
     expect(routing.reason).toBe("disabled");
   });
 
-  it("THINGS_API_DEPUTY=false forces inactive even with a live broker", async () => {
+  it("THINGS_API_HELPERS=false forces inactive even with a live broker", async () => {
     await startMock();
-    process.env["THINGS_API_DEPUTY"] = "false";
+    process.env["THINGS_API_HELPERS"] = "false";
     expect(deputyRouting().active).toBe(false);
   });
 
@@ -169,7 +169,7 @@ describe("activation matrix", () => {
     await startMock();
     const routing = deputyRouting();
     expect(routing.active).toBe(true);
-    expect(routing.hello?.deputyVersion).toBe(PKG_VERSION);
+    expect(routing.hello?.deputyVersion).toBe(EXPECTED_HELPERS_VERSION);
     expect(routing.hello?.dbPath).toContain("main.sqlite");
   });
 

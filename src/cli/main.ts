@@ -10,7 +10,7 @@ import { Command } from "commander";
 
 import { registerHelp } from "./help.ts";
 import { installExcessArgsHelp } from "./excess-args.ts";
-import { registerDeputy } from "./commands/deputy.ts";
+import { registerHelpers } from "./commands/helpers.ts";
 import { registerDoctor } from "./commands/doctor.ts";
 import { registerOpResult } from "./commands/op-result.ts";
 import { registerMcp } from "./commands/mcp.ts";
@@ -44,17 +44,17 @@ export function buildProgram(): Command {
     // stated for the record — most top-level typos route through the bare-noun
     // did-you-mean instead, this covers the subcommand groups).
     .showSuggestionAfterError(true)
-    // Per-invocation deputy routing override. Highest precedence: the hook
-    // writes THINGS_API_DEPUTY before any command action loads config, so an
+    // Per-invocation helper routing override. Highest precedence: the hook
+    // writes THINGS_API_HELPERS before any command action loads config, so an
     // explicit flag outranks both the environment and the stored key.
     .option(
-      "--deputy",
-      "route database reads and app automation through the things-deputy helper for this invocation",
+      "--helpers",
+      "route database reads and app automation through the installed helpers for this invocation",
     )
-    .option("--no-deputy", "run direct for this invocation, even when the helper is enabled");
+    .option("--no-helpers", "run direct for this invocation, even when the helpers are enabled");
   program.hook("preAction", (thisCommand) => {
-    const flag = thisCommand.opts()["deputy"] as boolean | undefined;
-    if (flag !== undefined) process.env["THINGS_API_DEPUTY"] = flag ? "true" : "false";
+    const flag = thisCommand.opts()["helpers"] as boolean | undefined;
+    if (flag !== undefined) process.env["THINGS_API_HELPERS"] = flag ? "true" : "false";
   });
   registerDoctor(program);
   registerOpResult(program);
@@ -65,7 +65,7 @@ export function buildProgram(): Command {
   registerTodoCommands(program);
   registerWriteCommands(program);
   registerSetup(program);
-  registerDeputy(program);
+  registerHelpers(program);
   registerInstallSkill(program);
   registerSnapshot(program);
   registerMcp(program);

@@ -1,6 +1,6 @@
 /**
  * Live certification of the REAL Swift broker (deputy/src). Builds it with
- * scripts/build-deputy.sh, runs it as a supervised child against a temp state
+ * scripts/build-helpers.sh, runs it as a supervised child against a temp state
  * dir, a synthetic SQLite file, and a stub osascript — never the production
  * container, never the real /usr/bin/osascript. Skipped automatically off
  * macOS or when no Swift toolchain is present (CI runs the mock suite;
@@ -14,7 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PKG_VERSION } from "../../src/contracts.ts";
+import { EXPECTED_HELPERS_VERSION } from "../../src/deputy/protocol.ts";
 import { osaExecSync } from "../../src/deputy/osa.ts";
 import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-exec.ts";
 import { DeputySyncBridge } from "../../src/deputy/bridge.ts";
@@ -61,14 +61,14 @@ describe.skipIf(!runnable)("things-deputy broker (live binary)", () => {
   }
 
   beforeAll(async () => {
-    execFileSync("bash", ["scripts/build-deputy.sh"], { cwd: repoRoot, stdio: "ignore" });
+    execFileSync("bash", ["scripts/build-helpers.sh"], { cwd: repoRoot, stdio: "ignore" });
 
     tmp = mkdtempSync(join(tmpdir(), "depL-"));
-    for (const key of ["THINGS_API_STATE_DIR", "THINGS_API_DEPUTY", "THINGS_DB"]) {
+    for (const key of ["THINGS_API_STATE_DIR", "THINGS_API_HELPERS", "THINGS_DB"]) {
       savedEnv[key] = process.env[key];
     }
     process.env["THINGS_API_STATE_DIR"] = tmp;
-    process.env["THINGS_API_DEPUTY"] = "true";
+    process.env["THINGS_API_HELPERS"] = "true";
     delete process.env["THINGS_DB"];
 
     // Synthetic "container": root/ThingsData-TEST/Things Database.thingsdatabase/main.sqlite
@@ -130,9 +130,13 @@ echo "$1:$2:$3:$4:$5:$6"
       { stdio: "ignore", timeout: 120_000 },
     );
 
-    child = spawn(join(repoRoot, "deputy/build/things-deputy"), ["--state-dir", deputyDir], {
-      stdio: "ignore",
-    });
+    child = spawn(
+      join(repoRoot, "deputy/build/things-helpers.app/Contents/MacOS/things-deputy"),
+      ["--state-dir", deputyDir],
+      {
+        stdio: "ignore",
+      },
+    );
     const socket = deputySocketPath(process.env);
     const deadline = Date.now() + 5000;
     while (!existsSync(socket) || !existsSync(deputyTokenPath(process.env))) {
@@ -157,11 +161,11 @@ echo "$1:$2:$3:$4:$5:$6"
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("handshakes with the package version as a mutations-only deputy", () => {
+  it("handshakes with the helpers version as a mutations-only deputy", () => {
     const res = request({ verb: "hello" });
     expect(res["ok"]).toBe(true);
     expect(res["protocol"]).toBe(1);
-    expect(res["deputyVersion"]).toBe(PKG_VERSION);
+    expect(res["deputyVersion"]).toBe(EXPECTED_HELPERS_VERSION);
     expect(res["role"]).toBe("deputy");
   });
 

@@ -20,7 +20,10 @@ import { DeputySyncBridge } from "../../src/deputy/bridge.ts";
 import { readerSocketPath, readerTokenPath } from "../../src/deputy/protocol.ts";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-const appBinary = join(repoRoot, "deputy/build/things-reader.app/Contents/MacOS/things-reader");
+const appBinary = join(
+  repoRoot,
+  "deputy/build/things-helpers.app/Contents/Helpers/things-reader.app/Contents/MacOS/things-reader",
+);
 
 function hasSigningIdentity(): boolean {
   try {
@@ -51,7 +54,7 @@ describe.skipIf(!runnable)("things-reader (live sandboxed bundle)", () => {
 
   beforeAll(async () => {
     if (!existsSync(appBinary)) {
-      execFileSync("bash", ["scripts/build-deputy.sh"], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("bash", ["scripts/build-helpers.sh"], { cwd: repoRoot, stdio: "ignore" });
     }
     child = spawn(appBinary, ["--serve"], { stdio: "ignore" });
     const socket = readerSocketPath({});
@@ -88,7 +91,7 @@ describe.skipIf(!runnable)("things-reader (live sandboxed bundle)", () => {
     const res = request({ verb: "locate" });
     expect(res["ok"]).toBe(false);
     expect((res["error"] as { code: string }).code).toBe("not-granted");
-    expect((res["error"] as { message: string }).message).toContain("things deputy grant");
+    expect((res["error"] as { message: string }).message).toContain("things helpers grant");
   });
 
   it("automation verbs are structurally absent", () => {

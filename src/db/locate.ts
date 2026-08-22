@@ -8,8 +8,12 @@ import { globSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+/** The Things group container, relative to $HOME (also the grant-ceremony target). */
+export const THINGS_GROUP_CONTAINER =
+  "Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac";
+
 const CONTAINER_GLOB = join(
-  "Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac",
+  THINGS_GROUP_CONTAINER,
   "ThingsData-*/Things Database.thingsdatabase/main.sqlite",
 );
 

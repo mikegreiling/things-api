@@ -44,7 +44,7 @@ function config(driveBudgetMs?: number): ThingsApiConfig {
     bounceEnabled: true,
     bounceMaxItems: 30,
     autoLaunch: true,
-    deputyEnabled: false,
+    helpersEnabled: false,
     ui: { enabled: true, ...(driveBudgetMs !== undefined && { driveBudgetMs }) },
     host: "test-host",
   };

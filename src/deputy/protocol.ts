@@ -2,12 +2,13 @@
  * things-deputy wire protocol: shared constants, request/response shapes, and
  * path resolution for the broker's socket, token, and state directory.
  *
- * The deputy (deputy/src/*.swift) is a deliberately dumb privileged proxy —
- * read-only SQL, fixed-shape osascript, container-scoped file reads — so that
- * macOS TCC grants attach to its one stable signed identity instead of
+ * The helpers (deputy/src, deputy/reader) are deliberately dumb privileged
+ * proxies — the deputy runs fixed-shape osascript/shortcuts (mutations), the
+ * sandboxed reader serves read-only SQL and scoped file reads — so that macOS
+ * permission grants attach to their stable signed identities instead of
  * whichever agent harness invokes the CLI. All product logic stays here in the
  * library; the protocol therefore carries raw primitives, never operations.
- * See docs/design/agent-daemon.md (§β1).
+ * See docs/design/agent-daemon.md (§β1, §3b).
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,16 @@ import { join } from "node:path";
 import { stateDir } from "../paths.ts";
 
 export const DEPUTY_PROTOCOL_VERSION = 1;
+
+/**
+ * The helpers version this package expects — the helpers are versioned on
+ * their OWN line (deputy/VERSION), decoupled from the package version, so a
+ * package release whose helper sources are unchanged never nags for (or
+ * forces) a reinstall of a byte-equivalent bundle. Bump deputy/VERSION with
+ * any helper-source change; a drift test asserts this constant matches it.
+ * The PROTOCOL version above remains the hard compatibility gate.
+ */
+export const EXPECTED_HELPERS_VERSION = "1.0.0";
 
 /** launchd label (and signing identifier) of the broker. */
 export const DEPUTY_LAUNCHD_LABEL = "com.pixelcog.things-deputy";
