@@ -22,7 +22,11 @@ import {
   composeRepeatRuleSpec,
   ruleXml as composeRuleXml,
 } from "../../src/write/recurrence-rule-blob.ts";
-import { makeRepeatingRecipe, pauseRepeatRecipe } from "../../src/write/vectors/ui-recipes.ts";
+import {
+  makeRepeatingRecipe,
+  pauseRepeatRecipe,
+  rescheduleRepeatRecipe,
+} from "../../src/write/vectors/ui-recipes.ts";
 import { createUiVector, type UiCommand, type UiRunResult } from "../../src/write/vectors/ui.ts";
 import type { CompiledInvocation, UiRecipe, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -1173,5 +1177,104 @@ describe("ui driver — session-reachability gate (SESSGATE #480)", () => {
     expect(res.stderr).not.toContain("confirmed gone");
     // The proven maneuver ran to clear the (unseen) stuck sheet.
     expect(commands.some(isCloseReopen)).toBe(true);
+  });
+});
+
+// RDLG2 — Things 3.23 redesigned the Repeat dialog: a new "Next:" occurrence
+// pop-up sits between Ends and every per-frequency control (+1 to their indices)
+// and REPLACES the first-occurrence date area. The driver MEASURES which dialog is
+// open and drives accordingly; nothing keys off the app version, so one binary
+// serves both goldens and an unrecognized third dialog refuses.
+describe("ui driver — the measured Repeat-dialog shape fork (RDLG2)", () => {
+  /** Answer every probe/canary happily; `shape` is what the dialog measures as. */
+  function shapeRunner(shape: string) {
+    return mockRunner((c) => {
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "probe-dialog-shape") return ok(shape);
+      return ok("OK");
+    });
+  }
+  const recipe = makeRepeatingRecipe("TODO-1", "weekly", 1, {
+    weekdays: ["tuesday", "thursday"],
+    next: "2026-09-22",
+  });
+
+  it("under the 3.23 dialog: weekday rows start at pop-up 3 and Next is a MENU pick", async () => {
+    const { run, commands } = shapeRunner("next-popup");
+    const res = await createUiVector(config(true), run).execute(invocation(recipe));
+    expect(res.exitCode).toBe(0);
+    const weekdays = commands.find((c) => c.primitive === "converge-weekdays");
+    expect(weekdays?.script).toContain("set baseIx to 3");
+    expect(weekdays?.script).toContain('{"Tuesday", "Thursday"}');
+    // the first occurrence goes through the new pop-up, and the ≤3.22 date-area
+    // write is NOT dispatched (it would target a control that no longer exists)
+    expect(commands.some((c) => c.primitive === "select-next-occurrence")).toBe(true);
+    expect(commands.some((c) => c.primitive === "set-datetime")).toBe(false);
+  });
+
+  it("under the ≤3.22 dialog: weekday rows start at pop-up 2 and Next is a date write", async () => {
+    const { run, commands } = shapeRunner("legacy");
+    const res = await createUiVector(config(true), run).execute(invocation(recipe));
+    expect(res.exitCode).toBe(0);
+    expect(commands.find((c) => c.primitive === "converge-weekdays")?.script).toContain(
+      "set baseIx to 2",
+    );
+    const dt = commands.find((c) => c.primitive === "set-datetime");
+    expect(dt?.script).toContain("2026-09-22");
+    expect(commands.some((c) => c.primitive === "select-next-occurrence")).toBe(false);
+  });
+
+  it("a dialog matching NEITHER shape refuses before any control is driven", async () => {
+    const { run, commands } = shapeRunner("unknown");
+    const res = await createUiVector(config(true), run).execute(invocation(recipe));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("matched neither known shape");
+    expect(res.stderr).toContain("nothing was entered into the rule");
+    // no weekday/next/OK actuation followed the refusal
+    expect(commands.some((c) => c.primitive === "converge-weekdays")).toBe(false);
+    expect(commands.some((c) => c.primitive === "select-next-occurrence")).toBe(false);
+    expect(commands.filter((c) => c.primitive === "press" && c.script?.includes('"OK"'))).toEqual(
+      [],
+    );
+  });
+
+  it("the measured shape is named in the completed-steps trail", async () => {
+    const { run } = shapeRunner("next-popup");
+    const res = await createUiVector(config(true), run).execute(invocation(recipe));
+    expect(res.stdout).toContain("(next-popup)");
+  });
+
+  it("the certified two-control path drives with NO shape probe at all", async () => {
+    const { run, commands } = shapeRunner("next-popup");
+    const res = await createUiVector(config(true), run).execute(
+      invocation(makeRepeatingRecipe("TODO-1", "daily", 2)),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(commands.some((c) => c.primitive === "probe-dialog-shape")).toBe(false);
+  });
+
+  it("reschedule presses whichever menu spelling the installed app offers", async () => {
+    // 3.23 renamed Reschedule… to Edit Rule…; the drive resolves the candidates in
+    // order, so an app offering only the OLD name still drives.
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve")
+        return ok(c.script?.includes('"Edit Rule…"') === true ? "false" : "true");
+      if (c.primitive === "wait") return ok("true");
+      return ok("OK");
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(rescheduleRepeatRecipe("TODO-1", "daily", 3)),
+    );
+    expect(res.exitCode).toBe(0);
+    const press = commands.find(
+      (c) => c.primitive === "press" && c.script?.includes("of menu 1 of menu item") === true,
+    );
+    expect(press?.script).toContain('menu item "Reschedule…"');
   });
 });

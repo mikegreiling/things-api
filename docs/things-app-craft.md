@@ -119,6 +119,20 @@ The private `_private_experimental_ reorder` command and the `when=`/`deadline=`
 
 On a *container* specifier (`reorder to dos in project id …` / `area …`) the command is deterministic and faithful — it re-ranks `index` (or `todayIndex`, date-preservingly) into the exact requested order and preserves the container FK. Its front-insert geometry is internally consistent enough to build exact-order protocols on: the `when=` bounce **front-inserts** a loose/area-direct member at the group `index` minimum and **back-inserts** a container child at the group end, both fully deterministic and both preserving `start`, the container FK, `reminderTime`, and `deadline` — so a reverse-order (front-insert) or forward-order (back-insert) leg sequence lands any target order exactly. `list "Someday"` even carries a distinct but coherent **anchor-stack** model (the call's original top item never moves; to-dos stack ascending, someday projects descending), which is unusual but self-consistent across the two-call protocol. The determinism is the craft — it is precisely what the aggregate specifiers lack. Evidence: [reference/novel-paths.md](reference/novel-paths.md) #1 (the private reorder + anchor-stack), #37 (SOMEBNC front/back-insert split), #48 (DAYBNC); [lab/reordgaps-results.md](lab/reordgaps-results.md) (SOMEBNC / BOUNCE2-h); oddities §9h (the containment-dependent re-entry direction, recorded there as an *inconsistency* note — clean and deterministic, just not uniform).
 
+## 6. Repeat craft in the 3.23 dialog
+
+### 6a. `Create Next Copy` is a clean "spawn the pending occurrence now" — with the same bookkeeping the clock does
+
+Things 3.23 adds `Items ▸ Repeat ▸ Create Next Copy` on a template. One press materializes the instance the cursor is pointing at AND advances the series exactly as the date's arrival would: the new row lands with the cursor's own `startDate` and its `rt1_repeatingTemplate` FK set, `rt1_instanceCreationStartDate` steps to the next occurrence, and `rt1_instanceCreationCount` increments. No dialog, no confirmation, no divergence between the manual path and the automatic one — the same state machine, just triggered by hand. It is the affordance a user who wants "do next week's one today" previously had to fake by editing dates. Evidence: [lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §5.2. Things 3.23.
+
+### 6b. The occurrence pop-up is bounded, lazily generated, and semantically tagged
+
+The redesigned `Next:` control (whose *cost* is oddities §11) is, as a piece of engineering, careful: rather than rendering an unbounded date list it shows a window of the rule's own occurrences and hangs the rest off cascading `More…` submenus, generated only as each level is reached — the AX tree shows populated levels ahead of the pointer and zero-frame placeholders beyond, about ten years out. Every occurrence item carries a shared `AXIdentifier` (`nextDateOptionAction:`) distinguishing it from the separator (`_popUpItemAction:`), which is a genuinely accessible way to say "these are the data rows" without depending on their localized titles. The preview line beside the rule (`",  7/12/26,  7/19/26, …"`) updates live as the rule is edited, so the dialog answers "what will this actually do?" before OK is pressed. Evidence: [lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §1.1. Things 3.23.
+
+### 6c. The weekday set is stored deduplicated, so a transient duplicate row cannot corrupt a rule
+
+The weekly dialog lets two rows name the same weekday, and the app simply collapses them on commit — the stored rule holds a SET. That is what makes a deterministic weekday drive possible without a remove gesture at all: overwrite surplus rows with a duplicate of a wanted day and the committed rule is exactly the wanted set. A dialog that instead stored the row list verbatim would have made every set-shrink a fragile removal dance. Evidence: [lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §2.4 + cell C12; [lab/vmq1-probe-closeout.md](lab/vmq1-probe-closeout.md) §2. Things 3.22.14 + 3.23.
+
 ---
 
 ## Edge cases this project routed through

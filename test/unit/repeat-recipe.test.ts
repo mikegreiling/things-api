@@ -19,16 +19,31 @@ import {
   resumeRepeatRecipe,
   type RepeatRuleExtras,
 } from "../../src/write/vectors/ui-recipes.ts";
-import type { UiRecipe, UiStep } from "../../src/write/vectors/types.ts";
+import type { RepeatDialogShape, UiRecipe, UiStep } from "../../src/write/vectors/types.ts";
 
-/** The dialog-entry steps (those addressed by pathCandidates). */
+/**
+ * Apply the driver's shape resolution (RDLG2) to a recipe: drop the steps that
+ * belong to the OTHER dialog shape, and fold each step's per-shape override in —
+ * exactly what `drive()` does once `probe-dialog-shape` has measured the dialog.
+ */
+function forShape(steps: UiStep[], shape: RepeatDialogShape): UiStep[] {
+  const out: UiStep[] = [];
+  for (const s of steps) {
+    if (s.onlyShape !== undefined && s.onlyShape !== shape) continue;
+    out.push(s.shaped === undefined ? s : Object.assign({}, s, s.shaped[shape]));
+  }
+  return out;
+}
+
+/** The dialog-entry steps (those addressed by pathCandidates), resolved for a shape. */
 function dialogSteps(
   extras: RepeatRuleExtras,
   frequency: "daily" | "weekly" | "monthly" | "yearly" = "weekly",
   interval = 1,
+  shape: RepeatDialogShape = "next-popup",
 ) {
   const recipe = makeRepeatingRecipe("T-1", frequency, interval, extras);
-  return recipe.steps.filter((s) => s.pathCandidates !== undefined);
+  return forShape(recipe.steps, shape).filter((s) => s.pathCandidates !== undefined);
 }
 const labels = (steps: UiStep[]) => steps.map((s) => s.label);
 
@@ -36,10 +51,10 @@ const labels = (steps: UiStep[]) => steps.map((s) => s.label);
 function allDialogSteps(
   extras: RepeatRuleExtras,
   frequency: "daily" | "weekly" | "monthly" | "yearly" = "weekly",
+  shape: RepeatDialogShape = "next-popup",
 ) {
-  return makeRepeatingRecipe("T-1", frequency, 1, extras).steps.filter(
-    (s) => s.pathCandidates !== undefined || s.primitive === "set-datetime",
-  );
+  const steps = forShape(makeRepeatingRecipe("T-1", frequency, 1, extras).steps, shape);
+  return steps.filter((s) => s.pathCandidates !== undefined || s.primitive === "set-datetime");
 }
 
 describe("repeat dialog recipe — dual-form addressing", () => {
@@ -70,13 +85,24 @@ describe("repeat dialog recipe — dual-form addressing", () => {
 });
 
 describe("repeat dialog recipe — per-control drive", () => {
-  it("weekly multi-day: a weekday pop-up + a '+' add per extra day", () => {
+  it("weekly multi-day: ONE closed-loop weekday converge, never a blind '+' ladder (RRD1)", () => {
     const steps = dialogSteps({ weekdays: ["monday", "wednesday", "friday"] });
-    const l = labels(steps);
-    expect(l).toContain("weekday = monday");
-    expect(l.filter((x) => x.startsWith("add weekday row"))).toHaveLength(2);
-    expect(l).toContain("weekday += wednesday");
-    expect(l).toContain("weekday += friday");
+    const converge = steps.filter((s) => s.primitive === "converge-weekdays");
+    expect(converge).toHaveLength(1);
+    expect(converge[0]?.label).toBe("weekdays = monday, wednesday, friday");
+    // the whole target set rides ONE step (so a pre-populated dialog cannot keep
+    // a stale row), and the blind add-then-redrive-the-same-index shape is gone
+    expect(converge[0]?.value).toBe("3|Monday,Wednesday,Friday");
+    expect(labels(steps).some((x) => x.startsWith("add weekday row"))).toBe(false);
+  });
+
+  it("the weekday converge carries the row base index for BOTH dialog shapes", () => {
+    const raw = makeRepeatingRecipe("T-1", "weekly", 1, { weekdays: ["tuesday"] }).steps;
+    const step = raw.find((s) => s.primitive === "converge-weekdays");
+    // Ends is group pop-up 1 in both shapes; 3.23 slots its "Next:" pop-up in at
+    // 2, so the first weekday row is 3 there and 2 on the legacy dialog.
+    expect(step?.shaped?.["next-popup"]?.value).toBe("3|Tuesday");
+    expect(step?.shaped?.legacy?.value).toBe("2|Tuesday");
   });
 
   it("monthly nth-weekday: mode + ordinal pop-ups", () => {
@@ -199,11 +225,19 @@ describe("repeat dialog recipe — per-control drive", () => {
   it("RRD1 ordering: the deadline checkbox converges BEFORE the Next field is driven", () => {
     // Deadline mode changes what "Next:" means (it becomes the deadline date, YANCH1
     // #493), so the checkbox must be converged before Next is driven with the shift.
-    const steps = allDialogSteps({ deadline: true, startDaysEarlier: 21, next: "2026-09-22" });
-    const deadlineIdx = steps.findIndex((s) => s.label === "Add deadlines");
-    const nextIdx = steps.findIndex((s) => s.dtTarget === "next");
-    expect(deadlineIdx).toBeGreaterThanOrEqual(0);
-    expect(nextIdx).toBeGreaterThan(deadlineIdx);
+    // Holds under BOTH dialog shapes — the first-occurrence control changed class
+    // in 3.23 (a pop-up pick, not a date write) but not its place in the order.
+    for (const shape of ["next-popup", "legacy"] as const) {
+      const steps = allDialogSteps(
+        { deadline: true, startDaysEarlier: 21, next: "2026-09-22" },
+        "weekly",
+        shape,
+      );
+      const deadlineIdx = steps.findIndex((s) => s.label === "Add deadlines");
+      const nextIdx = steps.findIndex((s) => s.label.startsWith("Next "));
+      expect(deadlineIdx).toBeGreaterThanOrEqual(0);
+      expect(nextIdx).toBeGreaterThan(deadlineIdx);
+    }
   });
 
   it("OK is always the last dialog step", () => {
@@ -226,9 +260,111 @@ describe("repeat dialog recipe — shared by reschedule + project", () => {
     const recipe = projectMakeRepeatingRecipe("AREA-1", "P-1", "Proj", "weekly", 2, {
       weekdays: ["monday", "thursday"],
     });
-    const l = recipe.steps.map((s) => s.label);
-    expect(l).toContain("weekday = monday");
-    expect(l).toContain("weekday += thursday");
+    const converge = recipe.steps.find((s) => s.primitive === "converge-weekdays");
+    expect(converge?.label).toBe("weekdays = monday, thursday");
+    expect(recipe.steps.some((s) => s.primitive === "probe-dialog-shape")).toBe(true);
+  });
+
+  it("reschedule offers BOTH menu spellings — Edit Rule… (3.23) and Reschedule… (≤3.22)", () => {
+    const recipe = rescheduleRepeatRecipe("T-1", "daily", 1);
+    const press = recipe.steps.find(
+      (s) => s.primitive === "press" && s.pathCandidates !== undefined,
+    );
+    expect(press?.pathCandidates?.[0]).toContain('menu item "Edit Rule…"');
+    expect(press?.pathCandidates?.[1]).toContain('menu item "Reschedule…"');
+    // the submenu itself stays canaried (it only exists on a selected template)
+    const anchor = recipe.steps.find((s) => s.primitive === "resolve");
+    expect(anchor?.path).toContain('menu item "Repeat"');
+    expect(anchor?.dynamic).not.toBe(true);
+  });
+});
+
+// RDLG2: Things 3.23 redesigned the Repeat dialog — a new "Next:" occurrence
+// pop-up sits between Ends and every per-frequency control (shifting them +1) and
+// REPLACES the first-occurrence date area. The recipe carries both shapes and the
+// driver measures which one is open; nothing keys off the app version.
+describe("repeat dialog recipe — the 3.23 shape fork (RDLG2)", () => {
+  it("probes the dialog's shape BEFORE any control the redesign moved", () => {
+    for (const extras of [
+      { weekdays: ["monday"] } as RepeatRuleExtras,
+      { monthly: { day: 4 } } as RepeatRuleExtras,
+      { yearly: { month: 3, day: 1 } } as RepeatRuleExtras,
+      { next: "2026-09-22" } as RepeatRuleExtras,
+    ]) {
+      const steps = makeRepeatingRecipe("T-1", "weekly", 1, extras).steps;
+      const probeIdx = steps.findIndex((s) => s.primitive === "probe-dialog-shape");
+      const firstShaped = steps.findIndex(
+        (s) => s.shaped !== undefined || s.onlyShape !== undefined,
+      );
+      expect(probeIdx).toBeGreaterThanOrEqual(0);
+      expect(firstShaped).toBeGreaterThan(probeIdx);
+    }
+  });
+
+  it("does NOT probe when no control depends on the shape (the certified two-control path)", () => {
+    expect(makeRepeatingRecipe("T-1", "daily", 3).steps).not.toContainEqual(
+      expect.objectContaining({ primitive: "probe-dialog-shape" }),
+    );
+    // after-completion has no calendar at all — no Ends, no Next, nothing to measure
+    expect(
+      makeRepeatingRecipe("T-1", "weekly", 2, { afterCompletion: true, next: "2026-09-22" }).steps,
+    ).not.toContainEqual(expect.objectContaining({ primitive: "probe-dialog-shape" }));
+  });
+
+  it("per-frequency pop-ups shift +1 under the 3.23 shape, and only there", () => {
+    const monthly = (shape: RepeatDialogShape) =>
+      dialogSteps({ monthly: { day: 15 } }, "monthly", 1, shape)
+        .filter((s) => s.primitive === "select-popup")
+        .map((s) => s.pathCandidates?.[0]);
+    expect(monthly("next-popup")).toEqual([
+      expect.stringContaining("pop up button 1 of"), // frequency (sheet-level)
+      expect.stringContaining("pop up button 3 of group 1"), // monthly mode
+      expect.stringContaining("pop up button 4 of group 1"), // ordinal
+    ]);
+    expect(monthly("legacy")).toEqual([
+      expect.stringContaining("pop up button 1 of"),
+      expect.stringContaining("pop up button 2 of group 1"),
+      expect.stringContaining("pop up button 3 of group 1"),
+    ]);
+  });
+
+  it("yearly month/mode/ordinal are 3/4/5 on 3.23 and 2/3/4 on the legacy dialog", () => {
+    const yearly = (shape: RepeatDialogShape) =>
+      dialogSteps({ yearly: { month: 10, day: 8 } }, "yearly", 1, shape)
+        .filter((s) => s.primitive === "select-popup")
+        .slice(1) // drop the sheet-level frequency pop-up
+        .map((s) => s.pathCandidates?.[0]);
+    expect(yearly("next-popup")).toEqual([
+      expect.stringContaining("pop up button 3 of group 1"),
+      expect.stringContaining("pop up button 4 of group 1"),
+      expect.stringContaining("pop up button 5 of group 1"),
+    ]);
+    expect(yearly("legacy")).toEqual([
+      expect.stringContaining("pop up button 2 of group 1"),
+      expect.stringContaining("pop up button 3 of group 1"),
+      expect.stringContaining("pop up button 4 of group 1"),
+    ]);
+  });
+
+  it("the first occurrence is a MENU pick on 3.23 and a date-area write on ≤3.22", () => {
+    const raw = makeRepeatingRecipe("T-1", "weekly", 1, { next: "2026-09-22" }).steps;
+    const modern = forShape(raw, "next-popup").filter((s) => s.label.startsWith("Next "));
+    const legacy = forShape(raw, "legacy").filter((s) => s.label.startsWith("Next "));
+    expect(modern).toHaveLength(1);
+    expect(modern[0]?.primitive).toBe("select-next-occurrence");
+    expect(modern[0]?.value).toBe("2026-09-22");
+    expect(modern[0]?.pathCandidates?.[0]).toContain("pop up button 2 of group 1");
+    expect(legacy).toHaveLength(1);
+    expect(legacy[0]?.primitive).toBe("set-datetime");
+    expect(legacy[0]?.dtTarget).toBe("next");
+  });
+
+  it("Ends / interval / checkbox controls are shape-INDEPENDENT (they did not move)", () => {
+    const shared = (shape: RepeatDialogShape) =>
+      dialogSteps({ ends: { kind: "after", count: 5 }, deadline: true }, "daily", 2, shape).map(
+        (s) => [s.label, s.pathCandidates?.[0]],
+      );
+    expect(shared("next-popup")).toEqual(shared("legacy"));
   });
 });
 

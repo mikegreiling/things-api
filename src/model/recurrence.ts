@@ -323,6 +323,20 @@ class Parser {
         return true;
       case "false/":
         return false;
+      // Self-closing EMPTY collections. Things writes `<array/>` for a rule with
+      // no calendar offsets — every AFTER-COMPLETION template, which has no
+      // anchor to list (RDLG2e: `things doctor` reported "1 undecodable" against
+      // a real 3.23 library holding one, and the whole rule then failed to
+      // decode, costing that template its occurrence projections and its rule
+      // read-back). `<dict/>` and `<string/>` are the same shape, so all three
+      // are accepted rather than leaving the next empty collection to rediscover
+      // this the same way.
+      case "array/":
+        return [];
+      case "dict/":
+        return {};
+      case "string/":
+        return "";
       case "dict": {
         const dict: { [key: string]: PlistValue } = {};
         while (!this.peekClose("dict")) {

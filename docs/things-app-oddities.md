@@ -660,6 +660,18 @@ Beyond refusing quiet-vector schedule edits (below), `things:///update-project?i
 
 Through 3.22.14, `make new to do with properties {…} at beginning of list "Today"` both inserted the row and scheduled it (start = 1, `startDate` = today) — the documented way to script a Today capture. Under 3.23 the same call succeeds (no error, row created, correct title/notes) but leaves the to-do UNSCHEDULED (`start` 0, `startDate` NULL): it lands in Inbox/Anytime semantics while nominally "in" the Today list locus. A user's existing automation silently stops scheduling. Evidence: the A01B regression cell, first red in the golden-v4 sweep after being green on golden-v1→v3 ([lab/gv4-323-campaign.md](lab/gv4-323-campaign.md)); the sdef is byte-identical across these versions, so the dictionary gives no hint of the change. Workaround: follow the create with an explicit `schedule` command (our applescript vector's two-step shape is unaffected).
 
+## 11. Things 3.23: the redesigned Repeat dialog can no longer start a series on an OFF-RULE first occurrence — the free "Next:" date field became a menu of the rule's own dates (RDLG2, 2026-08-22, golden-v4 / Things 3.23 build 32300036)
+
+Through 3.22.14 the Repeat dialog's `Next:` control was an editable date field (an `AXDateTimeArea`), so a series could be started on ANY date and the rule then took over: a weekly-Sunday rule whose first occurrence is a Wednesday is a legitimate, expressible shape (and one Things itself stores without complaint — a 3.22-built off-rule series keeps working after the update).
+
+Under 3.23 that control is an `AXPopUpButton` offering `Today`, then the rule's own upcoming occurrences, then a `More…` item whose submenu carries the next hundred, cascading further the same way (~10 years out; every occurrence item carries `AXIdentifier = nextDateOptionAction:`). There is no calendar affordance, no text field, and no way to type: **the dialog can express only dates the rule itself produces.** The off-rule first occurrence is not refused with a message — the option simply is not offered.
+
+**Reproduce:** select a plain to-do, `Items ▸ Repeat…`, frequency `weekly`, day `Sunday`, then open the `Next:` pop-up. Every item is a Sunday (plus `Today`). On 3.22.14 the same control accepts `2026-07-22`, a Wednesday.
+
+**Why it matters beyond us:** the app's own data model supports the state (a 3.22-created off-rule series still spawns correctly on 3.23), and the release-note framing of the change is "easier to pick the date for the next copy" — an ergonomic win for the common case that silently removes an expressible one. Anyone starting a "every Monday, but the first one is this Thursday" series now has to create it on an older version, or accept a different start.
+
+Evidence: [lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §1.1 (the AX capture of the cascade) and cells C8/C9 (an on-rule first occurrence lands; an off-rule one is unreachable and our drive fails closed naming why), against the ≤3.22 arm cell D5 (the same request still lands there).
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
