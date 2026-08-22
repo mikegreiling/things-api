@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Ref } from "../../src/model/entities.ts";
+import type { Ref, Todo } from "../../src/model/entities.ts";
 import { areaView } from "../../src/read/area-view.ts";
 import { projectView } from "../../src/read/project-view.ts";
 import { areaTags, inheritedTagsFor, tagsView } from "../../src/read/tags.ts";
@@ -29,6 +29,7 @@ import {
   todayView,
   upcomingView,
 } from "../../src/read/views.ts";
+import { ruleXml } from "../../src/write/recurrence-rule-blob.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
   seedArea,
@@ -37,6 +38,7 @@ import {
   seedProject,
   seedSettings,
   seedTag,
+  type SeedTaskOpts,
   seedTodo,
   tagArea,
   tagTask,
@@ -2506,5 +2508,183 @@ describe("deadlinesView — repeating-template projections", () => {
     expect(deadlinesView(fx.db, NOW, { todayOnly: true }).map((i) => i.title)).toEqual([
       "today-real",
     ]);
+  });
+});
+
+/**
+ * DBV27 READ EQUIVALENCE — Things 3.23 (`Meta.databaseVersion` 27) RETIRED
+ * `rt1_nextInstanceStartDate`: the migration nulled the per-row next-instance
+ * cache library-wide and the app no longer maintains it. Every read that used
+ * to consume the column now asks `templateProjectionDay`
+ * (src/model/template-projection.ts) for a template's PROJECTION DAY, so the
+ * two LIVE database shapes must render IDENTICALLY:
+ *
+ *   - `cached`  — Things ≤ 3.22: the column populated (what every projection
+ *     law was probed against);
+ *   - `derived` — Things 3.23: the column NULL, the rule + the
+ *     `rt1_instanceCreationStartDate` spawn cursor carrying the same day.
+ *
+ * The `derived` arm is the regression guard: read off the raw column, a 3.23
+ * template silently left its Upcoming day block, fell into the trailing
+ * "Repeating To-Dos" section, and reported a null `repeating.nextOccurrence`
+ * even for a healthy series.
+ *
+ * The biweekly-Sunday rule's ts=-4 means an instance STARTS four days before
+ * its Sunday event, so the on-grid 2026-07-19 event has start day 2026-07-15 —
+ * the day the retired column held, and the day the cursor derives.
+ */
+const PROJECTION_SHAPES: [string, SeedTaskOpts][] = [
+  ["cached (Things <= 3.22)", { nextInstanceStartDate: "2026-07-15" }],
+  ["derived (Things 3.23)", { instanceCreationStartDate: "2026-07-15" }],
+];
+
+describe.each(PROJECTION_SHAPES)("DBV27 read equivalence — %s", (_shapeName, shape) => {
+  /** The same deadlined biweekly template, in whichever DB shape is under test. */
+  const seedTemplate = (over: SeedTaskOpts = {}) =>
+    seedTodo(fx.db, {
+      title: "cpap",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      deadline: "4001-01-01", // the deadlined sentinel (oddities §8a)
+      ...shape,
+      ...over,
+    });
+
+  it("upcoming seats the projection in its own day block, between the rows around it", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "before", start: "someday", startDate: "2026-07-14" });
+    seedTemplate();
+    seedTodo(fx.db, { title: "after", start: "someday", startDate: "2026-07-16" });
+    expect(upcomingView(fx.db, NOW).map((i) => [i.title, i.startDate, i.deadline])).toEqual([
+      ["before", "2026-07-14", null],
+      ["cpap", "2026-07-15", "2026-07-19"], // ts=-4 ⇒ deadline = start + 4
+      ["after", "2026-07-16", null],
+    ]);
+  });
+
+  it("`repeating.nextOccurrence` reports the projection day (list row AND detail read)", () => {
+    fx = buildFixtureDb();
+    const uuid = seedTemplate();
+    expect(upcomingView(fx.db, NOW)[0]?.repeating.nextOccurrence).toBe("2026-07-15");
+    expect((byUuid(fx.db, uuid, NOW) as Todo | null)?.repeating.nextOccurrence).toBe("2026-07-15");
+  });
+
+  it("a projecting template never doubles into the trailing Repeating To-Dos section", () => {
+    fx = buildFixtureDb();
+    seedTemplate();
+    const items = upcomingView(fx.db, NOW);
+    expect(items.map((i) => i.title)).toEqual(["cpap"]);
+    expect(items.filter((i) => i.repeating.isTemplate && i.startDate === null)).toEqual([]);
+  });
+
+  it("within one day block, templates keep the query's `index` order", () => {
+    fx = buildFixtureDb();
+    seedTemplate({ title: "second", index: 20 });
+    seedTemplate({ title: "first", index: 10 });
+    expect(upcomingView(fx.db, NOW).map((i) => [i.title, i.startDate])).toEqual([
+      ["first", "2026-07-15"],
+      ["second", "2026-07-15"],
+    ]);
+  });
+
+  it("--horizon projects the same later occurrences from the same anchor", () => {
+    fx = buildFixtureDb();
+    seedTemplate();
+    expect(upcomingView(fx.db, NOW, { horizon: 3 }).map((i) => [i.startDate, i.deadline])).toEqual([
+      ["2026-07-15", "2026-07-19"],
+      ["2026-07-29", "2026-08-02"],
+      ["2026-08-12", "2026-08-16"],
+    ]);
+  });
+
+  it("--until / --since clip the projection on its day, not on the column", () => {
+    fx = buildFixtureDb();
+    seedTemplate();
+    // A bound that excludes the projection day drops the template from the view
+    // entirely (it is out of the window, and a projecting template is not a
+    // RESTING one) — exactly what the bounds did as SQL predicates on the column.
+    expect(upcomingView(fx.db, NOW, { until: "2026-07-14" })).toEqual([]);
+    expect(upcomingView(fx.db, NOW, { until: "2026-07-15" }).map((i) => i.startDate)).toEqual([
+      "2026-07-15",
+    ]);
+    expect(upcomingView(fx.db, NOW, { since: "2026-07-16" })).toEqual([]);
+    expect(upcomingView(fx.db, NOW, { since: "2026-07-15" }).map((i) => i.startDate)).toEqual([
+      "2026-07-15",
+    ]);
+  });
+
+  it("deadlines projects the template at its occurrence's deadline", () => {
+    fx = buildFixtureDb();
+    seedTemplate();
+    expect(deadlinesView(fx.db, NOW).map((i) => [i.title, i.deadline])).toEqual([
+      ["cpap", "2026-07-19"],
+    ]);
+  });
+
+  it("an instance's repeat context reads the same next occurrence", () => {
+    fx = buildFixtureDb();
+    const template = seedTemplate();
+    const instance = seedTodo(fx.db, { title: "cpap", repeatingTemplate: template });
+    expect((byUuid(fx.db, instance, NOW) as Todo | null)?.repeating.repeats?.next).toBe(
+      "2026-07-15",
+    );
+  });
+});
+
+/**
+ * DBV27 FAIL-CLOSED — a series that projects NOWHERE stays projection-less on
+ * the 3.23 shape too: the spawn cursor must never resurrect a row the app does
+ * not render. Each fixture carries the retired column NULL (as a real 3.23
+ * library does, and as ≤3.22 does for these states) plus a live spawn cursor,
+ * so only the derivation could invent a projection.
+ */
+/** A fixed daily rule (tp=0), with overrides. */
+const fixedDaily = (over: Record<string, number> = {}) =>
+  ruleXml({ tp: 0, fu: 16, fa: 1, anchor: 1_783_000_000, ...over });
+
+describe("DBV27 fail-closed — templates that project nowhere", () => {
+  const NOWHERE: [string, SeedTaskOpts][] = [
+    [
+      "an after-completion series between instances",
+      { recurrenceRuleXml: ruleXml({ tp: 1, fu: 16, fa: 1, anchor: 1_783_000_000 }) },
+    ],
+    ["a paused series", { recurrenceRuleXml: fixedDaily(), instanceCreationPaused: true }],
+    [
+      "a paused series still holding a ≤3.22 cached day",
+      {
+        recurrenceRuleXml: fixedDaily(),
+        instanceCreationPaused: true,
+        nextInstanceStartDate: "2026-07-15",
+      },
+    ],
+    [
+      "an ends-after series whose spawns are exhausted (RRX1)",
+      { recurrenceRuleXml: fixedDaily({ rc: 3 }), instanceCreationCount: 3 },
+    ],
+    [
+      "an ends-on series past its end date",
+      { recurrenceRuleXml: fixedDaily({ ed: Math.floor(Date.UTC(2026, 5, 30) / 1000) }) },
+    ],
+    ["an undecodable rule (a future Things format)", { recurrenceRule: true }],
+  ];
+
+  it.each(NOWHERE)("%s rests, with a null nextOccurrence", (_name, over) => {
+    fx = buildFixtureDb();
+    const uuid = seedTodo(fx.db, {
+      title: "nowhere",
+      instanceCreationStartDate: "2026-07-15", // a live cursor — the only derivation input
+      deadline: "4001-01-01",
+      ...over,
+    });
+    // Present, but in the trailing "Repeating To-Dos" section (startDate null),
+    // never in a day block; and no deadline projection either.
+    expect(upcomingView(fx.db, NOW).map((i) => [i.title, i.startDate])).toEqual([
+      ["nowhere", null],
+    ]);
+    expect(deadlinesView(fx.db, NOW)).toEqual([]);
+    // A paused template still reports whatever day the ≤3.22 app last cached —
+    // the view rests it on the paused arm regardless; every other cell is null.
+    expect((byUuid(fx.db, uuid, NOW) as Todo | null)?.repeating.nextOccurrence).toBe(
+      over.nextInstanceStartDate ?? null,
+    );
   });
 });

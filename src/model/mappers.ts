@@ -15,10 +15,19 @@ import {
   type Todo,
 } from "./entities.ts";
 import { decodeEpochReal, decodePackedDate, decodeReminderTime } from "./dates.ts";
+import { templateProjectionDay, type TemplateProjectionRow } from "./template-projection.ts";
 import { reminderIsLive } from "../read/stage.ts";
 
-/** Raw TMTask row shape (subset per schema manifest). */
-export interface TaskRow {
+/**
+ * Raw TMTask row shape (subset per schema manifest) PLUS the aliased template
+ * projection inputs ({@link TemplateProjectionRow}) every read query splices in
+ * (queries.ts `fetchTaskRows`). The retired `rt1_nextInstanceStartDate` is
+ * deliberately absent from this shape: a template's next occurrence is read
+ * ONLY through {@link templateProjectionDay} (the cache while a running app
+ * still maintains it, the derived day once Things 3.23 retired it), never off
+ * the raw column.
+ */
+export interface TaskRow extends TemplateProjectionRow {
   uuid: string;
   type: number;
   status: number;
@@ -53,7 +62,6 @@ export interface TaskRow {
   openChecklistItemsCount: number | null;
   rt1_repeatingTemplate: string | null;
   rt1_recurrenceRule: unknown;
-  rt1_nextInstanceStartDate: number | null;
   rt1_instanceCreationPaused: number | null;
   repeater: unknown;
 }
@@ -99,7 +107,11 @@ function mapRepeating(row: TaskRow): RepeatingInfo {
   const templateUuid = row.rt1_repeatingTemplate;
   const info: RepeatingInfo = { isTemplate, isInstance: templateUuid !== null, templateUuid };
   if (isTemplate) {
-    info.nextOccurrence = decodePackedDate(row.rt1_nextInstanceStartDate);
+    // The projection day — the app's own cache while it maintains it (Things
+    // ≤ 3.22), else derived from the rule + spawn cursor (3.23 retired the
+    // cache). Null when the series projects nowhere: paused, after-completion
+    // between instances, ended, or underivable. Never a guessed date.
+    info.nextOccurrence = decodePackedDate(templateProjectionDay(row));
     info.paused = row.rt1_instanceCreationPaused === 1;
     // A deadlined template carries a far-future sentinel (4001-01-01) in its
     // own `deadline` column; a deadline-less one carries NULL. This — NOT the

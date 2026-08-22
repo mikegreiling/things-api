@@ -13,6 +13,7 @@ import {
   type TaskRow,
 } from "../model/mappers.ts";
 import { decodeRecurrenceRule } from "../model/recurrence.ts";
+import { templateProjectionDay } from "../model/template-projection.ts";
 import { decodePackedDate, encodePackedDate, localToday } from "../model/dates.ts";
 import type { RepeatContext } from "../model/entities.ts";
 import {
@@ -111,8 +112,11 @@ function repeatContextFor(db: DatabaseSync, templateUuid: string): RepeatContext
     }
   }
   // FIXED mode only: the template's projected next occurrence IS the "Aug 19".
+  // Read through templateProjectionDay — the app's cache while it maintains one
+  // (Things ≤ 3.22), the day derived from the rule + spawn cursor once 3.23
+  // retired it; absent when the series projects nowhere.
   if (ctx.rule?.type === "fixed") {
-    const next = decodePackedDate(tmpl.rt1_nextInstanceStartDate);
+    const next = decodePackedDate(templateProjectionDay(tmpl));
     if (next !== null) ctx.next = next;
   }
   if (tmpl.rt1_instanceCreationPaused === 1) ctx.paused = true;
