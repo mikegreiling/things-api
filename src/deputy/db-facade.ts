@@ -11,7 +11,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { type DeputyRow, reviveRow } from "./protocol.ts";
-import { deputySyncRequest } from "./routing.ts";
+import { fileSyncRequest } from "./routing.ts";
 
 const SQL_TIMEOUT_MS = 15_000;
 
@@ -33,7 +33,8 @@ function normalizeParams(params: unknown[], sql: string): SqlParam[] {
 }
 
 function queryRows(sql: string, params: unknown[], env: NodeJS.ProcessEnv): DeputyRow[] {
-  const res = deputySyncRequest(
+  // Rides the granted reader when present, else the deputy (routing.ts).
+  const res = fileSyncRequest(
     { verb: "sql", sql, params: normalizeParams(params, sql) },
     SQL_TIMEOUT_MS,
     env,

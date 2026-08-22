@@ -9,6 +9,7 @@
  * library; the protocol therefore carries raw primitives, never operations.
  * See docs/design/agent-daemon.md (§β1).
  */
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { stateDir } from "../paths.ts";
@@ -35,6 +36,35 @@ export function deputyTokenPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(deputyStateDir(env), "token");
 }
 
+/** launchd label (and bundle identifier) of the sandboxed reader. */
+export const READER_LAUNCHD_LABEL = "com.pixelcog.things-reader";
+
+/**
+ * The reader's state lives in its App Sandbox container home — the OS picks
+ * the path from the bundle identifier. THINGS_API_READER_DIR overrides for
+ * tests (a mock reader is just a socket; no sandbox involved).
+ */
+export function readerContainerDir(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env["THINGS_API_READER_DIR"];
+  if (explicit !== undefined && explicit !== "") return explicit;
+  return join(homedir(), "Library/Containers", READER_LAUNCHD_LABEL, "Data");
+}
+
+export function readerSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(readerContainerDir(env), "reader.sock");
+}
+
+export function readerTokenPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(readerContainerDir(env), "token");
+}
+
+/** Reader handshake: DeputyHello plus the grant state. */
+export interface ReaderHello extends DeputyHello {
+  role: "reader";
+  /** False until the one-time open-panel ceremony has granted the folder. */
+  granted: boolean;
+}
+
 export interface DeputyErrorShape {
   code: string;
   message: string;
@@ -54,7 +84,8 @@ export interface DeputyHello {
   protocol: number;
   deputyVersion: string;
   pid: number;
-  dbPath: string | null;
+  /** Reader only: its cached container-db resolution (absent on the deputy). */
+  dbPath?: string | null;
   uptimeMs: number;
 }
 

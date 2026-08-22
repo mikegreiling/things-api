@@ -1,4 +1,6 @@
-# things-deputy — the TCC permission broker
+# things-deputy + things-reader — the permission broker pair
+
+> **2026-08-21 split:** live measurement showed the macOS "app data" consent class is allow-once-per-process — unusable headlessly — so file access moved to **things-reader** (`reader/`), a SANDBOXED sibling holding a durable security-scoped bookmark to the Things folder, minted once by `things deputy grant` (SANDBOX1, [docs/lab/sandbox1-scoped-reader.md](../docs/lab/sandbox1-scoped-reader.md)). The reader serves `sql`/`read-file`/`locate` from its container socket (`~/Library/Containers/com.pixelcog.things-reader/Data/reader.sock`); the deputy keeps the automation verbs (and serves file verbs only as an interim fallback, at the cost of per-process consent). The reader ships as a signed minimal .app (amfid refuses ad-hoc on sandboxed code; secinit refuses bare executables) and is built/installed alongside the deputy by the same scripts and `things deputy install`.
 
 A small launchd-supervised Swift helper that performs the CLI's privileged primitives — read-only SQL against the Things database, `osascript` execution, and file reads inside the Things group container — so that macOS TCC grants (Automation, Accessibility, group-container access) attach to **one stable signed identity** instead of whichever agent harness happens to invoke `things` this week. Design of record: [docs/design/agent-daemon.md](../docs/design/agent-daemon.md) (§β1).
 

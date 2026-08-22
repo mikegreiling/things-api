@@ -34,6 +34,12 @@ Remaining residuals (the account no longer gates them — they need real HARDWAR
 
 Every ui-vector op is `lab-certified` in-VM against the pinned Things version; the remaining axis is the on-hardware `certified` confirmation. The runbook exists: [docs/lab/ui-certification-runbook.md](lab/ui-certification-runbook.md) §5. This is a standing sitting, not a blocked one — run it when the deployment target hardware is set up.
 
+## CI Things-canary job — regression suite against real Things on GitHub macOS runners (PARKED 2026-08-21)
+
+Run the live regression suites against a real Things install in CI: a scheduled/manual-dispatch `macos-*` job downloads the Cultured Code direct-download **trial** build, installs it, pre-seeds the user TCC.db (runner images ship with SIP disabled; real Aqua session exists), scripts the first-launch chrome dismissal (port the lab setup legs), and runs the URL-scheme + AppleScript regression suites plus a small UI smoke. Value: an **early-warning canary against latest Things** (the trial is always-latest, inverting the lab's pinned-golden model — complement, not replacement; nested virt is unavailable on GitHub's Apple-silicon runners, so Tart-in-CI is not an option). Keep it off per-PR CI (Things-side breakage must not red unrelated PRs) and fork-safe (synthetic data, no secrets).
+
+**Gate before building (Mike's ruling required):** every ephemeral runner restarts the 15-day trial clock, so this is effectively perpetual automated trial use — a license/policy call, not an engineering one. Friendly-email-to-Cultured-Code for blessing or a test license is the clean path. Also verify the SIP-disabled claim against the current `actions/runner-images` README before committing.
+
 ## Appliance-mode VM — a future deployment option (PINNED, not scheduled)
 
 An alternative to running the MCP server directly on the host Mac-mini: a **long-lived Things VM on a dedicated host**, cloud-synced to Mike's account, running the MCP server with **port-forwarding** out of the guest. Deliberately parked — the current deployment target stays the **host Mac-mini with a one-time AX grant + always-allow setup**.

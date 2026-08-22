@@ -1,8 +1,13 @@
 /**
  * Socket server: accept loop, peer verification, JSON-lines framing, request
- * dispatch, and the local JSONL audit log. One thread per connection; SQL and
- * osascript execution are each funneled through their own serial queue so a
- * long GUI drive never blocks a verification read and vice versa.
+ * dispatch, and the local JSONL audit log. One thread per connection;
+ * osascript/shortcuts execution is funneled through one serial queue.
+ *
+ * MUTATIONS ONLY: the deputy serves the automation verbs (osascript,
+ * shortcuts). File verbs (sql / read-file / locate) live exclusively on the
+ * sandboxed things-reader — the deputy's own container access would ride the
+ * per-process AppData consent class (a prompt per process instance, measured
+ * 2026-08-21), which is precisely the churn this pair exists to end.
  */
 import Foundation
 
@@ -11,27 +16,8 @@ final class Server {
   let config: DeputyConfig
   let token: String
   let startedAt = Date()
-  private let dbQueue = DispatchQueue(label: "things-deputy.db")
   private let osaQueue = DispatchQueue(label: "things-deputy.osa")
   private let logQueue = DispatchQueue(label: "things-deputy.log")
-  private var reader: SqliteReader?  // guarded by dbQueue
-  /// Last successful container resolution. Guarded by its OWN lock — never by
-  /// dbQueue — so hello's cache read can never queue behind a locate/sql that
-  /// is mid-stall awaiting TCC consent on that queue.
-  private let cacheLock = NSLock()
-  private var cachedDbPath: String?
-
-  private func readCachedDbPath() -> String? {
-    cacheLock.lock()
-    defer { cacheLock.unlock() }
-    return cachedDbPath
-  }
-
-  private func storeCachedDbPath(_ path: String) {
-    cacheLock.lock()
-    cachedDbPath = path
-    cacheLock.unlock()
-  }
   private var listenFd: Int32 = -1
 
   init(paths: DeputyPaths, config: DeputyConfig, token: String) {
@@ -173,16 +159,6 @@ final class Server {
     switch verb {
     case "hello":
       result = handleHello(id: id)
-    case "locate":
-      result = handleLocate(id: id)
-    case "sql":
-      guard let sql = obj["sql"] as? String else {
-        result = errorResponse(id: id, code: "bad-request", message: "sql verb requires a sql string")
-        break
-      }
-      let params = obj["params"] as? [Any] ?? []
-      auditExtra["sqlSha256"] = sha256Hex(sql)
-      result = dbQueue.sync { handleSql(id: id, sql: sql, params: params) }
     case "osascript":
       guard let script = obj["script"] as? String else {
         result = errorResponse(id: id, code: "bad-request", message: "osascript verb requires a script string")
@@ -242,13 +218,11 @@ final class Server {
           args: ["run", name, "--input-path", inputPath, "--output-path", outputPath],
           timeoutMs: timeoutMs, id: id)
       }
-    case "read-file":
-      guard let path = obj["path"] as? String else {
-        result = errorResponse(id: id, code: "bad-request", message: "read-file verb requires a path string")
-        break
-      }
-      auditExtra["path"] = path
-      result = handleReadFile(id: id, path: path)
+    case "sql", "read-file", "locate":
+      // File verbs live exclusively on the sandboxed things-reader.
+      result = errorResponse(
+        id: id, code: "unsupported-verb",
+        message: "the deputy serves automation verbs only — file access rides things-reader (things deputy grant)")
     default:
       result = errorResponse(id: id, code: "bad-request", message: "unknown verb \(verb)")
     }
@@ -291,121 +265,10 @@ final class Server {
       "ok": true,
       "protocol": PROTOCOL_VERSION,
       "deputyVersion": DEPUTY_VERSION,
+      "role": "deputy",
       "pid": Int(getpid()),
-      // Cheap cached read ONLY — the handshake must never touch the protected
-      // container. On an ungranted machine that touch blocks in the kernel
-      // awaiting TCC consent, and a handshake that can hang on a consent
-      // dialog deadlocks every client (observed live 2026-08-21). The client
-      // resolves the path with the `locate` verb, which is allowed to stall.
-      "dbPath": readCachedDbPath() ?? NSNull(),
       "uptimeMs": Int(Date().timeIntervalSince(startedAt) * 1000),
     ]
-  }
-
-  private func handleLocate(id: Any?) -> [String: Any] {
-    // The first locate on an ungranted machine BLOCKS in open() until the
-    // user answers the macOS consent prompt — deliberate: this is the verb
-    // the grant ceremony rides. Result cached for hello.
-    let candidates = locateCandidates()
-    if let first = candidates.first { storeCachedDbPath(first) }
-    guard let first = candidates.first else {
-      return errorResponse(
-        id: id, code: "not-found",
-        message: "Things database not found under the group container (searched \(containerGlobRoot()))")
-    }
-    return [
-      "id": id ?? NSNull(), "ok": true, "path": first,
-      "otherCandidates": Array(candidates.dropFirst()),
-    ]
-  }
-
-  private func handleSql(id: Any?, sql: String, params: [Any]) -> [String: Any] {
-    if reader == nil {
-      guard let dbPath = resolveDbPath() else {
-        return errorResponse(id: id, code: "not-found", message: "no Things database to query (locate failed and no dbPath configured)")
-      }
-      storeCachedDbPath(dbPath)
-      do {
-        reader = try SqliteReader(path: dbPath)
-      } catch {
-        return errorResponse(id: id, code: "sql-error", message: "cannot open \(dbPath) read-only: \(error.localizedDescription)")
-      }
-    }
-    do {
-      let rows = try reader!.query(sql: sql, params: params)
-      return ["id": id ?? NSNull(), "ok": true, "rows": rows]
-    } catch let err as SqliteError {
-      return errorResponse(id: id, code: "sql-error", message: err.message)
-    } catch {
-      return errorResponse(id: id, code: "sql-error", message: error.localizedDescription)
-    }
-  }
-
-  private func handleReadFile(id: Any?, path: String) -> [String: Any] {
-    guard let root = containerRoot() else {
-      return errorResponse(id: id, code: "read-denied", message: "no container root resolved; cannot authorize file reads")
-    }
-    let canonical = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-    let canonicalRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().standardizedFileURL.path
-    guard canonical == canonicalRoot || canonical.hasPrefix(canonicalRoot + "/") else {
-      return errorResponse(
-        id: id, code: "read-denied",
-        message: "path is outside the Things container (\(canonicalRoot)); the deputy only reads inside it")
-    }
-    guard let data = FileManager.default.contents(atPath: canonical) else {
-      return errorResponse(id: id, code: "not-found", message: "cannot read \(canonical)")
-    }
-    guard data.count <= MAX_FILE_READ_BYTES else {
-      return errorResponse(id: id, code: "too-large", message: "file exceeds \(MAX_FILE_READ_BYTES) bytes")
-    }
-    return ["id": id ?? NSNull(), "ok": true, "b64": data.base64EncodedString()]
-  }
-
-  // --- path resolution ---
-
-  private func homeDir() -> String {
-    config.home ?? NSHomeDirectory()
-  }
-
-  private func containerGlobRoot() -> String {
-    homeDir() + "/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac"
-  }
-
-  /// Mirror of the library's locate precedence for the container case: every
-  /// ThingsData-*/Things Database.thingsdatabase/main.sqlite, most recently
-  /// modified first. A configured dbPath short-circuits (tests, odd installs).
-  private func locateCandidates() -> [String] {
-    if let explicit = config.dbPath { return [explicit] }
-    let root = containerGlobRoot()
-    let fm = FileManager.default
-    guard let entries = try? fm.contentsOfDirectory(atPath: root) else { return [] }
-    var found: [(String, Date)] = []
-    for entry in entries where entry.hasPrefix("ThingsData-") {
-      let dbPath = root + "/" + entry + "/Things Database.thingsdatabase/main.sqlite"
-      if let attrs = try? fm.attributesOfItem(atPath: dbPath),
-        let mtime = attrs[.modificationDate] as? Date {
-        found.append((dbPath, mtime))
-      }
-    }
-    return found.sorted { $0.1 > $1.1 }.map { $0.0 }
-  }
-
-  private func resolveDbPath() -> String? {
-    locateCandidates().first
-  }
-
-  /// The subtree file reads are confined to. With a configured dbPath (tests)
-  /// this is the dbPath's great-grandparent — the same shape the library uses
-  /// for the group root (sync-health's dirname^3).
-  private func containerRoot() -> String? {
-    if let explicit = config.dbPath {
-      return URL(fileURLWithPath: explicit)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .path
-    }
-    return containerGlobRoot()
   }
 
   // --- audit log ---

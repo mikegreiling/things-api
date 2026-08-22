@@ -8,6 +8,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -22,11 +23,14 @@ import { fileURLToPath } from "node:url";
 import { DeputySyncBridge } from "./bridge.ts";
 import {
   DEPUTY_LAUNCHD_LABEL,
+  READER_LAUNCHD_LABEL,
   DEPUTY_PROTOCOL_VERSION,
   type DeputyHello,
   deputySocketPath,
   deputyStateDir,
   deputyTokenPath,
+  readerSocketPath,
+  readerTokenPath,
 } from "./protocol.ts";
 
 export function deputyPlistPath(): string {
@@ -41,6 +45,48 @@ export function deputyInstalledBinaryPath(env: NodeJS.ProcessEnv = process.env):
 /** The build output of scripts/build-deputy.sh in this package checkout. */
 export function deputyDefaultBuildPath(): string {
   return fileURLToPath(new URL("../../deputy/build/things-deputy", import.meta.url));
+}
+
+export function readerPlistPath(): string {
+  return join(homedir(), "Library/LaunchAgents", `${READER_LAUNCHD_LABEL}.plist`);
+}
+
+/** Where `deputy install` places the reader bundle. */
+export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(deputyStateDir(env), "bin", "things-reader.app");
+}
+
+export function readerDefaultBuildPath(): string {
+  return fileURLToPath(new URL("../../deputy/build/things-reader.app", import.meta.url));
+}
+
+function readerLaunchTarget(): string {
+  return `gui/${process.getuid?.() ?? 501}/${READER_LAUNCHD_LABEL}`;
+}
+
+function readerExecPath(appPath: string): string {
+  return join(appPath, "Contents/MacOS/things-reader");
+}
+
+function renderReaderPlist(appPath: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${READER_LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${readerExecPath(appPath)}</string>
+    <string>--serve</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+</dict>
+</plist>
+`;
 }
 
 function launchTarget(): string {
@@ -118,6 +164,7 @@ export interface DeputyInstallResult {
   plistPath: string;
   stateDir: string;
   signing: DeputySigning;
+  readerInstalled: boolean;
   warnings: string[];
 }
 
@@ -166,31 +213,61 @@ export function installDeputy(
         `Mint the persistent certificate once (scripts/deputy-cert-setup.sh), rebuild, reinstall.`,
     );
   }
-  return { binaryPath: target, plistPath, stateDir, signing, warnings };
+
+  // The sandboxed reader (SANDBOX1): installed alongside when the build
+  // produced it (a real signing chain is mandatory for sandboxed code, so an
+  // unsigned host's build skips the bundle — and so do we, with a warning).
+  const readerSource = options.binaryPath !== undefined ? null : readerDefaultBuildPath();
+  let readerInstalled = false;
+  if (readerSource !== null && existsSync(readerSource)) {
+    const readerTarget = readerInstalledAppPath(env);
+    launchctl(["bootout", readerLaunchTarget()]);
+    // Fresh inodes for the whole bundle — the kernel CS cache is per-vnode.
+    rmSync(readerTarget, { recursive: true, force: true });
+    cpSync(readerSource, readerTarget, { recursive: true });
+    const readerPlist = readerPlistPath();
+    writeFileSync(readerPlist, renderReaderPlist(readerTarget));
+    const readerBoot = launchctl(["bootstrap", `gui/${process.getuid?.() ?? 501}`, readerPlist]);
+    if (!readerBoot.ok)
+      warnings.push(`reader launchctl bootstrap failed: ${readerBoot.output.trim()}`);
+    readerInstalled = true;
+  } else if (readerSource !== null) {
+    warnings.push(
+      "things-reader.app was not built (no signing identity?) — file reads will ride the deputy's per-process consent instead of the durable scoped grant. Build with an Apple-chain identity, reinstall, then run `things deputy grant`.",
+    );
+  }
+  return { binaryPath: target, plistPath, stateDir, signing, readerInstalled, warnings };
 }
 
 export interface DeputyUninstallResult {
   removed: string[];
 }
 
-/** Stop the deputy and remove its LaunchAgent + installed binary (state dir — token, logs — is kept). */
+/** Stop both halves and remove LaunchAgents + installed binaries (state — tokens, logs, the reader's grant — is kept). */
 export function uninstallDeputy(env: NodeJS.ProcessEnv = process.env): DeputyUninstallResult {
   const removed: string[] = [];
   launchctl(["bootout", launchTarget()]);
-  const plistPath = deputyPlistPath();
-  if (existsSync(plistPath)) {
-    rmSync(plistPath);
-    removed.push(plistPath);
+  launchctl(["bootout", readerLaunchTarget()]);
+  for (const path of [deputyPlistPath(), readerPlistPath()]) {
+    if (existsSync(path)) {
+      rmSync(path);
+      removed.push(path);
+    }
   }
   const binary = deputyInstalledBinaryPath(env);
   if (existsSync(binary)) {
     rmSync(binary);
     removed.push(binary);
   }
+  const readerApp = readerInstalledAppPath(env);
+  if (existsSync(readerApp)) {
+    rmSync(readerApp, { recursive: true });
+    removed.push(readerApp);
+  }
   return { removed };
 }
 
-/** Restart the launchd-managed deputy (picks up a rebuilt installed binary). */
+/** Restart the launchd-managed helpers (picks up rebuilt installed binaries). */
 export function restartDeputy(): void {
   const res = launchctl(["kickstart", "-k", launchTarget()]);
   if (!res.ok) {
@@ -198,6 +275,78 @@ export function restartDeputy(): void {
       `launchctl kickstart failed (${res.output.trim() || "unknown"}) — is the deputy installed? Run: things deputy install`,
     );
   }
+  // Reader restart is best-effort: it may legitimately not be installed.
+  launchctl(["kickstart", "-k", readerLaunchTarget()]);
+}
+
+/**
+ * The one-time grant ceremony: open the reader in `--grant` mode (the panel
+ * must be presented by the SANDBOXED process — that is what makes the grant
+ * durable) and wait for the bookmark to land, confirmed via the reader's
+ * handshake. Interactive by design; returns when granted or on timeout.
+ */
+export function grantReader(env: NodeJS.ProcessEnv = process.env): {
+  granted: boolean;
+  detail: string;
+} {
+  const appPath = readerInstalledAppPath(env);
+  if (!existsSync(appPath)) {
+    return {
+      granted: false,
+      detail: "things-reader.app is not installed — run `things deputy install` first",
+    };
+  }
+  const startDir = join(homedir(), "Library/Group Containers");
+  try {
+    execFileSync("open", ["-W", appPath, "--args", "--grant", startDir], {
+      stdio: "ignore",
+      timeout: 300_000,
+    });
+  } catch (err) {
+    return {
+      granted: false,
+      detail: `could not open the grant panel: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  // The serving reader re-checks its bookmark per request — no restart needed.
+  const socketPath = readerSocketPath(env);
+  const tokenPath = readerTokenPath(env);
+  const deadline = Date.now() + 15_000;
+  let detail = "the reader is not running — `things deputy status`";
+  while (Date.now() < deadline) {
+    if (existsSync(socketPath) && existsSync(tokenPath)) {
+      const token = readFileSync(tokenPath, "utf8").trim();
+      const bridge = new DeputySyncBridge(socketPath);
+      try {
+        const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
+        if (res["ok"] === true && (res as { granted?: boolean }).granted === true) {
+          bridge.close();
+          return { granted: true, detail: "granted" };
+        }
+        detail = "the panel closed but no grant landed (canceled?) — rerun `things deputy grant`";
+      } catch {
+        detail = "the reader socket is not answering — `things deputy status`";
+      } finally {
+        bridge.close();
+      }
+    }
+    syncSleepMs(500);
+  }
+  return { granted: false, detail };
+}
+
+function syncSleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export interface ReaderStatus {
+  installed: boolean;
+  loaded: boolean;
+  running: boolean;
+  granted: boolean;
+  socketPath: string;
+  signing: DeputySigning | null;
+  detail: string;
 }
 
 export interface DeputyStatus {
@@ -209,6 +358,7 @@ export interface DeputyStatus {
   socketPath: string;
   hello: DeputyHello | null;
   signing: DeputySigning | null;
+  reader: ReaderStatus;
   detail: string;
 }
 
@@ -252,6 +402,45 @@ export function deputyStatus(enabled: boolean, env: NodeJS.ProcessEnv = process.
     socketPath,
     hello,
     signing: binaryInstalled ? deputySigningInfo(binaryPath) : null,
+    reader: readerStatus(env),
     detail: hello !== null ? "running" : detail,
+  };
+}
+
+function readerStatus(env: NodeJS.ProcessEnv): ReaderStatus {
+  const appPath = readerInstalledAppPath(env);
+  const installed = existsSync(appPath);
+  const loaded = launchctl(["print", readerLaunchTarget()]).ok;
+  const socketPath = readerSocketPath(env);
+  const tokenPath = readerTokenPath(env);
+  let running = false;
+  let granted = false;
+  let detail = "not running (no socket)";
+  if (existsSync(socketPath) && existsSync(tokenPath)) {
+    const token = readFileSync(tokenPath, "utf8").trim();
+    const bridge = new DeputySyncBridge(socketPath);
+    try {
+      const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
+      if (res["ok"] === true) {
+        running = true;
+        granted = (res as { granted?: boolean }).granted === true;
+        detail = granted ? "running, granted" : "running, NOT granted (things deputy grant)";
+      } else {
+        detail = `handshake refused: ${JSON.stringify(res["error"])}`;
+      }
+    } catch (err) {
+      detail = `socket present but not answering: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      bridge.close();
+    }
+  }
+  return {
+    installed,
+    loaded,
+    running,
+    granted,
+    socketPath,
+    signing: installed ? deputySigningInfo(readerExecPath(appPath)) : null,
+    detail,
   };
 }

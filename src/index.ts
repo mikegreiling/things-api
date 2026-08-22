@@ -223,7 +223,11 @@ export {
   deputyPlistPath,
   deputySigningInfo,
   deputyStatus,
+  grantReader,
   installDeputy,
+  readerDefaultBuildPath,
+  readerInstalledAppPath,
+  readerPlistPath,
   restartDeputy,
   uninstallDeputy,
 } from "./deputy/install.ts";
@@ -232,8 +236,9 @@ export type {
   DeputySigning,
   DeputyStatus,
   DeputyUninstallResult,
+  ReaderStatus,
 } from "./deputy/install.ts";
-export { deputyRouting } from "./deputy/routing.ts";
+export { deputyRouting, readerRouting } from "./deputy/routing.ts";
 export type { DeputyRouting } from "./deputy/routing.ts";
 export type { Baseline, FingerprintStatus, SchemaObservation } from "./db/fingerprint.ts";
 

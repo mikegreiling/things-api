@@ -40,20 +40,16 @@ struct DeputyPaths {
 /// The state dir is 0700, so anything able to write this file already owns the
 /// user account; the overrides exist for tests and non-standard installs.
 struct DeputyConfig {
-  var dbPath: String?
   var osascriptPath: String?
   var shortcutsPath: String?
-  var home: String?
 
   static func load(path: String) -> DeputyConfig {
     var cfg = DeputyConfig()
     guard let data = FileManager.default.contents(atPath: path),
       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return cfg }
-    cfg.dbPath = obj["dbPath"] as? String
     cfg.osascriptPath = obj["osascriptPath"] as? String
     cfg.shortcutsPath = obj["shortcutsPath"] as? String
-    cfg.home = obj["home"] as? String
     return cfg
   }
 }

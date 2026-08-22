@@ -15,7 +15,6 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PKG_VERSION } from "../../src/contracts.ts";
-import { createDeputyDbFacade } from "../../src/deputy/db-facade.ts";
 import { osaExecSync } from "../../src/deputy/osa.ts";
 import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-exec.ts";
 import { DeputySyncBridge } from "../../src/deputy/bridge.ts";
@@ -116,7 +115,19 @@ echo "$1:$2:$3:$4:$5:$6"
     mkdirSync(deputyDir, { recursive: true });
     writeFileSync(
       join(deputyDir, "deputy.json"),
-      JSON.stringify({ dbPath, osascriptPath: stub, shortcutsPath: shortcutsStub }),
+      JSON.stringify({ osascriptPath: stub, shortcutsPath: shortcutsStub }),
+    );
+
+    execFileSync(
+      "swiftc",
+      [
+        "-O",
+        join(repoRoot, "deputy/src/sqlite.swift"),
+        join(repoRoot, "test/deputy/helpers/sqlite-harness/main.swift"),
+        "-o",
+        join(tmp, "sqlite-harness"),
+      ],
+      { stdio: "ignore", timeout: 120_000 },
     );
 
     child = spawn(join(repoRoot, "deputy/build/things-deputy"), ["--state-dir", deputyDir], {
@@ -146,14 +157,12 @@ echo "$1:$2:$3:$4:$5:$6"
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("handshakes with the package version; dbPath is null until a locate/sql resolves it", () => {
+  it("handshakes with the package version as a mutations-only deputy", () => {
     const res = request({ verb: "hello" });
     expect(res["ok"]).toBe(true);
     expect(res["protocol"]).toBe(1);
     expect(res["deputyVersion"]).toBe(PKG_VERSION);
-    // The handshake never touches the (TCC-protected) container — the path is
-    // unresolved until the first locate/sql, then cached (asserted below).
-    expect(res["dbPath"]).toBeNull();
+    expect(res["role"]).toBe("deputy");
   });
 
   it("rejects a bad token", () => {
@@ -162,49 +171,35 @@ echo "$1:$2:$3:$4:$5:$6"
     expect((res["error"] as { code: string }).code).toBe("bad-token");
   });
 
-  it("sql: full type round-trip through the facade (int, real, text, blob, null)", () => {
-    const db = createDeputyDbFacade();
-    const row = db.prepare("SELECT i, r, s, b, n FROM t").get() as Record<string, unknown>;
-    expect(row["i"]).toBe(7);
-    expect(row["r"]).toBe(1.5);
-    expect(row["s"]).toBe("seven");
-    expect(row["b"]).toBeInstanceOf(Uint8Array);
-    expect([...(row["b"] as Uint8Array)]).toEqual([1, 2]);
-    expect(row["n"]).toBeNull();
+  it("file verbs are structurally absent — they live on the reader", () => {
+    for (const fields of [
+      { verb: "sql", sql: "SELECT 1", params: [] },
+      { verb: "read-file", path: "/tmp/x" },
+      { verb: "locate" },
+    ]) {
+      const res = request(fields);
+      expect(res["ok"]).toBe(false);
+      expect((res["error"] as { code: string }).code).toBe("unsupported-verb");
+    }
   });
 
-  it("sql: positional parameters bind", () => {
-    const db = createDeputyDbFacade();
-    const rows = db.prepare("SELECT s FROM t WHERE i = ? AND r < ?").all(7, 2.5) as {
-      s: string;
-    }[];
-    expect(rows.map((r) => r.s)).toEqual(["seven"]);
-  });
-
-  it("sql: the connection cannot write", () => {
-    const res = request({
-      verb: "sql",
-      sql: "INSERT INTO t VALUES (1, 1, 'x', NULL, NULL)",
-      params: [],
-    });
-    expect(res["ok"]).toBe(false);
-    expect((res["error"] as { code: string }).code).toBe("sql-error");
-  });
-
-  it("sql: ATTACH is denied by the authorizer", () => {
-    const res = request({
-      verb: "sql",
-      sql: `ATTACH DATABASE '${join(tmp, "other.sqlite")}' AS other`,
-      params: [],
-    });
-    expect(res["ok"]).toBe(false);
-    expect((res["error"] as { message: string }).message).toMatch(/not authorized|authoriz/i);
-  });
-
-  it("sql: refuses multi-statement requests", () => {
-    const res = request({ verb: "sql", sql: "SELECT 1; SELECT 2", params: [] });
-    expect(res["ok"]).toBe(false);
-    expect((res["error"] as { message: string }).message).toContain("single SQL statement");
+  // The shared SQLite executor (deputy/src/sqlite.swift, consumed by the
+  // sandboxed reader whose granted path only the SANDBOX1 VM rig can unlock)
+  // stays live-covered through an unsandboxed one-shot harness.
+  it("sqlite executor: type round-trip, param binding, readonly, ATTACH deny, single-statement", () => {
+    const harness = join(tmp, "sqlite-harness");
+    const run = (sql: string, ...params: string[]) =>
+      execFileSync(harness, [dbPath, sql, ...params], { encoding: "utf8" }).trim();
+    const rows = JSON.parse(run("SELECT i, r, s, n FROM t WHERE s = ?", "seven")) as Record<
+      string,
+      unknown
+    >[];
+    expect(rows).toEqual([{ i: 7, r: 1.5, s: "seven", n: null }]);
+    const blob = JSON.parse(run("SELECT b FROM t")) as { b: { $b64: string } }[];
+    expect(Buffer.from(blob[0]!.b.$b64, "base64")).toEqual(Buffer.from([1, 2]));
+    expect(run("INSERT INTO t VALUES (1, 1, 'x', NULL, NULL)")).toContain("ERROR");
+    expect(run(`ATTACH DATABASE '${join(tmp, "other.sqlite")}' AS other`)).toMatch(/authoriz/i);
+    expect(run("SELECT 1; SELECT 2")).toContain("single SQL statement");
   });
 
   it("osascript: success round-trip (and the stub proves the argv shape)", () => {
@@ -268,27 +263,5 @@ echo "$1:$2:$3:$4:$5:$6"
     });
     expect(res["ok"]).toBe(false);
     expect((res["error"] as { code: string }).code).toBe("shortcut-denied");
-  });
-
-  it("read-file: confined to the container subtree", () => {
-    const inside = request({ verb: "read-file", path: join(tmp, "container/readable.txt") });
-    expect(inside["ok"]).toBe(true);
-    expect(Buffer.from(inside["b64"] as string, "base64").toString()).toBe("inside");
-    const outside = request({ verb: "read-file", path: "/etc/hosts" });
-    expect(outside["ok"]).toBe(false);
-    expect((outside["error"] as { code: string }).code).toBe("read-denied");
-  });
-
-  it("read-file: dotdot traversal cannot escape", () => {
-    const res = request({ verb: "read-file", path: join(tmp, "container/../secret.txt") });
-    expect(res["ok"]).toBe(false);
-  });
-
-  it("locate answers with the configured database, and hello then reports the cached path", () => {
-    const res = request({ verb: "locate" });
-    expect(res["ok"]).toBe(true);
-    expect(res["path"]).toBe(dbPath);
-    const hello = request({ verb: "hello" });
-    expect(hello["dbPath"]).toBe(dbPath);
   });
 });

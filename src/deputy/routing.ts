@@ -29,6 +29,9 @@ import {
   DeputyRequestError,
   deputySocketPath,
   deputyTokenPath,
+  type ReaderHello,
+  readerSocketPath,
+  readerTokenPath,
 } from "./protocol.ts";
 
 export interface DeputyRouting {
@@ -59,7 +62,24 @@ interface InactiveState {
 
 type RoutingState = ActiveState | InactiveState;
 
+/**
+ * The sandboxed reader transport (file verbs only). Activated lazily and
+ * independently of the deputy: either half may be installed alone. `granted`
+ * mirrors the reader's bookmark state — a present-but-ungranted reader is NOT
+ * used (the deputy, or direct access, still serves reads until the ceremony).
+ */
+interface ReaderState {
+  active: boolean;
+  granted: boolean;
+  hello: ReaderHello | null;
+  token: string;
+  bridge: DeputySyncBridge | null;
+  dbPathMemo?: string | null;
+  reason: string | null;
+}
+
 let state: RoutingState | null = null;
+let readerState: ReaderState | null = null;
 let noticed = false;
 
 /** Test seam: forget the per-process activation memo (and close transports). */
@@ -68,7 +88,9 @@ export function resetDeputyRoutingForTests(): void {
     state.bridge.close();
     state.client.close();
   }
+  readerState?.bridge?.close();
   state = null;
+  readerState = null;
   noticed = false;
 }
 
@@ -195,6 +217,94 @@ function activeState(env: NodeJS.ProcessEnv): ActiveState | null {
   return routing.active ? (state as ActiveState) : null;
 }
 
+function readerInactive(reason: string): ReaderState {
+  return { active: false, granted: false, hello: null, token: "", bridge: null, reason };
+}
+
+function activateReader(env: NodeJS.ProcessEnv): ReaderState {
+  if (!loadConfig(env).deputyEnabled) return readerInactive("disabled");
+  const socketPath = readerSocketPath(env);
+  const tokenPath = readerTokenPath(env);
+  if (!existsSync(socketPath) || !existsSync(tokenPath)) {
+    return readerInactive(`reader not running (no socket at ${socketPath})`);
+  }
+  const token = readFileSync(tokenPath, "utf8").trim();
+  const bridge = new DeputySyncBridge(socketPath);
+  try {
+    const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
+    if (res["ok"] !== true) throw new DeputyRequestError("handshake", JSON.stringify(res["error"]));
+    const readerHello = res as unknown as ReaderHello;
+    if (readerHello.protocol !== DEPUTY_PROTOCOL_VERSION) {
+      bridge.close();
+      return readerInactive(`protocol skew (reader ${readerHello.protocol})`);
+    }
+    return {
+      active: true,
+      granted: readerHello.granted === true,
+      hello: readerHello,
+      token,
+      bridge,
+      reason: null,
+    };
+  } catch (err) {
+    bridge.close();
+    return readerInactive(
+      `reader handshake failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** The reader transport's state (activated lazily; test seam via reset). */
+export function readerRouting(env: NodeJS.ProcessEnv = process.env): {
+  active: boolean;
+  granted: boolean;
+  hello: ReaderHello | null;
+  reason: string | null;
+} {
+  readerState ??= activateReader(env);
+  return readerState;
+}
+
+/**
+ * The transport serving FILE verbs (sql / read-file / locate): the sandboxed
+ * reader when present AND granted, else null (direct local access). ONLY the
+ * reader — the deputy is mutations-only by design (the maintainer's ruling
+ * 2026-08-21: no multi-step fallback chains; its container access would ride
+ * the per-process consent class this pair exists to end). A reader that dies
+ * mid-request errors that request honestly, never a silent transport switch.
+ */
+function fileTransport(env: NodeJS.ProcessEnv): { bridge: DeputySyncBridge; token: string } | null {
+  const reader = readerRouting(env);
+  if (reader.active && reader.granted) {
+    const rs = readerState as ReaderState;
+    return { bridge: rs.bridge as DeputySyncBridge, token: rs.token };
+  }
+  return null;
+}
+
+/** True when file verbs ride the reader (present, protocol-matched, granted). */
+export function deputyFilesActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  return fileTransport(env) !== null;
+}
+
+/** Blocking FILE-verb round-trip via the granted reader. */
+export function fileSyncRequest(
+  fields: Record<string, unknown>,
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const transport = fileTransport(env);
+  if (transport === null) {
+    throw new DeputyRequestError("inactive", "the reader is not active");
+  }
+  return unwrap(
+    transport.bridge.request(
+      { v: DEPUTY_PROTOCOL_VERSION, token: transport.token, ...fields },
+      timeoutMs,
+    ),
+  );
+}
+
 /** Unwrap a protocol response: return it on ok, throw DeputyRequestError otherwise. */
 function unwrap(res: Record<string, unknown>): Record<string, unknown> {
   if (res["ok"] === true) return res;
@@ -238,37 +348,28 @@ export async function deputyAsyncRequest(
 }
 
 /**
- * A first container touch on an ungranted machine blocks in the kernel until
- * the user answers the macOS consent prompt — give the human time to find it.
- */
-const FIRST_CONTACT_LOCATE_TIMEOUT_MS = 90_000;
-
-/**
- * The deputy-resolved container database path, or null when the deputy is
- * inactive or cannot resolve one. The handshake never touches the protected
- * container (a consent stall there would deadlock every client), so on first
- * contact this asks the `locate` verb — the request the grant ceremony rides,
- * deliberately allowed to stall while the user answers the consent prompt.
+ * The reader-resolved container database path, or null when no granted reader
+ * is active (the caller then locates locally, exactly as before the helpers
+ * existed). The reader's scope is grant-checked, never prompted — a locate
+ * through it can refuse but can never stall on a consent dialog.
  */
 export function deputyDbPath(env: NodeJS.ProcessEnv = process.env): string | null {
-  const active = activeState(env);
-  if (active === null) return null;
-  if (active.hello.dbPath !== null) return active.hello.dbPath;
-  if (active.dbPathMemo !== undefined) return active.dbPathMemo;
-  process.stderr.write(
-    "things-api deputy: first database access through the helper — if macOS shows a consent prompt for things-deputy, approve it (waiting up to 90s)\n",
-  );
+  const reader = readerRouting(env);
+  if (!reader.active || !reader.granted) return null;
+  if (reader.hello?.dbPath != null) return reader.hello.dbPath;
+  const rs = readerState as ReaderState;
+  if (rs.dbPathMemo !== undefined) return rs.dbPathMemo;
   try {
-    const res = deputySyncRequest({ verb: "locate" }, FIRST_CONTACT_LOCATE_TIMEOUT_MS, env);
-    active.dbPathMemo = typeof res["path"] === "string" ? res["path"] : null;
+    const res = fileSyncRequest({ verb: "locate" }, 10_000, env);
+    rs.dbPathMemo = typeof res["path"] === "string" ? res["path"] : null;
   } catch (err) {
-    active.dbPathMemo = null;
+    rs.dbPathMemo = null;
     const why = err instanceof Error ? err.message : String(err);
     process.stderr.write(
-      `things-api deputy: could not resolve the database through the helper (${why}) — this read runs DIRECT\n`,
+      `things-api deputy: the reader could not resolve the database (${why}) — this read runs DIRECT\n`,
     );
   }
-  return active.dbPathMemo;
+  return rs.dbPathMemo;
 }
 
 /**
@@ -282,5 +383,5 @@ export function deputyRoutesDb(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (options?.dbPath !== undefined || (env["THINGS_DB"] ?? "") !== "") return false;
-  return deputyRouting(env).active;
+  return deputyFilesActive(env);
 }

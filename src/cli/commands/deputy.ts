@@ -16,6 +16,7 @@ import {
   type DeputyStatus,
   deputyStatus,
   ExitCode,
+  grantReader,
   installDeputy,
   loadConfig,
   okEnvelope,
@@ -44,7 +45,6 @@ function renderStatus(status: DeputyStatus): string {
   if (status.hello !== null) {
     lines.push(
       `  version: ${status.hello.deputyVersion} (protocol ${status.hello.protocol}, pid ${status.hello.pid})`,
-      `  database: ${status.hello.dbPath ?? "not yet resolved (resolved on first read)"}`,
     );
   }
   if (status.signing !== null) {
@@ -57,6 +57,15 @@ function renderStatus(status: DeputyStatus): string {
       );
     }
   }
+  const reader = status.reader;
+  lines.push(
+    `reader: ${reader.running ? (reader.granted ? "running, granted" : "running, NOT granted") : reader.installed ? reader.detail : "not installed"}`,
+  );
+  if (reader.running && !reader.granted) {
+    lines.push(
+      "  next: run `things deputy grant` and select the Things data folder in the panel (one time; the grant survives restarts, reboots, and rebuilds)",
+    );
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -64,10 +73,10 @@ export function registerDeputy(program: Command): void {
   const deputy = program
     .command("deputy")
     .description(
-      "Manage the optional helper process that performs database reads and app automation " +
-        "on the CLI's behalf, so macOS permission grants attach to one stable helper instead " +
-        "of every terminal or agent runtime that runs `things`. Subcommands: status, install, " +
-        "restart, uninstall.",
+      "Manage the optional helper pair that performs database reads and app automation " +
+        "on the CLI's behalf, so macOS permission grants attach to stable helpers instead " +
+        "of every terminal or agent runtime that runs `things`. Subcommands: status, " +
+        "install, grant, restart, uninstall.",
     );
 
   deputy
@@ -107,12 +116,37 @@ export function registerDeputy(program: Command): void {
         process.stdout.write(
           `installed ${result.binaryPath}\nlaunchd agent: ${result.plistPath}\n`,
         );
+        if (result.readerInstalled) {
+          process.stdout.write(
+            "installed things-reader.app (file reads) — run `things deputy grant` once if you have not\n",
+          );
+        }
         for (const warning of result.warnings) {
           process.stderr.write(`warning: ${warning}\n`);
         }
         process.exitCode = ExitCode.Ok;
       } catch (err) {
         process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exitCode = ExitCode.Environment;
+      }
+    });
+
+  deputy
+    .command("grant")
+    .description(
+      "One-time ceremony: opens a folder panel presented by the sandboxed reader helper. " +
+        "Select the Things data folder (the panel starts in the right place) to give the " +
+        "reader durable read access to exactly that folder — it survives restarts, reboots, " +
+        "and updates, and macOS enforces that the reader can reach nothing else. Interactive: " +
+        "run this at the machine, not from an unattended session.",
+    )
+    .action(() => {
+      const result = grantReader();
+      if (result.granted) {
+        process.stdout.write("granted — file reads now ride the scoped reader\n");
+        process.exitCode = ExitCode.Ok;
+      } else {
+        process.stderr.write(`not granted: ${result.detail}\n`);
         process.exitCode = ExitCode.Environment;
       }
     });
