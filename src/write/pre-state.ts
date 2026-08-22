@@ -5,6 +5,11 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { encodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
+import {
+  TEMPLATE_PROJECTION_COLUMNS,
+  type TemplateProjectionRow,
+  templateProjectionDay,
+} from "../model/template-projection.ts";
 import type { AnyTask, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
@@ -1110,29 +1115,40 @@ export function computeReorderPre(
     templateClause: string,
     statusExpr: string,
     statusExprBinds: number[],
+    // When set, the query also fetches the projection inputs and keeps only rows
+    // whose PROJECTION DAY equals this packed day (see selectTemplatesProjectingOn).
+    projectionDay?: number,
   ): MemberRow[] =>
     (
       db
         .prepare(
-          `SELECT uuid, title, ${rankCol} AS rank, startBucket, type, ${TEMPLATE_ROW} AS isTemplate
+          `SELECT uuid, title, ${rankCol} AS rank, startBucket, type, ${TEMPLATE_ROW} AS isTemplate${
+            projectionDay === undefined ? "" : `, ${TEMPLATE_PROJECTION_COLUMNS}`
+          }
            FROM TMTask
            WHERE trashed = 0 AND ${CONTAINER_UNTRASHED} AND ${statusExpr} AND ${templateClause} AND ${where}
            ORDER BY ${rankCol} ASC`,
         )
         .all(...statusExprBinds, ...binds) as unknown as (Omit<MemberRow, "isTemplate"> & {
         isTemplate: number;
-      })[]
-    ).map((r) => {
-      const m: MemberRow = {
-        uuid: r.uuid,
-        title: r.title,
-        rank: r.rank,
-        startBucket: r.startBucket,
-        type: r.type,
-        isTemplate: r.isTemplate === 1,
-      };
-      return m;
-    });
+      } & Partial<TemplateProjectionRow>)[]
+    )
+      .filter(
+        (r) =>
+          projectionDay === undefined ||
+          templateProjectionDay(r as TemplateProjectionRow) === projectionDay,
+      )
+      .map((r) => {
+        const m: MemberRow = {
+          uuid: r.uuid,
+          title: r.title,
+          rank: r.rank,
+          startBucket: r.startBucket,
+          type: r.type,
+          isTemplate: r.isTemplate === 1,
+        };
+        return m;
+      });
 
   // Every scope EXCEPT the day-block scopes excludes templates (NOT_TEMPLATE_ROW).
   // The index-scope `select` carries the permit's relaxed status clause; the
@@ -1146,6 +1162,23 @@ export function computeReorderPre(
   // on a template — the §1 crash).
   const selectWithTemplates = (where: string, binds: (string | number)[]): MemberRow[] =>
     rowsOf(where, binds, "todayIndex", "1=1", "status = 0", []);
+  // The day-block TEMPLATE cohort: every template row (to-do or project) whose
+  // PROJECTION DAY is the packed day D. The day cannot be a SQL predicate any more
+  // — Things 3.23 retired `rt1_nextInstanceStartDate`, so the day is derived per
+  // row from the rule + spawn cursor (templateProjectionDay) and matched in host
+  // math. Templates are a tiny cohort (the v27 partial index on
+  // `rt1_recurrenceRule IS NOT NULL` covers the scan), and a template that
+  // projects nowhere is simply not a member — the fail-closed contract.
+  const selectTemplatesProjectingOn = (dayPacked: number): MemberRow[] =>
+    rowsOf(
+      `type IN (0, 1) AND ${TEMPLATE_ROW}`,
+      [],
+      "todayIndex",
+      "1=1",
+      "status = 0",
+      [],
+      dayPacked,
+    );
 
   let members: MemberRow[] = [];
   const rejectedCandidates = new Map<string, string>();
@@ -1351,28 +1384,28 @@ export function computeReorderPre(
         firstUuid !== undefined
           ? (db
               .prepare(
-                "SELECT startDate, startBucket, deadline, start, rt1_nextInstanceStartDate AS proj, " +
-                  `${TEMPLATE_ROW} AS isTemplate FROM TMTask WHERE uuid = ?`,
+                "SELECT startDate, startBucket, deadline, start, " +
+                  `${TEMPLATE_PROJECTION_COLUMNS}, ${TEMPLATE_ROW} AS isTemplate ` +
+                  "FROM TMTask WHERE uuid = ?",
               )
               .get(firstUuid) as
-              | {
+              | ({
                   startDate: number | null;
                   startBucket: number;
                   deadline: number | null;
                   start: number;
-                  proj: number | null;
                   isTemplate: number;
-                }
+                } & TemplateProjectionRow)
               | undefined)
           : undefined;
       // The day D read off the first requested uuid: a scheduled row's startDate, a
-      // forecast row's deadline, or a TEMPLATE's projection day (rt1_nextInstanceStart
-      // Date — TMPLSORT/PTMPL). Threaded into all three member cohorts below.
+      // forecast row's deadline, or a TEMPLATE's projection day (TMPLSORT/PTMPL —
+      // cached, else derived). Threaded into all three member cohorts below.
       const dayPacked: number | null =
         first === undefined
           ? null
           : first.isTemplate === 1
-            ? first.proj
+            ? templateProjectionDay(first)
             : first.startDate !== null && first.startBucket === 0
               ? first.startDate
               : first.startDate === null && (first.start === 1 || first.start === 2)
@@ -1394,14 +1427,11 @@ export function computeReorderPre(
           "todayIndex",
         );
         // Repeating TEMPLATE projections on day D (TMPLSORT-3c / PTMPL-B5): to-do AND
-        // project templates whose rt1_nextInstanceStartDate == D render on the SAME
-        // block todayIndex axis. Admitted as members so the dispatch can split the
+        // project templates whose PROJECTION DAY == D render on the SAME block
+        // todayIndex axis. Admitted as members so the dispatch can split the
         // per-class leg family; a PROJECT template is byte-untouched under the suffix
         // rule, a TO-DO template front-inserts via a single-id `list "Upcoming"` leg.
-        const templates = selectWithTemplates(
-          `type IN (0, 1) AND ${TEMPLATE_ROW} AND rt1_nextInstanceStartDate = ?`,
-          [dayPacked],
-        );
+        const templates = selectTemplatesProjectingOn(dayPacked);
         // One shared todayIndex axis (DLBNC-1d / TMPLSORT-2): merge + re-sort to block order.
         members = [...scheduled, ...forecast, ...templates].toSorted((a, b) => a.rank - b.rank);
       }
@@ -1463,23 +1493,23 @@ export function computeReorderPre(
         firstUuid !== undefined
           ? (db
               .prepare(
-                "SELECT startDate, startBucket, rt1_nextInstanceStartDate AS proj, " +
-                  `${TEMPLATE_ROW} AS isTemplate FROM TMTask WHERE uuid = ?`,
+                "SELECT startDate, startBucket, " +
+                  `${TEMPLATE_PROJECTION_COLUMNS}, ${TEMPLATE_ROW} AS isTemplate ` +
+                  "FROM TMTask WHERE uuid = ?",
               )
               .get(firstUuid) as
-              | {
+              | ({
                   startDate: number | null;
                   startBucket: number;
-                  proj: number | null;
                   isTemplate: number;
-                }
+                } & TemplateProjectionRow)
               | undefined)
           : undefined;
       const dayPacked: number | null =
         first === undefined
           ? null
           : first.isTemplate === 1
-            ? first.proj
+            ? templateProjectionDay(first)
             : first.startBucket === 0
               ? first.startDate
               : null;
@@ -1489,10 +1519,7 @@ export function computeReorderPre(
           [dayPacked],
           "todayIndex",
         );
-        const templates = selectWithTemplates(
-          `type IN (0, 1) AND ${TEMPLATE_ROW} AND rt1_nextInstanceStartDate = ?`,
-          [dayPacked],
-        );
+        const templates = selectTemplatesProjectingOn(dayPacked);
         members = [...scheduled, ...templates].toSorted((a, b) => a.rank - b.rank);
       }
       break;

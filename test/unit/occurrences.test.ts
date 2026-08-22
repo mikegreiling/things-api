@@ -5,9 +5,15 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { encodePackedDate } from "../../src/model/dates.ts";
 import { generateEventDates, projectOccurrences } from "../../src/model/occurrences.ts";
 import type { RepeatRule } from "../../src/model/recurrence.ts";
+import {
+  type TemplateProjectionRow,
+  templateProjectionDay,
+} from "../../src/model/template-projection.ts";
 import { upcomingView } from "../../src/read/views.ts";
+import { ruleXml } from "../../src/write/recurrence-rule-blob.ts";
 import { buildFixtureDb } from "../fixtures/build-db.ts";
 import { seedTodo } from "../fixtures/seed.ts";
 
@@ -246,5 +252,104 @@ describe("upcoming --horizon", () => {
     });
     expect(upcomingView(fx.db, NOW).map((i) => i.startDate)).toEqual(["2026-07-15"]);
     fx.close();
+  });
+});
+
+/**
+ * DBV27 — the PROJECTION DAY front door. Things ≤ 3.22 caches a template's next
+ * instance day in `rt1_nextInstanceStartDate`; Things 3.23 retired that column
+ * (nulled library-wide), leaving the rule + the `rt1_instanceCreationStartDate`
+ * spawn cursor. Both shapes must yield the same day, and an underivable
+ * projection must fail closed rather than guess one.
+ */
+/** A fixed rule row in the 3.23 shape (cache retired), with overrides. */
+function derivedRow(over: Partial<TemplateProjectionRow> = {}): TemplateProjectionRow {
+  return {
+    tpNext: null,
+    tpCursor: encodePackedDate("2026-07-15"),
+    tpRule: ruleXml({ tp: 0, fu: 16, fa: 1, anchor: 1_783_000_000 }),
+    tpPaused: 0,
+    tpCount: 0,
+    ...over,
+  };
+}
+
+describe("templateProjectionDay", () => {
+  it("the ≤3.22 cache wins whenever the app still maintains it", () => {
+    // Cache and cursor disagree; the app's own cached day is authoritative.
+    const row = derivedRow({ tpNext: encodePackedDate("2026-08-01") });
+    expect(templateProjectionDay(row)).toBe(encodePackedDate("2026-08-01"));
+  });
+
+  it("derives the cursor's own day when the cursor is on the rule grid", () => {
+    expect(templateProjectionDay(derivedRow())).toBe(encodePackedDate("2026-07-15"));
+  });
+
+  it("derives through the rule grid for a weekly template (cursor on grid)", () => {
+    // Biweekly Sunday: the cursor 2026-07-19 IS a Sunday, so it projects itself.
+    const row = derivedRow({
+      tpRule: ruleXml({ tp: 0, fu: 256, fa: 2, of: [{ wd: 0 }], anchor: 1_783_000_000 }),
+      tpCursor: encodePackedDate("2026-07-19"),
+    });
+    expect(templateProjectionDay(row)).toBe(encodePackedDate("2026-07-19"));
+  });
+
+  it("an OFF-RULE cursor projects to the first rule-ALIGNED occurrence after it (ANCH2)", () => {
+    // Weekly Sunday rule with a Wednesday cursor (an off-rule typed "Next:"):
+    // the retired column held the first rule-aligned occurrence — 2026-07-19.
+    const row = derivedRow({
+      tpRule: ruleXml({ tp: 0, fu: 256, fa: 1, of: [{ wd: 0 }], anchor: 1_783_000_000 }),
+      tpCursor: encodePackedDate("2026-07-15"), // a Wednesday
+    });
+    expect(templateProjectionDay(row)).toBe(encodePackedDate("2026-07-19"));
+  });
+
+  it("honors the rule's start offset (a deadlined ts=-4 rule projects the START)", () => {
+    // ts=-4: instances start 4 days before their (Sunday) event date. A cursor of
+    // 2026-07-15 is the START of the on-grid 2026-07-19 event, so it projects itself.
+    const row = derivedRow({
+      tpRule: ruleXml({ tp: 0, fu: 256, fa: 2, of: [{ wd: 0 }], ts: -4, anchor: 1_783_000_000 }),
+      tpCursor: encodePackedDate("2026-07-15"),
+    });
+    expect(templateProjectionDay(row)).toBe(encodePackedDate("2026-07-15"));
+  });
+
+  it.each([
+    ["an undecodable rule blob", { tpRule: new Uint8Array([0x62, 0x70]) }],
+    ["a rule with no blob at all (a bare legacy repeater)", { tpRule: null }],
+    [
+      "an unknown rule version (rrv drift)",
+      {
+        tpRule:
+          '<?xml version="1.0"?><plist version="1.0"><dict><key>fa</key><integer>1</integer>' +
+          "<key>fu</key><integer>16</integer><key>rrv</key><integer>5</integer>" +
+          "<key>tp</key><integer>0</integer></dict></plist>",
+      },
+    ],
+    [
+      "an after-completion rule",
+      { tpRule: ruleXml({ tp: 1, fu: 16, fa: 1, anchor: 1_783_000_000 }) },
+    ],
+    ["a paused series", { tpPaused: 1 }],
+    [
+      "an exhausted ends-after series",
+      { tpRule: ruleXml({ tp: 0, fu: 16, fa: 1, rc: 3, anchor: 1_783_000_000 }), tpCount: 3 },
+    ],
+    [
+      "an ends-on series past its end date",
+      {
+        tpRule: ruleXml({
+          tp: 0,
+          fu: 16,
+          fa: 1,
+          ed: Math.floor(Date.UTC(2026, 5, 30) / 1000),
+          anchor: 1_783_000_000,
+        }),
+      },
+    ],
+    ["no spawn cursor", { tpCursor: null }],
+    ["an out-of-domain packed cursor", { tpCursor: 0x7fff_ffff }],
+  ] as [string, Partial<TemplateProjectionRow>][])("fails closed for %s", (_name, over) => {
+    expect(templateProjectionDay(derivedRow(over))).toBeNull();
   });
 });
