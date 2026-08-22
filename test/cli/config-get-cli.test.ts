@@ -147,7 +147,7 @@ describe("config get (all keys)", () => {
       "auditEnabled",
       "accepted-fingerprint",
       "allow-experimental",
-      "deputy-enabled",
+      "helpers-enabled",
       "ui-enabled",
       "host",
     ]) {
@@ -164,7 +164,7 @@ describe("config get (all keys)", () => {
     const data = (env["data"] as { items: { key: string; source: string }[] }).items;
     expect(Array.isArray(data)).toBe(true);
     expect(data).toHaveLength(16);
-    expect(data.map((e) => e.key)).toContain("deputy-enabled");
+    expect(data.map((e) => e.key)).toContain("helpers-enabled");
     expect(data.map((e) => e.key)).toContain("ui-enabled");
     expect(data.map((e) => e.key)).toContain("auto-launch");
     expect(data.map((e) => e.key)).toContain("ui-drive-budget-ms");

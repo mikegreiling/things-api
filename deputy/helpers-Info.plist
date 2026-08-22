@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The outer helpers bundle: things-deputy (automation, unsandboxed) is the
+       main executable; the sandboxed things-reader.app nests under
+       Contents/Helpers with its own identity + entitlements. TCC keys the
+       deputy by THIS bundle identifier, so it must stay stable across
+       releases. LSUIElement keeps it out of the Dock. -->
+  <key>CFBundleIdentifier</key>
+  <string>com.pixelcog.things-api-helper</string>
+  <key>CFBundleName</key>
+  <string>Things API Helper</string>
+  <key>CFBundleExecutable</key>
+  <string>things-deputy</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.0.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>

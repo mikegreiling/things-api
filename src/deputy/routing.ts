@@ -3,9 +3,8 @@
  * reads, osascript, container file reads) go through the things-deputy broker
  * or run direct exactly as they always have.
  *
- * Mode resolution (highest wins): the CLI `--deputy/--no-deputy` flag (which
- * writes THINGS_API_DEPUTY before any load) → THINGS_API_DEPUTY env → stored
- * `deputy-enabled` config → default OFF. Direct execution is the contract's
+ * Mode resolution (highest wins): the CLI `--helpers/--no-helpers` flag (which * writes THINGS_API_HELPERS before any load) → THINGS_API_HELPERS env → stored
+ * `helpers-enabled` config → default OFF. Direct execution is the contract's
  * ground truth; the deputy is an alternative transport for the same
  * primitives.
  *
@@ -19,7 +18,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
 import { loadConfig } from "../config.ts";
-import { PKG_VERSION } from "../contracts.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import { DeputyAsyncClient } from "./client.ts";
 import {
@@ -29,6 +27,7 @@ import {
   DeputyRequestError,
   deputySocketPath,
   deputyTokenPath,
+  EXPECTED_HELPERS_VERSION,
   type ReaderHello,
   readerSocketPath,
   readerTokenPath,
@@ -115,18 +114,21 @@ function hello(bridge: DeputySyncBridge, token: string): DeputyHello {
 
 /**
  * Version-skew policy: a PROTOCOL mismatch always deactivates (the shapes on
- * the wire cannot be trusted). A package-version mismatch on matching protocol
- * gets one automatic `launchctl kickstart` (the installed binary may already
- * be newer on disk — the daily npm-link reality), then proceeds with a notice:
- * the broker's verbs are dumb primitives, so cross-version execution is safe
- * by construction as long as the protocol matches.
+ * the wire cannot be trusted). The helpers are versioned on their own line
+ * (EXPECTED_HELPERS_VERSION, decoupled from the package version so unchanged
+ * helpers never nag across package releases); a helpers-version mismatch on
+ * matching protocol gets one automatic `launchctl kickstart` (the installed
+ * bundle may already be newer on disk — the daily npm-link reality), then
+ * proceeds with a notice: the helpers' verbs are dumb primitives, so
+ * cross-version execution is safe by construction as long as the protocol
+ * matches.
  */
 function reconcileVersions(
   bridge: DeputySyncBridge,
   token: string,
   first: DeputyHello,
 ): DeputyHello {
-  if (first.deputyVersion === PKG_VERSION) return first;
+  if (first.deputyVersion === EXPECTED_HELPERS_VERSION) return first;
   try {
     execFileSync(
       "launchctl",
@@ -136,7 +138,7 @@ function reconcileVersions(
   } catch {
     // Not installed under launchd (foreground/test deputy) — nothing to restart.
     notice(
-      `deputy is v${first.deputyVersion}, library is v${PKG_VERSION} (same protocol) — proceeding; rebuild with scripts/build-deputy.sh + \`things deputy restart\` to align`,
+      `helpers are v${first.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with scripts/build-helpers.sh + \`things helpers install\` to align`,
     );
     return first;
   }
@@ -144,27 +146,27 @@ function reconcileVersions(
     syncSleep(250);
     try {
       const fresh = hello(bridge, token);
-      if (fresh.deputyVersion === PKG_VERSION) return fresh;
+      if (fresh.deputyVersion === EXPECTED_HELPERS_VERSION) return fresh;
     } catch {
       // Restart still in flight — keep waiting out the bounded window.
     }
   }
   const current = hello(bridge, token);
   notice(
-    `deputy is v${current.deputyVersion}, library is v${PKG_VERSION} (same protocol) — proceeding; rebuild + \`things deputy restart\` to align`,
+    `helpers are v${current.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild + \`things helpers install\` to align`,
   );
   return current;
 }
 
 function activate(env: NodeJS.ProcessEnv): RoutingState {
   const cfg = loadConfig(env);
-  if (!cfg.deputyEnabled) return { active: false, reason: "disabled", hello: null };
+  if (!cfg.helpersEnabled) return { active: false, reason: "disabled", hello: null };
 
   const socketPath = deputySocketPath(env);
   const tokenPath = deputyTokenPath(env);
   if (!existsSync(socketPath) || !existsSync(tokenPath)) {
     notice(
-      `enabled but not running (no socket at ${socketPath}) — running DIRECT, so TCC prompts attach to this process. \`things deputy status\` to inspect.`,
+      `enabled but not running (no socket at ${socketPath}) — running DIRECT, so TCC prompts attach to this process. \`things helpers status\` to inspect.`,
     );
     return {
       active: false,
@@ -181,14 +183,14 @@ function activate(env: NodeJS.ProcessEnv): RoutingState {
     bridge.close();
     const why = err instanceof Error ? err.message : String(err);
     notice(
-      `enabled but the handshake failed (${why}) — running DIRECT. \`things deputy status\` to inspect.`,
+      `enabled but the handshake failed (${why}) — running DIRECT. \`things helpers status\` to inspect.`,
     );
     return { active: false, reason: `handshake failed: ${why}`, hello: null };
   }
   if (helloResult.protocol !== DEPUTY_PROTOCOL_VERSION) {
     bridge.close();
     notice(
-      `deputy speaks protocol ${helloResult.protocol}, library speaks ${DEPUTY_PROTOCOL_VERSION} — running DIRECT. Rebuild + \`things deputy restart\`.`,
+      `deputy speaks protocol ${helloResult.protocol}, library speaks ${DEPUTY_PROTOCOL_VERSION} — running DIRECT. Rebuild + \`things helpers restart\`.`,
     );
     return {
       active: false,
@@ -222,7 +224,7 @@ function readerInactive(reason: string): ReaderState {
 }
 
 function activateReader(env: NodeJS.ProcessEnv): ReaderState {
-  if (!loadConfig(env).deputyEnabled) return readerInactive("disabled");
+  if (!loadConfig(env).helpersEnabled) return readerInactive("disabled");
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
   if (!existsSync(socketPath) || !existsSync(tokenPath)) {

@@ -71,14 +71,15 @@ export interface ThingsApiConfig {
   autoLaunch: boolean;
   /**
    * Route privileged primitives (database reads, osascript, container file
-   * reads) through the things-deputy broker (default false). The deputy is a
-   * launchd-supervised signed helper whose one job is to be the stable macOS
-   * TCC grantee, so Automation/Accessibility/file grants stop churning with
-   * agent-harness updates. When enabled but unreachable, every process falls
-   * back to DIRECT execution (today's behavior) with a one-line notice —
-   * see src/deputy/routing.ts and docs/design/agent-daemon.md §β1.
+   * reads) through the installed helper pair (default false): things-deputy
+   * for automation, the sandboxed things-reader for file access. The helpers
+   * are launchd-supervised signed processes whose one job is to be the stable
+   * macOS permission grantees, so Automation/Accessibility/file grants stop
+   * churning with agent-harness updates. When enabled but unreachable, every
+   * process falls back to DIRECT execution (today's behavior) with a one-line
+   * notice — see src/deputy/routing.ts and docs/design/agent-daemon.md §β1.
    */
-  deputyEnabled: boolean;
+  helpersEnabled: boolean;
   /**
    * The Accessibility GUI ("ui") write vector. When disabled the vector does
    * not exist on this machine: its GUI-only operations report unsupported.
@@ -183,7 +184,7 @@ interface ConfigFile {
   bounceEnabled?: boolean;
   bounceMaxItems?: number;
   autoLaunch?: boolean;
-  deputyEnabled?: boolean;
+  helpersEnabled?: boolean;
   uiEnabled?: boolean;
   uiDriveBudgetMs?: number;
   traceEnabled?: boolean;
@@ -230,7 +231,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
   const bounceEnabledEnv = boolEnvOverride(env["THINGS_API_BOUNCE_ENABLED"], "true", "false");
   const bounceMaxItemsEnv = positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]);
   const autoLaunchEnv = boolEnvOverride(env["THINGS_API_AUTO_LAUNCH"], "true", "false");
-  const deputyEnv = boolEnvOverride(env["THINGS_API_DEPUTY"], "true", "false");
+  const helpersEnv = boolEnvOverride(env["THINGS_API_HELPERS"], "true", "false");
   const uiEnv = boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false");
   const uiDriveBudgetEnv = positiveIntEnvOverride(env["THINGS_API_UI_DRIVE_BUDGET_MS"]);
   const traceEnv = boolEnvOverride(env["THINGS_API_TRACE"], "true", "false");
@@ -257,7 +258,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     bounceEnabled: bounceEnabledEnv ?? file.bounceEnabled ?? true,
     bounceMaxItems: bounceMaxItemsEnv ?? file.bounceMaxItems ?? 30,
     autoLaunch: autoLaunchEnv ?? file.autoLaunch ?? true,
-    deputyEnabled: deputyEnv ?? file.deputyEnabled ?? false,
+    helpersEnabled: helpersEnv ?? file.helpersEnabled ?? false,
     ui: {
       enabled: uiEnv ?? file.uiEnabled ?? false,
       driveBudgetMs: uiDriveBudgetEnv ?? file.uiDriveBudgetMs ?? DEFAULT_UI_DRIVE_BUDGET_MS,
@@ -404,10 +405,10 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       boolEnvOverride(env["THINGS_API_AUTO_LAUNCH"], "true", "false") !== undefined,
     ),
     view(
-      "deputy-enabled",
-      cfg.deputyEnabled,
-      file.deputyEnabled !== undefined,
-      boolEnvOverride(env["THINGS_API_DEPUTY"], "true", "false") !== undefined,
+      "helpers-enabled",
+      cfg.helpersEnabled,
+      file.helpersEnabled !== undefined,
+      boolEnvOverride(env["THINGS_API_HELPERS"], "true", "false") !== undefined,
     ),
     view(
       "ui-enabled",

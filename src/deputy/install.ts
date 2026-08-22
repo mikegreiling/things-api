@@ -1,31 +1,31 @@
 /**
- * things-deputy lifecycle: install/uninstall the launchd LaunchAgent, restart
- * it, and report status. launchd owns the deputy process end-to-end (RunAtLoad
- * + KeepAlive) — there is never a detached or self-daemonized process, and a
- * crashed deputy relaunches with its identity (and therefore its macOS
+ * things-helpers lifecycle: install/uninstall the launchd LaunchAgents for
+ * both helper halves, restart them, run the reader's grant ceremony, and
+ * report status. launchd owns both processes end-to-end (RunAtLoad +
+ * KeepAlive) — there is never a detached or self-daemonized process, and a
+ * crashed helper relaunches with its identity (and therefore its macOS
  * permission grants) intact.
+ *
+ * Both halves ship inside ONE bundle (Things API Helper.app): things-deputy
+ * (automation, unsandboxed) is the bundle's main executable and the sandboxed
+ * things-reader.app nests under Contents/Helpers with its own bundle identity
+ * — that identity (com.pixelcog.things-reader) keys the user's security-scoped
+ * bookmark grant and must never change.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  cpSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import {
   DEPUTY_LAUNCHD_LABEL,
   READER_LAUNCHD_LABEL,
   DEPUTY_PROTOCOL_VERSION,
   type DeputyHello,
+  type ReaderHello,
   deputySocketPath,
   deputyStateDir,
   deputyTokenPath,
@@ -37,27 +37,39 @@ export function deputyPlistPath(): string {
   return join(homedir(), "Library/LaunchAgents", `${DEPUTY_LAUNCHD_LABEL}.plist`);
 }
 
-/** Where `deputy install` places the running copy of the binary. */
-export function deputyInstalledBinaryPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(deputyStateDir(env), "bin", "things-deputy");
-}
-
-/** The build output of scripts/build-deputy.sh in this package checkout. */
-export function deputyDefaultBuildPath(): string {
-  return fileURLToPath(new URL("../../deputy/build/things-deputy", import.meta.url));
-}
-
 export function readerPlistPath(): string {
   return join(homedir(), "Library/LaunchAgents", `${READER_LAUNCHD_LABEL}.plist`);
 }
 
-/** Where `deputy install` places the reader bundle. */
-export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(deputyStateDir(env), "bin", "things-reader.app");
+/**
+ * The directory `helpers install` owns WHOLESALE: it is deleted and recreated
+ * on every install, so any previous layout (however old) is erased without
+ * dedicated migration logic, and the fresh inodes reset the kernel's
+ * per-vnode code-signature cache (copying over an executed inode makes every
+ * future exec die with SIGKILL — observed live 2026-08-21).
+ */
+export function helpersInstallDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(deputyStateDir(env), "bin");
 }
 
-export function readerDefaultBuildPath(): string {
-  return fileURLToPath(new URL("../../deputy/build/things-reader.app", import.meta.url));
+/** Where `helpers install` places the bundle. */
+export function helpersInstalledBundlePath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(helpersInstallDir(env), "Things API Helper.app");
+}
+
+/** The installed deputy executable (the bundle's main executable). */
+export function deputyInstalledBinaryPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(helpersInstalledBundlePath(env), "Contents/MacOS/things-deputy");
+}
+
+/** The installed nested reader app. */
+export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(helpersInstalledBundlePath(env), "Contents/Helpers/things-reader.app");
+}
+
+/** The build output of scripts/build-helpers.sh in this package checkout. */
+export function helpersDefaultBuildPath(): string {
+  return fileURLToPath(new URL("../../deputy/build/Things API Helper.app", import.meta.url));
 }
 
 function readerLaunchTarget(): string {
@@ -159,92 +171,122 @@ export function deputySigningInfo(binaryPath: string): DeputySigning {
     : { state: "unknown", authority: null };
 }
 
-export interface DeputyInstallResult {
-  binaryPath: string;
+export interface HelpersInstallResult {
+  bundlePath: string;
   plistPath: string;
   stateDir: string;
   signing: DeputySigning;
   readerInstalled: boolean;
+  /** Reader grant state after install: null when the reader is absent or never answered. */
+  readerGranted: boolean | null;
   warnings: string[];
 }
 
+/** One handshake against the reader's socket; null when it cannot complete. */
+function readerHelloProbe(env: NodeJS.ProcessEnv): ReaderHello | null {
+  const socketPath = readerSocketPath(env);
+  const tokenPath = readerTokenPath(env);
+  if (!existsSync(socketPath) || !existsSync(tokenPath)) return null;
+  const token = readFileSync(tokenPath, "utf8").trim();
+  const bridge = new DeputySyncBridge(socketPath);
+  try {
+    const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
+    return res["ok"] === true ? (res as unknown as ReaderHello) : null;
+  } catch {
+    return null;
+  } finally {
+    bridge.close();
+  }
+}
+
 /**
- * Install (or reinstall) the deputy: copy the built binary to its stable
- * path, write the LaunchAgent plist, and (re)bootstrap it under launchd.
+ * Install (or reinstall) the helpers: copy the built bundle to its stable
+ * path, write both LaunchAgent plists, and (re)bootstrap them under launchd.
  */
-export function installDeputy(
-  options: { binaryPath?: string } = {},
+export function installHelpers(
+  options: { bundlePath?: string } = {},
   env: NodeJS.ProcessEnv = process.env,
-): DeputyInstallResult {
-  const source = options.binaryPath ?? deputyDefaultBuildPath();
-  if (!existsSync(source)) {
+): HelpersInstallResult {
+  const source = options.bundlePath ?? helpersDefaultBuildPath();
+  if (!existsSync(join(source, "Contents/MacOS/things-deputy"))) {
     throw new Error(
-      `deputy binary not found at ${source} — build it first: bash scripts/build-deputy.sh`,
+      `helpers bundle not found at ${source} — build it first: bash scripts/build-helpers.sh`,
     );
   }
-  const target = deputyInstalledBinaryPath(env);
+  const readerInBuild = existsSync(join(source, "Contents/Helpers/things-reader.app"));
+  const installDir = helpersInstallDir(env);
+  const bundlePath = helpersInstalledBundlePath(env);
   const stateDir = deputyStateDir(env);
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
 
-  // Stop a running deputy before overwriting its binary (ignore "not loaded").
+  // Stop both halves before replacing the bundle (ignore "not loaded"), then
+  // recreate the install dir from scratch: install owns bin/ WHOLESALE — a
+  // fresh copy every time erases any previous layout without migration logic
+  // and resets the kernel's per-vnode code-signature cache.
   launchctl(["bootout", launchTarget()]);
-  // Unlink FIRST: the kernel caches code-signature state per vnode, so
-  // copying over an inode that has ever been executed makes every future exec
-  // die with SIGKILL "Taskgated Invalid Signature" — even though the new
-  // bytes' signature verifies clean on disk (observed live 2026-08-21, a
-  // launchd 10s crash-respawn loop). A fresh inode resets the cache.
-  rmSync(target, { force: true });
-  copyFileSync(source, target);
-  chmodSync(target, 0o755);
+  launchctl(["bootout", readerLaunchTarget()]);
+  rmSync(installDir, { recursive: true, force: true });
+  mkdirSync(installDir, { recursive: true, mode: 0o700 });
+  cpSync(source, bundlePath, { recursive: true });
 
   const plistPath = deputyPlistPath();
   mkdirSync(dirname(plistPath), { recursive: true });
-  writeFileSync(plistPath, renderPlist(target, stateDir));
+  writeFileSync(plistPath, renderPlist(deputyInstalledBinaryPath(env), stateDir));
 
-  const boot = launchctl(["bootstrap", `gui/${process.getuid?.() ?? 501}`, plistPath]);
   const warnings: string[] = [];
+  const boot = launchctl(["bootstrap", `gui/${process.getuid?.() ?? 501}`, plistPath]);
   if (!boot.ok) {
     warnings.push(`launchctl bootstrap failed: ${boot.output.trim()}`);
   }
-  const signing = deputySigningInfo(target);
+  const signing = deputySigningInfo(deputyInstalledBinaryPath(env));
   if (signing.state !== "signed") {
     warnings.push(
-      `binary is ${signing.state} — macOS permission grants will NOT survive rebuilds. ` +
+      `bundle is ${signing.state} — macOS permission grants will NOT survive rebuilds. ` +
         `Mint the persistent certificate once (scripts/deputy-cert-setup.sh), rebuild, reinstall.`,
     );
   }
 
-  // The sandboxed reader (SANDBOX1): installed alongside when the build
-  // produced it (a real signing chain is mandatory for sandboxed code, so an
-  // unsigned host's build skips the bundle — and so do we, with a warning).
-  const readerSource = options.binaryPath !== undefined ? null : readerDefaultBuildPath();
-  let readerInstalled = false;
-  if (readerSource !== null && existsSync(readerSource)) {
-    const readerTarget = readerInstalledAppPath(env);
-    launchctl(["bootout", readerLaunchTarget()]);
-    // Fresh inodes for the whole bundle — the kernel CS cache is per-vnode.
-    rmSync(readerTarget, { recursive: true, force: true });
-    cpSync(readerSource, readerTarget, { recursive: true });
+  let readerGranted: boolean | null = null;
+  if (readerInBuild) {
     const readerPlist = readerPlistPath();
-    writeFileSync(readerPlist, renderReaderPlist(readerTarget));
+    writeFileSync(readerPlist, renderReaderPlist(readerInstalledAppPath(env)));
     const readerBoot = launchctl(["bootstrap", `gui/${process.getuid?.() ?? 501}`, readerPlist]);
-    if (!readerBoot.ok)
+    if (!readerBoot.ok) {
       warnings.push(`reader launchctl bootstrap failed: ${readerBoot.output.trim()}`);
-    readerInstalled = true;
-  } else if (readerSource !== null) {
+    } else {
+      // Report the ACTUAL grant state instead of a "run it if you have not"
+      // hedge — the reader knows, so ask it (bounded: it just booted).
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const hello = readerHelloProbe(env);
+        if (hello !== null) {
+          readerGranted = hello.granted === true;
+          break;
+        }
+        syncSleepMs(250);
+      }
+    }
+  } else {
     warnings.push(
-      "things-reader.app was not built (no signing identity?) — file reads will ride the deputy's per-process consent instead of the durable scoped grant. Build with an Apple-chain identity, reinstall, then run `things deputy grant`.",
+      "the bundle was built without things-reader (no Apple-issued signing identity?) — file reads run direct. Build with an Apple-chain identity, reinstall, then run `things helpers grant`.",
     );
   }
-  return { binaryPath: target, plistPath, stateDir, signing, readerInstalled, warnings };
+  return {
+    bundlePath,
+    plistPath,
+    stateDir,
+    signing,
+    readerInstalled: readerInBuild,
+    readerGranted,
+    warnings,
+  };
 }
 
-export interface DeputyUninstallResult {
+export interface HelpersUninstallResult {
   removed: string[];
 }
 
-/** Stop both halves and remove LaunchAgents + installed binaries (state — tokens, logs, the reader's grant — is kept). */
-export function uninstallDeputy(env: NodeJS.ProcessEnv = process.env): DeputyUninstallResult {
+/** Stop both halves and remove LaunchAgents + the installed bundle (state — tokens, logs, the reader's grant — is kept). */
+export function uninstallHelpers(env: NodeJS.ProcessEnv = process.env): HelpersUninstallResult {
   const removed: string[] = [];
   launchctl(["bootout", launchTarget()]);
   launchctl(["bootout", readerLaunchTarget()]);
@@ -254,25 +296,20 @@ export function uninstallDeputy(env: NodeJS.ProcessEnv = process.env): DeputyUni
       removed.push(path);
     }
   }
-  const binary = deputyInstalledBinaryPath(env);
-  if (existsSync(binary)) {
-    rmSync(binary);
-    removed.push(binary);
-  }
-  const readerApp = readerInstalledAppPath(env);
-  if (existsSync(readerApp)) {
-    rmSync(readerApp, { recursive: true });
-    removed.push(readerApp);
+  const installDir = helpersInstallDir(env);
+  if (existsSync(installDir)) {
+    rmSync(installDir, { recursive: true });
+    removed.push(installDir);
   }
   return { removed };
 }
 
-/** Restart the launchd-managed helpers (picks up rebuilt installed binaries). */
-export function restartDeputy(): void {
+/** Restart the launchd-managed helpers (picks up a rebuilt installed bundle). */
+export function restartHelpers(): void {
   const res = launchctl(["kickstart", "-k", launchTarget()]);
   if (!res.ok) {
     throw new Error(
-      `launchctl kickstart failed (${res.output.trim() || "unknown"}) — is the deputy installed? Run: things deputy install`,
+      `launchctl kickstart failed (${res.output.trim() || "unknown"}) — are the helpers installed? Run: things helpers install`,
     );
   }
   // Reader restart is best-effort: it may legitimately not be installed.
@@ -283,7 +320,10 @@ export function restartDeputy(): void {
  * The one-time grant ceremony: open the reader in `--grant` mode (the panel
  * must be presented by the SANDBOXED process — that is what makes the grant
  * durable) and wait for the bookmark to land, confirmed via the reader's
- * handshake. Interactive by design; returns when granted or on timeout.
+ * handshake. The panel opens INSIDE the Things data folder when it exists, so
+ * accepting is the only click. Interactive by design; returns when granted or
+ * on timeout, and verifies the database actually resolves inside the granted
+ * scope so a wrong-folder grant reports loudly instead of half-working.
  */
 export function grantReader(env: NodeJS.ProcessEnv = process.env): {
   granted: boolean;
@@ -293,10 +333,13 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
   if (!existsSync(appPath)) {
     return {
       granted: false,
-      detail: "things-reader.app is not installed — run `things deputy install` first",
+      detail: "things-reader is not installed — run `things helpers install` first",
     };
   }
-  const startDir = join(homedir(), "Library/Group Containers");
+  const thingsContainer = join(homedir(), THINGS_GROUP_CONTAINER);
+  const startDir = existsSync(thingsContainer)
+    ? thingsContainer
+    : join(homedir(), "Library/Group Containers");
   try {
     execFileSync("open", ["-W", appPath, "--args", "--grant", startDir], {
       stdio: "ignore",
@@ -312,7 +355,7 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
   const deadline = Date.now() + 15_000;
-  let detail = "the reader is not running — `things deputy status`";
+  let detail = "the reader is not running — `things helpers status`";
   while (Date.now() < deadline) {
     if (existsSync(socketPath) && existsSync(tokenPath)) {
       const token = readFileSync(tokenPath, "utf8").trim();
@@ -320,12 +363,21 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
       try {
         const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
         if (res["ok"] === true && (res as { granted?: boolean }).granted === true) {
+          const locate = bridge.request(
+            { v: DEPUTY_PROTOCOL_VERSION, token, verb: "locate" },
+            5000,
+          );
           bridge.close();
-          return { granted: true, detail: "granted" };
+          if (locate["ok"] === true) return { granted: true, detail: "granted" };
+          return {
+            granted: false,
+            detail:
+              "the grant landed, but the Things database was not found inside the granted folder — rerun `things helpers grant` and grant the Things data folder",
+          };
         }
-        detail = "the panel closed but no grant landed (canceled?) — rerun `things deputy grant`";
+        detail = "the panel closed but no grant landed (canceled?) — rerun `things helpers grant`";
       } catch {
-        detail = "the reader socket is not answering — `things deputy status`";
+        detail = "the reader socket is not answering — `things helpers status`";
       } finally {
         bridge.close();
       }
@@ -339,39 +391,39 @@ function syncSleepMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-export interface ReaderStatus {
-  installed: boolean;
-  loaded: boolean;
-  running: boolean;
-  granted: boolean;
-  socketPath: string;
-  signing: DeputySigning | null;
-  detail: string;
-}
-
-export interface DeputyStatus {
-  enabled: boolean;
+export interface DeputyHalfStatus {
   plistInstalled: boolean;
-  binaryInstalled: boolean;
   loaded: boolean;
   running: boolean;
   socketPath: string;
   hello: DeputyHello | null;
   signing: DeputySigning | null;
-  reader: ReaderStatus;
   detail: string;
 }
 
+export interface ReaderHalfStatus extends DeputyHalfStatus {
+  installed: boolean;
+  granted: boolean;
+}
+
+export interface HelpersStatus {
+  enabled: boolean;
+  bundleInstalled: boolean;
+  deputy: DeputyHalfStatus;
+  reader: ReaderHalfStatus;
+}
+
 /**
- * Prompt-free status: launchd load state, a live handshake when the socket
- * answers, and the installed binary's signing facts. Works with routing
- * disabled — inspect first, enable after.
+ * Prompt-free status for both halves: launchd load state, a live handshake
+ * when each socket answers, and the installed bundle's signing facts. Works
+ * with routing disabled — inspect first, enable after.
  */
-export function deputyStatus(enabled: boolean, env: NodeJS.ProcessEnv = process.env): DeputyStatus {
-  const plistInstalled = existsSync(deputyPlistPath());
+export function helpersStatus(
+  enabled: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): HelpersStatus {
   const binaryPath = deputyInstalledBinaryPath(env);
   const binaryInstalled = existsSync(binaryPath);
-  const loaded = launchctl(["print", launchTarget()]).ok;
   const socketPath = deputySocketPath(env);
   let hello: DeputyHello | null = null;
   let detail = "";
@@ -395,19 +447,21 @@ export function deputyStatus(enabled: boolean, env: NodeJS.ProcessEnv = process.
   }
   return {
     enabled,
-    plistInstalled,
-    binaryInstalled,
-    loaded,
-    running: hello !== null,
-    socketPath,
-    hello,
-    signing: binaryInstalled ? deputySigningInfo(binaryPath) : null,
+    bundleInstalled: binaryInstalled,
+    deputy: {
+      plistInstalled: existsSync(deputyPlistPath()),
+      loaded: launchctl(["print", launchTarget()]).ok,
+      running: hello !== null,
+      socketPath,
+      hello,
+      signing: binaryInstalled ? deputySigningInfo(binaryPath) : null,
+      detail: hello !== null ? "running" : detail,
+    },
     reader: readerStatus(env),
-    detail: hello !== null ? "running" : detail,
   };
 }
 
-function readerStatus(env: NodeJS.ProcessEnv): ReaderStatus {
+function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
   const appPath = readerInstalledAppPath(env);
   const installed = existsSync(appPath);
   const loaded = launchctl(["print", readerLaunchTarget()]).ok;
@@ -415,6 +469,7 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderStatus {
   const tokenPath = readerTokenPath(env);
   let running = false;
   let granted = false;
+  let hello: DeputyHello | null = null;
   let detail = "not running (no socket)";
   if (existsSync(socketPath) && existsSync(tokenPath)) {
     const token = readFileSync(tokenPath, "utf8").trim();
@@ -423,8 +478,9 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderStatus {
       const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
       if (res["ok"] === true) {
         running = true;
+        hello = res as unknown as DeputyHello;
         granted = (res as { granted?: boolean }).granted === true;
-        detail = granted ? "running, granted" : "running, NOT granted (things deputy grant)";
+        detail = granted ? "running, granted" : "running, NOT granted (things helpers grant)";
       } else {
         detail = `handshake refused: ${JSON.stringify(res["error"])}`;
       }
@@ -436,10 +492,12 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderStatus {
   }
   return {
     installed,
+    plistInstalled: existsSync(readerPlistPath()),
     loaded,
     running,
     granted,
     socketPath,
+    hello,
     signing: installed ? deputySigningInfo(readerExecPath(appPath)) : null,
     detail,
   };

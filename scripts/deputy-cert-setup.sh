@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time ceremony: mint the persistent self-signed code-signing certificate
-# ("things-deputy-signing") that scripts/build-deputy.sh signs the deputy with.
+# ("things-deputy-signing") that scripts/build-helpers.sh signs the deputy with.
 #
 # WHY A PERSISTENT CERT: macOS attaches Automation/Accessibility/file grants to
 # the responsible process's code signature. A stable certificate means every
@@ -55,6 +55,6 @@ security add-trusted-cert -p codeSign \
 
 echo
 echo "done. Next:"
-echo "  bash scripts/build-deputy.sh   # now signs with $IDENTITY"
+echo "  bash scripts/build-helpers.sh   # now signs with $IDENTITY"
 echo "  things deputy install          # (re)install the signed helper"
 echo "  things deputy status           # verify signing: signed ($IDENTITY)"

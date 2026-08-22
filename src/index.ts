@@ -215,28 +215,30 @@ export type { WhenSugar, WhenSugarLabels } from "./model/when-sugar.ts";
 export { ThingsDbNotFoundError } from "./db/locate.ts";
 export { ThingsDbOpenError } from "./db/connection.ts";
 
-// things-deputy broker (docs/design/agent-daemon.md §β1): lifecycle + routing
-// state for the CLI `things deputy` command group and doctor.
+// The helper pair (docs/design/agent-daemon.md §β1): lifecycle + routing
+// state for the CLI `things helpers` command group and doctor.
 export {
-  deputyDefaultBuildPath,
   deputyInstalledBinaryPath,
   deputyPlistPath,
   deputySigningInfo,
-  deputyStatus,
   grantReader,
-  installDeputy,
-  readerDefaultBuildPath,
+  helpersDefaultBuildPath,
+  helpersInstallDir,
+  helpersInstalledBundlePath,
+  helpersStatus,
+  installHelpers,
   readerInstalledAppPath,
   readerPlistPath,
-  restartDeputy,
-  uninstallDeputy,
+  restartHelpers,
+  uninstallHelpers,
 } from "./deputy/install.ts";
 export type {
-  DeputyInstallResult,
+  DeputyHalfStatus,
   DeputySigning,
-  DeputyStatus,
-  DeputyUninstallResult,
-  ReaderStatus,
+  HelpersInstallResult,
+  HelpersStatus,
+  HelpersUninstallResult,
+  ReaderHalfStatus,
 } from "./deputy/install.ts";
 export { deputyRouting, readerRouting } from "./deputy/routing.ts";
 export type { DeputyRouting } from "./deputy/routing.ts";

@@ -45,7 +45,7 @@ function queryRows(sql: string, params: unknown[], env: NodeJS.ProcessEnv): Depu
 function unsupported(member: string): () => never {
   return () => {
     throw new Error(
-      `DatabaseSync.${member} is not available on a deputy-routed connection — the deputy brokers read-only prepare/all/get only. Disable the deputy (THINGS_API_DEPUTY=false) for local access.`,
+      `DatabaseSync.${member} is not available on a deputy-routed connection — the deputy brokers read-only prepare/all/get only. Disable the helpers (THINGS_API_HELPERS=false) for local access.`,
     );
   };
 }

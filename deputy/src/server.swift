@@ -143,7 +143,7 @@ final class Server {
     guard let v = obj["v"] as? Int, v == PROTOCOL_VERSION else {
       return errorResponse(
         id: id, code: "unsupported-protocol",
-        message: "deputy speaks protocol \(PROTOCOL_VERSION); restart or rebuild the deputy (things deputy restart)")
+        message: "deputy speaks protocol \(PROTOCOL_VERSION); restart or rebuild the deputy (things helpers restart)")
     }
     guard let reqToken = obj["token"] as? String, reqToken == token else {
       audit(["event": "rejected-token", "peerPid": Int(peerPid)])
@@ -222,7 +222,7 @@ final class Server {
       // File verbs live exclusively on the sandboxed things-reader.
       result = errorResponse(
         id: id, code: "unsupported-verb",
-        message: "the deputy serves automation verbs only — file access rides things-reader (things deputy grant)")
+        message: "the deputy serves automation verbs only — file access rides things-reader (things helpers grant)")
     default:
       result = errorResponse(id: id, code: "bad-request", message: "unknown verb \(verb)")
     }

@@ -1,42 +1,43 @@
-# things-deputy + things-reader — the permission broker pair
+# things-helpers — the permission broker pair (one bundle)
 
-> **2026-08-21 split:** live measurement showed the macOS "app data" consent class is allow-once-per-process — unusable headlessly — so file access moved to **things-reader** (`reader/`), a SANDBOXED sibling holding a durable security-scoped bookmark to the Things folder, minted once by `things deputy grant` (SANDBOX1, [docs/lab/sandbox1-scoped-reader.md](../docs/lab/sandbox1-scoped-reader.md)). The reader serves `sql`/`read-file`/`locate` from its container socket (`~/Library/Containers/com.pixelcog.things-reader/Data/reader.sock`); the deputy keeps the automation verbs (and serves file verbs only as an interim fallback, at the cost of per-process consent). The reader ships as a signed minimal .app (amfid refuses ad-hoc on sandboxed code; secinit refuses bare executables) and is built/installed alongside the deputy by the same scripts and `things deputy install`.
+Two small launchd-supervised Swift helpers, shipped inside ONE signed bundle (`Things API Helper.app`), that perform the CLI's privileged primitives so macOS permission grants attach to **stable signed identities** instead of whichever agent harness happens to invoke `things` this week. Design of record: [docs/design/agent-daemon.md](../docs/design/agent-daemon.md) (§β1, §3b).
 
-A small launchd-supervised Swift helper that performs the CLI's privileged primitives — read-only SQL against the Things database, `osascript` execution, and file reads inside the Things group container — so that macOS TCC grants (Automation, Accessibility, group-container access) attach to **one stable signed identity** instead of whichever agent harness happens to invoke `things` this week. Design of record: [docs/design/agent-daemon.md](../docs/design/agent-daemon.md) (§β1).
+- **things-deputy** (`src/`, the bundle's main executable, unsandboxed) — app automation: `osascript` execution and the bundled `things-proxy-*` Shortcuts. Mutations only; file verbs answer `unsupported-verb`.
+- **things-reader** (`reader/`, nested at `Contents/Helpers/things-reader.app`, SANDBOXED) — database/file reads through a durable security-scoped bookmark to the Things folder, minted once by `things helpers grant` (SANDBOX1, [docs/lab/sandbox1-scoped-reader.md](../docs/lab/sandbox1-scoped-reader.md)). Serves `sql`/`read-file`/`locate` from its container socket (`~/Library/Containers/com.pixelcog.things-reader/Data/reader.sock`). Ships as a signed minimal .app because amfid refuses ad-hoc/self-signed roots on sandboxed code and secinit refuses bare executables. Its bundle identifier keys the user's bookmark grant and must never change.
 
-**Deliberately dumb.** All product logic — validation, guards, verification, audit, rendering — stays in the TypeScript library. The deputy never sees an operation, only primitives, which is what makes CLI↔deputy version skew survivable (the protocol is versioned; matching protocol = safe to execute across package versions).
+**Deliberately dumb.** All product logic — validation, guards, verification, audit, rendering — stays in the TypeScript library. The helpers never see an operation, only primitives, which is what makes CLI↔helper version skew survivable (the protocol is versioned; matching protocol = safe to execute across package versions).
 
 ## Build, sign, install
 
 ```sh
-bash scripts/deputy-cert-setup.sh   # ONCE per machine, interactive: mints the persistent
-                                    # self-signed signing cert ("things-deputy-signing")
-bash scripts/build-deputy.sh        # swiftc → deputy/build/things-deputy, signed when the cert exists
-things deputy install               # copy to the stable path + launchd bootstrap
-things deputy status                # verify: running, signed, database resolved
-things config set deputy-enabled true   # opt the CLI into routing (per-call: --deputy/--no-deputy)
+bash scripts/build-helpers.sh        # swiftc → deputy/build/Things API Helper.app, signed when an identity exists
+things helpers install               # copy to the stable path + launchd bootstrap (both halves)
+things helpers grant                 # ONCE: accept the panel → durable scoped read grant for the reader
+things helpers status                # verify: running, signed, granted
+things config set helpers-enabled true   # opt the CLI into routing (per-call: --helpers/--no-helpers)
 ```
 
-Rebuild flow after pulling changes: `bash scripts/build-deputy.sh && things deputy install`.
+Rebuild flow after pulling changes: `bash scripts/build-helpers.sh && things helpers install`. Install owns its `bin/` directory wholesale — every install is a fresh copy (which also resets the kernel's per-vnode code-signature cache), so there is no upgrade ceremony and no migration logic.
 
-**Never ad-hoc sign.** TCC identity follows the certificate; an ad-hoc identity changes per build, which silently re-introduces the grant churn this helper exists to end. The build script picks the best stable identity present — **Developer ID Application** (distribution-grade, 5-year, notarizable) > **Apple Development** (Apple-issued dev cert) > the self-signed ceremony cert — signing with hardened runtime + timestamp, and warns loudly when none exists. Mint the Developer ID cert BEFORE running the TCC grant ceremony so grants attach to the durable identity from day one (an identity switch later means one re-grant pass). Verified 2026-08-20: an Apple-chain signature also stops the EDR exec-time conviction that killed unsigned builds (see design §3a).
+**Never ad-hoc sign.** TCC identity follows the certificate; an ad-hoc identity changes per build, which silently re-introduces the grant churn these helpers exist to end. The build script picks the best stable identity present — **Developer ID Application** (distribution-grade, 5-year, notarizable) > **Apple Development** (Apple-issued dev cert) > the self-signed ceremony cert (`scripts/deputy-cert-setup.sh`; deputy-only — the sandboxed reader REQUIRES an Apple-issued chain and is skipped without one) — signing with hardened runtime + timestamp, and warns loudly when none exists. Verified 2026-08-20: an Apple-chain signature also stops the EDR exec-time conviction that killed unsigned builds (see design §3a).
 
 ## Security posture
 
-- Socket, token, config, and logs live in a 0700 state dir (`~/.local/state/things-api/deputy/`); socket and token are 0600.
-- Every connection is peer-checked (same UID); every request must carry the token file's value — a sandboxed process that cannot read the token cannot use the deputy.
+- Deputy socket, token, and logs live in a 0700 state dir (`~/.local/state/things-api/deputy/`); socket and token are 0600. The reader's live in its sandbox container.
+- Every connection is peer-checked (same UID); every request must carry the token file's value — a sandboxed process that cannot read the token cannot use a helper.
 - SQL runs on a `SQLITE_OPEN_READONLY` connection with `ATTACH` denied by an authorizer: it cannot write and cannot be aimed at other files. One statement per request.
+- The reader can read NOTHING outside the granted folder — the OS enforces the sandbox, not our code; file-read requests are additionally confined to the granted subtree (symlinks resolved before the prefix check).
 - osascript runs at a fixed absolute path with exactly two argv shapes (`-e <script>`, `-l JavaScript -e <script>`); scripts containing `do shell script` / `do script` are refused (a lint, not a boundary — see the threat-model note below).
-- File reads are confined to the resolved group-container subtree (symlinks resolved before the prefix check).
-- Every request is audit-logged locally (JSONL: verb, peer pid, script/sql SHA-256, duration — never content).
+- Every request is audit-logged locally (JSONL: verb, ok, script/sql SHA-256, duration — never content).
 
-**Threat model, honestly:** a non-sandboxed same-user process can read the token and use the deputy — but such a process could equally run `osascript` itself and answer its own TCC prompt. What the deputy adds is *its* grants; the token + peer check keep sandboxed and other-user processes out, and the guard/read-only/argv constraints keep the deputy from being a general execution or file-read proxy.
+**Threat model, honestly:** a non-sandboxed same-user process can read the token and use the helpers — but such a process could equally run `osascript` itself and answer its own TCC prompt. What the helpers add is *their* grants; the token + peer check keep sandboxed and other-user processes out, and the guard/read-only/argv constraints keep them from being a general execution or file-read proxy.
 
 ## Protocol
 
-JSON lines over the UNIX socket; one request → one response. Verbs: `hello` (handshake: protocol + versions + resolved db path), `sql` (`{sql, params}` → `{rows}`; BLOBs as `{"$b64": …}`), `osascript` (`{script, lang, timeoutMs}` → `{exitCode, stdout, stderr, timedOut?, signal?}` — the deputy kills the child at the deadline, so a dead caller never leaves an unbounded osascript), `shortcuts` (`op: "list"`, or `op: "run"` restricted to the bundled `things-proxy-*` names, fixed argv, same deadline-kill), `read-file`, `locate`. TypeScript twin: `src/deputy/protocol.ts`.
+JSON lines over each UNIX socket; one request → one response. Deputy verbs: `hello`, `osascript` (`{script, lang, timeoutMs}` → `{exitCode, stdout, stderr, timedOut?, signal?}` — the deputy kills the child at the deadline, so a dead caller never leaves an unbounded osascript), `shortcuts` (`op: "list"`, or `op: "run"` restricted to the bundled `things-proxy-*` names, fixed argv, same deadline-kill). Reader verbs: `hello` (carries `granted`), `sql` (`{sql, params}` → `{rows}`; BLOBs as `{"$b64": …}`), `read-file`, `locate`. Each half answers the other's verbs with `unsupported-verb`. TypeScript twin: `src/deputy/protocol.ts`.
 
 ## Tests
 
-- `test/unit/deputy-routing.test.ts` — routing/bridge/facade against a mock broker (any platform; runs in CI's ubuntu job).
-- `test/deputy/broker-integration.test.ts` — the REAL binary end-to-end (synthetic DB, stub osascript). Gated by `THINGS_DEPUTY_LIVE=1` + macOS + swiftc; CI's `deputy-macos` job runs it on every push. The gate exists because managed dev machines with EDR may refuse to execute freshly built unknown binaries (observed 2026-08-19: Cylance `execution_control` auto-quarantine, score −1000) — hosted runners are clean.
+- `test/unit/deputy-routing.test.ts` — routing/bridge/facade against mock helpers (any platform; runs in CI's ubuntu job).
+- `test/deputy/broker-integration.test.ts` — the REAL deputy end-to-end (synthetic DB, stub osascript). Gated by `THINGS_DEPUTY_LIVE=1` + macOS + swiftc; CI's `deputy-macos` job runs it on every push. The gate exists because managed dev machines with EDR may refuse to execute freshly built unknown binaries (observed 2026-08-19: Cylance `execution_control` auto-quarantine, score −1000) — hosted runners are clean.
+- `test/deputy/reader-integration.test.ts` — the REAL sandboxed reader (handshake, not-granted refusals, verb gating). Additionally gated on an Apple-chain signing identity and skipped when a production reader already serves on the machine.

@@ -4,10 +4,17 @@
  * precedence, so pointing one env at a temp dir points the socket, token, and
  * logs of BOTH processes there. These tests pin the TS half of that contract.
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { deputySocketPath, deputyStateDir, deputyTokenPath } from "../../src/deputy/protocol.ts";
+import {
+  deputySocketPath,
+  deputyStateDir,
+  deputyTokenPath,
+  EXPECTED_HELPERS_VERSION,
+} from "../../src/deputy/protocol.ts";
 
 describe("deputy paths", () => {
   it("THINGS_API_STATE_DIR wins", () => {
@@ -24,5 +31,18 @@ describe("deputy paths", () => {
 
   it("defaults under ~/.local/state", () => {
     expect(deputyStateDir({})).toContain(join(".local", "state", "things-api", "deputy"));
+  });
+});
+
+describe("helpers version line", () => {
+  // The helpers version is deliberately decoupled from package.json (see
+  // EXPECTED_HELPERS_VERSION); the constant and deputy/VERSION (the build
+  // script's source of truth) must never drift apart.
+  it("EXPECTED_HELPERS_VERSION matches deputy/VERSION", () => {
+    const onDisk = readFileSync(
+      fileURLToPath(new URL("../../deputy/VERSION", import.meta.url)),
+      "utf8",
+    ).trim();
+    expect(EXPECTED_HELPERS_VERSION).toBe(onDisk);
   });
 });

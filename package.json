@@ -16,10 +16,13 @@
   },
   "files": [
     "bin",
+    "deputy/helpers-Info.plist",
+    "deputy/reader",
     "deputy/src",
+    "deputy/VERSION",
     "dist",
     "schema",
-    "scripts/build-deputy.sh",
+    "scripts/build-helpers.sh",
     "scripts/deputy-cert-setup.sh",
     "shortcuts",
     "skills"

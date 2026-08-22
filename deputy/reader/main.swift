@@ -54,9 +54,12 @@ func runGrant(startDir: String) -> Never {
   panel.canChooseDirectories = true
   panel.canChooseFiles = false
   panel.allowsMultipleSelection = false
+  // The CLI passes the Things data folder itself when it exists, so the panel
+  // opens INSIDE it and the accept button (which returns the displayed
+  // directory when nothing is selected) is the only click needed.
   panel.directoryURL = URL(fileURLWithPath: startDir)
   panel.message =
-    "Grant things-reader read access to the Things data folder (select the JLMPQHK86H.com.culturedcode.ThingsMac folder)"
+    "Click \u{201C}Grant read access\u{201D} to give things-reader read-only access to this folder — your Things data."
   panel.prompt = "Grant read access"
   app.activate(ignoringOtherApps: true)
   guard panel.runModal() == .OK, let url = panel.url else {
@@ -75,32 +78,46 @@ func runGrant(startDir: String) -> Never {
   }
 }
 
-// --- scope resolution (re-checked per request so a fresh grant needs no restart) ---
+// --- scope resolution (re-checked per request so a fresh grant — or a
+// corrective RE-grant after selecting the wrong folder — needs no restart) ---
 
 final class Scope {
   private let lock = NSLock()
   private var url: URL?
+  private var bookmarkBytes: Data?
 
-  /// Resolve (or return the already-started) security scope. nil = no grant yet.
+  /// Resolve the security scope from the bookmark file, re-resolving whenever
+  /// the file's bytes change (a re-grant replaces them). nil = no grant.
   func current() -> URL? {
     lock.lock()
     defer { lock.unlock() }
-    if let u = url { return u }
-    guard let data = FileManager.default.contents(atPath: bookmarkFile) else { return nil }
+    guard let data = FileManager.default.contents(atPath: bookmarkFile) else {
+      if let old = url {
+        old.stopAccessingSecurityScopedResource()
+        url = nil
+        bookmarkBytes = nil
+      }
+      return nil
+    }
+    if data == bookmarkBytes { return url }
     var stale = false
     guard
       let resolved = try? URL(
         resolvingBookmarkData: data, options: [.withSecurityScope],
         relativeTo: nil, bookmarkDataIsStale: &stale),
       resolved.startAccessingSecurityScopedResource()
-    else { return nil }
+    else { return url }
+    if let old = url { old.stopAccessingSecurityScopedResource() }
+    var current = data
     if stale,
       let fresh = try? resolved.bookmarkData(
         options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
     {
       try? fresh.write(to: URL(fileURLWithPath: bookmarkFile))
+      current = fresh
     }
     url = resolved
+    bookmarkBytes = current
     return resolved
   }
 }
@@ -128,6 +145,7 @@ final class ReaderServer {
   private let dbQueue = DispatchQueue(label: "things-reader.db")
   private let logQueue = DispatchQueue(label: "things-reader.log")
   private var reader: SqliteReader?  // guarded by dbQueue
+  private var readerRoot: String?  // scope the open handle belongs to; guarded by dbQueue
   private let cacheLock = NSLock()
   private var cachedDbPath: String?
 
@@ -285,7 +303,7 @@ final class ReaderServer {
         nil,
         errorResponse(
           id: id, code: "not-granted",
-          message: "no security-scoped grant yet — run `things deputy grant` and select the Things data folder")
+          message: "no security-scoped grant yet — run `things helpers grant` and select the Things data folder")
       )
     }
     return (root, nil)
@@ -318,14 +336,18 @@ final class ReaderServer {
   }
 
   private func handleSql(id: Any?, sql: String, params: [Any]) -> [String: Any] {
+    let (root, err) = scopedRoot(id: id)
+    guard let r = root else { return err! }
+    // A re-grant moves the scope: drop a handle opened under the old root so
+    // queries never keep answering from a folder the user has replaced.
+    if reader != nil && readerRoot != r.path { reader = nil }
     if reader == nil {
-      let (root, err) = scopedRoot(id: id)
-      guard let r = root else { return err! }
       guard let dbPath = locateCandidates(root: r).first else {
         return errorResponse(id: id, code: "not-found", message: "no Things database under the granted folder")
       }
       do {
         reader = try SqliteReader(path: dbPath)
+        readerRoot = r.path
         storeCachedDbPath(dbPath)
       } catch {
         return errorResponse(id: id, code: "sql-error", message: "cannot open \(dbPath) read-only: \(error.localizedDescription)")
