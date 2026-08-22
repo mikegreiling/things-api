@@ -48,6 +48,11 @@ import { randomBytes } from "node:crypto";
 
 import type { AuditRecord } from "../audit/schema.ts";
 import { addDaysIso, decodePackedDate, localToday, encodePackedDate } from "../model/dates.ts";
+import {
+  TEMPLATE_PROJECTION_COLUMNS,
+  type TemplateProjectionRow,
+  templateProjectionDay,
+} from "../model/template-projection.ts";
 import type { ReorderParams, ReorderScope, WhenValue } from "./operations.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { computeReorderPre, resolveArea, resolveProject, todayEveningFlagOf } from "./pre-state.ts";
@@ -943,29 +948,30 @@ async function runBounce(
       firstUuid !== undefined
         ? (deps.db
             .prepare(
-              "SELECT startDate, startBucket, deadline, start, rt1_nextInstanceStartDate AS proj, " +
+              "SELECT startDate, startBucket, deadline, start, " +
+                `${TEMPLATE_PROJECTION_COLUMNS}, ` +
                 "(rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL) AS isTemplate " +
                 "FROM TMTask WHERE uuid = ?",
             )
             .get(firstUuid) as
-            | {
+            | ({
                 startDate: number | null;
                 startBucket: number;
                 deadline: number | null;
                 start: number;
-                proj: number | null;
                 isTemplate: number;
-              }
+              } & TemplateProjectionRow)
             | undefined)
         : undefined;
-    // The day D: a template's PROJECTION day (rt1_nextInstanceStartDate), else a
-    // scheduled row's startDate, else a forecast row's deadline (mirrors
+    // The day D: a template's PROJECTION day (its cached rt1_nextInstanceStartDate,
+    // else derived from the rule + spawn cursor — Things 3.23 retired the cache),
+    // else a scheduled row's startDate, else a forecast row's deadline (mirrors
     // computeReorderPre so the when= legs and the member set agree on D).
     dayPacked =
       firstRow === undefined
         ? null
         : firstRow.isTemplate === 1
-          ? firstRow.proj
+          ? templateProjectionDay(firstRow)
           : firstRow.startDate !== null && firstRow.startBucket === 0
             ? firstRow.startDate
             : firstRow.startDate === null && (firstRow.start === 1 || firstRow.start === 2)
@@ -3267,11 +3273,10 @@ function checkStillMember(
   const row = deps.db
     .prepare(
       "SELECT status, trashed, startBucket, startDate, start, type, area, project, heading, deadline, " +
-        "rt1_recurrenceRule AS rule, repeater, rt1_nextInstanceStartDate AS proj " +
-        "FROM TMTask WHERE uuid = ?",
+        `repeater, ${TEMPLATE_PROJECTION_COLUMNS} FROM TMTask WHERE uuid = ?`,
     )
     .get(uuid) as
-    | {
+    | ({
         status: number;
         trashed: number;
         startBucket: number;
@@ -3282,10 +3287,8 @@ function checkStillMember(
         project: string | null;
         heading: string | null;
         deadline: number | null;
-        rule: unknown;
         repeater: unknown;
-        proj: number | null;
-      }
+      } & TemplateProjectionRow)
     | undefined;
   if (row === undefined) return "the item no longer exists";
   if (row.trashed !== 0) return "the item was trashed";
@@ -3358,9 +3361,11 @@ function checkStillMember(
       // or drops the row to the Inbox (start=0) ejects it from the group.
       if (row.type !== 0 && row.type !== 1) return "the item is not a to-do or project";
       // A repeating TEMPLATE stays a day-block member via its PROJECTION day
-      // (rt1_nextInstanceStartDate — TMPLSORT/PTMPL), not startDate/deadline.
-      if (row.rule !== null || row.repeater !== null) {
-        return row.proj === dayPacked
+      // (TMPLSORT/PTMPL), not startDate/deadline. A now-null projection (the rule
+      // was paused/ended out from under us) ejects it like any other day change.
+      if (row.tpRule !== null || row.repeater !== null) {
+        const proj = templateProjectionDay(row);
+        return proj !== null && proj === dayPacked
           ? null
           : "the template's projection day changed (its recurrence rule was edited)";
       }

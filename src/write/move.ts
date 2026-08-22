@@ -34,6 +34,11 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { addDaysIso, decodePackedDate, encodePackedDate, localToday } from "../model/dates.ts";
+import {
+  TEMPLATE_PROJECTION_COLUMNS,
+  type TemplateProjectionRow,
+  templateProjectionDay,
+} from "../model/template-projection.ts";
 import { ReferenceResolutionError, resolveTaskUuidPrefix } from "../read/queries.ts";
 import type { CandidateRef } from "../read/shape.ts";
 import { taskMembershipClause } from "../read/scope.ts";
@@ -203,13 +208,17 @@ interface MoveeRow {
   /** Repeating TEMPLATE row (rt1_recurrenceRule or repeater set). */
   isTemplate: boolean;
   /**
-   * A repeating template's projection day — its `rt1_nextInstanceStartDate` (packed),
-   * the Upcoming day-block its rendered projection row sits in (TMPLSORT/PTMPL). NULL
-   * for a non-template. It is the template's day-group key: a strictly-future
-   * projection makes the template a first-class member of that day-block's todayIndex
-   * axis (a `list "Tomorrow"` member when the projection == tomorrow; otherwise a
-   * `day`-scope member reachable — for a TO-DO template — by a single-id `list
-   * "Upcoming"` front-insert leg, §9s / PTMPL-B).
+   * A repeating template's projection day (packed) — the Upcoming day-block its
+   * rendered projection row sits in (TMPLSORT/PTMPL), from
+   * {@link templateProjectionDay} (the app's `rt1_nextInstanceStartDate` cache on
+   * Things ≤ 3.22, derived from the rule + spawn cursor on 3.23, which retired
+   * that column). NULL for a non-template — and for a template that projects
+   * nowhere (paused, ended, undecodable rule): the fail-closed contract, treated
+   * exactly as a NULL column always was. It is the template's day-group key: a
+   * strictly-future projection makes the template a first-class member of that
+   * day-block's todayIndex axis (a `list "Tomorrow"` member when the projection
+   * == tomorrow; otherwise a `day`-scope member reachable — for a TO-DO template
+   * — by a single-id `list "Upcoming"` front-insert leg, §9s / PTMPL-B).
    */
   templateProjectionDay: number | null;
 }
@@ -218,20 +227,23 @@ function loadRow(db: DatabaseSync, uuid: string): MoveeRow | undefined {
   const row = db
     .prepare(
       "SELECT uuid, title, type, project, area, heading, start, startDate, startBucket, deadline, " +
-        "rt1_recurrenceRule AS rule, repeater, rt1_nextInstanceStartDate AS projectionDay " +
-        "FROM TMTask WHERE uuid = ?",
+        `repeater, ${TEMPLATE_PROJECTION_COLUMNS} FROM TMTask WHERE uuid = ?`,
     )
     .get(uuid) as
     | (Omit<MoveeRow, "isTemplate" | "templateProjectionDay"> & {
-        rule: unknown;
         repeater: unknown;
-        projectionDay: number | null;
-      })
+      } & TemplateProjectionRow)
     | undefined;
   if (row === undefined) return undefined;
-  const { rule, repeater, projectionDay, ...rest } = row;
-  const isTemplate = rule !== null || repeater !== null;
-  return { ...rest, isTemplate, templateProjectionDay: isTemplate ? projectionDay : null };
+  const { repeater, tpNext, tpCursor, tpRule, tpPaused, tpCount, ...rest } = row;
+  const isTemplate = tpRule !== null || repeater !== null;
+  return {
+    ...rest,
+    isTemplate,
+    templateProjectionDay: isTemplate
+      ? templateProjectionDay({ tpNext, tpCursor, tpRule, tpPaused, tpCount })
+      : null,
+  };
 }
 
 const KIND_LABEL: Record<number, string> = { 0: "to-do", 1: "project", 2: "heading" };
@@ -2189,7 +2201,9 @@ async function runAreaReorderUniversal(
  * Today axis) contributes null.
  */
 function rowDayKey(row: MoveeRow, packedToday: number): number | null {
-  // A repeating TEMPLATE contributes its PROJECTION day (rt1_nextInstanceStartDate),
+  // A repeating TEMPLATE contributes its PROJECTION day (the app's cached
+  // rt1_nextInstanceStartDate, or — on Things 3.23, which retired that column —
+  // the day derived from its rule + spawn cursor; see templateProjectionDay),
   // the Upcoming day-block its rendered projection row sits in (TMPLSORT/PTMPL). Its
   // startDate/deadline are NULL (or non-block), so it would otherwise contribute null;
   // strictly-future gate mirrors the scheduled/forecast branches (an arrived/absent

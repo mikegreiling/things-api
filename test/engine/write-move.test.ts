@@ -25,12 +25,38 @@ import {
   type MovePosition,
 } from "../../src/write/move.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
+import { ruleXml } from "../../src/write/recurrence-rule-blob.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const TODAY_PACKED = encodePackedDate("2026-07-05");
+
+/**
+ * The two LIVE database shapes a repeating template can carry — placement must
+ * read the SAME projection day out of both (DBV27):
+ *
+ *  - `cached`: Things ≤ 3.22 keeps `rt1_nextInstanceStartDate` on every live
+ *    template (the shape the TMPLSORT/PTMPL probes were taken under);
+ *  - `derived`: Things 3.23 RETIRED that column (the dbv-27 migration nulled it
+ *    library-wide) and maintains only the `rt1_instanceCreationStartDate` spawn
+ *    cursor, so the projection day comes from the decoded rule + that cursor.
+ */
+const TEMPLATE_SHAPES = [
+  { shape: "cached (Things ≤3.22)", derived: false },
+  { shape: "derived (Things 3.23 — cache retired)", derived: true },
+] as const;
+
+/** A fixed DAILY rule: every day is an occurrence, so a cursor's own day projects. */
+const DAILY_RULE_XML = ruleXml({ tp: 0, fu: 16, fa: 1, anchor: 1_783_000_000 });
+
+/** Template columns for a projection on `iso`, in either live DB shape. */
+function templateCols(iso: string, derived: boolean) {
+  return derived
+    ? { recurrenceRuleXml: DAILY_RULE_XML, instanceCreationStartDate: iso }
+    : { recurrenceRule: true, nextInstanceStartDate: iso };
+}
 
 let fixture: FixtureDb;
 let auditRecords: AuditRecord[];
@@ -376,7 +402,7 @@ function templateDayMoveVectors() {
         `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND (
            (startBucket = 0 AND startDate = ?)
            OR (startDate IS NULL AND deadline = ? AND start IN (1, 2))
-           OR (rt1_nextInstanceStartDate = ? AND (rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)))`,
+           OR (COALESCE(rt1_nextInstanceStartDate, rt1_instanceCreationStartDate) = ? AND (rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)))`,
       )
       .get(packed, packed, packed) as { m: number | null };
     return r.m ?? 0;
@@ -415,7 +441,9 @@ function templateDayMoveVectors() {
         // Single-id TO-DO template front-insert: umd-silent (unchanged).
         const id = p.uuids[0] ?? "";
         const row = fixture.db
-          .prepare("SELECT rt1_nextInstanceStartDate AS proj FROM TMTask WHERE uuid = ?")
+          .prepare(
+            "SELECT COALESCE(rt1_nextInstanceStartDate, rt1_instanceCreationStartDate) AS proj FROM TMTask WHERE uuid = ?",
+          )
           .get(id) as { proj: number | null };
         fixture.db
           .prepare("UPDATE TMTask SET todayIndex=? WHERE uuid=?")
@@ -454,7 +482,7 @@ function grandInterleaveMoveVectors() {
         `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND (
            (startBucket = 0 AND startDate = ?)
            OR (startDate IS NULL AND deadline = ? AND start IN (1, 2))
-           OR (rt1_nextInstanceStartDate = ? AND (rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)))`,
+           OR (COALESCE(rt1_nextInstanceStartDate, rt1_instanceCreationStartDate) = ? AND (rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)))`,
       )
       .get(packed, packed, packed) as { m: number | null };
     return r.m ?? 0;
@@ -508,7 +536,9 @@ function grandInterleaveMoveVectors() {
         // Single-id TO-DO template front-insert: umd-silent (todayIndex only).
         const id = p.uuids[0] ?? "";
         const row = fixture.db
-          .prepare("SELECT rt1_nextInstanceStartDate AS proj FROM TMTask WHERE uuid = ?")
+          .prepare(
+            "SELECT COALESCE(rt1_nextInstanceStartDate, rt1_instanceCreationStartDate) AS proj FROM TMTask WHERE uuid = ?",
+          )
           .get(id) as { proj: number | null };
         fixture.db
           .prepare("UPDATE TMTask SET todayIndex=? WHERE uuid=?")
@@ -1416,34 +1446,75 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
 
   // TMPLSORT/PTMPL: a repeating template's projection routes by its projection day —
   // tomorrow → the native one-call wire; a LATER day → the `day` leg family.
-  it("a TOMORROW template routes to the native `tomorrow` scope on the one-call wire", async () => {
-    const t = seedTodo(fixture.db, {
-      title: "t",
-      start: "someday",
-      startDate: TOMORROW,
-      todayIndex: 20,
-    });
-    const tmpl = seedTodo(fixture.db, {
-      title: "tmpl",
-      start: "someday",
-      startDate: null,
-      todayIndex: 10,
-      recurrenceRule: true,
-      nextInstanceStartDate: TOMORROW,
-    });
-    const { vectors, calls } = templateDayMoveVectors();
-    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
-      uuids: [tmpl, t],
-      position: { at: "first" },
-    });
-    expect(r.kind).toBe("move-ok");
-    if (r.kind === "move-ok") expect(r.note).toContain("tomorrow scope");
-    // One native `list "Tomorrow"` wire carries the template — no per-template leg.
-    expect(calls).toContain("reorder:tomorrow");
-    expect(calls).not.toContain("reorder:upcoming");
-  });
+  it.each(TEMPLATE_SHAPES)(
+    "a TOMORROW template routes to the native `tomorrow` scope on the one-call wire [$shape]",
+    async ({ derived }) => {
+      const t = seedTodo(fixture.db, {
+        title: "t",
+        start: "someday",
+        startDate: TOMORROW,
+        todayIndex: 20,
+      });
+      const tmpl = seedTodo(fixture.db, {
+        title: "tmpl",
+        start: "someday",
+        startDate: null,
+        todayIndex: 10,
+        ...templateCols(TOMORROW, derived),
+      });
+      const { vectors, calls } = templateDayMoveVectors();
+      const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+        uuids: [tmpl, t],
+        position: { at: "first" },
+      });
+      expect(r.kind).toBe("move-ok");
+      if (r.kind === "move-ok") expect(r.note).toContain("tomorrow scope");
+      // One native `list "Tomorrow"` wire carries the template — no per-template leg.
+      expect(calls).toContain("reorder:tomorrow");
+      expect(calls).not.toContain("reorder:upcoming");
+    },
+  );
 
-  it('a LATER-day template routes to the `day` leg family (single-id `list "Upcoming"` leg)', async () => {
+  it.each(TEMPLATE_SHAPES)(
+    'a LATER-day template routes to the `day` leg family (single-id `list "Upcoming"` leg) [$shape]',
+    async ({ derived }) => {
+      const s = seedTodo(fixture.db, {
+        title: "s",
+        start: "someday",
+        startDate: LATER,
+        todayIndex: 0,
+      });
+      const tmpl = seedTodo(fixture.db, {
+        title: "tmpl",
+        start: "someday",
+        startDate: null,
+        todayIndex: -5,
+        ...templateCols(LATER, derived),
+      });
+      const { vectors, calls } = templateDayMoveVectors();
+      // Target: template on top of the scheduled row.
+      const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+        uuids: [tmpl, s],
+        position: { at: "first" },
+      });
+      expect(r.kind).toBe("move-ok");
+      if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+      // The template rides the single-id `list "Upcoming"` native leg; the scheduled row a when= leg.
+      expect(calls).toContain("reorder:upcoming");
+      expect(calls).toContain("todo.update");
+      expect(calls).not.toContain("reorder:tomorrow");
+      expect(ascending(indexOrder([tmpl, s], "todayIndex"))).toBe(true);
+    },
+  );
+
+  /**
+   * FAIL-CLOSED (DBV27): on Things 3.23 a template whose projection is not soundly
+   * derivable (here: an undecodable rule blob) contributes NO day — exactly as a
+   * NULL `rt1_nextInstanceStartDate` always did. It never joins the day-group, so
+   * the mixed set falls through to the ordinary single-container guard and is
+   * refused: no dated leg, no guessed placement.
+   */
+  it("an underivable template projection contributes no day-group (fails closed)", async () => {
     const s = seedTodo(fixture.db, {
       title: "s",
       start: "someday",
@@ -1455,22 +1526,16 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
       start: "someday",
       startDate: null,
       todayIndex: -5,
-      recurrenceRule: true,
-      nextInstanceStartDate: LATER,
+      recurrenceRule: true, // undecodable blob
+      instanceCreationStartDate: LATER,
     });
     const { vectors, calls } = templateDayMoveVectors();
-    // Target: template on top of the scheduled row.
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [tmpl, s],
       position: { at: "first" },
     });
-    expect(r.kind).toBe("move-ok");
-    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
-    // The template rides the single-id `list "Upcoming"` native leg; the scheduled row a when= leg.
-    expect(calls).toContain("reorder:upcoming");
-    expect(calls).toContain("todo.update");
-    expect(calls).not.toContain("reorder:tomorrow");
-    expect(ascending(indexOrder([tmpl, s], "todayIndex"))).toBe(true);
+    expect(r.kind).toBe("move-refused");
+    expect(calls).toHaveLength(0); // nothing dispatched — never a guessed placement
   });
 });
 

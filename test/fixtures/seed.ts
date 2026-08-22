@@ -50,8 +50,17 @@ export interface SeedTaskOpts {
   recurrenceRule?: boolean;
   /** Real XML plist rule blob (implies template); overrides recurrenceRule. */
   recurrenceRuleXml?: string;
-  /** ISO date for rt1_nextInstanceStartDate (templates). */
+  /**
+   * ISO date for rt1_nextInstanceStartDate (templates) — the app's cached
+   * next-instance day. Things ≤ 3.22 maintains it; on 3.23 it is always NULL
+   * (the dbv-27 migration retired the column), so a 3.23-shape template fixture
+   * leaves this unset and carries {@link instanceCreationStartDate} instead.
+   */
   nextInstanceStartDate?: string | null;
+  /** ISO date for rt1_instanceCreationStartDate — the template's spawn cursor. */
+  instanceCreationStartDate?: string | null;
+  /** rt1_instanceCreationCount — spawns so far (the ends-after tally, RRX1). */
+  instanceCreationCount?: number;
   instanceCreationPaused?: boolean;
   repeatingTemplate?: string | null;
   creationDate?: number;
@@ -69,8 +78,9 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
        untrashedLeafActionsCount, openUntrashedLeafActionsCount,
        checklistItemsCount, openChecklistItemsCount,
        rt1_repeatingTemplate, rt1_recurrenceRule,
-       rt1_nextInstanceStartDate, rt1_instanceCreationPaused, repeater
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+       rt1_nextInstanceStartDate, rt1_instanceCreationStartDate, rt1_instanceCreationCount,
+       rt1_instanceCreationPaused, repeater
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   ).run(
     uuid,
     type,
@@ -104,6 +114,8 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
         ? new Uint8Array([0x62, 0x70])
         : null,
     opts.nextInstanceStartDate ? encodePackedDate(opts.nextInstanceStartDate) : null,
+    opts.instanceCreationStartDate ? encodePackedDate(opts.instanceCreationStartDate) : null,
+    opts.instanceCreationCount ?? 0,
     opts.instanceCreationPaused ? 1 : 0,
   );
   return uuid;
