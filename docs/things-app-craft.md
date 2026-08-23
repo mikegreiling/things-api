@@ -189,6 +189,27 @@ The 3.23 `When`/`Deadline` pickers are search fields, not calendars-first: typin
 
 The `Update Rule` branch of the 3.23 repeating chooser and the URL scheme's dated `when=` on a template are not two code paths that agree; they are one. Give a daily series seeded 2026-07-05 a new anchor of 2026-07-09 through either route and the stored `rt1_recurrenceRule` is the **same 627-byte blob** (`sha256:b9a58999d5b4072c`), with the same five-column row delta around it. And "re-anchor" means the whole anchor, not a cursor pointer: a weekly Sunday rule moved to a Thursday becomes a Thursday rule, a monthly rule anchored on the 5th becomes anchored on the 17th, a yearly July-5 rule becomes a September-17 rule — the rule is recomputed from the target date rather than the cursor being nudged out of step with it, which is the difference between a series that has been rescheduled and one that has been left inconsistent. A deadlined rule keeps its deadline mode through the rewrite (the 4001-01-01 sentinel and the start offset both survive). The handler also short-circuits: asked to anchor a series to the date it is already anchored on, it writes nothing at all — no `userModificationDate` bump, no rule rewrite, no sync churn for a no-op edit. (Two things this entry deliberately does not admire: the same code path is *fatal* for a non-future target and for an after-completion rule — [oddities §1](things-app-oddities.md), [§15](things-app-oddities.md) — and the recomputation is destructive on a multi-weekday rule, [§16](things-app-oddities.md). The craft is the shared implementation and the idempotent short-circuit, not the envelope around them.) Evidence: [lab/reanch1-url-reanchor.md](lab/reanch1-url-reanchor.md) §2, §7. Things 3.23.
 
+### 6j. Undo reverses BOTH chooser branches completely — down to restoring the rule's bytes and rewinding `userModificationDate`
+
+§6g measured undo against a just-in-time check-off. Driven against the two branches of the *Repeating To-Do* chooser, it is just as complete, and in the `Update Rule` case it does something an undo very rarely bothers to do:
+
+```
+Make Exception, then ⌘Z
+  DELETED  the minted exception row                                <- hard-deleted
+  CHANGED  template  icCount 2 -> 1 ; watermark and cursor 07-07 -> 07-06 ; todayIndex and its ref date rewound
+  and the slot is genuinely UN-consumed: rolling the clock onto it spawns normally,
+  reissuing THE SAME uuid the deleted exception row had (instance uuids are slot-derived)
+
+Update Rule, then ⌘Z
+  CHANGED  template  rt1_recurrenceRule  sha256:b9a58999… -> sha256:3b34361c…   <- the ORIGINAL bytes, not an equivalent rule
+  CHANGED  template  watermark + cursor + todayIndexReferenceDate  07-09 -> 07-06
+  CHANGED  template  userModificationDate  1783252904.646 -> 1783252858.644477 <- REWOUND, not re-bumped
+```
+
+Both are durable across a relaunch, and both net to *no field changed on any surviving row* against the pre-gesture snapshot. Two details deserve the credit. Restoring the recurrence blob **byte-identically** means undo replays stored state rather than re-deriving a rule that merely behaves the same — the sync layer sees the original record, not a new one. And rewinding `umd` says the app models undo as *this edit did not happen*, rather than as a fresh compensating edit; that is the same lever our TAGMOD capture-and-restore recipe reaches for, applied by the app to itself.
+
+The lesson from §6g still holds and gets sharper: an exception moves **two** independent cursor columns (one of which, `rt1_instanceCreationStartDate`, nothing shipped even reads), hard-deletes are unavailable to us, and no surface lets us restore a rule blob or rewind a template's `umd`. Evidence: [lab/repx3-chooser-residuals.md](lab/repx3-chooser-residuals.md) §4. Things 3.23.
+
 ---
 
 ## Edge cases this project routed through

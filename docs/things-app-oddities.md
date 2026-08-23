@@ -928,6 +928,8 @@ The complementary cell (C3a) shows the same mechanism from the other side: an oc
 
 **ADDENDUM 2026-08-22 (REPX2, golden-v4 / Things 3.23) — the exception EXISTS, which makes this entry stronger, not weaker.** The paragraph above says "nothing we drive can express 'make this an exception'". That was measured against five vectors, all aimed at a materialized INSTANCE. The chooser's real trigger is a scheduling edit on the series' **PROJECTION** row (the pseudo-row Upcoming renders at the template's cursor day): highlight it, `Items ▸ When…`, commit a date, and the app raises the *Repeating To-Do* alert with `Make Exception` / `Update Rule` / `Cancel`. Driven, `Make Exception` has **true exception semantics** — it mints the occurrence at the chosen date AND advances the cursor past the original slot, so when the clock reaches that slot **nothing spawns** (a Cancel control on the same clock roll spawns normally). So the app is not missing the concept: **it implements exactly the reconciliation this entry asks for, one code path over.** The defect is that the same user intent expressed on an *already-materialized* occurrence — the ordinary drag or `When…` a user reaches for far more often, because that is the row they can see in Today — silently takes the copy path instead, with no prompt and no reconciliation. Suggested remedy accordingly narrows: **raise the same chooser (or apply the same slot consumption) when a re-date targets or vacates a live rule slot**, rather than only when the edit happens to be made on the projection row. Evidence: [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §1.2/§1.3/§1.5.
 
+**QUALIFIER 2026-08-23 (REPX3, golden-v4 / Things 3.23) — the chooser is not the whole reconciliation.** The addendum above credits the app with "exactly the reconciliation this entry asks for, one code path over". What the chooser reconciles is **slot consumption**; it does not reconcile **day occupancy**, so `Make Exception` onto a day the rule itself is about to produce double-books that day just as an instance re-date does. Filed separately as [§17](#17-things-323-the-apps-own-make-exception-double-books-a-day-when-the-exception-lands-on-a-live-rule-slot--the-reconciliation-is-slot-keyed-not-date-keyed-repx3-2026-08-23-golden-v4--things-323-build-32300036); the remedy this entry asks for should be read as covering both directions. Evidence: [lab/repx3-chooser-residuals.md](lab/repx3-chooser-residuals.md) §3.
+
 **ODDS1 re-validation 2026-08-22 (Things 3.23, build 32300036, golden-v4):** Still reproduces — cited from [REPX1](lab/repx1-instance-semantics.md) §3.2/§3.3 and [REPX2](lab/repx2-exception-chooser.md) §1.2–§1.5; not re-run. [lab/odds1-323-revalidation.md](lab/odds1-323-revalidation.md)
 
 ## 14. Things 3.23: CONTENT edits on a projection row silently rewrite the series template — no chooser, and the visible occurrence does not change (REPX2, 2026-08-22, golden-v4 / Things 3.23 build 32300036)
@@ -992,6 +994,40 @@ Measured one edit at a time on a daily series (fixture built on 3.23, full 41-co
 **Data integrity:** no corruption in the storage sense — the resulting rule is well-formed and the series continues normally. The damage is that it is a *different schedule* than the one the user had.
 
 **Evidence:** [lab/reanch1-url-reanchor.md](lab/reanch1-url-reanchor.md) §7 (cell W3).
+
+## 17. Things 3.23: the app's OWN `Make Exception` double-books a day when the exception lands on a live rule slot — the reconciliation is slot-keyed, not date-keyed (REPX3, 2026-08-23, golden-v4 / Things 3.23 build 32300036)
+
+§13 records the app spawning a duplicate when a *materialized occurrence* is re-dated onto its series' next slot, and its REPX2 addendum credits the app with implementing the missing reconciliation "one code path over" — in the `Make Exception` chooser, which consumes the slot it was made from. REPX3 drove that sanctioned path onto an occupied day, and it double-books too.
+
+**What the app reconciles is slot CONSUMPTION, not day OCCUPANCY.** An exception advances the cursor past the slot the projection came from, and the spawner then produces every *other* slot unconditionally — without ever comparing a new occurrence's date against the dates of the rows the series already has. Whenever the two notions disagree, the day ends up holding more than one copy.
+
+**Reproduce (pure GUI, one gesture):** create a daily repeating to-do. In Upcoming, select the series' projection row (tomorrow) → `Items ▸ When…` → pick **the day after tomorrow** → **Make Exception**. When the day after tomorrow arrives, that day shows **two** copies: the one you moved there, and the one the rule produced for its own slot.
+
+**Probe (REPX3 cell G3B; daily series, instance 2026-07-05, cursor 2026-07-06).** The projection is moved 07-06 → **07-07** and `Make Exception` pressed:
+
+```
+INSERTED row MQPG1nxp  startDate = 2026-07-07  creationDate = 1783252902.48 (gesture wall-clock)
+CHANGED template.rt1_instanceCreationCount     : 1 -> 2
+CHANGED template.rt1_nextInstanceStartDate     : 2026-07-06 -> 2026-07-07    <- the cursor now points AT the occupied day
+```
+
+Advancing the guest clock to 2026-07-07:
+
+```
+INSERTED row B4Pcd3hK  startDate = 2026-07-07  creationDate = 1783382400.0 (occurrence midnight)
+CHANGED template.rt1_instanceCreationCount     : 2 -> 3
+CHANGED template.rt1_nextInstanceStartDate     : 2026-07-07 -> 2026-07-08
+
+untrashed rows of the series dated 2026-07-07 = 2
+```
+
+The next day spawns exactly one row, so the series is otherwise healthy — the duplicate is specific to the day the exception was parked on. Cell G3A stacks the failure: two exceptions moved onto the same free day are accepted with no prompt (2 rows), and when the spawner later reaches that day's own slot it adds a third.
+
+**Why the two rows never merge.** Instance uuids are derived from the template and the SLOT, not from the date the row carries — the deterministic-uuid law behind cross-device dedupe ([lab/sync3-dedupe-tiebreak.md](lab/sync3-dedupe-tiebreak.md) SY-3b). REPX3 §4.1 shows it directly: undo an exception and the freed slot later spawns **with the very uuid the deleted exception row had**. So an exception is its slot's occurrence wearing a different date, and the duplicate above is a *different* slot's occurrence — different uuid, nothing to dedupe against, no date comparison anywhere.
+
+**Expected:** the same reconciliation the chooser already performs for the vacated slot, applied to the target day — either suppress the spawn for a day that already holds a live occurrence of the series, or warn at exception time that the chosen day is a rule slot. **Actual:** the two are independent and both fire.
+
+**Data note:** no corruption; the rows are independent instances of one template, both `trashed=0`, both live in every view, and ⌘Z immediately after the gesture is a complete inverse (REPX3 §4.1) — but only immediately, and only for the exception, never for the later spawn. Evidence: [lab/repx3-chooser-residuals.md](lab/repx3-chooser-residuals.md) §3.2/§3.1/§3.3; class predecessors [§13](#13-things-323-re-dating-a-repeating-occurrence-onto-its-series-next-slot-double-books-that-day--the-9ff-reconciliation-defect-now-with-no-preserve-trigger-required-repx1-2026-08-22-golden-v4--things-323-build-32300036) and §9ff.
 
 ## Suggested report to Cultured Code
 
