@@ -41,6 +41,7 @@ import type {
 } from "./operations.ts";
 import {
   fingerprintLabel,
+  runComposite,
   runMutation,
   type MutationResult,
   type WriteDeps,
@@ -621,179 +622,186 @@ async function makeRepeatingViaClone(
   const gate = await gateSessionReachability(deps, op);
   if (gate !== null) return gate;
 
-  const startedAt = now;
-  const txnId = newTxnId(startedAt);
+  // COMPOSITE LOCK: everything below is ONE verb executed as several mutations
+  // (clone → trash → promote → the DBLSPAWN1 clean-up), and they must not
+  // interleave with another writer's legs — the promote's row selection is by
+  // TITLE, so a concurrent clone of the same item makes it ambiguous. One lock,
+  // held to the end; each leg's own acquisition is a reentrant no-op.
+  return runComposite(deps, op, async () => {
+    const startedAt = now;
+    const txnId = newTxnId(startedAt);
 
-  // 1. Clone the source as a disposable, embedded leg (--preserve-created). The
-  // clone has captured X's full content by the time it returns.
-  const clone =
-    kind === "project"
-      ? await runCloneProject(
-          deps,
-          { uuid: srcUuid, preserveCreated: true },
-          legOptions(options, txnId),
-        )
-      : await runCloneTodo(
-          deps,
-          { uuid: srcUuid, preserveCreated: true },
-          legOptions(options, txnId),
-        );
-  if (clone.kind !== "ok" || clone.uuid === null) {
-    // A clone refusal (nested repeating template, H-CLONE-SOURCE) surfaces
-    // coherently here — re-label it to the make-repeating op for the caller.
-    return clone.kind === "ok"
-      ? {
-          kind: "verify-failed",
-          op,
-          reason: "mismatch",
-          expected: {
-            mode: "create",
-            probe: { title: src.title, type: expectedType, sinceEpoch: 0 },
-            assert: [],
-          },
-          observed: null,
-          detail:
-            "the disposable clone was created but its uuid was not discovered — nothing was promoted or trashed",
-        }
-      : { ...clone, op };
-  }
-  const cloneUuid = clone.uuid;
+    // 1. Clone the source as a disposable, embedded leg (--preserve-created). The
+    // clone has captured X's full content by the time it returns.
+    const clone =
+      kind === "project"
+        ? await runCloneProject(
+            deps,
+            { uuid: srcUuid, preserveCreated: true },
+            legOptions(options, txnId),
+          )
+        : await runCloneTodo(
+            deps,
+            { uuid: srcUuid, preserveCreated: true },
+            legOptions(options, txnId),
+          );
+    if (clone.kind !== "ok" || clone.uuid === null) {
+      // A clone refusal (nested repeating template, H-CLONE-SOURCE) surfaces
+      // coherently here — re-label it to the make-repeating op for the caller.
+      return clone.kind === "ok"
+        ? {
+            kind: "verify-failed",
+            op,
+            reason: "mismatch",
+            expected: {
+              mode: "create",
+              probe: { title: src.title, type: expectedType, sinceEpoch: 0 },
+              assert: [],
+            },
+            observed: null,
+            detail:
+              "the disposable clone was created but its uuid was not discovered — nothing was promoted or trashed",
+          }
+        : { ...clone, op };
+    }
+    const cloneUuid = clone.uuid;
 
-  // --preserve-modified: X is the ONLY pre-existing row the compound touches (the
-  // clone/promote legs mint fresh rows). Capture its pre-write umd BEFORE the
-  // trash bumps it — the trash leg restores it forward, and the value rides the
-  // summary record's preModDates so the symmetric undo restore fires on the
-  // revived X (undo.ts, 2026-08-13 ruling). The clone leg above reads X but never
-  // writes it, so its umd is still pristine here.
-  const preserveModified = options.preserveModified === true;
-  const preUmd = preserveModified
-    ? createDbReader(deps.db, now, deps.zone).modDateOf(srcUuid)
-    : null;
+    // --preserve-modified: X is the ONLY pre-existing row the compound touches (the
+    // clone/promote legs mint fresh rows). Capture its pre-write umd BEFORE the
+    // trash bumps it — the trash leg restores it forward, and the value rides the
+    // summary record's preModDates so the symmetric undo restore fires on the
+    // revived X (undo.ts, 2026-08-13 ruling). The clone leg above reads X but never
+    // writes it, so its umd is still pristine here.
+    const preserveModified = options.preserveModified === true;
+    const preUmd = preserveModified
+      ? createDbReader(deps.db, now, deps.zone).modDateOf(srcUuid)
+      : null;
 
-  // 2. Trash the original BEFORE promoting — the clone already holds X's content,
-  // and a live same-titled X would make the promote's project row-selection
-  // ambiguous (H-PROJECT-REPEAT). X survives in the Trash (the recoverable half).
-  const trash = await runMutation(
-    deps,
-    `${kind}.delete`,
-    { uuid: srcUuid },
-    legOptions(
+    // 2. Trash the original BEFORE promoting — the clone already holds X's content,
+    // and a live same-titled X would make the promote's project row-selection
+    // ambiguous (H-PROJECT-REPEAT). X survives in the Trash (the recoverable half).
+    const trash = await runMutation(
+      deps,
+      `${kind}.delete`,
+      { uuid: srcUuid },
+      legOptions(
+        options,
+        txnId,
+        undefined,
+        preserveModified ? { preserveModified: true } : undefined,
+      ),
+    );
+    if (trash.kind !== "ok") {
+      return {
+        ...trash,
+        op,
+        ...("detail" in trash
+          ? {
+              detail:
+                `${trash.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
+                `original ${srcUuid} could not be moved to the Trash, so it was NOT promoted; trash ` +
+                "the clone and retry",
+            }
+          : {}),
+      } as MutationResult;
+    }
+
+    // 3. Native-promote the clone (with the ANCH2 Next drive + derived weekday).
+    const rule = ruleParamsFor(cloneUuid, effParams, nextIso);
+    const promote =
+      kind === "project"
+        ? await promoteProjectViaGui(deps, rule, legOptions(options, txnId, "ui"))
+        : await runMutation(deps, "todo.make-repeating", rule, legOptions(options, txnId, "ui"));
+    if (promote.kind !== "ok") {
+      // The clone persists but was not promoted; best-effort ROLL BACK the trash so
+      // the original is not stranded in the Trash.
+      const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
+      const rolledBack = await runMutation(
+        deps,
+        restoreOp,
+        { uuid: srcUuid },
+        legOptions(options, txnId),
+      );
+      const rollNote =
+        rolledBack.kind === "ok"
+          ? `the original ${srcUuid} was restored from the Trash`
+          : `the original ${srcUuid} could NOT be restored from the Trash — restore it in the app`;
+      return {
+        ...promote,
+        op,
+        ...("detail" in promote
+          ? {
+              detail:
+                `${promote.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
+                `promote did not land; ${rollNote}. Trash the clone and retry`,
+            }
+          : {}),
+      } as MutationResult;
+    }
+    const { templateUuid } = discoveryOf(promote);
+    let { instanceUuid } = discoveryOf(promote);
+
+    // Post-drive verify (ANCH2 + YANCH1): the instance START must have landed on the
+    // requested `--when` — for a deadlined rule the driven Next is the deadline
+    // (when + startDaysEarlier) and the app back-shifts the start to `--when`, so the
+    // check is against `expectedStartIso`, not the raw drive date. Fail closed on
+    // mismatch rather than report a wrong-phase ok. The ORACLE is rule-kind dependent
+    // (#508) — see landedFirstStart; an unverifiable after-completion series skips.
+    const afterCompletion = effParams.afterCompletion === true;
+    if (expectedStartIso !== undefined) {
+      const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
+      if (!(afterCompletion && landed === null) && landed !== expectedStartIso) {
+        return nextMismatch(op, templateUuid, expectedStartIso, landed);
+      }
+    }
+
+    const warnings: string[] = [
+      landedRuleEcho(effParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
+      `the original ${expectedType} (uuid ${srcUuid}) was moved to the Trash; \`things undo\` ` +
+        "removes the new series (trash-both) and restores it",
+      PLACEMENT_NOTE,
+    ];
+    // DBLSPAWN1: if the promote PRESERVED the source (deadline / terminal-element
+    // trigger) as a FUTURE-dated instance, the app would spawn a duplicate on that date
+    // — trash the redundant occurrence and disclose (cursor mints the single real one).
+    const dbl = await trashRedundantFuturePreservedInstance(
+      deps,
+      kind,
+      promote,
       options,
       txnId,
-      undefined,
-      preserveModified ? { preserveModified: true } : undefined,
-    ),
-  );
-  if (trash.kind !== "ok") {
-    return {
-      ...trash,
-      op,
-      ...("detail" in trash
-        ? {
-            detail:
-              `${trash.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
-              `original ${srcUuid} could not be moved to the Trash, so it was NOT promoted; trash ` +
-              "the clone and retry",
-          }
-        : {}),
-    } as MutationResult;
-  }
-
-  // 3. Native-promote the clone (with the ANCH2 Next drive + derived weekday).
-  const rule = ruleParamsFor(cloneUuid, effParams, nextIso);
-  const promote =
-    kind === "project"
-      ? await promoteProjectViaGui(deps, rule, legOptions(options, txnId, "ui"))
-      : await runMutation(deps, "todo.make-repeating", rule, legOptions(options, txnId, "ui"));
-  if (promote.kind !== "ok") {
-    // The clone persists but was not promoted; best-effort ROLL BACK the trash so
-    // the original is not stranded in the Trash.
-    const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
-    const rolledBack = await runMutation(
-      deps,
-      restoreOp,
-      { uuid: srcUuid },
-      legOptions(options, txnId),
+      now,
+      afterCompletion,
     );
-    const rollNote =
-      rolledBack.kind === "ok"
-        ? `the original ${srcUuid} was restored from the Trash`
-        : `the original ${srcUuid} could NOT be restored from the Trash — restore it in the app`;
-    return {
-      ...promote,
-      op,
-      ...("detail" in promote
-        ? {
-            detail:
-              `${promote.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
-              `promote did not land; ${rollNote}. Trash the clone and retry`,
-          }
-        : {}),
-    } as MutationResult;
-  }
-  const { templateUuid } = discoveryOf(promote);
-  let { instanceUuid } = discoveryOf(promote);
-
-  // Post-drive verify (ANCH2 + YANCH1): the instance START must have landed on the
-  // requested `--when` — for a deadlined rule the driven Next is the deadline
-  // (when + startDaysEarlier) and the app back-shifts the start to `--when`, so the
-  // check is against `expectedStartIso`, not the raw drive date. Fail closed on
-  // mismatch rather than report a wrong-phase ok. The ORACLE is rule-kind dependent
-  // (#508) — see landedFirstStart; an unverifiable after-completion series skips.
-  const afterCompletion = effParams.afterCompletion === true;
-  if (expectedStartIso !== undefined) {
-    const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
-    if (!(afterCompletion && landed === null) && landed !== expectedStartIso) {
-      return nextMismatch(op, templateUuid, expectedStartIso, landed);
+    if (dbl !== null) {
+      warnings.push(dbl.warning);
+      if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
     }
-  }
+    const offRule = offRuleFirstNote(effParams);
+    if (offRule !== null) warnings.push(offRule);
+    if (promote.warnings !== undefined) warnings.push(...promote.warnings);
 
-  const warnings: string[] = [
-    landedRuleEcho(effParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
-    `the original ${expectedType} (uuid ${srcUuid}) was moved to the Trash; \`things undo\` ` +
-      "removes the new series (trash-both) and restores it",
-    PLACEMENT_NOTE,
-  ];
-  // DBLSPAWN1: if the promote PRESERVED the source (deadline / terminal-element
-  // trigger) as a FUTURE-dated instance, the app would spawn a duplicate on that date
-  // — trash the redundant occurrence and disclose (cursor mints the single real one).
-  const dbl = await trashRedundantFuturePreservedInstance(
-    deps,
-    kind,
-    promote,
-    options,
-    txnId,
-    now,
-    afterCompletion,
-  );
-  if (dbl !== null) {
-    warnings.push(dbl.warning);
-    if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
-  }
-  const offRule = offRuleFirstNote(effParams);
-  if (offRule !== null) warnings.push(offRule);
-  if (promote.warnings !== undefined) warnings.push(...promote.warnings);
+    appendPromoteSummary(deps, {
+      startedAt,
+      op,
+      txnId,
+      templateUuid,
+      instanceUuid,
+      originalUuid: srcUuid,
+      invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote ${cloneUuid} → template ${templateUuid}`,
+      requested: effParams as unknown as Record<string, unknown>,
+      ...(preserveModified && preUmd !== null && { preModDates: { [srcUuid]: preUmd } }),
+    });
 
-  appendPromoteSummary(deps, {
-    startedAt,
-    op,
-    txnId,
-    templateUuid,
-    instanceUuid,
-    originalUuid: srcUuid,
-    invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote ${cloneUuid} → template ${templateUuid}`,
-    requested: effParams as unknown as Record<string, unknown>,
-    ...(preserveModified && preUmd !== null && { preModDates: { [srcUuid]: preUmd } }),
-  });
-
-  return promoteOk({
-    op,
-    templateUuid,
-    instanceUuid,
-    replacedUuid: cloneUuid,
-    title: src.title,
-    txnId,
-    warnings,
+    return promoteOk({
+      op,
+      templateUuid,
+      instanceUuid,
+      replacedUuid: cloneUuid,
+      title: src.title,
+      txnId,
+      warnings,
+    });
   });
 }
 
@@ -907,119 +915,124 @@ async function addRepeatingViaCreate(
   const gate = await gateSessionReachability(deps, op);
   if (gate !== null) return gate;
 
-  const startedAt = deps.now?.() ?? new Date();
-  const txnId = newTxnId(startedAt);
+  // COMPOSITE LOCK: add → promote (→ the seed auto-trash / DBLSPAWN1 clean-up)
+  // is one verb, several mutations; hold one lock across all of them so a
+  // concurrent composite cannot land its own legs between ours.
+  return runComposite(deps, op, async () => {
+    const startedAt = deps.now?.() ?? new Date();
+    const txnId = newTxnId(startedAt);
 
-  // 1. Create the item (full add vocabulary) as an embedded leg.
-  const addOp = kind === "project" ? "project.add" : "todo.add";
-  const add = await runMutation(
-    deps,
-    addOp,
-    addParams as never,
-    legOptions(options, txnId, "url-scheme"),
-  );
-  if (add.kind !== "ok" || add.uuid === null) {
-    return add.kind === "ok"
-      ? {
-          kind: "verify-failed",
-          op,
-          reason: "mismatch",
-          expected: {
-            mode: "create",
-            probe: { title, type: expectedType, sinceEpoch: 0 },
-            assert: [],
-          },
-          observed: null,
-          detail: `the ${expectedType} was created but its uuid was not discovered — it cannot be promoted to repeating`,
-        }
-      : ({ ...add, op } as MutationResult);
-  }
-  const createdUuid = add.uuid;
+    // 1. Create the item (full add vocabulary) as an embedded leg.
+    const addOp = kind === "project" ? "project.add" : "todo.add";
+    const add = await runMutation(
+      deps,
+      addOp,
+      addParams as never,
+      legOptions(options, txnId, "url-scheme"),
+    );
+    if (add.kind !== "ok" || add.uuid === null) {
+      return add.kind === "ok"
+        ? {
+            kind: "verify-failed",
+            op,
+            reason: "mismatch",
+            expected: {
+              mode: "create",
+              probe: { title, type: expectedType, sinceEpoch: 0 },
+              assert: [],
+            },
+            observed: null,
+            detail: `the ${expectedType} was created but its uuid was not discovered — it cannot be promoted to repeating`,
+          }
+        : ({ ...add, op } as MutationResult);
+    }
+    const createdUuid = add.uuid;
 
-  // 2. Native-promote the fresh row (ANCH2 Next drive + derived weekday + the
-  //    base reminder driven onto the series, ADR1).
-  const ruleParams = ruleParamsFor(createdUuid, effRuleWithReminder, nextIso);
-  const promote =
-    kind === "project"
-      ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
-      : await runMutation(
-          deps,
-          "todo.make-repeating",
-          ruleParams,
-          legOptions(options, txnId, "ui"),
-        );
-  if (promote.kind !== "ok") {
-    // The seed persists (the two legs are not atomic) but the promote did not
-    // land. RATIFIED RULING (2026-08-15, issue #480): auto-trash our OWN seed
-    // inside the txn — it is our artifact, recreatable verbatim from the command
-    // args, and the Trash is recoverable — then disclose it. If the auto-trash
-    // itself fails, the result carries the seed's REAL, resolvable uuid with a
-    // working `delete` remediation, so cleanup is never ambiguous (the #480
-    // second bug: a failed add-repeating left a residue whose reported uuid was
-    // not actionable).
-    const patch = await cleanupSeed(deps, kind, createdUuid, promote, options, txnId);
-    return { ...promote, op, ...patch } as MutationResult;
-  }
-  const { templateUuid } = discoveryOf(promote);
-  let { instanceUuid } = discoveryOf(promote);
+    // 2. Native-promote the fresh row (ANCH2 Next drive + derived weekday + the
+    //    base reminder driven onto the series, ADR1).
+    const ruleParams = ruleParamsFor(createdUuid, effRuleWithReminder, nextIso);
+    const promote =
+      kind === "project"
+        ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
+        : await runMutation(
+            deps,
+            "todo.make-repeating",
+            ruleParams,
+            legOptions(options, txnId, "ui"),
+          );
+    if (promote.kind !== "ok") {
+      // The seed persists (the two legs are not atomic) but the promote did not
+      // land. RATIFIED RULING (2026-08-15, issue #480): auto-trash our OWN seed
+      // inside the txn — it is our artifact, recreatable verbatim from the command
+      // args, and the Trash is recoverable — then disclose it. If the auto-trash
+      // itself fails, the result carries the seed's REAL, resolvable uuid with a
+      // working `delete` remediation, so cleanup is never ambiguous (the #480
+      // second bug: a failed add-repeating left a residue whose reported uuid was
+      // not actionable).
+      const patch = await cleanupSeed(deps, kind, createdUuid, promote, options, txnId);
+      return { ...promote, op, ...patch } as MutationResult;
+    }
+    const { templateUuid } = discoveryOf(promote);
+    let { instanceUuid } = discoveryOf(promote);
 
-  // Post-drive verify (ANCH2 + DBLSPAWN1): the instance START must have landed on the
-  // requested `--when` — for a deadlined rule the driven Next is the deadline (when +
-  // startDaysEarlier) and the app back-shifts the start to `--when`, so the check is
-  // against `expectedStartIso`, not the raw drive date. Fail closed on mismatch rather
-  // than report a wrong-phase ok. The series EXISTS here (promote landed) but on the
-  // wrong phase, so this is a genuine partial success, NOT a seed to trash. The
-  // ORACLE is rule-kind dependent (#508) — see landedFirstStart; an after-completion
-  // series verifies against its materialized instance, and skips when it has none.
-  const afterCompletion = effRuleWithReminder.afterCompletion === true;
-  if (expectedStartIso !== undefined) {
-    const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
-    if (!(afterCompletion && landed === null) && landed !== expectedStartIso)
-      return nextMismatch(op, templateUuid, expectedStartIso, landed);
-  }
+    // Post-drive verify (ANCH2 + DBLSPAWN1): the instance START must have landed on the
+    // requested `--when` — for a deadlined rule the driven Next is the deadline (when +
+    // startDaysEarlier) and the app back-shifts the start to `--when`, so the check is
+    // against `expectedStartIso`, not the raw drive date. Fail closed on mismatch rather
+    // than report a wrong-phase ok. The series EXISTS here (promote landed) but on the
+    // wrong phase, so this is a genuine partial success, NOT a seed to trash. The
+    // ORACLE is rule-kind dependent (#508) — see landedFirstStart; an after-completion
+    // series verifies against its materialized instance, and skips when it has none.
+    const afterCompletion = effRuleWithReminder.afterCompletion === true;
+    if (expectedStartIso !== undefined) {
+      const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
+      if (!(afterCompletion && landed === null) && landed !== expectedStartIso)
+        return nextMismatch(op, templateUuid, expectedStartIso, landed);
+    }
 
-  const warnings: string[] = [
-    landedRuleEcho(ruleParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
-    PLACEMENT_NOTE,
-  ];
-  // DBLSPAWN1 backstop: the deadline-mapping above keeps the seed deadline-free (no
-  // SRCFATE preserve), but any OTHER preserve trigger reaching the seed (defensive)
-  // would double-book a future first occurrence — trash the redundant instance.
-  const dbl = await trashRedundantFuturePreservedInstance(
-    deps,
-    kind,
-    promote,
-    options,
-    txnId,
-    startedAt,
-    afterCompletion,
-  );
-  if (dbl !== null) {
-    warnings.push(dbl.warning);
-    if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
-  }
-  const offRule = offRuleFirstNote(ruleParams);
-  if (offRule !== null) warnings.push(offRule);
-  if (promote.warnings !== undefined) warnings.push(...promote.warnings);
+    const warnings: string[] = [
+      landedRuleEcho(ruleParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
+      PLACEMENT_NOTE,
+    ];
+    // DBLSPAWN1 backstop: the deadline-mapping above keeps the seed deadline-free (no
+    // SRCFATE preserve), but any OTHER preserve trigger reaching the seed (defensive)
+    // would double-book a future first occurrence — trash the redundant instance.
+    const dbl = await trashRedundantFuturePreservedInstance(
+      deps,
+      kind,
+      promote,
+      options,
+      txnId,
+      startedAt,
+      afterCompletion,
+    );
+    if (dbl !== null) {
+      warnings.push(dbl.warning);
+      if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
+    }
+    const offRule = offRuleFirstNote(ruleParams);
+    if (offRule !== null) warnings.push(offRule);
+    if (promote.warnings !== undefined) warnings.push(...promote.warnings);
 
-  appendPromoteSummary(deps, {
-    startedAt,
-    op,
-    txnId,
-    templateUuid,
-    instanceUuid,
-    invocation: `${op}: add "${title}" ${createdUuid} → template ${templateUuid}`,
-    requested: { title, ...effRule },
-  });
+    appendPromoteSummary(deps, {
+      startedAt,
+      op,
+      txnId,
+      templateUuid,
+      instanceUuid,
+      invocation: `${op}: add "${title}" ${createdUuid} → template ${templateUuid}`,
+      requested: { title, ...effRule },
+    });
 
-  return promoteOk({
-    op,
-    templateUuid,
-    instanceUuid,
-    replacedUuid: createdUuid,
-    title,
-    txnId,
-    warnings,
+    return promoteOk({
+      op,
+      templateUuid,
+      instanceUuid,
+      replacedUuid: createdUuid,
+      title,
+      txnId,
+      warnings,
+    });
   });
 }
 
@@ -1298,106 +1311,113 @@ export async function cloneTemplateViaRepromote(
   const gate = await gateSessionReachability(deps, op);
   if (gate !== null) return gate;
 
-  const startedAt = deps.now?.() ?? new Date();
-  const txnId = newTxnId(startedAt);
+  // COMPOSITE LOCK: clone-as-plain → promote-with-the-source's-rule is one verb;
+  // hold one lock across both legs.
+  return runComposite(deps, op, async () => {
+    const startedAt = deps.now?.() ?? new Date();
+    const txnId = newTxnId(startedAt);
 
-  // 4. Mint the plain clone as an embedded leg — cloneTemplateAsPlain reaches the
-  //    clone orchestrator's plain-content path (recurrence + schedule stripped);
-  //    --title/--preserve-created ride through the CloneParams.
-  const cloneParams: CloneParams = {
-    uuid: srcUuid,
-    ...(params.title !== undefined && { title: params.title }),
-    ...(params.preserveCreated === true && { preserveCreated: true }),
-  };
-  const cloneOptions: WriteOptions = { ...legOptions(options, txnId), cloneTemplateAsPlain: true };
-  const clone =
-    kind === "project"
-      ? await runCloneProject(deps, cloneParams, cloneOptions)
-      : await runCloneTodo(deps, cloneParams, cloneOptions);
-  if (clone.kind !== "ok" || clone.uuid === null) {
-    // A nested-repeater refusal (a template CONTAINING a nested repeater) or any
-    // clone failure surfaces coherently here — re-label it to the compound op.
-    return clone.kind === "ok"
-      ? {
-          kind: "verify-failed",
-          op,
-          reason: "mismatch",
-          expected: {
-            mode: "create",
-            probe: { title, type: expectedType, sinceEpoch: 0 },
-            assert: [],
-          },
-          observed: null,
-          detail:
-            "the plain clone was created but its uuid was not discovered — nothing was promoted",
-        }
-      : { ...clone, op };
-  }
-  const cloneUuid = clone.uuid;
-
-  // 5. Native-promote the clone with the FULL decoded rule (ruleToInverseParams
-  //    carries deadline/start-earlier + the calendar anchors + ends).
-  const ruleParams: RepeatRuleParams = { uuid: cloneUuid, ...inverse };
-  const promote =
-    kind === "project"
-      ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
-      : await runMutation(
-          deps,
-          "todo.make-repeating",
-          ruleParams,
-          legOptions(options, txnId, "ui"),
-        );
-  if (promote.kind !== "ok") {
-    // The plain clone persists but was not promoted — honest report (no original
-    // to roll back; the clone is a fresh row the caller can trash and retry).
-    return {
-      ...promote,
-      op,
-      ...("detail" in promote
+    // 4. Mint the plain clone as an embedded leg — cloneTemplateAsPlain reaches the
+    //    clone orchestrator's plain-content path (recurrence + schedule stripped);
+    //    --title/--preserve-created ride through the CloneParams.
+    const cloneParams: CloneParams = {
+      uuid: srcUuid,
+      ...(params.title !== undefined && { title: params.title }),
+      ...(params.preserveCreated === true && { preserveCreated: true }),
+    };
+    const cloneOptions: WriteOptions = {
+      ...legOptions(options, txnId),
+      cloneTemplateAsPlain: true,
+    };
+    const clone =
+      kind === "project"
+        ? await runCloneProject(deps, cloneParams, cloneOptions)
+        : await runCloneTodo(deps, cloneParams, cloneOptions);
+    if (clone.kind !== "ok" || clone.uuid === null) {
+      // A nested-repeater refusal (a template CONTAINING a nested repeater) or any
+      // clone failure surfaces coherently here — re-label it to the compound op.
+      return clone.kind === "ok"
         ? {
+            kind: "verify-failed",
+            op,
+            reason: "mismatch",
+            expected: {
+              mode: "create",
+              probe: { title, type: expectedType, sinceEpoch: 0 },
+              assert: [],
+            },
+            observed: null,
             detail:
-              `${promote.detail} — the plain clone (uuid ${cloneUuid}) was created but the promote ` +
-              `did not land; trash the clone with \`things ${kind} delete ${cloneUuid}\` and retry`,
+              "the plain clone was created but its uuid was not discovered — nothing was promoted",
           }
-        : {}),
-    } as MutationResult;
-  }
-  const { templateUuid, instanceUuid } = discoveryOf(promote);
+        : { ...clone, op };
+    }
+    const cloneUuid = clone.uuid;
 
-  const warnings: string[] = [NEW_SERIES_NOTE, PLACEMENT_NOTE];
-  if (params.preserveCreated === true) {
-    warnings.push(
-      "--preserve-created is best-effort on a template clone: the promote may replace the clone " +
-        "row with the new template, whose creation date is the conversion time",
-    );
-  }
-  if (src.repeating.paused === true) {
-    warnings.push(
-      `the source template was PAUSED; the new series is created UNPAUSED and begins spawning — ` +
-        `pause it with \`things ${kind} pause-repeat\` if you want it suspended`,
-    );
-  }
-  if (promote.warnings !== undefined) warnings.push(...promote.warnings);
+    // 5. Native-promote the clone with the FULL decoded rule (ruleToInverseParams
+    //    carries deadline/start-earlier + the calendar anchors + ends).
+    const ruleParams: RepeatRuleParams = { uuid: cloneUuid, ...inverse };
+    const promote =
+      kind === "project"
+        ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
+        : await runMutation(
+            deps,
+            "todo.make-repeating",
+            ruleParams,
+            legOptions(options, txnId, "ui"),
+          );
+    if (promote.kind !== "ok") {
+      // The plain clone persists but was not promoted — honest report (no original
+      // to roll back; the clone is a fresh row the caller can trash and retry).
+      return {
+        ...promote,
+        op,
+        ...("detail" in promote
+          ? {
+              detail:
+                `${promote.detail} — the plain clone (uuid ${cloneUuid}) was created but the promote ` +
+                `did not land; trash the clone with \`things ${kind} delete ${cloneUuid}\` and retry`,
+            }
+          : {}),
+      } as MutationResult;
+    }
+    const { templateUuid, instanceUuid } = discoveryOf(promote);
 
-  // Summary WITHOUT originalUuid → undo is the add-repeating trash-both (remove
-  // the minted series; there is no original to restore).
-  appendPromoteSummary(deps, {
-    startedAt,
-    op,
-    txnId,
-    templateUuid,
-    instanceUuid,
-    invocation: `${kind}.clone (template) ${srcUuid}: clone → promote ${cloneUuid} → template ${templateUuid}`,
-    requested: { source: srcUuid, title, ...inverse },
-  });
+    const warnings: string[] = [NEW_SERIES_NOTE, PLACEMENT_NOTE];
+    if (params.preserveCreated === true) {
+      warnings.push(
+        "--preserve-created is best-effort on a template clone: the promote may replace the clone " +
+          "row with the new template, whose creation date is the conversion time",
+      );
+    }
+    if (src.repeating.paused === true) {
+      warnings.push(
+        `the source template was PAUSED; the new series is created UNPAUSED and begins spawning — ` +
+          `pause it with \`things ${kind} pause-repeat\` if you want it suspended`,
+      );
+    }
+    if (promote.warnings !== undefined) warnings.push(...promote.warnings);
 
-  return promoteOk({
-    op,
-    templateUuid,
-    instanceUuid,
-    replacedUuid: cloneUuid,
-    title,
-    txnId,
-    warnings,
+    // Summary WITHOUT originalUuid → undo is the add-repeating trash-both (remove
+    // the minted series; there is no original to restore).
+    appendPromoteSummary(deps, {
+      startedAt,
+      op,
+      txnId,
+      templateUuid,
+      instanceUuid,
+      invocation: `${kind}.clone (template) ${srcUuid}: clone → promote ${cloneUuid} → template ${templateUuid}`,
+      requested: { source: srcUuid, title, ...inverse },
+    });
+
+    return promoteOk({
+      op,
+      templateUuid,
+      instanceUuid,
+      replacedUuid: cloneUuid,
+      title,
+      txnId,
+      warnings,
+    });
   });
 }
