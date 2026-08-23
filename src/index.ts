@@ -222,6 +222,7 @@ export {
   deputyPlistPath,
   deputySigningInfo,
   grantReader,
+  helpersBundleCandidates,
   helpersDefaultBuildPath,
   helpersInstallDir,
   helpersInstalledBundlePath,

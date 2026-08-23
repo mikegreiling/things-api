@@ -28,6 +28,11 @@ bench/artifacts/
 lab/guest/disruption-monitor/disruption-monitor
 deputy/build/
 
+# The signed + notarized helper bundle the release workflow stages into the
+# npm tarball. Produced by CI (or by a local `npm pack` rehearsal) — never
+# committed; the tarball is its only home.
+deputy/prebuilt/
+
 # Python bytecode
 __pycache__/
 *.pyc

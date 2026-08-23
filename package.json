@@ -17,6 +17,7 @@
   "files": [
     "bin",
     "deputy/helpers-Info.plist",
+    "deputy/prebuilt",
     "deputy/reader",
     "deputy/src",
     "deputy/VERSION",
