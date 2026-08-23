@@ -30,6 +30,15 @@ Everything surprising, inconsistent, or hazardous we found while systematically 
 
 **ODDS1 re-validation 2026-08-22 (Things 3.23, build 32300036, golden-v4):** **Still reproduces — and the boundary is now measured.** The crash is keyed on the `when=` SPELLING, not on the whole family: `when=today`, `someday`, `anytime`, `evening` and a bare `when=` (clear) each kill the process (2/2 runs each, `EXC_BREAKPOINT`/`SIGTRAP`, fresh `.ips`, template byte-identical), while `when=<ISO-date>` and `when=<ISO-date>@<time>` SURVIVE. So the unguarded precondition sits in the BUCKET-assignment branch of the handler, not in `when=` as a whole. **And the surviving branch is not inert** — it is an undocumented, unsignalled write to the SERIES: a dated `when=` leaves `start`/`startDate` alone but re-anchors the template's spawn cursor (`rt1_nextInstanceStartDate` AND `rt1_instanceCreationStartDate` → the supplied date, `umd` bumped, `rt1_instanceCreationCount` and every existing instance untouched), and a `@<time>` component additionally writes `reminderTime` onto the template row (a rule-level reminder) which a subsequent bare dated `when=` does NOT clear. Cultured Code's own `Update Rule` chooser branch performs the same re-anchor with a prompt (REPX2 §1.4); the URL path does it silently. *(The ≤3.22 behavior of the DATED spelling was never measured — this entry's "whole `when=` family" wording meant nobody tried it — so this is recorded as a 3.23 measurement, not as a 3.23 change.)* The AppleScript contrast is intact on 3.23 (`schedule` → 302, `move … to list "Anytime"` → 301, zero delta). Evidence: [lab/odds1-323-revalidation.md](lab/odds1-323-revalidation.md) §3.1 (ODDS1-E1/E2/E3); the `when=today`/`today@18:00` arms independently re-confirmed by [REPX2](lab/repx2-exception-chooser.md) §5 and u-suite U12 / r-suite R09 green on golden-v4.
 
+**REANCH1 correction + provenance 2026-08-23 (Things 3.23 build 32300036, golden-v4; and Things 3.22.14 build 32214000, golden-v3):** two things above are now measurably wrong, and the entry is sharper for both.
+
+- **The boundary is not the SPELLING, it is whether the target resolves to a FUTURE day.** On 3.23, `when=2026-07-05` submitted on 2026-07-05 kills the process exactly as the word `today` does (2/2 runs, two clones), and `when=2026-07-04` (a past date) kills it too. A target strictly after the device's current day re-anchors; a target equal to the current cursor returns silently without writing; everything else — including any ISO date on or before today — takes the fatal branch. So the same literal `when=2026-07-05` is a safe write on Friday and a process kill on Sunday, which is a nastier trap than a bad keyword. `tomorrow` survives because the parser resolves it to today+1, not because it is a keyword; `anytime`/`someday`/bare `when=` are fatal because they name a bucket with no day at all.
+- **The dated branch is NEW IN 3.23 — this entry's original blanket claim was CORRECT for the 3.22 line.** Re-run on Things 3.22.14: `when=<future date>`, `when=<future date>@<time>`, `when=<past date>`, `when=today` and the bucket spellings ALL kill the process with zero row delta, five deaths for five arms. ODDS1's provenance caution is therefore resolved: 3.23 did not merely reveal an untested spelling, it opened a branch that used to crash. A guard moved in the *helpful* direction between builds, unannounced — which sits oddly beside §8k, where a guard moved in the harmful direction between the same two builds.
+- **A dated `when=` on an AFTER-COMPLETION template still crashes on 3.23** (2/2) — see new §15. An after-completion rule has no calendar anchor, so there is no future day for the surviving branch to land on.
+- What the surviving branch writes is also wider than ODDS1 could see: FIVE columns, not two — both `rt1_*` cursor columns, `todayIndexReferenceDate`, `userModificationDate`, and the `rt1_recurrenceRule` blob itself, whose start anchor AND calendar anchor are rewritten (a weekly Sunday rule re-anchored to a Thursday becomes a Thursday rule). The resulting blob is byte-identical to the one the GUI's own `Update Rule` button produces.
+
+Evidence: [lab/reanch1-url-reanchor.md](lab/reanch1-url-reanchor.md) §2, §5, §6.
+
 ---
 
 ## 2. Silent-failure hazards in the URL scheme
@@ -370,6 +379,8 @@ Findings: (1) the column NULL/sentinel split is the reliable, **universal** disc
 **The report-worthy oddity that STANDS:** even though the template's `reminderTime` column now holds a real value, **NO automation surface can clear it in place on a template** — the Shortcuts `set-detail Reminder Time=""` is a **silent no-op** (proxy exit 0, `reminderTime` unchanged), the AppleScript de-schedule (`move … to list "Inbox"`) is **refused with error 301**, and the URL `when=` bounce **CRASHES** the app (§1). The reminder can only be changed in the app's repeat editor (rule-level, UI-only). Consequence for automation: `todo.clear-dated-reminder` REFUSES a repeating template outright (`blocked:H-REPEAT-SCHEDULE`) — previously `H-NO-REMINDER` masked this because the template's `reminderTime` was NULL; on 3.22.12 the non-null column made the op verify-fail, so an explicit refusal replaced the mask. Evidence: `RRX1`, [rrx1-rc-and-reminder.md](lab/rrx1-rc-and-reminder.md) (RW/RC storage + the DB-verified clear-surface table); earlier `RCLEAR`, s-campaign-results.md round 3 (immutable, 3.22.11).
 
 **ODDS1 re-validation 2026-08-22 (Things 3.23, build 32300036, golden-v4):** **Partially re-validated.** Two of the three clear surfaces are re-confirmed on 3.23: AppleScript `move (to do id <template>) to list "Inbox"/"Anytime"` still returns error 301, and the URL `when=` bounce still CRASHES (§1) for every keyword spelling. The Shortcuts arm was vacuous here — the golden's template carries `reminderTime = NULL`, so there was nothing to clear — and was **NOT re-validated**. A measured SET path with still no CLEAR path (ODDS1-F2): a DATED `things:///update?id=<template>&when=<date>@<time>` does not crash and writes `reminderTime` onto the template row, while a following bare dated `when=<date>` leaves that byte intact — so the "no automation surface can set it either" reading of RRX1 needs qualifying, but this entry's actual claim (no surface can CLEAR it in place) is untouched. Whether the reminder propagates to the next spawned instance is unmeasured — the same call re-anchors the spawn cursor forward (§1's appendix), so no instance materialized inside the probe's clock roll. [lab/odds1-323-revalidation.md](lab/odds1-323-revalidation.md)
+
+**REANCH1 follow-up 2026-08-23 (Things 3.23 build 32300036, golden-v4):** the propagation question ODDS1 left open is answered, and the no-CLEAR claim is re-confirmed on a live value. A `when=<future date>@18:00` write set the template's `reminderTime`; rolling the clock through two occurrences minted instances on both days, **each carrying `reminderTime = 1207959552` (18:00)** — so the rule-level reminder set through this path is inherited by every spawn, exactly like one set in the repeat editor. A subsequent BARE dated re-anchor to a LATER, distinct date left the byte untouched (the ODDS1-F2 arm and the first REANCH1 pass both happened to pick a date equal to the current cursor, which the handler short-circuits into a full no-op — a bare re-anchor that actually writes still does not clear the reminder). [lab/reanch1-url-reanchor.md](lab/reanch1-url-reanchor.md) §3
 
 ### 8c. `logInterval` has only THREE values — no weekly/monthly
 
@@ -941,6 +952,46 @@ Measured one edit at a time on a daily series (fixture built on 3.23, full 41-co
 **Data note:** no corruption, and the write itself is coherent — the projection row IS the template, so editing it editing the template is defensible; the report is about the missing disclosure and the inconsistency with §13's own chooser. Evidence: [lab/repx2-exception-chooser.md](lab/repx2-exception-chooser.md) §3.
 
 **ODDS1 re-validation 2026-08-22 (Things 3.23, build 32300036, golden-v4):** Still reproduces — cited from [REPX2](lab/repx2-exception-chooser.md) §3; not re-run. [lab/odds1-323-revalidation.md](lab/odds1-323-revalidation.md)
+
+---
+
+## 15. Things 3.23: the URL `when=` branch that 3.23 made SAFE for a fixed repeating template still kills the app on an AFTER-COMPLETION one (REANCH1, 2026-08-23, golden-v4 / Things 3.23 build 32300036)
+
+**A refinement of §1 that a fix would have to carry.** Things 3.23 opened a survivable path through the crash §1 reports: `things:///update?id=<template>&when=<a future ISO date>` on a repeating to-do no longer kills the process — it re-anchors the series (§1's appendix). That new branch is **not** reached for a template whose rule is *after completion*, and the fall-through is the old crash.
+
+**Reproduce:**
+1. Create a to-do, `Items ▸ Repeat…`, set the frequency pop-up to **after completion**, OK. (The template lands `tp=1`, `fu=256`, `of=[]`, `rt1_nextInstanceStartDate = NULL`.)
+2. `open "things:///update?id=<template-uuid>&auth-token=<token>&when=2026-07-09"` — any date, past or future.
+
+**Expected:** either the re-anchor the same call performs on a fixed template, or the clean refusal AppleScript gives (`Cannot schedule to-do (302)`).
+**Actual:** Things terminates immediately — `EXC_BREAKPOINT`/`SIGTRAP`, a fresh `.ips`, and the template row byte-identical afterwards. Measured 2/2 on two independent clones, for both the bare dated spelling and the `@<time>` form.
+
+**Why it is worth reporting separately from §1.** An after-completion rule has no calendar anchor at all — there is no current occurrence date for the handler to compare a target against and no anchor to rewrite — so the guard that 3.23 evidently added to the dated branch has nothing to test and the code falls into the same unguarded path the bucket spellings take. The template is otherwise perfectly healthy: across a clock roll its scan watermark tracks the clock normally and it correctly spawns nothing while waiting on a completion. It is only the URL schedule write that is fatal.
+
+**Data integrity:** no corruption; row byte-identical after every death (all 41 columns compared).
+
+**Evidence:** [lab/reanch1-url-reanchor.md](lab/reanch1-url-reanchor.md) §4.2 (cells C4 and B6).
+
+---
+
+## 16. Things 3.23: re-anchoring a MULTI-WEEKDAY repeating rule silently rewrites WHICH WEEKDAYS the series fires on (REANCH1, 2026-08-23, golden-v4 / Things 3.23 build 32300036)
+
+**The most destructive thing found in the re-anchor path, and it is silent.** Moving a repeating series' next occurrence to a new date re-derives the rule's calendar anchor from that date — sensible enough for a single-anchor rule. For a weekly rule that fires on *several* weekdays, the set is not preserved and not merely narrowed to the target's day: it is replaced by a **different set of the same size**, containing days the user never chose.
+
+**Reproduce:**
+1. Create a to-do, `Items ▸ Repeat…` → **weekly**, add weekday rows until the rule reads **Monday, Wednesday, Friday**, OK. (Stored `rt1_recurrenceRule` → `fu=256`, `of=[{wd=1},{wd=3},{wd=5}]`.)
+2. Move the series' next occurrence to a **Thursday** — e.g. `open "things:///update?id=<template>&auth-token=<token>&when=2026-09-17"` (2026-09-17 is a Thursday).
+
+**Expected:** the series still fires on Monday, Wednesday and Friday; only *when the next copy appears* changes. Failing that, an explicit statement that the rule is being rewritten.
+**Actual:** the rule becomes **Wednesday, Thursday, Friday** (`of=[{wd=3},{wd=4},{wd=5}]`). Monday is gone; Thursday, which the user never selected, is in. No prompt, no error, no visible signal until the repeat editor is reopened — and the next copies simply start arriving on the wrong days.
+
+**Shape.** Together with the single-weekday case (a Sunday-only rule re-anchored to a Thursday becomes Thursday-only), the pattern that fits is a **contiguous run of the original cardinality centred on the target weekday** — `{t}` for one day, `{t−1, t, t+1}` for three. Two data points, so that is a hypothesis, not a law; what is certain is that the original set is not recoverable from the result.
+
+**Scope.** Measured through the URL scheme. The GUI's own `Update Rule` chooser branch produces a byte-identical rule blob for a daily series (REANCH1 §2.1), so the same rewrite very likely happens when a user presses `Update Rule` on a multi-weekday series — but that arm was not driven, and the GUI at least prompts first and shows the resulting rule in the editor. Untested on monthly nth-weekday anchors, which use a similar offset encoding.
+
+**Data integrity:** no corruption in the storage sense — the resulting rule is well-formed and the series continues normally. The damage is that it is a *different schedule* than the one the user had.
+
+**Evidence:** [lab/reanch1-url-reanchor.md](lab/reanch1-url-reanchor.md) §7 (cell W3).
 
 ## Suggested report to Cultured Code
 
