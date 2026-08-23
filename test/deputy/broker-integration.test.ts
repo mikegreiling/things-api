@@ -178,6 +178,17 @@ echo "$1:$2:$3:$4:$5:$6"
     expect(res["role"]).toBe("deputy");
   });
 
+  it("carries its own TCC standing in the handshake, prompt-free", () => {
+    // The VALUES depend on the host's grants; the shape and vocabulary do not.
+    // prime-ax is deliberately NOT exercised here — it raises a system dialog.
+    const res = request({ verb: "hello" });
+    expect(typeof res["axTrusted"]).toBe("boolean");
+    const automation = res["automation"] as { things: string; systemEvents: string };
+    for (const value of [automation.things, automation.systemEvents]) {
+      expect(["granted", "denied", "not-running", "unknown"]).toContain(value);
+    }
+  });
+
   it("rejects a bad token", () => {
     const res = request({ verb: "hello" }, { token: "0".repeat(64) });
     expect(res["ok"]).toBe(false);

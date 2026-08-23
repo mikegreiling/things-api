@@ -52,10 +52,21 @@ function helperHalfLine(
         : "launchd registered, NOT loaded"
       : "no launchd registration",
   ];
-  if (half.hello !== null)
+  if (half.hello !== null) {
     facts.push(
       `v${half.hello.deputyVersion}, protocol ${half.hello.protocol}, pid ${half.hello.pid}`,
     );
+    // Only the deputy carries TCC standing, and only from helpers v1.2.0 on —
+    // an older one simply has no row here rather than a guessed one.
+    if (half.hello.automation !== undefined) {
+      facts.push(
+        `automation: Things ${half.hello.automation.things}, System Events ${half.hello.automation.systemEvents}`,
+      );
+    }
+    if (half.hello.axTrusted !== undefined) {
+      facts.push(`accessibility: ${half.hello.axTrusted ? "granted" : "NOT granted"}`);
+    }
+  }
   if (half.signing !== null) {
     facts.push(
       half.signing.state === "signed"

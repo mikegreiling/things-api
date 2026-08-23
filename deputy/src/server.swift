@@ -212,6 +212,8 @@ final class Server {
     switch verb {
     case "hello":
       result = handleHello(id: id)
+    case "prime-ax":
+      result = handlePrimeAx(id: id)
     case "osascript":
       guard let script = obj["script"] as? String else {
         result = errorResponse(id: id, code: "bad-request", message: "osascript verb requires a script string")
@@ -312,6 +314,13 @@ final class Server {
 
   // --- verb handlers ---
 
+  /**
+   * The handshake, plus the deputy's own TCC standing — Accessibility trust
+   * and Automation permission for each target it drives. Every field here is
+   * PROMPT-FREE by construction (see tcc.swift), which is what lets a status
+   * report and the onboarding ceremony ask "is this leg already granted?"
+   * without raising a dialog at whoever happens to run `things` next.
+   */
   private func handleHello(id: Any?) -> [String: Any] {
     [
       "id": id ?? NSNull(),
@@ -321,7 +330,21 @@ final class Server {
       "role": "deputy",
       "pid": Int(getpid()),
       "uptimeMs": Int(Date().timeIntervalSince(startedAt) * 1000),
+      "axTrusted": accessibilityTrusted(),
+      "automation": [
+        "things": automationStatus(bundleID: "com.culturedcode.ThingsMac"),
+        "systemEvents": automationStatus(bundleID: "com.apple.systemevents"),
+      ],
     ]
+  }
+
+  /**
+   * Raise the Accessibility consent dialog for the deputy's own identity. The
+   * grant itself is a toggle in System Settings, so the answer can only arrive
+   * later — the caller polls `hello`'s axTrusted. Returns the state as of now.
+   */
+  private func handlePrimeAx(id: Any?) -> [String: Any] {
+    ["id": id ?? NSNull(), "ok": true, "axTrusted": primeAccessibility()]
   }
 
   // --- audit log ---
