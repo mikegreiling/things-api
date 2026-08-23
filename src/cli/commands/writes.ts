@@ -322,6 +322,40 @@ function splitCsv(value: string | undefined): string[] | undefined {
     .filter((s) => s !== "");
 }
 
+/**
+ * Open a CLI write invocation: install the dev-mode step-timeline trace and arm
+ * the signal-safe interrupt guard (TRACE1, #487). Returns the teardown for the
+ * driver's `finally` — it closes the trace with the final exit code, then
+ * disarms the guard so a signal during teardown/reads emits nothing.
+ *
+ * EVERY write driver calls this, not just the single-mutation one: the library
+ * half (the in-flight marker, the watchdog, the plain-stderr interrupt line)
+ * works everywhere, but the trace FILE and the `--json` `interrupted` envelope
+ * exist only where the driver installs and arms them. `json` says whether this
+ * invocation's stdout is machine-readable — drivers that emit JSONL regardless
+ * of `--json` (batch, undo) pass true.
+ *
+ * The sink is a no-op unless tracing is on (a `-dev` build, or config/env
+ * forced), so this costs a config read on every write and nothing else.
+ */
+function beginWriteInvocation(json: boolean, startedAt: number): () => void {
+  installCliTrace({
+    argv: process.argv.slice(1),
+    version: CLI_VERSION,
+    isDev: isDevVersion(CLI_VERSION),
+  });
+  armInterrupt(json);
+  return () => {
+    trace(() => ({
+      phase: "invocation-end",
+      exitCode: process.exitCode ?? 0,
+      elapsedMs: Date.now() - startedAt,
+    }));
+    disarmInterrupt();
+    closeCliTrace();
+  };
+}
+
 async function runWrite(
   opts: WriteFlagOpts,
   fn: (client: ThingsClient) => Promise<ReorderResult>,
@@ -329,16 +363,7 @@ async function runWrite(
 ): Promise<void> {
   if (!opIdOk(opts)) return;
   const started = Date.now();
-  // Dev-mode step-timeline trace + signal-safe interrupt guard (TRACE1, #487).
-  // Scoped to the write driver — the invocations where a per-step timeline earns
-  // its keep, and where a mid-drive kill would otherwise leave empty stdout. The
-  // sink is a no-op unless tracing is on (a `-dev` build, or config/env forced).
-  installCliTrace({
-    argv: process.argv.slice(1),
-    version: CLI_VERSION,
-    isDev: isDevVersion(CLI_VERSION),
-  });
-  armInterrupt(opts.json === true);
+  const endInvocation = beginWriteInvocation(opts.json === true, started);
   let client: ThingsClient | null = null;
   const meta = (client_: ThingsClient | null): EnvelopeMeta => {
     let dbVersion: number | null = null;
@@ -398,16 +423,7 @@ async function runWrite(
     process.exitCode = isEnv ? ExitCode.Environment : ExitCode.Unexpected;
   } finally {
     client?.close();
-    // Close the trace with a final result line (the exit code the caller sees),
-    // then disarm the interrupt guard so a later signal during teardown/reads
-    // emits nothing.
-    trace(() => ({
-      phase: "invocation-end",
-      exitCode: process.exitCode ?? 0,
-      elapsedMs: Date.now() - started,
-    }));
-    disarmInterrupt();
-    closeCliTrace();
+    endInvocation();
   }
 }
 
@@ -628,6 +644,7 @@ async function runMoveCmd(
     return;
   }
   const started = Date.now();
+  const endInvocation = beginWriteInvocation(opts.json === true, started);
   let client: ThingsClient | null = null;
   const meta = (): EnvelopeMeta => {
     let dbVersion: number | null = null;
@@ -665,6 +682,7 @@ async function runMoveCmd(
     process.exitCode = ExitCode.Unexpected;
   } finally {
     client?.close();
+    endInvocation();
   }
 }
 
@@ -892,6 +910,7 @@ function addResultLine(r: BatchItemResult): string {
  * in creation order, and nothing else. Exit code is the worst leg's failure.
  */
 async function runBulkAdd(opts: WriteFlagOpts, ops: BatchOp[], idOnly: boolean): Promise<void> {
+  const endInvocation = beginWriteInvocation(opts.json === true, Date.now());
   let client: ThingsClient | null = null;
   try {
     client = openThings(opts.db ? { dbPath: opts.db } : {});
@@ -938,6 +957,7 @@ async function runBulkAdd(opts: WriteFlagOpts, ops: BatchOp[], idOnly: boolean):
     process.exitCode = aggregateExitCode(failed.map((r) => r.outcome));
   } finally {
     client?.close();
+    endInvocation();
   }
 }
 
@@ -2243,6 +2263,7 @@ export function registerWriteCommands(program: Command): void {
   ).action(async (uuid: string, opts: WriteFlagOpts & { restoreChildren?: boolean }) => {
     if (opIdCompoundRefused(opts, "project reopen")) return;
     const started = Date.now();
+    const endInvocation = beginWriteInvocation(opts.json === true, started);
     let client: ThingsClient | null = null;
     try {
       client = openThings(opts.db ? { dbPath: opts.db } : {});
@@ -2285,6 +2306,7 @@ export function registerWriteCommands(program: Command): void {
           : process.exitCode;
     } finally {
       client?.close();
+      endInvocation();
     }
   });
 
@@ -2713,6 +2735,9 @@ export function registerWriteCommands(program: Command): void {
           });
         }
       }
+      // batch streams JSONL regardless of --json, so the interrupt guard is
+      // armed machine-readable.
+      const endInvocation = beginWriteInvocation(true, Date.now());
       let client: ThingsClient | null = null;
       try {
         client = openThings(opts.db ? { dbPath: opts.db } : {});
@@ -2755,6 +2780,7 @@ export function registerWriteCommands(program: Command): void {
         process.exitCode = aggregateExitCode(failed.map((r) => r.outcome));
       } finally {
         client?.close();
+        endInvocation();
       }
     });
 
@@ -2814,6 +2840,9 @@ export function registerWriteCommands(program: Command): void {
         usageError(opts, "--txn cannot be combined with --last or --by");
         return;
       }
+      // undo streams JSONL regardless of --json, so the interrupt guard is armed
+      // machine-readable (each inverse is a real write, GUI drives included).
+      const endInvocation = beginWriteInvocation(true, Date.now());
       let client: ThingsClient | null = null;
       try {
         client = openThings(opts.db ? { dbPath: opts.db } : {});
@@ -2870,6 +2899,7 @@ export function registerWriteCommands(program: Command): void {
         }
       } finally {
         client?.close();
+        endInvocation();
       }
     });
 
