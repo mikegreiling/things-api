@@ -130,12 +130,17 @@ describe("computeHelpersNotice — absence hint", () => {
   });
 });
 
-/** Run the CLI check with a captured stderr sink. */
+/**
+ * Run the CLI check with a captured stderr sink. The platform is pinned to
+ * darwin: the notices are macOS-only by design, and the suite also runs on
+ * CI's Linux job.
+ */
 function capture(argv: string[], e: NodeJS.ProcessEnv, now?: number): string[] {
   const lines: string[] = [];
   maybeEmitHelpersNotice({
     argv,
     env: e,
+    platform: "darwin",
     ...(now !== undefined && { now }),
     write: (s) => lines.push(s),
   });
@@ -160,6 +165,19 @@ describe("maybeEmitHelpersNotice — CLI gating", () => {
       resetHelpersNoticeForTests();
       expect(capture(argv, e)).toEqual([]);
     }
+  });
+
+  it("says nothing on a platform that has no helpers", () => {
+    const e = env();
+    installBundle("0.9.0", e);
+    const lines: string[] = [];
+    maybeEmitHelpersNotice({
+      argv: ["today"],
+      env: e,
+      platform: "linux",
+      write: (s) => lines.push(s),
+    });
+    expect(lines).toEqual([]);
   });
 
   it("honors the kill switch", () => {

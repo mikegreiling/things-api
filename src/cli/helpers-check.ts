@@ -35,6 +35,8 @@ export function maybeEmitHelpersNotice(opts: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
   now?: number;
+  /** Host platform (the helpers are macOS-only); injectable for tests. */
+  platform?: string;
   write?: (s: string) => void;
 }): void {
   if (alreadyChecked) return;
@@ -44,7 +46,11 @@ export function maybeEmitHelpersNotice(opts: {
     const kill = env["THINGS_API_NO_HELPERS_CHECK"];
     if (kill !== undefined && kill !== "" && kill !== "0") return;
     if (!isHumanPath(opts.argv)) return;
-    const notice = computeHelpersNotice({ env, ...(opts.now !== undefined && { now: opts.now }) });
+    const notice = computeHelpersNotice({
+      env,
+      ...(opts.now !== undefined && { now: opts.now }),
+      ...(opts.platform !== undefined && { platform: opts.platform }),
+    });
     if (notice === null) return;
     emitHelpersNotice(notice.text, opts.write);
     // Restart the throttle only for the suggestion — a real skew keeps saying
