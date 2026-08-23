@@ -40,7 +40,12 @@ import {
   type LikelyCause,
 } from "./failure-hints.ts";
 import { evaluateGuards, type GuardBlock, type HazardId } from "./guards.ts";
-import { acquireMutationLock, MutationLockError } from "./lock.ts";
+import {
+  acquireMutationLock,
+  MutationLockError,
+  withMutationLock,
+  type AcquireMutationLockOptions,
+} from "./lock.ts";
 import {
   isHeadingTargetOp,
   type Acknowledgements,
@@ -579,6 +584,44 @@ export function normalizeConsumerWhen(
       `schedule an explicit date (when=${consumerToday}; it lands in that day's section, not ` +
       `This Evening), or set this host's system time zone to the consumer's so the calendars match`,
   };
+}
+
+/**
+ * Run a COMPOSITE — a single verb the engine executes as several mutations —
+ * under ONE mutation lock held end-to-end, so it serializes against other
+ * writers as a whole instead of leg by leg. Every leg's own
+ * `acquireMutationLock` inside `body` is a reentrant no-op (see
+ * {@link withMutationLock}); the per-leg lock stays the base case for an
+ * ordinary single mutation.
+ *
+ * Wrap only the MUTATING tail: validation, dry-run planning, and the hazard /
+ * session gates belong outside, so a refusal never takes the lock. On contention
+ * the refusal is the same `blocked` / `lock` shape the pipeline returns for a
+ * single op, carrying the composite's own op name. No audit record is written
+ * for it — unlike the single-op path, nothing was attempted, so there is no leg
+ * to record.
+ */
+export async function runComposite(
+  deps: WriteDeps,
+  op: OperationKind,
+  body: () => Promise<MutationResult>,
+  /** @internal test seam — see {@link AcquireMutationLockOptions}. */
+  lockOptions: AcquireMutationLockOptions = {},
+): Promise<MutationResult> {
+  try {
+    return await withMutationLock(deps.lockPath, body, lockOptions);
+  } catch (err) {
+    if (err instanceof MutationLockError) {
+      return {
+        kind: "blocked",
+        op,
+        reason: "lock",
+        detail: err.message,
+        remediation: "wait for the concurrent mutation to finish and retry",
+      };
+    }
+    throw err;
+  }
 }
 
 export async function runMutation<K extends OperationKind>(

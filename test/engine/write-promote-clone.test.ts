@@ -7,7 +7,7 @@
  * an EMBEDDED leg (not an independent todo.clone summary), (e) the undo trash-both
  * + restore round-trip, (f) the refusal + gating copy. No Things app is touched.
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -763,6 +763,52 @@ describe("#508 — the after-completion first-occurrence verify uses the instanc
     if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
     expect(res.detail).toContain("2026-07-06");
     expect(res.detail).toContain("2026-07-20");
+  });
+});
+
+// COMPOSITE LOCK: a promote is one verb executed as several mutations, and the
+// whole verb — not each leg — is what must serialize against other writers.
+describe("promote composites hold ONE mutation lock across their legs", () => {
+  /** The simulator, plus the lockfile's identity recorded at every leg. */
+  function lockWatchingVector(lockPath: string, seen: (string | null)[]): WriteVector {
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    return {
+      ...sim,
+      async execute(inv) {
+        try {
+          const st = statSync(lockPath);
+          seen.push(`${st.dev}:${st.ino}`);
+        } catch {
+          seen.push(null); // no lock held during this leg
+        }
+        return sim.execute(inv);
+      },
+    };
+  }
+
+  it("every leg runs under the SAME lockfile, and it is gone afterwards", async () => {
+    const seen: (string | null)[] = [];
+    const d = deps(vector);
+    const watched = deps(lockWatchingVector(d.lockPath, seen));
+    watched.lockPath = d.lockPath;
+
+    const src = seedTodo(fixture.db, { title: "Locked promote", start: "active" });
+    const res = await runMakeRepeatingTodo(
+      watched,
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+
+    // Several legs ran (clone, trash, promote) …
+    expect(seen.length).toBeGreaterThan(2);
+    // … every one of them under a lockfile, and the SAME one throughout: a
+    // per-leg lock would mint a fresh inode for each leg, leaving a gap between
+    // them for another writer's legs to land in.
+    expect(seen.filter((s) => s === null)).toEqual([]);
+    expect(new Set(seen).size).toBe(1);
+    // The composite's own release is the last thing to happen.
+    expect(existsSync(d.lockPath)).toBe(false);
   });
 });
 
