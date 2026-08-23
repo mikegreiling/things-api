@@ -13,6 +13,7 @@ import {
   axSelectNextOccurrenceScript,
   axSelectPopupCandidatesScript,
   axSelectPopupScript,
+  axSelectRowScript,
   axSetDateTimeScript,
   axSetValueScript,
   axSheetOpenScript,
@@ -311,5 +312,32 @@ describe("axConvergeWeekdaysScript — closed-loop weekday rows (the RRD1 fix)",
 
   it("the legacy dialog's base index is 2 (no Next: pop-up in front of the rows)", () => {
     expect(axConvergeWeekdaysScript("group 1", 2, ["Monday"])).toContain("set baseIx to 2");
+  });
+});
+
+describe("axSelectRowScript — the matched row must itself hold the selection (VMRES1)", () => {
+  const script = axSelectRowScript("table 1 of scroll area 1 of window 1", "My Project");
+
+  it("settles after the select before reading the title back", () => {
+    // The readback LAGS the select action: with no settle, `name of selected to
+    // dos` can still report the PREVIOUS iteration's row (VMRES1 §2).
+    expect(script).toMatch(/select \(row i of theTable\)\s*\n\s*delay 0\.25/);
+  });
+
+  it("gates the title readback on `selected of (row i)` — the anti-lag guard", () => {
+    // A blank spacer row's select lands NOTHING; without this gate the stale
+    // readback matched the previous row's title, the loop returned OK one row
+    // late, and the table was left with no selection at all — so the menu item
+    // the next step waits for never materialized.
+    const gateAt = script.indexOf("if (selected of (row i of theTable)) then");
+    const readbackAt = script.indexOf("name of selected to dos");
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(readbackAt).toBeGreaterThan(gateAt);
+  });
+
+  it("still returns OK on the title match and NOMATCH when no row selects to it", () => {
+    expect(script).toContain('is "My Project" then');
+    expect(script).toContain('return "OK"');
+    expect(script).toContain('return "NOMATCH"');
   });
 });
