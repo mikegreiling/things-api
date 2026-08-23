@@ -973,6 +973,52 @@ async function readStdinTitles(): Promise<string[]> {
     .filter((l) => l.trim() !== "");
 }
 
+/**
+ * The CLI-only half of the notes vocabulary (the shared half is NOTES_FORMAT):
+ * how a multi-line body gets in from a shell. `-` reads STDIN, so a heredoc or
+ * a pipe composes; the `$'…'` form covers the inline case.
+ */
+const NOTES_INPUT = "pass - to read the body from stdin, or $'line 1\\nline 2' to give it inline";
+
+/**
+ * Read the whole of STDIN as one UTF-8 note body. One trailing newline is
+ * dropped (a heredoc and most pipes add one); every other newline is kept.
+ */
+async function readStdinText(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks)
+    .toString("utf8")
+    .replace(/\r?\n$/, "");
+}
+
+/**
+ * Resolve `--notes -` into the body waiting on STDIN, in place on `opts`. A
+ * terminal STDIN has nothing to read, so it is refused with the two working
+ * spellings rather than hanging on an input nobody is going to type. Returns
+ * false when the invocation was refused (the usage error is already emitted).
+ */
+async function resolveNotesStdin(
+  opts: WriteFlagOpts & Record<string, unknown>,
+  conflictsWithStdinFlag = false,
+): Promise<boolean> {
+  if (opts["notes"] !== "-") return true;
+  if (conflictsWithStdinFlag && opts["stdin"] === true) {
+    usageError(opts, "--notes - and --stdin both read stdin; pass at most one of them");
+    return false;
+  }
+  if (process.stdin.isTTY === true) {
+    usageError(
+      opts,
+      "--notes - reads the note body from stdin, and stdin is a terminal: pipe the body in " +
+        "(or redirect a file with < notes.md), or give the text inline with --notes $'line 1\\nline 2'",
+    );
+    return false;
+  }
+  opts["notes"] = await readStdinText();
+  return true;
+}
+
 function group(program: Command, name: string, description: string): Command {
   const existing = program.commands.find((c) => c.name() === name);
   if (existing !== undefined) return existing;
@@ -1007,7 +1053,7 @@ export function registerWriteCommands(program: Command): void {
             "requires --acknowledge-project-reopen. When several to-dos are created, one undo " +
             "token removes the whole skeleton at once.",
         )
-        .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
+        .option("--notes <text>", `notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
         .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
         .option(
           "--reminder <HH:mm>",
@@ -1047,6 +1093,7 @@ export function registerWriteCommands(program: Command): void {
       usageError(opts, "--id-only and --json are mutually exclusive");
       return;
     }
+    if (!(await resolveNotesStdin(opts, true))) return;
     if (useStdin && titles.length > 0) {
       usageError(opts, "--stdin is mutually exclusive with title arguments");
       return;
@@ -1160,7 +1207,7 @@ export function registerWriteCommands(program: Command): void {
           "newline (exclusive with --notes).",
       )
       .option("--title <text>", "new title")
-      .option("--notes <text>", `replace the notes body — ${NOTES_FORMAT}`)
+      .option("--notes <text>", `replace the notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
       .option("--append-notes <text>", "append to existing notes (newline-joined)")
       .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -1184,6 +1231,7 @@ export function registerWriteCommands(program: Command): void {
       usageError(opts, "--notes, --append-notes, --prepend-notes are exclusive");
       return;
     }
+    if (!(await resolveNotesStdin(opts))) return;
     if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
       usageError(opts, "pass at most one of --reminder / --clear-reminder");
       return;
@@ -1937,7 +1985,7 @@ export function registerWriteCommands(program: Command): void {
               "it to create in Someday. The new repeating project's uuid is printed; `things undo` " +
               "removes the created series (trash-both).",
           )
-          .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
+          .option("--notes <text>", `notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
           .option("--area <ref>", "destination area (uuid or unique name)")
           .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
           .option("--deadline <date>", "YYYY-MM-DD")
@@ -1951,6 +1999,7 @@ export function registerWriteCommands(program: Command): void {
     const area = containerRef(opts["area"] as string | undefined);
     const frequency = opts["frequency"] as RepeatFrequency;
     if (opIdCompoundRefused(opts, "project add-repeating")) return;
+    if (!(await resolveNotesStdin(opts))) return;
     await runWrite(opts, (c) =>
       c.write.addRepeatingProject(
         {
@@ -1978,7 +2027,7 @@ export function registerWriteCommands(program: Command): void {
               "if the promote refuses; then it is promoted (which drives the GUI). The new repeating " +
               "template's uuid is printed; `things undo` removes the created series (trash-both).",
           )
-          .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
+          .option("--notes <text>", `notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
           .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
           .option("--reminder <time>", "HH:mm reminder (needs a schedulable --when)")
           .option(
@@ -2013,6 +2062,7 @@ export function registerWriteCommands(program: Command): void {
     const area = containerRef(opts["area"] as string | undefined);
     const frequency = opts["frequency"] as RepeatFrequency;
     if (opIdCompoundRefused(opts, "todo add-repeating")) return;
+    if (!(await resolveNotesStdin(opts))) return;
     await runWrite(opts, (c) =>
       c.write.addRepeatingTodo(
         {
@@ -2045,7 +2095,7 @@ export function registerWriteCommands(program: Command): void {
           "seed it with child to-dos in the same call — the quick way to stand up a new " +
           "project skeleton.",
       )
-      .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
+      .option("--notes <text>", `notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
       .option("--deadline <date>", "YYYY-MM-DD")
@@ -2066,6 +2116,7 @@ export function registerWriteCommands(program: Command): void {
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const todos = opts["todo"] as string[];
     const area = containerRef(opts["area"] as string | undefined);
+    if (!(await resolveNotesStdin(opts))) return;
     await runWrite(opts, (c) =>
       c.write.addProject(
         {
@@ -2095,7 +2146,7 @@ export function registerWriteCommands(program: Command): void {
       ),
   )
     .option("--title <text>", "new title")
-    .option("--notes <text>", `replace the notes body — ${NOTES_FORMAT}`)
+    .option("--notes <text>", `replace the notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
     .option("--append-notes <text>", "append to existing notes (newline-joined)")
     .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
     .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -2119,6 +2170,7 @@ export function registerWriteCommands(program: Command): void {
         usageError(opts, "--notes, --append-notes, --prepend-notes are exclusive");
         return;
       }
+      if (!(await resolveNotesStdin(opts))) return;
       if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
         usageError(opts, "pass at most one of --reminder / --clear-reminder");
         return;
