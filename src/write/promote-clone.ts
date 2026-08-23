@@ -53,7 +53,7 @@ import {
   deriveFixedAnchor,
   isIsoDate,
 } from "./repeat-anchor.ts";
-import { assertRepeatRule, ruleToInverseParams } from "./repeat-rule.ts";
+import { assertRepeatRule, ruleToInverseParams, splitAddRepeatingRule } from "./repeat-rule.ts";
 import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
 
@@ -192,40 +192,26 @@ async function cleanupSeed(
  *
  * The `rule` bag is the SUPERSET the make/add legs actually carry: make-repeating
  * passes a full {@link RepeatRuleParams} (rule-level `deadline`/`startDaysEarlier`
- * included), add-repeating an {@link AddRepeatingRuleFields} (which OMITS those —
- * the base add owns the item's own deadline). Every field is copied THROUGH so
- * neither is silently dropped: an earlier version keyed the param type to
- * AddRepeatingRuleFields and stripped `deadline`/`startDaysEarlier` from the
- * make-repeating promote entirely (the same class as the RRX1 reminder drop —
- * a deadlined make-repeating produced a NON-deadlined template, YANCH1 #493).
+ * and the requested `next` included), add-repeating an
+ * {@link AddRepeatingRuleFields} plus whichever of the deadline pair its geometry
+ * folded in. Every field flows through by SPREAD, never by a hand-copied field
+ * list — a list here is how the make-repeating promote once stripped
+ * `deadline`/`startDaysEarlier` (a deadlined make-repeating produced a
+ * NON-deadlined template, YANCH1 #493) and how the project promote later dropped
+ * `next` (#549). The ONE field that is deliberately re-derived rather than copied
+ * is `next`: the drive date is deadline-shifted by the caller, and an
+ * after-completion dialog has no first-occurrence field to drive at all.
  */
 function ruleParamsFor(
   uuid: string,
-  rule: AddRepeatingRuleFields &
-    Partial<Pick<RepeatRuleParams, "reminder" | "deadline" | "startDaysEarlier">>,
+  rule: Partial<Omit<RepeatRuleParams, "uuid">> & AddRepeatingRuleFields,
   nextIso?: IsoDate,
 ): RepeatRuleParams {
-  return {
-    uuid,
-    frequency: rule.frequency,
-    interval: rule.interval,
-    ...(rule.afterCompletion !== undefined && { afterCompletion: rule.afterCompletion }),
-    ...(rule.weekdays !== undefined && { weekdays: rule.weekdays }),
-    ...(rule.monthly !== undefined && { monthly: rule.monthly }),
-    ...(rule.yearly !== undefined && { yearly: rule.yearly }),
-    ...(rule.ends !== undefined && { ends: rule.ends }),
-    // The repeat reminder picker is drivable (ANCH2). make-repeating carries a
-    // rule-level reminder through; add-repeating threads the base to-do's
-    // --reminder here too (ADR1 #480), since the dialog conversion otherwise drops
-    // the seed's one-off reminder from the series.
-    ...(rule.reminder !== undefined && { reminder: rule.reminder }),
-    // The deadline offset is a rule-level field on make-repeating (the "Add
-    // deadlines" checkbox + "start N days earlier"); it must ride the promote or a
-    // `make-repeating --deadline` lands a non-deadlined series (YANCH1 #493).
-    ...(rule.deadline !== undefined && { deadline: rule.deadline }),
-    ...(rule.startDaysEarlier !== undefined && { startDaysEarlier: rule.startDaysEarlier }),
-    ...(nextIso !== undefined && rule.afterCompletion !== true && { next: nextIso }),
-  };
+  const out: RepeatRuleParams = { ...rule, uuid };
+  // Never the caller's raw `next` — see above; the drive date arrives as `nextIso`.
+  delete out.next;
+  if (nextIso !== undefined && rule.afterCompletion !== true) out.next = nextIso;
+  return out;
 }
 
 const UNIT_SINGULAR: Record<RepeatRuleParams["frequency"], string> = {
@@ -1115,26 +1101,12 @@ export async function runAddRepeatingTodo(
   params: TodoAddRepeatingParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
-  const {
-    frequency,
-    interval,
-    afterCompletion,
-    weekdays,
-    monthly,
-    yearly,
-    ends,
-    startDaysEarlier,
-    ...add
-  } = params;
-  const baseRule: AddRepeatingRuleFields = {
-    frequency,
-    interval,
-    ...(afterCompletion !== undefined && { afterCompletion }),
-    ...(weekdays !== undefined && { weekdays }),
-    ...(monthly !== undefined && { monthly }),
-    ...(yearly !== undefined && { yearly }),
-    ...(ends !== undefined && { ends }),
-  };
+  // The rule/add split is driven by the exhaustive key map (splitAddRepeatingRule),
+  // not by a hand-written destructure — a field added to either vocabulary lands on
+  // the right leg instead of falling between them (#549 / YANCH1 #493).
+  const { rule: baseRule, add } = splitAddRepeatingRule(params);
+  const { afterCompletion } = params;
+  const startDaysEarlier = add.startDaysEarlier;
 
   // A concrete `--deadline` (or `--start-days-earlier`) belongs to the RULE, not
   // the seed — see mapDeadlineOntoRule for the geometry and the refusals. The
@@ -1158,19 +1130,14 @@ export async function runAddRepeatingTodo(
     );
   }
 
-  const addParams: Record<string, unknown> = {
-    title: add.title,
-    ...(add.notes !== undefined && { notes: add.notes }),
-    ...(add.when !== undefined && { when: add.when }),
-    ...(add.reminder !== undefined && { reminder: add.reminder }),
-    ...(seedDeadline !== undefined && { deadline: seedDeadline }),
-    ...(add.tags !== undefined && { tags: add.tags }),
-    ...(add.checklistItems !== undefined && { checklistItems: add.checklistItems }),
-    ...(add.project !== undefined && { project: add.project }),
-    ...(add.area !== undefined && { area: add.area }),
-    ...(add.heading !== undefined && { heading: add.heading }),
-    ...(add.createdAt !== undefined && { createdAt: add.createdAt }),
-  };
+  // The seed carries the WHOLE add vocabulary by spread (a field added to
+  // TodoAddRepeatingParams reaches the create leg without a line here), minus the
+  // two the rule took: `startDaysEarlier` is rule-only, and the deadline is
+  // whatever the geometry left for the seed (none, once mapped).
+  const addParams: Record<string, unknown> = { ...add };
+  delete addParams["startDaysEarlier"];
+  delete addParams["deadline"];
+  if (seedDeadline !== undefined) addParams["deadline"] = seedDeadline;
   return addRepeatingViaCreate(deps, "todo", addParams, rule, add.title, options);
 }
 
@@ -1179,16 +1146,9 @@ export async function runAddRepeatingProject(
   params: ProjectAddRepeatingParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
-  const { frequency, interval, afterCompletion, weekdays, monthly, yearly, ends, ...add } = params;
-  const baseRule: AddRepeatingRuleFields = {
-    frequency,
-    interval,
-    ...(afterCompletion !== undefined && { afterCompletion }),
-    ...(weekdays !== undefined && { weekdays }),
-    ...(monthly !== undefined && { monthly }),
-    ...(yearly !== undefined && { yearly }),
-    ...(ends !== undefined && { ends }),
-  };
+  // Same exhaustive rule/add split as the to-do verb (one key map, both verbs).
+  const { rule: baseRule, add } = splitAddRepeatingRule(params);
+  const { afterCompletion } = params;
 
   // A concrete `--deadline` maps to the RULE here exactly as it does on the to-do
   // verb (DBLSPAWN1 residual). The project stakes are quieter than the to-do's but
@@ -1217,16 +1177,13 @@ export async function runAddRepeatingProject(
   // Seed a pure-AX taxonomy: an area lands a selectable AREA-view row; otherwise
   // create in Someday (UIC4-f) so the promote skips the anytime-header problem.
   const seedWhen = add.when ?? (add.area === undefined ? "someday" : undefined);
-  const addParams: Record<string, unknown> = {
-    title: add.title,
-    ...(add.notes !== undefined && { notes: add.notes }),
-    ...(add.area !== undefined && { area: add.area }),
-    ...(seedWhen !== undefined && { when: seedWhen }),
-    ...(seedDeadline !== undefined && { deadline: seedDeadline }),
-    ...(add.todos !== undefined && { todos: add.todos }),
-    ...(add.items !== undefined && { items: add.items }),
-    ...(add.createdAt !== undefined && { createdAt: add.createdAt }),
-  };
+  // The whole add vocabulary by spread (see the to-do verb), with the two the
+  // promote owns re-derived: the seed taxonomy `when` and the mapped deadline.
+  const addParams: Record<string, unknown> = { ...add };
+  delete addParams["when"];
+  delete addParams["deadline"];
+  if (seedWhen !== undefined) addParams["when"] = seedWhen;
+  if (seedDeadline !== undefined) addParams["deadline"] = seedDeadline;
   return addRepeatingViaCreate(deps, "project", addParams, rule, add.title, options);
 }
 

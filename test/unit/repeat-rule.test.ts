@@ -6,8 +6,16 @@
 import { describe, expect, it } from "vitest";
 
 import type { RepeatRule } from "../../src/model/recurrence.ts";
-import type { RepeatRuleParams } from "../../src/write/operations.ts";
-import { assertRepeatRule, ruleToInverseParams } from "../../src/write/repeat-rule.ts";
+import type {
+  AddRepeatingRuleFields,
+  RepeatRuleParams,
+  TodoAddRepeatingParams,
+} from "../../src/write/operations.ts";
+import {
+  assertRepeatRule,
+  ruleToInverseParams,
+  splitAddRepeatingRule,
+} from "../../src/write/repeat-rule.ts";
 
 type Rule = Omit<RepeatRuleParams, "uuid">;
 const ok = (r: Rule) => expect(() => assertRepeatRule(r)).not.toThrow();
@@ -389,5 +397,62 @@ describe("ruleToInverseParams — inexpressible shapes (dialog cannot produce)",
       false,
     );
     expect(inv).toMatchObject({ afterCompletion: true, frequency: "weekly" });
+  });
+});
+
+describe("splitAddRepeatingRule — the exhaustive rule/add split (#491 doctrine)", () => {
+  // The promote orchestrators used to destructure the rule fields by hand and
+  // rebuild both halves field by field, which is how `project make-repeating`
+  // dropped the requested first occurrence (#549) and how a deadlined
+  // make-repeating landed a non-deadlined series (YANCH1 #493). The split is now
+  // key-map driven; this pins that EVERY rule field goes left and everything else
+  // goes right, with the map's own exhaustiveness enforced at compile time.
+  const RULE_KEYS: Record<keyof AddRepeatingRuleFields, true> = {
+    frequency: true,
+    interval: true,
+    afterCompletion: true,
+    weekdays: true,
+    monthly: true,
+    yearly: true,
+    ends: true,
+  };
+
+  it("routes every rule field to the rule half and every add field to the add half", () => {
+    const params: TodoAddRepeatingParams = {
+      frequency: "weekly",
+      interval: 2,
+      afterCompletion: false,
+      weekdays: ["monday"],
+      ends: { kind: "after", count: 5 },
+      title: "seed",
+      notes: "body",
+      when: "2026-08-01",
+      reminder: "09:00",
+      deadline: "2026-08-05",
+      startDaysEarlier: 4,
+      tags: ["t"],
+      checklistItems: ["c"],
+      heading: "H",
+      createdAt: "2026-01-01",
+    };
+    const { rule: ruleHalf, add } = splitAddRepeatingRule(params);
+    for (const key of Object.keys(ruleHalf)) expect(RULE_KEYS).toHaveProperty(key);
+    for (const key of Object.keys(add)) expect(RULE_KEYS).not.toHaveProperty(key);
+    // Nothing falls between the halves — the split is a partition.
+    expect([...Object.keys(ruleHalf), ...Object.keys(add)].toSorted()).toEqual(
+      Object.keys(params).toSorted(),
+    );
+    // ...and the rule half is a valid rule on its own.
+    expect(() => assertRepeatRule(ruleHalf)).not.toThrow();
+  });
+
+  it("omits absent fields rather than carrying an explicit undefined", () => {
+    const { rule: ruleHalf, add } = splitAddRepeatingRule({
+      frequency: "daily",
+      interval: 1,
+      title: "seed",
+    } as TodoAddRepeatingParams);
+    expect(ruleHalf).toEqual({ frequency: "daily", interval: 1 });
+    expect(add).toEqual({ title: "seed" });
   });
 });

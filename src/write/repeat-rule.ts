@@ -16,6 +16,7 @@ import type { RepeatOffset, RepeatRule } from "../model/recurrence.ts";
 import { assessOffRuleFirst } from "./repeat-anchor.ts";
 import {
   WEEKDAYS,
+  type AddRepeatingRuleFields,
   type MonthlyAnchor,
   type RepeatEnds,
   type RepeatFrequency,
@@ -115,6 +116,51 @@ function assertEnds(ends: RepeatEnds): void {
       throw new RangeError(`unknown ends bound ${JSON.stringify(exhaustive)}`);
     }
   }
+}
+
+/**
+ * EXHAUSTIVE over the calendar-anchor rule vocabulary an add-repeating params bag
+ * carries INLINE alongside its add fields ({@link AddRepeatingRuleFields} — the
+ * rule-level deadline pair is folded in later, by the caller's deadline geometry).
+ * Adding a field there breaks compilation here until the splitter is told which
+ * half of the bag it belongs to. (The assert-side map over the FULL rule
+ * vocabulary lives in repeat-asserts.ts.)
+ */
+const ADD_RULE_KEYS: { [K in keyof AddRepeatingRuleFields]-?: true } = {
+  frequency: true,
+  interval: true,
+  afterCompletion: true,
+  weekdays: true,
+  monthly: true,
+  yearly: true,
+  ends: true,
+};
+
+/**
+ * Split an add-repeating params bag into its RULE half and its ADD half, by the
+ * exhaustive key map rather than by hand — so a field added to either vocabulary
+ * flows to the right leg instead of being dropped by an out-of-date literal.
+ *
+ * This is the #491 exhaustive-map doctrine applied to the promote orchestrators:
+ * a hand-rebuilt bag here is how `project make-repeating` came to drop the
+ * requested first occurrence (#549) and how a deadlined make-repeating came to
+ * land a non-deadlined series (YANCH1 #493). Present-only: an `undefined` value
+ * is omitted from both halves (the `exactOptionalPropertyTypes` contract the
+ * downstream params types are written against).
+ */
+export function splitAddRepeatingRule<T extends AddRepeatingRuleFields>(
+  params: T,
+): { rule: AddRepeatingRuleFields; add: Omit<T, keyof AddRepeatingRuleFields> } {
+  const rule: Record<string, unknown> = {};
+  const add: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    (Object.hasOwn(ADD_RULE_KEYS, key) ? rule : add)[key] = value;
+  }
+  return {
+    rule: rule as unknown as AddRepeatingRuleFields,
+    add: add as Omit<T, keyof AddRepeatingRuleFields>,
+  };
 }
 
 /**
