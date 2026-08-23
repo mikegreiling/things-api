@@ -40,6 +40,83 @@ function syncHealthLines(sh: DiagnoseReport["syncHealth"]): string[] {
   ];
 }
 
+/** One half's line: liveness, launchd registration, version, signing. */
+function helperHalfLine(
+  half: DiagnoseReport["helpers"]["status"]["deputy"] & { granted?: boolean; installed?: boolean },
+  running: string,
+): string {
+  const facts = [
+    half.plistInstalled
+      ? half.loaded
+        ? "launchd loaded"
+        : "launchd registered, NOT loaded"
+      : "no launchd registration",
+  ];
+  if (half.hello !== null)
+    facts.push(
+      `v${half.hello.deputyVersion}, protocol ${half.hello.protocol}, pid ${half.hello.pid}`,
+    );
+  if (half.signing !== null) {
+    facts.push(
+      half.signing.state === "signed"
+        ? `signed (${half.signing.authority ?? "unknown authority"})`
+        : `${half.signing.state} — macOS grants will NOT survive rebuilds`,
+    );
+  }
+  return `${running} · ${facts.join(" · ")}`;
+}
+
+/** The `── Helpers ──` section: routing resolution + both halves' health. */
+function helpersLines(helpers: DiagnoseReport["helpers"]): string[] {
+  const { status, routing } = helpers;
+  const resolved =
+    helpers.mode === "false"
+      ? "direct (routing off)"
+      : `automation ${routing.automation ? "via the deputy" : "DIRECT"}, database reads ${
+          routing.files ? "via the reader" : "DIRECT"
+        }`;
+  const lines = [
+    "── Helpers ──",
+    `mode:        ${helpers.mode} — ${helpers.detail}`,
+    `routing:     ${resolved}`,
+    `bundle:      ${
+      status.bundleInstalled
+        ? `installed${helpers.installedVersion !== null ? ` (v${helpers.installedVersion})` : ""}${
+            helpers.versionSkew ? `, this package expects v${helpers.expectedVersion}` : ""
+          }`
+        : "not installed"
+    }`,
+  ];
+  if (status.bundleInstalled || status.deputy.plistInstalled) {
+    lines.push(
+      `deputy:      ${helperHalfLine(
+        status.deputy,
+        status.deputy.running
+          ? "running"
+          : status.deputy.hungSocket
+            ? "SOCKET PRESENT, NOT ANSWERING"
+            : "not running",
+      )}`,
+      `reader:      ${
+        status.reader.installed
+          ? helperHalfLine(
+              status.reader,
+              status.reader.running
+                ? status.reader.granted
+                  ? "running, granted"
+                  : "running, NOT granted"
+                : status.reader.hungSocket
+                  ? "SOCKET PRESENT, NOT ANSWERING"
+                  : "not running",
+            )
+          : "not installed (the bundle was built without an Apple-issued signing identity)"
+      }`,
+    );
+  }
+  if (helpers.remedy !== null) lines.push(`next:        ${helpers.remedy}`);
+  return lines;
+}
+
 /** The `── ui vector ──` section: config + app + Accessibility + certification. */
 function uiVectorLines(ui: DiagnoseReport["ui"]): string[] {
   const total = ui.certification.length;
@@ -63,9 +140,10 @@ export function registerDoctor(program: Command): void {
       "Check environment health: database location, database schema compatibility, app " +
         "presence, any one-time setup still needed (macOS permissions, the app's " +
         "'Enable Things URLs' setting), whether the environment changed since the last " +
-        "successful write, and a sync-health summary (whether the app is running, how recently " +
+        "successful write, a sync-health summary (whether the app is running, how recently " +
         "the data changed, and — when a Things Cloud account is attached — the last sync " +
-        "attempt) — with steps to fix. " +
+        "attempt), and the state of the optional helpers (installed, running, granted, signed, " +
+        "and what routing resolved to) — with steps to fix. " +
         "Exit 0 healthy; 5 schema drift (writes disabled); 7 environment problem.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
@@ -145,6 +223,7 @@ export function registerDoctor(program: Command): void {
                 ]
               : []),
             ...syncHealthLines(report.syncHealth),
+            ...helpersLines(report.helpers),
             ...uiVectorLines(report.ui),
           ];
           process.stdout.write(`${lines.join("\n")}\n`);

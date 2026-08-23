@@ -7,7 +7,16 @@
  * this one rides dev machines and release preflights).
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -255,6 +264,68 @@ echo "$1:$2:$3:$4:$5:$6"
     );
     expect(shortcutsListSync(5000)).toContain("things-proxy-alpha");
   });
+
+  /**
+   * Graceful drain (§3c item 3): `helpers install` / `restart` boot a running
+   * helper out mid-flight. A request already dispatched must still get its
+   * answer, and the process must then exit CLEANLY (0, socket removed) —
+   * otherwise upgrade-while-busy silently kills whatever was in progress.
+   *
+   * Its own deputy instance with its own state dir, so the shared one above
+   * survives for the rest of the suite.
+   */
+  it("SIGTERM drains: the in-flight request completes, then the process exits 0", async () => {
+    const drainDir = join(tmp, "drain");
+    mkdirSync(drainDir, { recursive: true });
+    writeFileSync(
+      join(drainDir, "deputy.json"),
+      JSON.stringify({ osascriptPath: join(tmp, "stub-osascript") }),
+    );
+    const victim = spawn(
+      join(repoRoot, "deputy/build/Things API Helper.app/Contents/MacOS/things-deputy"),
+      ["--state-dir", drainDir],
+      { stdio: "ignore" },
+    );
+    const socketPath = join(drainDir, "deputy.sock");
+    const tokenPath = join(drainDir, "token");
+    const upBy = Date.now() + 5000;
+    while (!existsSync(socketPath) || !existsSync(tokenPath)) {
+      if (Date.now() > upBy) throw new Error("drain-test deputy did not come up within 5s");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const drainToken = readFileSync(tokenPath, "utf8").trim();
+
+    // The SLEEP stub holds the request for ~5s; SIGTERM lands while it runs.
+    const conn = connect(socketPath);
+    const response = new Promise<Record<string, unknown>>((resolve, reject) => {
+      let buffer = "";
+      conn.on("data", (chunk) => {
+        buffer += String(chunk);
+        const nl = buffer.indexOf("\n");
+        if (nl >= 0) resolve(JSON.parse(buffer.slice(0, nl)) as Record<string, unknown>);
+      });
+      conn.on("error", reject);
+      conn.on("close", () => reject(new Error("connection closed before the response arrived")));
+    });
+    await new Promise((resolve) => conn.once("connect", resolve));
+    conn.write(
+      `${JSON.stringify({ v: 1, token: drainToken, verb: "osascript", script: "SLEEP", timeoutMs: 20_000 })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 750)); // let it reach osascript
+    const exited = new Promise<number | null>((resolve) =>
+      victim.once("exit", (code) => resolve(code)),
+    );
+    victim.kill("SIGTERM");
+
+    const res = await response;
+    expect(res["ok"]).toBe(true);
+    expect(res["exitCode"]).toBe(0);
+    expect(res["timedOut"]).toBeUndefined();
+    conn.destroy();
+    expect(await exited).toBe(0);
+    // The socket is removed on the way out, so no client can find a dead helper.
+    expect(existsSync(socketPath)).toBe(false);
+  }, 30_000);
 
   it("shortcuts: refuses names outside the bundled things-proxy-* family", () => {
     const res = request({

@@ -22,6 +22,9 @@ const ENV_KEYS = [
   "THINGS_API_ACTOR",
   "THINGS_API_AUDIT",
   "THINGS_API_ALLOW_EXPERIMENTAL",
+  // The suite forces THINGS_API_HELPERS=false globally (vitest.config.ts) so no
+  // test routes into a live helper; this file asserts DEFAULTS, so it clears it.
+  "THINGS_API_HELPERS",
   "THINGS_API_UI_ENABLED",
   "NO_COLOR",
 ];
@@ -194,5 +197,29 @@ describe("config get (all keys)", () => {
     expect(byKey["profile"]).toBe("stored");
     expect(byKey["actor"]).toBe("default");
     expect(byKey["host"]).toBe("derived");
+  });
+});
+
+describe("config set helpers-enabled (tri-state)", () => {
+  it("stores each of the three modes verbatim", async () => {
+    for (const mode of ["auto", "true", "false"]) {
+      await run(["config", "set", "helpers-enabled", mode]);
+      expect(stdout.join("")).toContain(`set helpers-enabled = ${mode}`);
+      stdout.length = 0;
+      await run(["config", "get", "helpers-enabled", "--json"]);
+      expect((lastJson()["data"] as Record<string, unknown>)["value"]).toBe(mode);
+      stdout.length = 0;
+    }
+  });
+
+  it("refuses anything else as a usage error rather than coercing it to off", async () => {
+    await run(["config", "set", "helpers-enabled", "yes"]);
+    expect(stderr.join("")).toContain("helpers-enabled accepts auto | true | false");
+    expect(process.exitCode).toBe(2);
+    stdout.length = 0;
+    await run(["config", "get", "helpers-enabled", "--json"]);
+    const entry = lastJson()["data"] as Record<string, unknown>;
+    expect(entry["value"]).toBe("auto");
+    expect(entry["source"]).toBe("default");
   });
 });

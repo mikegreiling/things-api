@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildProgram } from "../../src/cli/main.ts";
 import { runDoctor } from "../../src/cli/commands/doctor.ts";
-import { diagnose } from "../../src/diagnose.ts";
+import { diagnose, type DiagnoseOptions, type DiagnoseReport } from "../../src/diagnose.ts";
+import type { DeputyHalfStatus, HelpersStatus } from "../../src/deputy/install.ts";
+import { EXPECTED_HELPERS_VERSION } from "../../src/deputy/protocol.ts";
+import { resetDeputyRoutingForTests, type HelpersRouting } from "../../src/deputy/routing.ts";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { EnvironmentTracker, EnvironmentTuple } from "../../src/write/environment.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -372,5 +375,219 @@ describe("doctor — behavioral-drift notice (certified-app-version)", () => {
     });
     expect(report?.app.version).toBeNull();
     expect(report?.app.behavioralDrift).toBe(false);
+  });
+});
+
+/**
+ * The helpers section. Every cell injects a synthetic status + routing
+ * resolution: the real probes read this machine's launchd, sockets, and code
+ * signatures — right for a diagnostic, useless for an assertion, since the host
+ * running the suite may have live helpers of its own.
+ */
+function half(over: Partial<DeputyHalfStatus> = {}): DeputyHalfStatus {
+  return {
+    plistInstalled: true,
+    loaded: true,
+    running: true,
+    socketPath: "/tmp/synthetic/deputy.sock",
+    hungSocket: false,
+    hello: { protocol: 1, deputyVersion: EXPECTED_HELPERS_VERSION, pid: 4242, uptimeMs: 1000 },
+    signing: { state: "signed", authority: "Developer ID Application: Synthetic" },
+    detail: "running",
+    ...over,
+  };
+}
+
+const absentHalf = half({
+  plistInstalled: false,
+  loaded: false,
+  running: false,
+  hello: null,
+  signing: null,
+  detail: "not running (no socket)",
+});
+
+function status(over: Partial<HelpersStatus> = {}): HelpersStatus {
+  return {
+    mode: "auto",
+    bundleInstalled: true,
+    installedVersion: EXPECTED_HELPERS_VERSION,
+    deputy: half(),
+    reader: { ...half(), installed: true, granted: true },
+    ...over,
+  };
+}
+
+function routing(over: Partial<HelpersRouting> = {}): HelpersRouting {
+  return {
+    mode: "auto",
+    automation: true,
+    files: true,
+    deputyReason: null,
+    readerReason: null,
+    ...over,
+  };
+}
+
+describe("doctor — helpers section", () => {
+  function helpersOf(deps: NonNullable<DiagnoseOptions["helpers"]>): DiagnoseReport["helpers"] {
+    fixture = buildFixtureDb();
+    const { report } = diagnose(fixture.path, { helpers: deps });
+    if (report === null) throw new Error("expected a report");
+    return report.helpers;
+  }
+
+  it("reports a healthy pair: both halves carrying traffic, nothing to fix", () => {
+    const helpers = helpersOf({ status: status(), routing: routing() });
+    expect(helpers.routing.automation).toBe(true);
+    expect(helpers.routing.files).toBe(true);
+    expect(helpers.versionSkew).toBe(false);
+    expect(helpers.hungSocket).toBe(false);
+    expect(helpers.remedy).toBeNull();
+    expect(helpers.detail).toContain("both halves");
+  });
+
+  it("flags version skew and names the rebuild + reinstall remedy", () => {
+    const helpers = helpersOf({
+      status: status({ installedVersion: "0.9.0" }),
+      routing: routing(),
+    });
+    expect(helpers.versionSkew).toBe(true);
+    expect(helpers.expectedVersion).toBe(EXPECTED_HELPERS_VERSION);
+    expect(helpers.remedy).toContain("build-helpers.sh");
+    expect(helpers.remedy).toContain("things helpers install");
+  });
+
+  it("detects a hung socket (present, no handshake) and asks for a restart", () => {
+    const helpers = helpersOf({
+      status: status({
+        deputy: half({
+          running: false,
+          hungSocket: true,
+          hello: null,
+          detail: "socket present but not answering",
+        }),
+      }),
+      routing: routing({ automation: false, deputyReason: "handshake failed: timeout" }),
+    });
+    expect(helpers.hungSocket).toBe(true);
+    expect(helpers.remedy).toContain("things helpers restart");
+    expect(helpers.detail).toContain("automation");
+  });
+
+  it("an ungranted reader points at the ceremony", () => {
+    const helpers = helpersOf({
+      status: status({ reader: { ...half(), installed: true, granted: false } }),
+      routing: routing({ files: false, readerReason: "reader running but NOT granted" }),
+    });
+    expect(helpers.remedy).toContain("things helpers grant");
+    expect(helpers.detail).toContain("database reads");
+  });
+
+  it("under auto, an un-onboarded machine reads as normal — with an install pointer", () => {
+    const helpers = helpersOf({
+      status: status({
+        bundleInstalled: false,
+        installedVersion: null,
+        deputy: absentHalf,
+        reader: { ...absentHalf, installed: false, granted: false },
+      }),
+      routing: routing({
+        automation: false,
+        files: false,
+        deputyReason: "deputy not installed",
+        readerReason: "reader not installed",
+      }),
+    });
+    expect(helpers.versionSkew).toBe(false);
+    expect(helpers.detail).toContain("normal state");
+    expect(helpers.remedy).toContain("things helpers install");
+  });
+
+  it("mode false reports fully direct and asks for nothing", () => {
+    // The mode itself comes from config, which the suite pins to false.
+    const helpers = helpersOf({
+      status: status({ mode: "false", bundleInstalled: false, installedVersion: null }),
+      routing: routing({
+        mode: "false",
+        automation: false,
+        files: false,
+        deputyReason: "disabled",
+        readerReason: "disabled",
+      }),
+    });
+    expect(helpers.mode).toBe("false");
+    expect(helpers.detail).toContain("routing off");
+    expect(helpers.remedy).toBeNull();
+  });
+});
+
+describe("doctor CLI — helpers section render", () => {
+  let stateDir: string;
+  let stdout: string[];
+  const envBackup: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    fixture = buildFixtureDb();
+    stateDir = mkdtempSync(join(tmpdir(), "things-api-doctor-helpers-"));
+    for (const key of [
+      "THINGS_DB",
+      "THINGS_API_STATE_DIR",
+      "THINGS_API_CONFIG_DIR",
+      "THINGS_API_READER_DIR",
+      "THINGS_API_HELPERS",
+    ]) {
+      envBackup[key] = process.env[key];
+    }
+    process.env["THINGS_DB"] = fixture.path;
+    process.env["THINGS_API_STATE_DIR"] = stateDir;
+    process.env["THINGS_API_CONFIG_DIR"] = join(stateDir, "config");
+    // Never handshake this machine's real reader socket from a test.
+    process.env["THINGS_API_READER_DIR"] = join(stateDir, "reader");
+    process.env["THINGS_API_HELPERS"] = "auto";
+    stdout = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.exitCode = undefined;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetDeputyRoutingForTests();
+    for (const [key, value] of Object.entries(envBackup)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(stateDir, { recursive: true, force: true });
+    process.exitCode = undefined;
+  });
+
+  it("renders the section with the mode, what it resolved to, and the bundle state", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(["node", "things", "doctor"]);
+    const out = stdout.join("");
+    expect(out).toContain("── Helpers ──");
+    expect(out).toContain("mode:        auto");
+    expect(out).toContain("routing:     automation DIRECT, database reads DIRECT");
+    expect(out).toContain("bundle:      not installed");
+    expect(out).toContain("next:        `things helpers install`");
+  });
+
+  it("--json carries the section in the envelope", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(["node", "things", "doctor", "--json"]);
+    const envelope = JSON.parse(stdout.join("").trim()) as {
+      data: {
+        helpers: { mode: string; expectedVersion: string; status: { bundleInstalled: boolean } };
+      };
+    };
+    expect(envelope.data.helpers.mode).toBe("auto");
+    expect(envelope.data.helpers.expectedVersion).toBe(EXPECTED_HELPERS_VERSION);
+    expect(envelope.data.helpers.status.bundleInstalled).toBe(false);
   });
 });

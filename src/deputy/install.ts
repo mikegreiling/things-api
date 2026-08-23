@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { HelpersMode } from "../config.ts";
 import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import {
@@ -27,9 +28,13 @@ import {
   DEPUTY_PROTOCOL_VERSION,
   type DeputyHello,
   type ReaderHello,
+  deputyInstalledBinaryPath,
   deputySocketPath,
   deputyStateDir,
   deputyTokenPath,
+  helpersInstallDir,
+  helpersInstalledBundlePath,
+  readerInstalledAppPath,
   readerSocketPath,
   readerTokenPath,
 } from "./protocol.ts";
@@ -40,32 +45,6 @@ export function deputyPlistPath(): string {
 
 export function readerPlistPath(): string {
   return join(homedir(), "Library/LaunchAgents", `${READER_LAUNCHD_LABEL}.plist`);
-}
-
-/**
- * The directory `helpers install` owns WHOLESALE: it is deleted and recreated
- * on every install, so any previous layout (however old) is erased without
- * dedicated migration logic, and the fresh inodes reset the kernel's
- * per-vnode code-signature cache (copying over an executed inode makes every
- * future exec die with SIGKILL — observed live 2026-08-21).
- */
-export function helpersInstallDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(deputyStateDir(env), "bin");
-}
-
-/** Where `helpers install` places the bundle. */
-export function helpersInstalledBundlePath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(helpersInstallDir(env), "Things API Helper.app");
-}
-
-/** The installed deputy executable (the bundle's main executable). */
-export function deputyInstalledBinaryPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(helpersInstalledBundlePath(env), "Contents/MacOS/things-deputy");
-}
-
-/** The installed nested reader app. */
-export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(helpersInstalledBundlePath(env), "Contents/Helpers/things-reader.app");
 }
 
 /**
@@ -82,13 +61,38 @@ export function helpersBundleCandidates(): string[] {
   ];
 }
 
-/** The first candidate bundle that carries a deputy executable; null when none does. */
+/**
+ * The first candidate bundle that carries a deputy executable; null when none
+ * does. Both candidates are READ only — nothing in the `things helpers` path
+ * ever writes inside the package directory, so the CLI works from a read-only
+ * package root (an npx cache); BUILDING a bundle there is the one operation
+ * that needs a writable checkout, and `--bundle <path>` covers a prebuilt one.
+ */
 export function helpersDefaultBuildPath(): string | null {
   return (
     helpersBundleCandidates().find((path) =>
       existsSync(join(path, "Contents/MacOS/things-deputy")),
     ) ?? null
   );
+}
+
+/**
+ * The INSTALLED bundle's version, read prompt-free from its Info.plist
+ * (CFBundleShortVersionString, stamped from deputy/VERSION at build time).
+ * Null when nothing is installed or the plist is unreadable/unstamped. This is
+ * the version a passive upgrade notice compares against
+ * {@link EXPECTED_HELPERS_VERSION} without needing a running helper.
+ */
+export function installedHelpersVersion(env: NodeJS.ProcessEnv = process.env): string | null {
+  const plist = join(helpersInstalledBundlePath(env), "Contents/Info.plist");
+  try {
+    const xml = readFileSync(plist, "utf8");
+    const match = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]*)<\/string>/.exec(xml);
+    const value = match?.[1]?.trim();
+    return value !== undefined && value !== "" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function readerLaunchTarget(): string {
@@ -136,10 +140,14 @@ function launchctl(args: string[]): { ok: boolean; output: string } {
     // stderr must be captured, never inherited: a routine negative probe
     // ("Could not find service … in domain") is a state we REPORT, not noise
     // the child gets to print over our own output.
+    //
+    // The timeout must clear the helpers' DRAIN bound: `bootout`/`kickstart -k`
+    // block until the old process exits, and a helper with a request in flight
+    // takes up to HELPERS_DRAIN_TIMEOUT_MS to finish it before exiting.
     const output = execFileSync("launchctl", args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
+      timeout: 30_000,
     });
     return { ok: true, output };
   } catch (err) {
@@ -435,6 +443,12 @@ export interface DeputyHalfStatus {
   loaded: boolean;
   running: boolean;
   socketPath: string;
+  /**
+   * The socket file exists but no handshake came back (a dead process that
+   * left its socket behind, or one wedged mid-request). Distinct from plain
+   * "not running": the remedy is `things helpers restart`, not an install.
+   */
+  hungSocket: boolean;
   hello: DeputyHello | null;
   signing: DeputySigning | null;
   detail: string;
@@ -446,8 +460,11 @@ export interface ReaderHalfStatus extends DeputyHalfStatus {
 }
 
 export interface HelpersStatus {
-  enabled: boolean;
+  /** The configured routing mode (`helpers-enabled`), not what it resolved to. */
+  mode: HelpersMode;
   bundleInstalled: boolean;
+  /** The installed bundle's version (Info.plist), null when nothing is installed. */
+  installedVersion: string | null;
   deputy: DeputyHalfStatus;
   reader: ReaderHalfStatus;
 }
@@ -458,7 +475,7 @@ export interface HelpersStatus {
  * with routing disabled — inspect first, enable after.
  */
 export function helpersStatus(
-  enabled: boolean,
+  mode: HelpersMode,
   env: NodeJS.ProcessEnv = process.env,
 ): HelpersStatus {
   const binaryPath = deputyInstalledBinaryPath(env);
@@ -466,7 +483,8 @@ export function helpersStatus(
   const socketPath = deputySocketPath(env);
   let hello: DeputyHello | null = null;
   let detail = "";
-  if (existsSync(socketPath) && existsSync(deputyTokenPath(env))) {
+  const socketPresent = existsSync(socketPath) && existsSync(deputyTokenPath(env));
+  if (socketPresent) {
     const token = readFileSync(deputyTokenPath(env), "utf8").trim();
     const bridge = new DeputySyncBridge(socketPath);
     try {
@@ -485,13 +503,15 @@ export function helpersStatus(
     detail = "not running (no socket)";
   }
   return {
-    enabled,
+    mode,
     bundleInstalled: binaryInstalled,
+    installedVersion: installedHelpersVersion(env),
     deputy: {
       plistInstalled: existsSync(deputyPlistPath()),
       loaded: launchctl(["print", launchTarget()]).ok,
       running: hello !== null,
       socketPath,
+      hungSocket: socketPresent && hello === null,
       hello,
       signing: binaryInstalled ? deputySigningInfo(binaryPath) : null,
       detail: hello !== null ? "running" : detail,
@@ -510,7 +530,8 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
   let granted = false;
   let hello: DeputyHello | null = null;
   let detail = "not running (no socket)";
-  if (existsSync(socketPath) && existsSync(tokenPath)) {
+  const socketPresent = existsSync(socketPath) && existsSync(tokenPath);
+  if (socketPresent) {
     const token = readFileSync(tokenPath, "utf8").trim();
     const bridge = new DeputySyncBridge(socketPath);
     try {
@@ -536,6 +557,7 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
     running,
     granted,
     socketPath,
+    hungSocket: socketPresent && !running,
     hello,
     signing: installed ? deputySigningInfo(readerExecPath(appPath)) : null,
     detail,

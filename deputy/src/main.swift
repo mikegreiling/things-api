@@ -117,7 +117,10 @@ let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
 let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
 for source in [termSource, intSource] {
   source.setEventHandler {
-    server.shutdown()
+    // Graceful drain: stop accepting, let in-flight requests finish (bounded),
+    // then remove the socket and exit cleanly. An upgrade boots the old
+    // process out mid-flight, and a request in progress must not die with it.
+    server.drainAndShutdown()
     exit(0)
   }
   source.resume()

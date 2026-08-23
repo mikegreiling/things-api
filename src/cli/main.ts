@@ -29,6 +29,7 @@ import { runVerbHint } from "./verb-hint.ts";
 import { detectMoveHint, runMoveHint } from "./move-hint.ts";
 import { setRenderClock } from "./clock.ts";
 import { maybeEmitSkillDriftNote } from "./skill-check.ts";
+import { maybeEmitHelpersNotice } from "./helpers-check.ts";
 import { installSignalHandlers } from "./interrupt.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
 import { CLI_VERSION } from "./version.ts";
@@ -49,9 +50,10 @@ export function buildProgram(): Command {
     // explicit flag outranks both the environment and the stored key.
     .option(
       "--helpers",
-      "route database reads and app automation through the installed helpers for this invocation",
+      "route database reads and app automation through the installed helpers for this " +
+        "invocation, and report it when they cannot serve",
     )
-    .option("--no-helpers", "run direct for this invocation, even when the helpers are enabled");
+    .option("--no-helpers", "run direct for this invocation, whatever helpers-enabled says");
   program.hook("preAction", (thisCommand) => {
     const flag = thisCommand.opts()["helpers"] as boolean | undefined;
     if (flag !== undefined) process.env["THINGS_API_HELPERS"] = flag ? "true" : "false";
@@ -114,6 +116,11 @@ export function runCli(): void {
   // is well behind this binary's own version (human paths only, never --json /
   // mcp; kill switch THINGS_API_NO_SKILL_CHECK=1). Silent on any error/absence.
   maybeEmitSkillDriftNote({ argv: process.argv.slice(2), env: process.env });
+  // Passive helpers notice: a stale installed helper bundle asks for a rebuild,
+  // and a machine with none gets a throttled introduction (human paths only,
+  // never --json / mcp / `things helpers`; kill switch
+  // THINGS_API_NO_HELPERS_CHECK=1). Silent on any error/absence.
+  maybeEmitHelpersNotice({ argv: process.argv.slice(2), env: process.env });
   const program = buildProgram();
   program.exitOverride((err) => {
     process.exit(err.exitCode === 0 ? ExitCode.Ok : ExitCode.Usage);

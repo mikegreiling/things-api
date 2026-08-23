@@ -14,6 +14,27 @@ import { configDir } from "./paths.ts";
 export type Profile = "workstation" | "dedicated-server";
 export type DisruptionTier = 0 | 1 | 2 | 3;
 
+/**
+ * Helper-routing mode (`helpers-enabled`, tri-state):
+ *
+ *  - `auto` (default): installation IS the intent signal. A present-and-HEALTHY
+ *    helper is used exactly as under `true`; an INSTALLED-but-unhealthy one
+ *    degrades to direct LOUDLY (one stderr notice); a simply ABSENT one degrades
+ *    to direct silently — absence is not degradation, and a fresh machine must
+ *    not nag.
+ *  - `true`: routing is asserted, so even absence is worth a notice.
+ *  - `false`: never route; every primitive runs direct.
+ */
+export type HelpersMode = "auto" | "true" | "false";
+
+/** The recognized `helpers-enabled` / THINGS_API_HELPERS values. */
+export const HELPERS_MODES: readonly HelpersMode[] = ["auto", "true", "false"];
+
+/** Narrow an arbitrary string to a {@link HelpersMode}, or undefined. */
+export function parseHelpersMode(raw: string | undefined): HelpersMode | undefined {
+  return raw === "auto" || raw === "true" || raw === "false" ? raw : undefined;
+}
+
 export interface ThingsApiConfig {
   profile: Profile;
   /** Highest disruption tier allowed without explicit per-call escalation. */
@@ -70,16 +91,19 @@ export interface ThingsApiConfig {
    */
   autoLaunch: boolean;
   /**
-   * Route privileged primitives (database reads, osascript, container file
-   * reads) through the installed helper pair (default false): things-deputy
-   * for automation, the sandboxed things-reader for file access. The helpers
-   * are launchd-supervised signed processes whose one job is to be the stable
+   * Whether privileged primitives (database reads, osascript, container file
+   * reads) route through the installed helper pair — things-deputy for
+   * automation, the sandboxed things-reader for file access. The helpers are
+   * launchd-supervised signed processes whose one job is to be the stable
    * macOS permission grantees, so Automation/Accessibility/file grants stop
-   * churning with agent-harness updates. When enabled but unreachable, every
-   * process falls back to DIRECT execution (today's behavior) with a one-line
-   * notice — see src/deputy/routing.ts and docs/design/agent-daemon.md §β1.
+   * churning with agent-harness updates.
+   *
+   * Tri-state ({@link HelpersMode}), default `auto`. Whenever routing does not
+   * happen but was expected, every process falls back to DIRECT execution
+   * (today's behavior) with a one-line stderr notice — see src/deputy/routing.ts
+   * and docs/design/agent-daemon.md §3c.
    */
-  helpersEnabled: boolean;
+  helpersMode: HelpersMode;
   /**
    * The Accessibility GUI ("ui") write vector. When disabled the vector does
    * not exist on this machine: its GUI-only operations report unsupported.
@@ -184,7 +208,7 @@ interface ConfigFile {
   bounceEnabled?: boolean;
   bounceMaxItems?: number;
   autoLaunch?: boolean;
-  helpersEnabled?: boolean;
+  helpersMode?: HelpersMode;
   uiEnabled?: boolean;
   uiDriveBudgetMs?: number;
   traceEnabled?: boolean;
@@ -231,7 +255,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
   const bounceEnabledEnv = boolEnvOverride(env["THINGS_API_BOUNCE_ENABLED"], "true", "false");
   const bounceMaxItemsEnv = positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]);
   const autoLaunchEnv = boolEnvOverride(env["THINGS_API_AUTO_LAUNCH"], "true", "false");
-  const helpersEnv = boolEnvOverride(env["THINGS_API_HELPERS"], "true", "false");
+  const helpersEnv = parseHelpersMode(env["THINGS_API_HELPERS"]);
   const uiEnv = boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false");
   const uiDriveBudgetEnv = positiveIntEnvOverride(env["THINGS_API_UI_DRIVE_BUDGET_MS"]);
   const traceEnv = boolEnvOverride(env["THINGS_API_TRACE"], "true", "false");
@@ -258,7 +282,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     bounceEnabled: bounceEnabledEnv ?? file.bounceEnabled ?? true,
     bounceMaxItems: bounceMaxItemsEnv ?? file.bounceMaxItems ?? 30,
     autoLaunch: autoLaunchEnv ?? file.autoLaunch ?? true,
-    helpersEnabled: helpersEnv ?? file.helpersEnabled ?? false,
+    helpersMode: helpersEnv ?? parseHelpersMode(file.helpersMode) ?? "auto",
     ui: {
       enabled: uiEnv ?? file.uiEnabled ?? false,
       driveBudgetMs: uiDriveBudgetEnv ?? file.uiDriveBudgetMs ?? DEFAULT_UI_DRIVE_BUDGET_MS,
@@ -406,9 +430,9 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
     ),
     view(
       "helpers-enabled",
-      cfg.helpersEnabled,
-      file.helpersEnabled !== undefined,
-      boolEnvOverride(env["THINGS_API_HELPERS"], "true", "false") !== undefined,
+      cfg.helpersMode,
+      parseHelpersMode(file.helpersMode) !== undefined,
+      parseHelpersMode(env["THINGS_API_HELPERS"]) !== undefined,
     ),
     view(
       "ui-enabled",

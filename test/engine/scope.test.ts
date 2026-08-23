@@ -132,7 +132,7 @@ const CONFIG: ThingsApiConfig = {
   bounceEnabled: true,
   bounceMaxItems: 30,
   autoLaunch: true,
-  helpersEnabled: false,
+  helpersMode: "false",
   ui: { enabled: false },
   scope: null,
   host: "test-host",

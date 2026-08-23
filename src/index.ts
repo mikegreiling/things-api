@@ -136,7 +136,8 @@ export { URL_SCHEME_MATRIX } from "./write/vectors/url-scheme.ts";
 export { dbCarriesBenchMarker, simFenceActive } from "./write/vectors/simulator.ts";
 export type { DeltaSpec, FieldAssertion, RepeatingDiscovery } from "./write/verify/delta.ts";
 export type { AuditRecord } from "./audit/schema.ts";
-export type { DisruptionTier, Profile, ThingsApiConfig } from "./config.ts";
+export type { DisruptionTier, HelpersMode, Profile, ThingsApiConfig } from "./config.ts";
+export { HELPERS_MODES, parseHelpersMode } from "./config.ts";
 
 export type {
   AnyTask,
@@ -218,17 +219,14 @@ export { ThingsDbOpenError } from "./db/connection.ts";
 // The helper pair (docs/design/agent-daemon.md §β1): lifecycle + routing
 // state for the CLI `things helpers` command group and doctor.
 export {
-  deputyInstalledBinaryPath,
   deputyPlistPath,
   deputySigningInfo,
   grantReader,
   helpersBundleCandidates,
   helpersDefaultBuildPath,
-  helpersInstallDir,
-  helpersInstalledBundlePath,
   helpersStatus,
+  installedHelpersVersion,
   installHelpers,
-  readerInstalledAppPath,
   readerPlistPath,
   restartHelpers,
   uninstallHelpers,
@@ -241,8 +239,23 @@ export type {
   HelpersUninstallResult,
   ReaderHalfStatus,
 } from "./deputy/install.ts";
-export { deputyRouting, readerRouting } from "./deputy/routing.ts";
-export type { DeputyRouting } from "./deputy/routing.ts";
+export {
+  deputyInstalledBinaryPath,
+  EXPECTED_HELPERS_VERSION,
+  helpersInstallDir,
+  helpersInstalledBundlePath,
+  readerInstalledAppPath,
+} from "./deputy/protocol.ts";
+export { deputyRouting, helpersRouting, readerRouting } from "./deputy/routing.ts";
+export type { DeputyRouting, HelpersRouting } from "./deputy/routing.ts";
+export { emitHelpersNotice } from "./deputy/notice.ts";
+export {
+  computeHelpersNotice,
+  HELPERS_HINT_INTERVAL_DAYS,
+  lastHelpersHintAt,
+  markHelpersHintShown,
+} from "./deputy/notices.ts";
+export type { HelpersNotice, HelpersNoticeKind } from "./deputy/notices.ts";
 export type { Baseline, FingerprintStatus, SchemaObservation } from "./db/fingerprint.ts";
 
 export {
