@@ -5,7 +5,7 @@
  * capabilities/dry-run OUTPUT. No interactive prompts: risky semantics
  * require explicit flags.
  */
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 
 import { readFileSync } from "node:fs";
 
@@ -82,7 +82,25 @@ interface WriteFlagOpts {
   preserveModified?: boolean;
 }
 
-function addWriteFlags(cmd: Command): Command {
+/**
+ * Per-command capability for the shared write flags. `opId: "unsupported"` marks
+ * a command whose execution categorically refuses `--op-id` (every multi-leg
+ * compound — the variadic move/reorder family and the heading/promote verbs):
+ * the option stays REGISTERED, so a caller who passes it anyway still gets the
+ * bespoke refusal that points at `things batch`, but `--help` no longer offers a
+ * flag that command can never accept.
+ */
+interface WriteFlagCapability {
+  opId?: "unsupported";
+}
+
+function addWriteFlags(cmd: Command, capability: WriteFlagCapability = {}): Command {
+  const opId = new Option(
+    "--op-id <key>",
+    "idempotency key: a resubmission with the same key is recognized as already applied " +
+      "and not re-run (matches [A-Za-z0-9_-], 1-64 chars)",
+  );
+  if (capability.opId === "unsupported") opId.hideHelp();
   return cmd
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -104,12 +122,18 @@ function addWriteFlags(cmd: Command): Command {
     .option("--allow-very-disruptive", "permit changes that visibly drive the Things UI")
     .option("--verify-timeout <ms>", "how long to wait for the change to take effect")
     .option("--actor <name>", "author name recorded for this change (default: from config)")
-    .option(
-      "--op-id <key>",
-      "idempotency key: a resubmission with the same key is recognized as already applied " +
-        "and not re-run (matches [A-Za-z0-9_-], 1-64 chars)",
-    );
+    .addOption(opId);
 }
+
+/**
+ * The write flags for a multi-leg COMPOUND command: the same set, with `--op-id`
+ * kept out of `--help` because that command's execution refuses it (see
+ * `opIdCompoundRefused` / `runMoveCmd`). Every command wrapped in this MUST
+ * refuse `--op-id` at runtime, and every command that refuses it MUST be wrapped
+ * in this — `test/cli/help-contract.test.ts` holds the two halves together.
+ */
+const addCompoundWriteFlags = (cmd: Command): Command =>
+  addWriteFlags(cmd, { opId: "unsupported" });
 
 /** Validate an `--op-id`; on a malformed value emit the usage error and return false. */
 function opIdOk(opts: WriteFlagOpts): boolean {
@@ -1201,7 +1225,7 @@ export function registerWriteCommands(program: Command): void {
   });
 
   addPositionFlags(
-    addWriteFlags(
+    addCompoundWriteFlags(
       todo
         .command("move <refs...>")
         .description(
@@ -1574,7 +1598,7 @@ export function registerWriteCommands(program: Command): void {
   // candidates.
 
   addPlacementFlags(
-    addWriteFlags(
+    addCompoundWriteFlags(
       project
         .command("add-heading <project> <title>")
         .description(
@@ -1620,7 +1644,7 @@ export function registerWriteCommands(program: Command): void {
     },
   );
 
-  addWriteFlags(
+  addCompoundWriteFlags(
     project
       .command("archive-heading <project> <heading>")
       .description(
@@ -1656,7 +1680,7 @@ export function registerWriteCommands(program: Command): void {
     },
   );
 
-  addWriteFlags(
+  addCompoundWriteFlags(
     project
       .command("unarchive-heading <project> <heading>")
       .description(
@@ -1850,7 +1874,7 @@ export function registerWriteCommands(program: Command): void {
 
   addDriveGuiFlag(
     addRepeatRuleFlags(
-      addWriteFlags(
+      addCompoundWriteFlags(
         project
           .command("make-repeating <ref>")
           .description(
@@ -1882,7 +1906,7 @@ export function registerWriteCommands(program: Command): void {
 
   addDriveGuiFlag(
     addRepeatCalendarFlags(
-      addWriteFlags(
+      addCompoundWriteFlags(
         project
           .command("add-repeating <title>")
           .description(
@@ -1924,7 +1948,7 @@ export function registerWriteCommands(program: Command): void {
 
   addDriveGuiFlag(
     addRepeatCalendarFlags(
-      addWriteFlags(
+      addCompoundWriteFlags(
         todo
           .command("add-repeating <title>")
           .description(
@@ -2134,7 +2158,7 @@ export function registerWriteCommands(program: Command): void {
   });
 
   addPositionFlags(
-    addWriteFlags(
+    addCompoundWriteFlags(
       project
         .command("move <refs...>")
         .description(
@@ -2205,7 +2229,7 @@ export function registerWriteCommands(program: Command): void {
     },
   );
 
-  addWriteFlags(
+  addCompoundWriteFlags(
     project
       .command("reopen <ref>")
       .description(
@@ -2851,7 +2875,7 @@ export function registerWriteCommands(program: Command): void {
 
   addReorderPositionFlags(
     addDriveGuiFlag(
-      addWriteFlags(
+      addCompoundWriteFlags(
         program
           .command("reorder <refs...>")
           .description(
