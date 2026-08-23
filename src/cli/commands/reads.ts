@@ -22,6 +22,7 @@ import {
   renderLogbook,
   renderDeadlines,
   renderProjectsSidebar,
+  renderRepeaters,
   renderSearch,
   renderSections,
   renderSomedayPreview,
@@ -1374,6 +1375,59 @@ export function registerReadCommands(program: Command): void {
       );
     });
 
+  program
+    .command("repeaters")
+    .description(
+      "Every repeating series in the library — to-dos and projects — with its rule, next " +
+        "occurrence, and container. Repeating series appear in no other list: the other views " +
+        "show the occurrences a series spawns, not the series itself. Paused and ended series " +
+        "are included and say which they are. Ordered by next occurrence; the ones with no " +
+        "next occurrence (paused, ended, or repeating after completion) come last.",
+    )
+    .option("--tag <ref>", TAG_DESC, collectRef, [])
+    .option("--exact-tag", EXACT_TAG_DESC)
+    .option("--untagged", UNTAGGED_DESC)
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
+    .option("--full", FULL_DESC)
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action((opts: GlobalReadOpts & Record<string, unknown>) => {
+      const json = opts["json"] === true;
+      const tagFlags: TagFlags = {
+        ...(Array.isArray(opts["tag"]) && { tag: opts["tag"] as string[] }),
+        exactTag: opts["exactTag"] === true,
+        untagged: opts["untagged"] === true,
+      };
+      const validated = validateViewArgs("repeaters", tagFlags, {
+        untaggedConflict: "--untagged does not combine with --tag/--exact-tag",
+        overdueRejected: "--overdue does not apply to repeaters",
+        overdueStatusWiden: "",
+      });
+      if (!validated.ok) {
+        usageError({ json }, validated.message);
+        return;
+      }
+      const all = opts["all"] === true;
+      const limitOpt = opts["limit"] as string | undefined;
+      const lim = parseLimit({ all, json, ...(limitOpt !== undefined && { limit: limitOpt }) });
+      if (!lim.ok) return;
+      const base = invocation("repeaters", tagInvocationParts(tagFlags));
+      runRead(
+        opts,
+        "repeaters",
+        (c) => {
+          const { items, truncation } = c.read.repeaters({
+            limit: lim.limit,
+            ...validated.filter,
+          });
+          return { data: items, truncation };
+        },
+        renderRepeaters,
+        base,
+      );
+    });
+
   // Every row-rendering view points at `things legend` for its glyph language.
   const GLYPH_VIEWS = new Set([
     "today",
@@ -1388,6 +1442,7 @@ export function registerReadCommands(program: Command): void {
     "changes",
     "search",
     "deadlines",
+    "repeaters",
   ]);
   for (const c of program.commands) {
     if (c.name() === "today") {

@@ -1073,6 +1073,10 @@ const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
   ["search", NO_DROP],
   // deadlines is stage-MIXED (to-dos + projects, deadline-ordered) — keep `stage`.
   ["deadlines", NO_DROP],
+  // The repeating-template catalogue keeps everything: its rows are the series
+  // themselves (each with its decoded `repeating.rule`), and a reader reaching
+  // for the catalogue wants the whole record, not a pruned list row.
+  ["repeaters", NO_DROP],
   ["projects", NO_DROP],
 ]);
 

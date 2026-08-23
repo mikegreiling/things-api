@@ -20,6 +20,8 @@ import {
   type ListItem,
   type LogState,
   type Project,
+  type RepeatOffset,
+  type RepeatRule,
   type SidebarSection,
   REF_PREFIX_LEN,
   type TodayBucketTotals,
@@ -43,12 +45,13 @@ import {
   projectCircle,
   projectTitleAccent,
   provisionalPip,
+  REPEAT_MARK,
   REMINDER_MARK,
   shortDate,
   todayStar,
   todoBox,
 } from "./glyphs.ts";
-import { FULL_MONTHS, upcomingBucket } from "./period.ts";
+import { FULL_MONTHS, SHORT_MONTHS, upcomingBucket, WEEKDAYS } from "./period.ts";
 import {
   fitRow,
   getFitWidth,
@@ -593,6 +596,95 @@ export function renderDeadlines(items: ListItem[]): string[] {
   if (items.length === 0) return [header, "(empty)"];
   const w = uuidDisplayWidth(items);
   return [header, ...items.map((i) => formatItem(i, w, { leadDeadline: true }))];
+}
+
+/** The singular unit noun each cadence phrase is built from. */
+const RULE_UNIT_NOUN: Record<RepeatRule["unit"], string> = {
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
+};
+
+/** `1st` / `2nd` / `3rd` / `4th` … — the ordinal a monthly/yearly anchor reads as. */
+function ordinal(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  const suffix = { 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th";
+  return `${n}${suffix}`;
+}
+
+/** The nth-weekday / day-of-month phrase one calendar offset reads as, or null. */
+function offsetPhrase(o: RepeatOffset): string | null {
+  const weekday = o.weekday !== undefined ? (WEEKDAYS[o.weekday] ?? null) : null;
+  if (o.weekdayOrdinal !== undefined && weekday !== null) {
+    const which = o.weekdayOrdinal === -1 ? "last" : ordinal(o.weekdayOrdinal);
+    return `the ${which} ${weekday}`;
+  }
+  if (o.day !== undefined) {
+    const day = o.day === -1 ? "the last day" : `the ${ordinal(o.day)}`;
+    return o.month !== undefined ? `${SHORT_MONTHS[o.month - 1] ?? o.month} ${day}` : day;
+  }
+  return weekday;
+}
+
+/**
+ * One line of prose for a decoded repeat rule — the `repeaters` catalogue's
+ * reason to exist. The TTY renders this; the JSON wire carries the decoded
+ * {@link RepeatRule} itself, so the two surfaces never disagree about the rule,
+ * only about how much of it is spelled out.
+ *
+ * Reads the way the app's own dialog does: the cadence, then the calendar
+ * anchors it fires on, then the bounds — `every 2 weeks on Mon, Thu`,
+ * `every month on the last Friday · ends after 10`, `every 3 days after each is
+ * completed`. An after-completion rule states no anchors (it has no calendar);
+ * a deadline offset is stated as the per-occurrence lead it actually is.
+ */
+export function repeatRuleSummary(rule: RepeatRule): string {
+  const noun = RULE_UNIT_NOUN[rule.unit];
+  const cadence = rule.interval === 1 ? `every ${noun}` : `every ${rule.interval} ${noun}s`;
+  const parts: string[] = [cadence];
+  if (rule.type === "after-completion") {
+    parts[0] = `${cadence} after each is completed`;
+  } else {
+    const anchors = rule.offsets.map(offsetPhrase).filter((p): p is string => p !== null);
+    if (anchors.length > 0) parts[0] = `${cadence} on ${anchors.join(", ")}`;
+  }
+  // The deadline lead (ts ≤ 0): each occurrence starts N days before it is due.
+  if (rule.startOffsetDays < 0) {
+    const n = -rule.startOffsetDays;
+    parts.push(`due ${n} day${n === 1 ? "" : "s"} after each start`);
+  }
+  if (rule.endDate !== null) parts.push(`ends ${rule.endDate}`);
+  else if (rule.occurrenceCount !== null) {
+    parts.push(
+      `ends after ${rule.occurrenceCount} occurrence${rule.occurrenceCount === 1 ? "" : "s"}`,
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * The repeating-template catalogue (`things repeaters`). Each series renders as
+ * its ordinary list row — the `[↻]` box, the next-occurrence chip or the
+ * ‹waiting›/‹paused›/‹ended› state chip, the container hint — followed by an
+ * indented dim line carrying the rule itself. The rule rides its OWN line rather
+ * than the meta run because it is the longest thing on the row and the row
+ * fitter would spend the title's width on it; here a narrow terminal costs the
+ * catalogue nothing. A template whose rule could not be decoded (a future Things
+ * schema) still lists, its rule line reading `(rule not readable)`.
+ */
+export function renderRepeaters(items: ListItem[]): string[] {
+  const header = bold(`── ${REPEAT_MARK} Repeating ──`);
+  if (items.length === 0) return [header, "(empty)"];
+  const w = uuidDisplayWidth(items);
+  const lines = [header];
+  for (const item of items) {
+    lines.push(formatItem(item, w));
+    const rule = item.repeating.rule;
+    lines.push(`  ${dim(rule === undefined ? "(rule not readable)" : repeatRuleSummary(rule))}`);
+  }
+  return lines;
 }
 
 /** Hidden-later counts per sidebar group (null area = the loose block). */

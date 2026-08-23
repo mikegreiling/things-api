@@ -74,6 +74,7 @@ export type {
   ViewFilter,
   ChangedItem,
   DeadlinesFilter,
+  RepeatersFilter,
 } from "./read/views.ts";
 
 // The per-view read-filter contract: the declarative applicability table plus
@@ -320,6 +321,9 @@ export { makeRefPromoter, titleRoundTrips } from "./read/queries.ts";
 export { fusedRef, REF_PREFIX_LEN } from "./read/queries.ts";
 export { instantDateIso, localToday } from "./model/dates.ts";
 export { templateStatus } from "./model/recurrence.ts";
+// The decoded recurrence rule — the shape a template's `repeating.rule` carries,
+// nameable by a consumer surface that renders it (the `repeaters` catalogue).
+export type { RepeatOffset, RepeatRule } from "./model/recurrence.ts";
 export { isTodayMember } from "./read/views.ts";
 // The single-source time-axis derivation the wire emit boundary and the TTY
 // renderers share (a TTY when/pip can never disagree with the emitted `when`).

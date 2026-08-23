@@ -40,7 +40,7 @@ const SHORT_MONTHS = [
   "Dec",
 ] as const;
 
-export { FULL_MONTHS };
+export { FULL_MONTHS, SHORT_MONTHS, WEEKDAYS };
 
 /**
  * Relative period: `3d`/`2w`/`1m`/`1y` (days/weeks/calendar months/years),

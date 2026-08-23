@@ -1597,3 +1597,74 @@ export function deadlinesView(
       a.uuid.localeCompare(b.uuid),
   );
 }
+
+/** {@link repeatersView}'s scope — the universal tag filters, nothing view-specific. */
+export type RepeatersFilter = ViewFilter;
+
+/**
+ * The repeating-template CATALOGUE: every live repeating template in the
+ * library, to-do and project alike, each carrying its DECODED rule.
+ *
+ * Templates are otherwise nearly unreachable by reading. They are excluded from
+ * every ordinary view by {@link NOT_TEMPLATE} (the app hides them too — the user
+ * sees spawned occurrences, not the series), search matches a series' open
+ * INSTANCES but never the template behind them, and the full rule is emitted
+ * only by a detail read — whose uuid you first have to learn from somewhere
+ * else. This view is that somewhere else.
+ *
+ * The census is the same template predicate the `upcoming` and `deadlines`
+ * projection arms use — an untrashed, open row with a recurrence rule (or a bare
+ * legacy `repeater`) under an untrashed container. PAUSED and ENDED series are
+ * INCLUDED: a catalogue that hid them would hide exactly the series a reader is
+ * looking for ("why has this not been appearing?"), and each row states its
+ * standing ({@link templateStatus} renders it from `paused` + `nextOccurrence`).
+ *
+ * Unlike an ordinary list row, each item carries `repeating.rule` — the decoded
+ * recurrence, the reason the view exists — attached here exactly as the detail
+ * read attaches it, fail-open: an undecodable rule (a future Things schema)
+ * still lists the template, without a rule, rather than failing the read.
+ *
+ * Order: next occurrence ASC, then the projectionless rows (paused / ended /
+ * after-completion — no calendar to sort by), each block by title then uuid.
+ */
+export function repeatersView(
+  db: DatabaseSync,
+  now?: Date,
+  filter?: RepeatersFilter,
+  zone?: string,
+): ListItem[] {
+  const todayIso = localToday(now, zone);
+  const packedToday = encodePackedDate(todayIso);
+  const boundary = logBoundary(db, now, zone);
+  const tf = tagFilter(db, filter);
+
+  const rows = fetchTaskRows(
+    db,
+    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
+     AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)${tf.sql}`,
+    [...tf.binds],
+  );
+  const ruleOf = new Map(rows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
+  const items = materialize(db, rows, boundary, packedToday);
+  for (const item of items) {
+    const blob = ruleOf.get(item.uuid);
+    if (blob === null || blob === undefined) continue;
+    try {
+      item.repeating.rule = decodeRecurrenceRule(blob);
+    } catch {
+      // Unknown rule schema (a future Things build) — list the template without
+      // a decoded rule rather than dropping it from its own catalogue.
+    }
+  }
+
+  return items.toSorted((a, b) => {
+    const an = a.repeating.nextOccurrence ?? null;
+    const bn = b.repeating.nextOccurrence ?? null;
+    if (an !== bn) {
+      if (an === null) return 1; // projectionless rows sort after the scheduled ones
+      if (bn === null) return -1;
+      return an.localeCompare(bn);
+    }
+    return a.title.localeCompare(b.title) || a.uuid.localeCompare(b.uuid);
+  });
+}

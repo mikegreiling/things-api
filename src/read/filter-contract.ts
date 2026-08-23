@@ -31,6 +31,7 @@ export type ViewName =
   | "search"
   | "changes"
   | "deadlines"
+  | "repeaters"
   | "projects"
   | "areas"
   | "project-show"
@@ -89,6 +90,10 @@ export const FILTER_CONTRACT: Record<ViewName, ViewFilterSpec> = {
   // Deadline horizon (R9 query view): overdue narrows to open, past-deadline
   // rows; tags are inheritance-inclusive (flat view); flat row cap.
   deadlines: { overdue: true, tag: "inherited", bound: "flat", statusWidening: false },
+  // Repeating-template catalogue: a template's own `deadline` column is the
+  // app's far-future sentinel, never a real due date, so `overdue` has nothing
+  // to narrow. Tags are inheritance-inclusive as in every other flat view.
+  repeaters: { overdue: false, tag: "inherited", bound: "flat", statusWidening: false },
   // Projects LIST is a FLAT view — each project row filtered by its own
   // (inheritance-inclusive) tags; overdue keeps past-deadline projects.
   projects: { overdue: true, tag: "inherited", bound: "none", statusWidening: false },
