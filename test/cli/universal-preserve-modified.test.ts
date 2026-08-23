@@ -7,9 +7,10 @@
  *       leaf (one declaring the `--vector` delivery flag, i.e. everything built
  *       through `addWriteFlags`) also declares `--preserve-modified`, so a future
  *       write command cannot silently regress the invariant;
- *   (b) NON-write leaves (reads, config, mcp, capabilities) and the composing
- *       meta-commands (`batch`, `undo`) do NOT declare it, and no namespace/root
- *       declares it either.
+ *   (b) NON-write leaves (reads, config, mcp, capabilities) and `undo` do NOT
+ *       declare it, and no namespace/root declares it either. `batch` is the one
+ *       exception: it declares the flag as a RUN-LEVEL default applied to every
+ *       line (a line may override it with its own `options.preserveModified`).
  * The behavior (capture → restore) is locked in test/engine/write-preserve-modified.test.ts.
  */
 import { describe, expect, it } from "vitest";
@@ -49,12 +50,14 @@ describe("completeness lock: --preserve-modified reaches every write-family comm
     expect(writeLeaves).toBeGreaterThan(20);
   });
 
-  it("no non-write leaf or namespace declares --preserve-modified", () => {
+  it("no non-write leaf or namespace declares --preserve-modified (batch excepted)", () => {
     const program = buildProgram();
     for (const [path, cmd] of everyCommand(program)) {
       const isWriteLeaf = cmd.commands.length === 0 && declares(cmd, "--vector");
       if (isWriteLeaf) continue;
       const label = `things ${path.join(" ")}`.trim() || "things";
+      // `batch` carries it as a run-level default for every line (below).
+      if (label === "things batch") continue;
       expect(
         declares(cmd, "--preserve-modified"),
         `\`${label}\` must NOT declare --preserve-modified`,
@@ -62,12 +65,14 @@ describe("completeness lock: --preserve-modified reaches every write-family comm
     }
   });
 
-  it("the meta-commands batch and undo do not carry --preserve-modified (per-op only)", () => {
+  it("`batch` carries --preserve-modified as a run-level default; `undo` does not", () => {
     const program = buildProgram();
-    for (const name of ["batch", "undo"]) {
+    const find = (name: string): Command => {
       const cmd = program.commands.find((c) => c.name() === name);
       expect(cmd, `\`things ${name}\` should exist`).toBeDefined();
-      expect(declares(cmd as Command, "--preserve-modified")).toBe(false);
-    }
+      return cmd as Command;
+    };
+    expect(declares(find("batch"), "--preserve-modified")).toBe(true);
+    expect(declares(find("undo"), "--preserve-modified")).toBe(false);
   });
 });

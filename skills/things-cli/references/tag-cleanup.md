@@ -18,11 +18,23 @@ So: **reshape the vocabulary first, re-tag items last.** A rename that turns `er
 
 1. **Look before you write.** `things tags` lists the hierarchy; `things anytime --tag <name> --all --json` (or `things search`) enumerates what a tag actually holds. Decide which tag survives.
 2. **Rename the survivor into the name you want** (`tag update`), rather than creating a new tag and re-tagging into it. Free.
-3. **Fold the synonyms.** For each doomed tag, the items that carry it and NOT the survivor need the survivor added — this is the only pass that re-dates anything, so run it with `--preserve-modified`:
+3. **Fold the synonyms.** For each doomed tag, the items that carry it and NOT the survivor need the survivor added — this is the only pass that re-dates anything, so run it with `--preserve-modified`. One item at a time:
    ```sh
    things todo tags <uuid> --add "errand" --preserve-modified
    ```
-   Repeat it per item (a shell loop over the uuids a `--json` read gave you). **`things batch` does not carry `--preserve-modified` today** — neither as a run flag nor as a per-line option — so a batched re-tag lands on the timeline even though each item's own verb would not. Until that changes, a cleanup that must stay silent runs the per-item verb; use `batch` when the timeline does not matter and you want one `undoToken` for the whole submission.
+   For hundreds of them, `things batch` is the vehicle: it takes `--preserve-modified` at the RUN level, applying it to every line, and the whole submission comes back under one `undoToken`. The batch op is `todo.set-tags`, which REPLACES the tag set (there is no per-line merge — `--add` is CLI sugar over a read), so build each line's full set from the item's current tags:
+   ```sh
+   # anytime is a SECTIONED view (data.sections[].items[]); item tags are
+   # {title} objects, and todo.set-tags wants a flat list of titles.
+   things anytime --tag "Errand" --all --json \
+     | jq -c '.data.sections[].items[]
+         | select(.type == "to-do")
+         | {op: "todo.set-tags",
+            params: {uuid, tags: ([(.tags // [])[].title] - ["errand"] + ["errand"])}}' \
+     | things batch --preserve-modified
+   ```
+   (Project rows carry their own tags — filter them out as above and re-tag them with `project.set-tags` in a second pass, or drop the `select` and branch the `op` on `.type`.)
+   Each line's result carries `preservedModified` (and `preserveFailures` for any restore that did not land), so you can see the pass stayed silent. A single line can opt back onto the timeline with its own `"options": {"preserveModified": false}` — the per-line value always outranks the run flag. Add an `"opId"` per line if you want a stopped batch to be resubmittable verbatim.
 4. **Delete the doomed tags** (`tag delete … --dangerously-permanent`, plus `--acknowledge-subtree` when the tag has children — deleting a parent deletes its whole subtree). Free, and it also removes the tag from anything you missed in step 3, so a stray assignment does not survive as a ghost.
 5. **Check the timeline you were protecting**: `things changes --since <the moment you started>` should show only what you meant to surface.
 

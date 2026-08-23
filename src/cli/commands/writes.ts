@@ -97,6 +97,19 @@ interface WriteFlagCapability {
   opId?: "unsupported";
 }
 
+/**
+ * The `--preserve-modified` help text, shared by the universal write flag and
+ * the run-level `batch` flag (which applies it as the default for every line) —
+ * one source so the two surfaces can never drift.
+ */
+const PRESERVE_MODIFIED_HELP =
+  "keep this change off the modification-date timeline: capture each pre-existing edited " +
+  "item's modification date and restore it (to the whole second) after the change, so a " +
+  "changes/watch query keyed on it does not surface the edit. A no-op on a pure create. " +
+  "Safe with Things Cloud: the restored date syncs to your other devices and stays put, so " +
+  "the item stays off the timeline everywhere — unless another device edits the same item " +
+  "at nearly the same time, which re-dates it.";
+
 function addWriteFlags(cmd: Command, capability: WriteFlagCapability = {}): Command {
   const opId = new Option(
     "--op-id <key>",
@@ -108,15 +121,7 @@ function addWriteFlags(cmd: Command, capability: WriteFlagCapability = {}): Comm
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .option("--dry-run", "preview the planned change and its expected effect; nothing executes")
-    .option(
-      "--preserve-modified",
-      "keep this change off the modification-date timeline: capture each pre-existing edited " +
-        "item's modification date and restore it (to the whole second) after the change, so a " +
-        "changes/watch query keyed on it does not surface the edit. A no-op on a pure create. " +
-        "Safe with Things Cloud: the restored date syncs to your other devices and stays put, so " +
-        "the item stays off the timeline everywhere — unless another device edits the same item " +
-        "at nearly the same time, which re-dates it.",
-    )
+    .option("--preserve-modified", PRESERVE_MODIFIED_HELP)
     .option(
       "--vector <id>",
       "force how the change is delivered: url-scheme | applescript | shortcuts | ui",
@@ -2700,6 +2705,10 @@ export function registerWriteCommands(program: Command): void {
         "re-created (put an opId on EVERY line so a stopped batch can be resubmitted verbatim " +
         "to resume). The trailing summary line adds `tempIdMapping` (handle → uuid) and " +
         "`undoToken` — undo the WHOLE batch with `things undo --txn <undoToken>`. " +
+        "TIMELINE: --preserve-modified applies to every line (each line may override it with its " +
+        'own `"options": {"preserveModified": true|false}`), so a bulk re-tag stays off the ' +
+        "modification-date timeline under one undo token; each line's result then carries " +
+        "`preservedModified` (and `preserveFailures` for any restore that did not land). " +
         "By DEFAULT a runtime failure STOPS the batch (later lines reported not-run, with resume " +
         "guidance in the summary); --continue-on-error runs past failures. --dry-run plans " +
         "everything without executing. Exit (worst failure wins): 0 all ok · 3 any " +
@@ -2707,6 +2716,11 @@ export function registerWriteCommands(program: Command): void {
     )
     .option("--dry-run", "plan every op; execute nothing")
     .option("--continue-on-error", "run past a failed op instead of stopping (default: stop)")
+    .option(
+      "--preserve-modified",
+      `${PRESERVE_MODIFIED_HELP} Applies to EVERY line; a line that sets its own ` +
+        '`"options": {"preserveModified": false}` opts back onto the timeline.',
+    )
     .option("--json", "JSONL results + summary on stdout (also the default)")
     .option("--db <path>", "explicit database path")
     .option("--actor <name>", "author name recorded for the whole batch")
@@ -2750,6 +2764,9 @@ export function registerWriteCommands(program: Command): void {
           {
             ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
             ...(opts["continueOnError"] === true && { continueOnError: true }),
+            // Run-level default for every line; a line's own explicit
+            // `options.preserveModified` outranks it (src/write/batch.ts).
+            ...(opts.preserveModified === true && { preserveModified: true }),
             ...(opts.actor !== undefined && { actor: opts.actor }),
           },
           (r) => {

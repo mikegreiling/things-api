@@ -2190,6 +2190,63 @@ describe("things MCP server", () => {
       expect(results.map((r) => r.outcome)).toEqual(["skipped", "invalid"]);
       expect(results[1]?.detail).toMatch(/duplicate tempId "x"/);
     });
+
+    it("run-level preserve_modified reaches every op, and a per-op false opts one back out", async () => {
+      // Regression: the run-level preserve_modified was declared in the schema
+      // but never read, so a whole batch silently landed on the timeline.
+      const ORIG = 1_780_000_000;
+      const a = seedTodo(fixture.db, { title: "pm-a", modificationDate: ORIG });
+      const b = seedTodo(fixture.db, { title: "pm-b", modificationDate: ORIG });
+      const bumped = Math.floor(NOW.getTime() / 1000) + 1;
+      // url-scheme delivers each update (bumping title + umd); the applescript
+      // vector (no ops — never chosen to deliver) serves the restore leg.
+      const restored: string[] = [];
+      await connect([
+        fakeVector((payload) => {
+          const m = /[?&]id=([^&]+)/.exec(payload);
+          if (m?.[1] !== undefined) {
+            fixture.db
+              .prepare(
+                "UPDATE TMTask SET title = 'renamed', userModificationDate = ? WHERE uuid = ?",
+              )
+              .run(bumped, m[1]);
+          }
+        }).vector,
+        fakeVector(
+          (payload) => {
+            const m = /set modification date of to do id "([^"]+)"/.exec(payload);
+            if (m?.[1] !== undefined) {
+              restored.push(m[1]);
+              fixture.db
+                .prepare("UPDATE TMTask SET userModificationDate = ? WHERE uuid = ?")
+                .run(ORIG, m[1]);
+            }
+          },
+          { id: "applescript", ops: [] },
+        ).vector,
+      ]);
+      const results = textOf(
+        await client.callTool({
+          name: "batch",
+          arguments: {
+            ops: [
+              { op: "todo.update", params: { uuid: a, title: "renamed" } },
+              {
+                op: "todo.update",
+                params: { uuid: b, title: "renamed" },
+                options: { preserve_modified: false },
+              },
+            ],
+            preserve_modified: true,
+            continue_on_error: true,
+          },
+        }),
+      ) as { outcome: string; preservedModified?: number }[];
+      expect(results.map((r) => r.outcome)).toEqual(["ok", "ok"]);
+      expect(restored).toEqual([a]);
+      expect(results[0]?.preservedModified).toBe(1);
+      expect(results[1]?.preservedModified).toBeUndefined();
+    });
   });
 
   describe("reorder — planner form + sidebar areas", () => {
