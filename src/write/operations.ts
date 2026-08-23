@@ -198,8 +198,20 @@ export interface TodoAddParams {
   completedAt?: string;
 }
 
-export interface TodoUpdateParams {
-  uuid: string;
+/**
+ * The attribute vocabulary of the update verbs — ONE declaration shared by
+ * {@link TodoUpdateParams} and {@link ProjectUpdateParams} (the two carry an
+ * identical field set; the app's `update` / `update-project` URL commands take
+ * the same parameter names).
+ *
+ * It is a MULTI-CONSUMER vocabulary: the URL compilation, the expected-delta
+ * assertions, the undo inverse, and the CLI/MCP patch builders all speak it. Per
+ * the exhaustive-map doctrine (decisions.md 2026-08-17, #491) none of them may
+ * hand-enumerate it — every consumer derives from the exhaustive `Record<keyof
+ * UpdateFields, …>` in [update-fields.ts](./update-fields.ts), so a field added
+ * here breaks compilation until it is consciously handled everywhere.
+ */
+export interface UpdateFields {
   title?: string;
   notes?: string;
   /** Append to the existing notes (newline-joined). Exclusive with notes/prependNotes. */
@@ -208,13 +220,17 @@ export interface TodoUpdateParams {
   prependNotes?: string;
   when?: WhenValue;
   /**
-   * `HH:mm` sets a reminder (requires when: today|evening in the same call);
-   * null clears it (today/evening only — a dated reminder can only be
+   * `HH:mm` sets a reminder (requires when: today|evening|YYYY-MM-DD in the same
+   * call); null clears it (today/evening only — a dated reminder can only be
    * changed, not cleared). When re-scheduling with this OMITTED, an existing
-   * reminder is auto-preserved.
+   * (live) reminder is auto-preserved.
    */
   reminder?: ReminderTime | null;
   deadline?: IsoDate | null;
+}
+
+export interface TodoUpdateParams extends UpdateFields {
+  uuid: string;
 }
 
 export interface UuidParams {
@@ -443,22 +459,9 @@ export interface ProjectAddParams {
   completedAt?: string;
 }
 
-export interface ProjectUpdateParams {
+/** Projects take the same {@link UpdateFields} vocabulary as to-dos (A3). */
+export interface ProjectUpdateParams extends UpdateFields {
   uuid: string;
-  title?: string;
-  notes?: string;
-  /** Append to the existing notes (newline-joined). Exclusive with notes/prependNotes. */
-  appendNotes?: string;
-  /** Prepend to the existing notes (newline-joined). Exclusive with notes/appendNotes. */
-  prependNotes?: string;
-  when?: WhenValue;
-  /**
-   * `HH:mm` sets a reminder (requires when: today|evening|YYYY-MM-DD in the
-   * same call); null clears it (today/evening only — a dated reminder can
-   * only be changed, not cleared). Same semantics as to-do reminders.
-   */
-  reminder?: ReminderTime | null;
-  deadline?: IsoDate | null;
 }
 
 export interface ProjectSetTagsParams {

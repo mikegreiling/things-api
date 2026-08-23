@@ -119,9 +119,19 @@ export type {
   TodoAddParams,
   TodoMoveParams,
   TodoUpdateParams,
+  UpdateFields,
   WhenValue,
 } from "./write/operations.ts";
 export { OPERATION_KINDS } from "./write/operations.ts";
+// The update vocabulary's one registry: consumer surfaces build their patch with
+// this instead of hand-listing the fields (the #491 exhaustive-map doctrine).
+export { buildUpdatePatch, CLI_UPDATE_LABELS, MCP_UPDATE_LABELS } from "./write/update-fields.ts";
+export type {
+  UpdateInput,
+  UpdateLabels,
+  UpdatePatch,
+  UpdatePatchResult,
+} from "./write/update-fields.ts";
 export type { MutationPlan, MutationResult, WriteOptions } from "./write/pipeline.ts";
 export type { HazardId } from "./write/guards.ts";
 export { HAZARD_IDS } from "./write/guards.ts";

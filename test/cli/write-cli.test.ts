@@ -714,3 +714,39 @@ describe("undo selection flags", () => {
     expect(item.plan.target.actor).toBe("mcp");
   });
 });
+
+describe("update flag contradictions are refused, never silently resolved", () => {
+  // The update vocabulary is built by the ONE registry both consumer surfaces
+  // share (src/write/update-fields.ts, the #491 exhaustive-map doctrine). These
+  // pin the CLI end of it — including the two pairs that used to be accepted and
+  // then quietly overwritten, dropping the value the caller asked for.
+  it("--deadline with --clear-deadline is a usage error (was: silently cleared)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "target" });
+    await run(["todo", "update", uuid, "--deadline", "2026-09-01", "--clear-deadline"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("pass at most one of --deadline / --clear-deadline");
+  });
+
+  it("--when <date>@<time> with --clear-reminder is a usage error (was: reminder dropped)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "target" });
+    await run(["todo", "update", uuid, "--when", "today@09:00", "--clear-reminder"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("carries an @time suffix");
+  });
+
+  it("project update refuses the same pairs (one vocabulary, one builder)", async () => {
+    const uuid = seedProject(fixture.db, { title: "proj" });
+    await run(["project", "update", uuid, "--deadline", "2026-09-01", "--clear-deadline"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("pass at most one of --deadline / --clear-deadline");
+  });
+
+  it("project update splits the @time sugar exactly as the to-do verb does", async () => {
+    const uuid = seedProject(fixture.db, { title: "proj" });
+    await run(["project", "update", uuid, "--when", "2026-08-01@09:00", "--dry-run", "--json"]);
+    const plan = envelope()["data"] as Record<string, unknown>;
+    // The suffix became a real reminder token on the `when` value (%40 = @).
+    expect(String(plan["invocation"])).toContain("when=2026-08-01%4009%3A00");
+    expect(process.exitCode).toBe(0);
+  });
+});

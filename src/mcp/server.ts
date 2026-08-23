@@ -23,6 +23,7 @@ import {
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
   blockedCode,
+  buildUpdatePatch,
   capabilitiesTable,
   DATE_FORMAT,
   DEFAULT_LIST_LIMIT,
@@ -34,6 +35,7 @@ import {
   isValidTimeZone,
   LIMIT_DESC,
   looseShadowNotice,
+  MCP_UPDATE_LABELS,
   MCP_WHEN_LABELS,
   mutationWireData,
   NOTES_FORMAT,
@@ -1679,61 +1681,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const opts = writeOptions(args);
         const c = getClient();
         if (args.kind === "todo" || args.kind === "project") {
-          const notesModes = [args.notes, args.append_notes, args.prepend_notes].filter(
-            (v) => v !== undefined,
-          );
-          if (notesModes.length > 1) {
-            return usage("notes, append_notes, prepend_notes are exclusive");
-          }
-          if (args.reminder !== undefined && args.clear_reminder === true) {
-            return usage("pass at most one of reminder / clear_reminder");
-          }
-          if (args.deadline !== undefined && args.clear_deadline === true) {
-            return usage("pass at most one of deadline / clear_deadline");
-          }
-          if (args.kind === "todo") {
-            const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
-            if (sugar.kind === "error") return usage(sugar.message);
-            const when = sugar.kind === "split" ? sugar.when : args.when;
-            const reminder = sugar.kind === "split" ? sugar.reminder : args.reminder;
-            return mutationResult(
-              await c.write.updateTodo(
-                args.uuid,
-                {
-                  ...(args.title !== undefined && { title: args.title }),
-                  ...(args.notes !== undefined && { notes: args.notes }),
-                  ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
-                  ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
-                  ...(when !== undefined && { when: when as never }),
-                  ...(reminder !== undefined && { reminder }),
-                  ...(args.clear_reminder === true && { reminder: null }),
-                  ...(args.deadline !== undefined && { deadline: args.deadline }),
-                  ...(args.clear_deadline === true && { deadline: null }),
-                  ...(args.created_at !== undefined && { createdAt: args.created_at }),
-                  ...(args.completed_at !== undefined && { completedAt: args.completed_at }),
-                },
-                opts,
-              ),
-            );
-          }
+          // The patch — and every exclusive pair in the vocabulary, the `@time`
+          // sugar included — comes from the ONE builder the CLI shares, so the two
+          // surfaces cannot drift on which flags they accept (#491 doctrine).
+          const built = buildUpdatePatch(args, MCP_UPDATE_LABELS);
+          if (built.kind === "error") return usage(built.message);
           return mutationResult(
-            await c.write.updateProject(
-              args.uuid,
-              {
-                ...(args.title !== undefined && { title: args.title }),
-                ...(args.notes !== undefined && { notes: args.notes }),
-                ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
-                ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
-                ...(args.when !== undefined && { when: args.when as never }),
-                ...(args.reminder !== undefined && { reminder: args.reminder }),
-                ...(args.clear_reminder === true && { reminder: null }),
-                ...(args.deadline !== undefined && { deadline: args.deadline }),
-                ...(args.clear_deadline === true && { deadline: null }),
-                ...(args.created_at !== undefined && { createdAt: args.created_at }),
-                ...(args.completed_at !== undefined && { completedAt: args.completed_at }),
-              },
-              opts,
-            ),
+            args.kind === "todo"
+              ? await c.write.updateTodo(args.uuid, built.patch, opts)
+              : await c.write.updateProject(args.uuid, built.patch, opts),
           );
         }
         if (args.kind === "area") {
