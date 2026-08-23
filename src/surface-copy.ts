@@ -26,6 +26,16 @@ export const RESOLUTION_DATE_FORMAT = "ISO date or datetime; a date is noon in t
 export const REF_FORMAT = "uuid or unique name";
 
 /**
+ * The notes-field format, shared by every `--notes`/`notes` surface: notes is a
+ * markdown field with multi-line support, not a plain text blob. Things renders
+ * the common markdown constructs while leaving the syntax characters in place,
+ * and links a bare URL on its own — so `[label](url)` stays literal text.
+ * Evidence: docs/lab/notesmd-results.md.
+ */
+export const NOTES_FORMAT =
+  "markdown, multi-line; a bare URL becomes a link, [label](url) stays literal";
+
+/**
  * Time-window bound grammar shared by `--since`/`--until` flags: relative
  * periods counted from today (`2w`/`3m`/`1y`) or whole calendar periods
  * (`2024`, `2024-03`, `2024-03-05`).

@@ -36,6 +36,7 @@ import {
   looseShadowNotice,
   MCP_WHEN_LABELS,
   mutationWireData,
+  NOTES_FORMAT,
   noUuidMatch,
   omitEmpty,
   OMIT_EMPTY_NOTE,
@@ -594,6 +595,8 @@ function buildInstructions(getClient: () => ThingsClient): string {
     `- Scheduling vocabulary: when = ${WHEN_VALUES}; deadlines are ${DATE_FORMAT}; reminders ` +
       `are ${REMINDER_FORMAT}. Resolve relative calendar phrases against the Calendar context ` +
       `below (or a date-sensitive read result's meta.clock.today), then pass the explicit date.`,
+    `- Notes vocabulary: the notes field is ${NOTES_FORMAT}. Newlines are kept as written, so ` +
+      `pass a multi-line body directly rather than flattening it into one line.`,
     "- Every write tool accepts dry_run: true to preview the change without applying it. " +
       "A preview creates no state, so later calls cannot reference an item that only appeared in " +
       "a dry-run result. Operations with cascading or permanent effects require the explicit " +
@@ -1528,7 +1531,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "project reopens that project — pass acknowledge_project_reopen to confirm.",
       inputSchema: {
         title: z.string(),
-        notes: z.string().optional(),
+        notes: z.string().optional().describe(`Notes body — ${NOTES_FORMAT}`),
         when: whenSchema,
         reminder: z.string().optional().describe(REMINDER_FORMAT),
         deadline: z.string().optional().describe(DATE_FORMAT),
@@ -1616,7 +1619,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               "unique name",
           ),
         title: z.string().optional().describe("New title (any kind)"),
-        notes: z.string().optional().describe("todo/project: replaces the whole notes body"),
+        notes: z
+          .string()
+          .optional()
+          .describe(`todo/project: replaces the whole notes body — ${NOTES_FORMAT}`),
         append_notes: z.string().optional().describe("todo/project: add a line after the notes"),
         prepend_notes: z.string().optional().describe("todo/project: add a line before the notes"),
         when: whenSchema,
@@ -2565,7 +2571,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             "start/reschedule/pause/resume: the item (a project also accepts a unique name)",
           ),
         title: z.string().optional().describe("add: the new item's title"),
-        notes: z.string().optional().describe("add: notes"),
+        notes: z.string().optional().describe(`add: notes — ${NOTES_FORMAT}`),
         area: z.string().optional().describe(`add (project): destination area (${REF_FORMAT})`),
         project_deadline: z
           .string()
@@ -2782,7 +2788,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "it, set a deadline, and seed it with initial to-dos.",
       inputSchema: {
         title: z.string(),
-        notes: z.string().optional(),
+        notes: z.string().optional().describe(`Notes body — ${NOTES_FORMAT}`),
         area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
         when: whenSchema,
         deadline: z.string().optional().describe(DATE_FORMAT),

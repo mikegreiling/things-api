@@ -33,6 +33,7 @@ import {
   getConfigKey,
   parseHelpersMode,
   mutationWireData,
+  NOTES_FORMAT,
   okEnvelope,
   openThings,
   OP_ID_RE,
@@ -1006,7 +1007,7 @@ export function registerWriteCommands(program: Command): void {
             "requires --acknowledge-project-reopen. When several to-dos are created, one undo " +
             "token removes the whole skeleton at once.",
         )
-        .option("--notes <text>", "notes body")
+        .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
         .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
         .option(
           "--reminder <HH:mm>",
@@ -1159,7 +1160,7 @@ export function registerWriteCommands(program: Command): void {
           "newline (exclusive with --notes).",
       )
       .option("--title <text>", "new title")
-      .option("--notes <text>", "replace notes")
+      .option("--notes <text>", `replace the notes body — ${NOTES_FORMAT}`)
       .option("--append-notes <text>", "append to existing notes (newline-joined)")
       .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -1936,7 +1937,7 @@ export function registerWriteCommands(program: Command): void {
               "it to create in Someday. The new repeating project's uuid is printed; `things undo` " +
               "removes the created series (trash-both).",
           )
-          .option("--notes <text>", "notes body")
+          .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
           .option("--area <ref>", "destination area (uuid or unique name)")
           .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
           .option("--deadline <date>", "YYYY-MM-DD")
@@ -1977,7 +1978,7 @@ export function registerWriteCommands(program: Command): void {
               "if the promote refuses; then it is promoted (which drives the GUI). The new repeating " +
               "template's uuid is printed; `things undo` removes the created series (trash-both).",
           )
-          .option("--notes <text>", "notes body")
+          .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
           .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
           .option("--reminder <time>", "HH:mm reminder (needs a schedulable --when)")
           .option(
@@ -2044,7 +2045,7 @@ export function registerWriteCommands(program: Command): void {
           "seed it with child to-dos in the same call — the quick way to stand up a new " +
           "project skeleton.",
       )
-      .option("--notes <text>", "notes body")
+      .option("--notes <text>", `notes body — ${NOTES_FORMAT}`)
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
       .option("--deadline <date>", "YYYY-MM-DD")
@@ -2094,7 +2095,7 @@ export function registerWriteCommands(program: Command): void {
       ),
   )
     .option("--title <text>", "new title")
-    .option("--notes <text>", "replace notes")
+    .option("--notes <text>", `replace the notes body — ${NOTES_FORMAT}`)
     .option("--append-notes <text>", "append to existing notes (newline-joined)")
     .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
     .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
