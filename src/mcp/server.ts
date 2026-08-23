@@ -2577,10 +2577,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .string()
           .optional()
           .describe(
-            `add: due date (${DATE_FORMAT}). For a to-do it deadlines EVERY occurrence — each ` +
-              `starts (deadline − when) days before its own deadline, so it needs a concrete when ` +
-              `on or before it (an alternative spelling of start_days_earlier — give one or the ` +
-              `other, both must agree). For a project it is the project's own due date.`,
+            `add: due date (${DATE_FORMAT}). It deadlines EVERY occurrence — each starts ` +
+              `(deadline − when) days before its own deadline, so it needs a concrete when on or ` +
+              `before it. For a to-do it is an alternative spelling of start_days_earlier (give ` +
+              `one or the other, both must agree). Not available with after_completion on a ` +
+              `project, whose occurrences are created without a deadline.`,
           ),
         todos: z.array(z.string()).optional().describe("add (project): initial child to-do titles"),
         frequency: z
@@ -2623,10 +2624,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           }
           // add-repeating carries only the calendar-anchor rule fields here; the rule
           // reminder is set with a follow-up reschedule. A concrete `project_deadline`
-          // maps to the RULE for a to-do (DBLSPAWN1 — each occurrence deadlined, seed
-          // deadline-free) and to the project's own due date for a project. For a to-do,
-          // `start_days_earlier` is the alternative spelling of that deadline geometry
-          // (the two must AGREE when both are given — enforced in the library).
+          // maps to the RULE on BOTH scopes (DBLSPAWN1 — each occurrence deadlined,
+          // the created item deadline-free). For a to-do, `start_days_earlier` is the
+          // alternative spelling of that deadline geometry (the two must AGREE when
+          // both are given — enforced in the library).
           const {
             reminder: _reminder,
             deadline: _deadline,

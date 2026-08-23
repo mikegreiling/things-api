@@ -372,6 +372,23 @@ describe("add-repeating — add → native promote", () => {
     expect(row(res.uuid)?.["area"]).toBe(area);
   });
 
+  it("project.add-repeating: a concrete --when drives the first occurrence (ANCH2)", async () => {
+    // The project promote leg re-keyed the rule bag field by field and left `next`
+    // out, so the dialog's first-occurrence field was never driven for a project:
+    // the series anchored to the app's today-based default and the post-drive
+    // verify then failed the caller's own correct request.
+    const res = await runAddRepeatingProject(
+      deps(vector),
+      { title: "Dated series", when: "2026-07-20", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    expect(decodePackedDate(row(res.uuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-20",
+    );
+  });
+
   it("threads the base --reminder onto the SERIES via the promote (ADR1 #480, behavior #3)", async () => {
     // The Repeat-dialog conversion does not preserve the seed's one-off reminder,
     // so add-repeating must drive the dialog reminder with the base time — the
@@ -608,6 +625,85 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
         GUI,
       ),
     ).rejects.toThrow(/concrete --when/);
+  });
+
+  // The PROJECT verb maps a concrete --deadline to the rule exactly as the to-do
+  // verb does (DBLSPAWN1 residual). Its stakes are different — a project seed is
+  // DELETE-fate, so an un-mapped deadline was DROPPED rather than double-booked —
+  // but the fix and the geometry are the same.
+  it("project add-repeating: a concrete --deadline lands as the RULE deadline (start-offset)", async () => {
+    const res = await runAddRepeatingProject(
+      deps(vector),
+      {
+        title: "Annual review",
+        when: "2026-07-15",
+        deadline: "2026-07-29", // 14 days after the start
+        frequency: "yearly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // The RULE owns the deadline: template deadline sentinel + start-offset −14.
+    expect(row(res.uuid)?.["deadline"]).not.toBeNull();
+    const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(-14);
+    // The template records the START (the --when), not the deadline.
+    expect(decodePackedDate(row(res.uuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-15",
+    );
+  });
+
+  it("project add-repeating: --deadline with a keyword --when is refused (needs a concrete date)", async () => {
+    await expect(
+      runAddRepeatingProject(
+        deps(vector),
+        {
+          title: "Undated project",
+          when: "someday",
+          deadline: "2026-07-15",
+          frequency: "yearly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/concrete --when/);
+  });
+
+  it("project add-repeating: --deadline before --when is refused", async () => {
+    await expect(
+      runAddRepeatingProject(
+        deps(vector),
+        {
+          title: "Impossible project",
+          when: "2026-07-15",
+          deadline: "2026-07-01",
+          frequency: "monthly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/on or after/);
+  });
+
+  it("project add-repeating: --deadline with --after-completion is refused (it would vanish)", async () => {
+    // RSIM-P P4: an after-completion project's seed is DELETED and its instance is
+    // minted deadline-free, so the requested deadline has nowhere to live.
+    await expect(
+      runAddRepeatingProject(
+        deps(vector),
+        {
+          title: "After-completion project",
+          when: "2026-07-15",
+          deadline: "2026-07-22",
+          afterCompletion: true,
+          frequency: "monthly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/after-completion/);
   });
 
   it("make-repeating: a FUTURE-scheduled deadlined source's redundant preserved instance is trashed + disclosed", async () => {

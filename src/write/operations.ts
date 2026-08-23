@@ -796,6 +796,11 @@ export interface AddRepeatingRuleFields {
  * seeds a pure-AX taxonomy (an `area` lands a selectable AREA-view row; otherwise
  * Someday) so the promote never needs a coercion. The two legs are NOT atomic:
  * the created project persists even if the promote refuses.
+ *
+ * `deadline` is the exception, exactly as on {@link TodoAddRepeatingParams}: a
+ * concrete deadline DATE maps to the RULE (each occurrence starts
+ * `deadline − when` days before its own deadline) rather than landing on the
+ * created project, which the promote replaces with the series' own instance.
  */
 export interface ProjectAddRepeatingParams extends AddRepeatingRuleFields {
   title: string;
@@ -803,6 +808,13 @@ export interface ProjectAddRepeatingParams extends AddRepeatingRuleFields {
   /** Destination area (uuid or unique name); when omitted the project is created in Someday. */
   area?: ContainerRef;
   when?: WhenValue;
+  /**
+   * The FIRST occurrence's due date — mapped to the RULE (derive
+   * start-days-earlier = deadline − when), so every occurrence is deadlined and
+   * the created project carries none. Needs a concrete `when` on or before it;
+   * refused on an after-completion series, whose instance is created without a
+   * deadline (RSIM-P P4).
+   */
   deadline?: IsoDate;
   /** Flat child to-do titles (born open). Exclusive with `items`. */
   todos?: string[];

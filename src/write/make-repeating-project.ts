@@ -115,19 +115,15 @@ export async function promoteProjectViaGui(
     return blockedUiDrive("project.make-repeating");
   }
 
-  const driveParams: RepeatRuleParams = {
-    uuid,
-    frequency: params.frequency,
-    interval: params.interval,
-    ...(params.afterCompletion !== undefined && { afterCompletion: params.afterCompletion }),
-    ...(params.weekdays !== undefined && { weekdays: params.weekdays }),
-    ...(params.monthly !== undefined && { monthly: params.monthly }),
-    ...(params.yearly !== undefined && { yearly: params.yearly }),
-    ...(params.ends !== undefined && { ends: params.ends }),
-    ...(params.reminder !== undefined && { reminder: params.reminder }),
-    ...(params.deadline !== undefined && { deadline: params.deadline }),
-    ...(params.startDaysEarlier !== undefined && { startDaysEarlier: params.startDaysEarlier }),
-  };
+  // Everything but the uuid rides THROUGH: this bag is re-keyed to the resolved
+  // project uuid, not filtered. `next` (the dialog's first-occurrence field,
+  // ANCH2) was missing from an earlier hand-enumeration, so every project promote
+  // silently took the app's today-anchored default — a dated `project
+  // make-repeating` / `add-repeating --when` landed on the wrong phase and then
+  // failed its own post-drive verify. Spread first, override the uuid, so a new
+  // rule field is carried by default instead of dropped by omission (the RRF1
+  // hand-enumeration class, decisions.md 2026-08-17).
+  const driveParams: RepeatRuleParams = { ...params, uuid };
 
   if (options.dryRun === true) {
     const coercion =

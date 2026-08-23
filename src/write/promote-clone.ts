@@ -1036,6 +1036,80 @@ async function addRepeatingViaCreate(
   });
 }
 
+/** The add-repeating rule bag once a concrete deadline has been folded into it. */
+type RuleWithDeadline = AddRepeatingRuleFields &
+  Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">>;
+
+/**
+ * Fold a concrete item-level `deadline` (and/or an explicit `startDaysEarlier`)
+ * into the RULE, returning the rule to promote with and the deadline the SEED
+ * should keep (none — the rule owns it). Shared by the to-do and project
+ * add-repeating verbs so one geometry, and one set of refusals, serves both.
+ *
+ * DBLSPAWN1 (docs/lab/dblspawn1-preserved-instance.md): each occurrence is due
+ * `deadline − when` days after its start (the "Add deadlines" + "start N days
+ * earlier" dialog fields). This is the deadline the series actually wants, and
+ * mapping it up front is also what keeps the SEED deadline-free — a to-do seed
+ * carrying a deadline is SRCFATE-preserved as a materialized instance, and a
+ * future-dated first occurrence then DOUBLE-BOOKS against the template cursor
+ * and spawns a duplicate on the date (cell C). A project seed is DELETE-fate, so
+ * there the un-mapped deadline was simply LOST rather than duplicated — a
+ * quieter bug with the same cause and the same fix. A deadline needs a concrete
+ * `when` (the per-occurrence offset is measured from the start) on/after it.
+ *
+ * DEADLINE/OFFSET AGREEMENT (ruling 2026-08-18): the same rule-global offset can
+ * be named two ways — a concrete `deadline` (offset = deadline − when) OR an
+ * explicit `startDaysEarlier` N (deadline derived as when + N). The geometry
+ * when/deadline/N is OVER-DETERMINED: the dialog's start-offset is rule-global
+ * and the first occurrence's start is derived as due − N, so there is no
+ * per-first-instance gap to absorb a disagreement (unlike DACON1's off-rule-first
+ * calendar freedom). So when BOTH are given they must AGREE — an exact match is
+ * harmless redundancy, a mismatch is inexpressible and refused fast (zero
+ * mutation). Either input ALONE maps to the rule.
+ */
+function mapDeadlineOntoRule(
+  baseRule: AddRepeatingRuleFields,
+  when: unknown,
+  deadline: IsoDate | undefined,
+  startDaysEarlier: number | undefined,
+): { rule: RuleWithDeadline; seedDeadline: undefined } {
+  if (!isIsoDate(when)) {
+    throw new RangeError(
+      "a repeating --deadline or --start-days-earlier needs a concrete --when date (the deadline " +
+        "offset is measured from each occurrence's start) — schedule the series on a YYYY-MM-DD " +
+        "--when, or drop --deadline / --start-days-earlier",
+    );
+  }
+  let startEarlier: number;
+  if (deadline !== undefined) {
+    const derived = daysBetweenIso(when, deadline);
+    if (derived < 0) {
+      throw new RangeError(
+        `--deadline (${deadline}) must be on or after --when (${when}) — a deadline cannot ` +
+          "precede the occurrence's own start",
+      );
+    }
+    if (startDaysEarlier !== undefined && startDaysEarlier !== derived) {
+      throw new RangeError(
+        `--deadline (${deadline}) puts each occurrence's due date ${derived} day` +
+          `${derived === 1 ? "" : "s"} after its start (--when ${when}), but ` +
+          `--start-days-earlier says ${startDaysEarlier} — these disagree. Drop one, or make them ` +
+          `agree (--start-days-earlier ${derived}, or --deadline ${addDaysIso(when, startDaysEarlier)}).`,
+      );
+    }
+    startEarlier = derived;
+  } else {
+    // `--start-days-earlier N` alone: the deadline is derived as when + N. A bad N
+    // (non-integer / negative) is refused by assertRepeatRule once mapped.
+    startEarlier = startDaysEarlier as number;
+  }
+  // The RULE owns the deadline; the seed carries none.
+  return {
+    rule: { ...baseRule, deadline: true, startDaysEarlier: startEarlier },
+    seedDeadline: undefined,
+  };
+}
+
 export async function runAddRepeatingTodo(
   deps: WriteDeps,
   params: TodoAddRepeatingParams,
@@ -1062,64 +1136,19 @@ export async function runAddRepeatingTodo(
     ...(ends !== undefined && { ends }),
   };
 
-  // DBLSPAWN1 (docs/lab/dblspawn1-preserved-instance.md): a concrete item-level
-  // `--deadline <date>` on add-repeating maps to the RULE's deadline — each occurrence
-  // is due `deadline − when` days after its start (the "Add deadlines" + "start N days
-  // earlier" dialog fields). This is the deadline the series actually wants, and it
-  // keeps the SEED deadline-free: a seed carrying a deadline is SRCFATE-preserved as a
-  // materialized instance, and when that first occurrence is future-dated the app
-  // DOUBLE-BOOKS it against the template cursor and spawns a duplicate on the date
-  // (cell C). The seed owning the deadline was the two-step dance the live agent hit
-  // (add-repeating dropped the rule deadline, forcing a follow-up reschedule-repeat);
-  // mapping it up front makes that unnecessary. A deadline needs a concrete `--when`
-  // (the per-occurrence offset is deadline − start) and must be on/after it.
-  //
-  // DEADLINE/OFFSET AGREEMENT (ruling 2026-08-18): the same rule-global offset can be
-  // named two ways — a concrete `--deadline <date>` (offset = deadline − when) OR an
-  // explicit `--start-days-earlier N` (offset = N, deadline derived as when + N). The
-  // geometry when/deadline/N is OVER-DETERMINED: the dialog's start-offset is
-  // rule-global and the first occurrence's start is derived as due − N, so there is no
-  // per-first-instance gap to absorb a disagreement (unlike DACON1's off-rule-first
-  // calendar freedom). So when BOTH are given they must AGREE (`deadline − when == N`)
-  // — an exact match is harmless redundancy, a mismatch is inexpressible and refused
-  // fast (zero mutation). Either input ALONE maps to the rule and keeps the seed
-  // deadline-free.
-  let rule: AddRepeatingRuleFields &
-    Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">> = baseRule;
+  // A concrete `--deadline` (or `--start-days-earlier`) belongs to the RULE, not
+  // the seed — see mapDeadlineOntoRule for the geometry and the refusals. The
+  // to-do stakes: an un-mapped seed deadline makes the app preserve the seed as a
+  // future-dated instance that double-books the cursor (DBLSPAWN1 cell C).
+  let rule: RuleWithDeadline = baseRule;
   let seedDeadline = add.deadline;
   if ((add.deadline !== undefined || startDaysEarlier !== undefined) && afterCompletion !== true) {
-    if (!isIsoDate(add.when)) {
-      throw new RangeError(
-        "a repeating --deadline or --start-days-earlier needs a concrete --when date (the deadline " +
-          "offset is measured from each occurrence's start) — schedule the series on a YYYY-MM-DD " +
-          "--when, or drop --deadline / --start-days-earlier",
-      );
-    }
-    let startEarlier: number;
-    if (add.deadline !== undefined) {
-      const derived = daysBetweenIso(add.when, add.deadline);
-      if (derived < 0) {
-        throw new RangeError(
-          `--deadline (${add.deadline}) must be on or after --when (${add.when}) — a deadline cannot ` +
-            "precede the occurrence's own start",
-        );
-      }
-      if (startDaysEarlier !== undefined && startDaysEarlier !== derived) {
-        throw new RangeError(
-          `--deadline (${add.deadline}) puts each occurrence's due date ${derived} day` +
-            `${derived === 1 ? "" : "s"} after its start (--when ${add.when}), but ` +
-            `--start-days-earlier says ${startDaysEarlier} — these disagree. Drop one, or make them ` +
-            `agree (--start-days-earlier ${derived}, or --deadline ${addDaysIso(add.when, startDaysEarlier)}).`,
-        );
-      }
-      startEarlier = derived;
-    } else {
-      // `--start-days-earlier N` alone: the deadline is derived as when + N. A bad N
-      // (non-integer / negative) is refused by assertRepeatRule once mapped.
-      startEarlier = startDaysEarlier as number;
-    }
-    rule = { ...baseRule, deadline: true, startDaysEarlier: startEarlier };
-    seedDeadline = undefined; // the RULE owns the deadline; the seed carries none
+    ({ rule, seedDeadline } = mapDeadlineOntoRule(
+      baseRule,
+      add.when,
+      add.deadline,
+      startDaysEarlier,
+    ));
   } else if (startDaysEarlier !== undefined) {
     // afterCompletion === true here: an after-completion repeat has no calendar
     // start to count a deadline back from — refuse rather than silently drop it.
@@ -1145,13 +1174,13 @@ export async function runAddRepeatingTodo(
   return addRepeatingViaCreate(deps, "todo", addParams, rule, add.title, options);
 }
 
-export function runAddRepeatingProject(
+export async function runAddRepeatingProject(
   deps: WriteDeps,
   params: ProjectAddRepeatingParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
   const { frequency, interval, afterCompletion, weekdays, monthly, yearly, ends, ...add } = params;
-  const rule: AddRepeatingRuleFields = {
+  const baseRule: AddRepeatingRuleFields = {
     frequency,
     interval,
     ...(afterCompletion !== undefined && { afterCompletion }),
@@ -1160,6 +1189,31 @@ export function runAddRepeatingProject(
     ...(yearly !== undefined && { yearly }),
     ...(ends !== undefined && { ends }),
   };
+
+  // A concrete `--deadline` maps to the RULE here exactly as it does on the to-do
+  // verb (DBLSPAWN1 residual). The project stakes are quieter than the to-do's but
+  // no more acceptable: a project seed is DELETE-fate, so the app does not preserve
+  // it into a double-booked instance — it simply DROPS the deadline, and the series
+  // came out undeadlined with nothing said. Mapped, every occurrence is due
+  // `deadline − when` days after its start.
+  let rule: RuleWithDeadline = baseRule;
+  let seedDeadline = add.deadline;
+  if (add.deadline !== undefined) {
+    if (afterCompletion === true) {
+      // The to-do verb can leave a deadline on an after-completion seed because
+      // that seed SURVIVES as the series' instance. An after-completion project's
+      // seed is deleted and its instance is minted deadline-free (RSIM-P P4), so
+      // the deadline would vanish either way — refuse rather than drop it quietly.
+      throw new RangeError(
+        "an after-completion repeating project cannot carry a --deadline: the rule has no calendar " +
+          "start to measure a per-occurrence deadline from, and the created project is replaced by " +
+          "the series' own instance, which is created without one — drop --after-completion to " +
+          "deadline every occurrence, or drop --deadline",
+      );
+    }
+    ({ rule, seedDeadline } = mapDeadlineOntoRule(baseRule, add.when, add.deadline, undefined));
+  }
+
   // Seed a pure-AX taxonomy: an area lands a selectable AREA-view row; otherwise
   // create in Someday (UIC4-f) so the promote skips the anytime-header problem.
   const seedWhen = add.when ?? (add.area === undefined ? "someday" : undefined);
@@ -1168,7 +1222,7 @@ export function runAddRepeatingProject(
     ...(add.notes !== undefined && { notes: add.notes }),
     ...(add.area !== undefined && { area: add.area }),
     ...(seedWhen !== undefined && { when: seedWhen }),
-    ...(add.deadline !== undefined && { deadline: add.deadline }),
+    ...(seedDeadline !== undefined && { deadline: seedDeadline }),
     ...(add.todos !== undefined && { todos: add.todos }),
     ...(add.items !== undefined && { items: add.items }),
     ...(add.createdAt !== undefined && { createdAt: add.createdAt }),

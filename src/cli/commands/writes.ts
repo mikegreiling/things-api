@@ -1988,7 +1988,12 @@ export function registerWriteCommands(program: Command): void {
           .option("--notes <text>", `notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
           .option("--area <ref>", "destination area (uuid or unique name)")
           .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
-          .option("--deadline <date>", "YYYY-MM-DD")
+          .option(
+            "--deadline <date>",
+            "YYYY-MM-DD — deadlines EVERY occurrence: each starts (deadline − --when) days " +
+              "before its own deadline (needs a concrete --when, on or before the deadline; " +
+              "not available with --after-completion)",
+          )
           .option("--todo <title>", "initial child to-do (repeatable)", collect, [])
           .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
           .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
