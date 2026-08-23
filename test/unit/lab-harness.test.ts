@@ -7,6 +7,7 @@ import {
   evaluateProbe,
   resolveExpectation,
 } from "../../lab/runner/evaluate.ts";
+import { selectReapableVms, type TartVmRow } from "../../lab/runner/tart.ts";
 import { computeDisruption, parseEventLog, sliceEvents } from "../../lab/runner/tier.ts";
 import type {
   DbSnapshot,
@@ -581,5 +582,65 @@ describe("activeProbes", () => {
       { ...base, id: "B" },
     ];
     expect(activeProbes(probes)).toHaveLength(2);
+  });
+});
+
+const vm = (name: string, running: boolean, accessedAt: string): TartVmRow => ({
+  name,
+  running,
+  accessedAt,
+});
+
+describe("selectReapableVms (gc politeness)", () => {
+  const RUN_START = "2026-08-22T20:00:00.000Z";
+
+  it("reaps a stopped run VM left behind by a crashed earlier run", () => {
+    const rows = [vm("things-run-u-20260822-101500", false, "2026-08-22T10:20:00.000Z")];
+    expect(selectReapableVms(rows, RUN_START)).toEqual({
+      reap: ["things-run-u-20260822-101500"],
+      spared: [],
+    });
+  });
+
+  it("never reaps a running VM, however old", () => {
+    const rows = [vm("things-run-simfid-20260801-090000", true, "2026-08-01T09:00:00.000Z")];
+    expect(selectReapableVms(rows, RUN_START)).toEqual({
+      reap: [],
+      spared: ["things-run-simfid-20260801-090000"],
+    });
+  });
+
+  it("spares a stopped VM tart touched after this run started (a sibling mid-campaign)", () => {
+    const rows = [vm("things-run-simfid-20260822-200500", false, "2026-08-22T20:05:00.000Z")];
+    expect(selectReapableVms(rows, RUN_START).reap).toEqual([]);
+  });
+
+  it("ignores VMs outside the run prefix (goldens are never candidates)", () => {
+    const rows = [
+      vm("things-lab-golden-v4", false, "2026-08-01T00:00:00.000Z"),
+      vm("things-lab-golden-v3", true, "2026-08-01T00:00:00.000Z"),
+    ];
+    expect(selectReapableVms(rows, RUN_START)).toEqual({ reap: [], spared: [] });
+  });
+
+  it("fails closed on an unparseable accessed timestamp", () => {
+    const rows = [vm("things-run-u-20260822-101500", false, "")];
+    expect(selectReapableVms(rows, RUN_START)).toEqual({
+      reap: [],
+      spared: ["things-run-u-20260822-101500"],
+    });
+  });
+
+  it("partitions a mixed host: strays reaped, sibling slots spared", () => {
+    const rows = [
+      vm("things-lab-golden-v4", false, "2026-08-01T00:00:00.000Z"),
+      vm("things-run-u-20260821-235900", false, "2026-08-21T23:59:00.000Z"),
+      vm("things-run-simfid-20260822-195500", true, "2026-08-22T19:55:00.000Z"),
+      vm("things-run-rsim-20260822-200100", false, "2026-08-22T20:01:00.000Z"),
+    ];
+    expect(selectReapableVms(rows, RUN_START)).toEqual({
+      reap: ["things-run-u-20260821-235900"],
+      spared: ["things-run-simfid-20260822-195500", "things-run-rsim-20260822-200100"],
+    });
   });
 });
