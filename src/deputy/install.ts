@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import type { HelpersMode } from "../config.ts";
 import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
+import { EXPECTED_PROXIES } from "../write/availability.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import {
   DEPUTY_LAUNCHD_LABEL,
@@ -27,11 +28,14 @@ import {
   READER_LAUNCHD_LABEL,
   DEPUTY_PROTOCOL_VERSION,
   type DeputyHello,
+  type DeputyOsaResult,
+  DeputyRequestError,
   type ReaderHello,
   deputyInstalledBinaryPath,
   deputySocketPath,
   deputyStateDir,
   deputyTokenPath,
+  EXPECTED_HELPERS_VERSION,
   helpersInstallDir,
   helpersInstalledBundlePath,
   readerInstalledAppPath,
@@ -436,6 +440,457 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
 
 function syncSleepMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// ---------------------------------------------------------------------------
+// The onboarding ceremony (docs/design/helpers-onboarding.md)
+// ---------------------------------------------------------------------------
+
+/** How long a consent dialog may stay unanswered before the leg is left pending. */
+const AUTOMATION_PROMPT_TIMEOUT_MS = 120_000;
+/** How long the Accessibility toggle is waited for, and how often it is re-read. */
+const AX_WAIT_TIMEOUT_MS = 120_000;
+const AX_POLL_INTERVAL_MS = 2000;
+/** The deputy kills its child at timeoutMs; the client deadline adds grace. */
+const CLIENT_GRACE_MS = 5000;
+
+const AX_SETTINGS_URL =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+export type OnboardLeg =
+  | "reader-read-grant"
+  | "automation-things"
+  | "automation-system-events"
+  | "accessibility"
+  | "shortcuts";
+
+/**
+ * Where a leg stands after the ceremony. `pending` is a HUMAN-pace outcome (a
+ * dialog left unanswered, a toggle not yet flipped) and is not a failure —
+ * rerunning resumes exactly where it stopped. Only `denied` means macOS (or
+ * the user) refused, and only that makes the command exit nonzero.
+ */
+export type OnboardState = "granted" | "denied" | "pending" | "skipped-not-installed";
+
+export interface OnboardStep {
+  leg: OnboardLeg;
+  /** The row label in the closing report. */
+  label: string;
+  state: OnboardState;
+  /** True when the leg was already satisfied, detected without raising anything. */
+  alreadyGranted: boolean;
+  detail: string;
+}
+
+export interface HelpersOnboardResult {
+  steps: OnboardStep[];
+  /** Any leg refused. */
+  denied: boolean;
+  /** Any leg still waiting on a human. */
+  pending: boolean;
+  /** The single closing line printed under the report. */
+  closing: string;
+}
+
+/** The deputy transport the ceremony drives (a test seam — see {@link OnboardDeps}). */
+export interface OnboardChannel {
+  hello(): DeputyHello;
+  request(fields: Record<string, unknown>, timeoutMs: number): Record<string, unknown>;
+  close(): void;
+}
+
+export interface OnboardDeps {
+  /** One line per step, as it happens. Default: stdout. */
+  progress?: (line: string) => void;
+  channel?: OnboardChannel;
+  /** Reader state, prompt-free: granted bookmark AND a database inside it. */
+  readerProbe?: () => { granted: boolean; locates: boolean } | null;
+  /** The reader's panel ceremony (default: {@link grantReader}). */
+  grant?: () => { granted: boolean; detail: string };
+  /** Best-effort deep link into System Settings. Default: `open <url>`. */
+  openUrl?: (url: string) => void;
+  sleep?: (ms: number) => void;
+  now?: () => number;
+  automationTimeoutMs?: number;
+  axTimeoutMs?: number;
+  axIntervalMs?: number;
+}
+
+/** A live sync bridge to the deputy socket, independent of the routing config. */
+function openDeputyChannel(env: NodeJS.ProcessEnv): OnboardChannel {
+  const socketPath = deputySocketPath(env);
+  const tokenPath = deputyTokenPath(env);
+  if (!existsSync(socketPath) || !existsSync(tokenPath)) {
+    throw new Error(
+      `the deputy is not running (no socket at ${socketPath}) — run \`things helpers install\` first`,
+    );
+  }
+  const token = readFileSync(tokenPath, "utf8").trim();
+  const bridge = new DeputySyncBridge(socketPath);
+  const request = (fields: Record<string, unknown>, timeoutMs: number): Record<string, unknown> => {
+    const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, ...fields }, timeoutMs);
+    if (res["ok"] === true) return res;
+    const err = res["error"] as { code?: string; message?: string } | undefined;
+    throw new DeputyRequestError(err?.code ?? "internal", err?.message ?? "the deputy refused");
+  };
+  return {
+    hello: () => request({ verb: "hello" }, 5000) as unknown as DeputyHello,
+    request,
+    close: () => {
+      bridge.close();
+    },
+  };
+}
+
+/** Reader handshake + a `locate` inside the granted scope, on one connection. */
+function readerProbeDefault(env: NodeJS.ProcessEnv): { granted: boolean; locates: boolean } | null {
+  const socketPath = readerSocketPath(env);
+  const tokenPath = readerTokenPath(env);
+  if (!existsSync(socketPath) || !existsSync(tokenPath)) return null;
+  const token = readFileSync(tokenPath, "utf8").trim();
+  const bridge = new DeputySyncBridge(socketPath);
+  try {
+    const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
+    if (res["ok"] !== true) return null;
+    const granted = (res as { granted?: boolean }).granted === true;
+    if (!granted) return { granted: false, locates: false };
+    const locate = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "locate" }, 5000);
+    return { granted: true, locates: locate["ok"] === true };
+  } catch {
+    return null;
+  } finally {
+    bridge.close();
+  }
+}
+
+function firstLine(text: string): string {
+  return text.trim().split("\n")[0]?.trim() ?? "";
+}
+
+/**
+ * One Automation leg: skipped when the deputy already reports the target
+ * granted, otherwise a benign AppleEvent sent THROUGH the deputy — the request
+ * blocks while the consent dialog is up, so answering it right there is what
+ * completes the leg. The event auto-launches its target, which is intended:
+ * macOS has no consent record to hand out while the target is down.
+ */
+function automationLeg(
+  channel: OnboardChannel,
+  spec: { leg: OnboardLeg; label: string; script: string; settingsName: string },
+  known: string | undefined,
+  timeoutMs: number,
+  progress: (line: string) => void,
+): OnboardStep {
+  const base = { leg: spec.leg, label: spec.label };
+  if (known === "granted") {
+    progress(`${spec.label}: already granted`);
+    return { ...base, state: "granted", alreadyGranted: true, detail: "already granted" };
+  }
+  if (known === "denied") {
+    progress(`${spec.label}: denied — the dialog cannot be raised again`);
+    return {
+      ...base,
+      state: "denied",
+      alreadyGranted: false,
+      detail: `turn on Things API Helper under System Settings ▸ Privacy & Security ▸ Automation ▸ ${spec.settingsName}, then rerun`,
+    };
+  }
+  progress(`${spec.label}: asking now — answer the dialog if one appears`);
+  let res: DeputyOsaResult;
+  try {
+    res = channel.request(
+      { verb: "osascript", script: spec.script, lang: "applescript", timeoutMs },
+      timeoutMs + CLIENT_GRACE_MS,
+    ) as unknown as DeputyOsaResult;
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    progress(`${spec.label}: no answer (${why})`);
+    return { ...base, state: "pending", alreadyGranted: false, detail: why };
+  }
+  if (res.timedOut === true) {
+    progress(`${spec.label}: still waiting on the dialog`);
+    return {
+      ...base,
+      state: "pending",
+      alreadyGranted: false,
+      detail: `no answer within ${Math.round(timeoutMs / 1000)}s — answer the dialog, then rerun`,
+    };
+  }
+  if (res.exitCode === 0) {
+    progress(`${spec.label}: granted`);
+    return { ...base, state: "granted", alreadyGranted: false, detail: "granted" };
+  }
+  if (res.stderr.includes("-1743")) {
+    progress(`${spec.label}: denied`);
+    return {
+      ...base,
+      state: "denied",
+      alreadyGranted: false,
+      detail: `turn on Things API Helper under System Settings ▸ Privacy & Security ▸ Automation ▸ ${spec.settingsName}, then rerun`,
+    };
+  }
+  const why = firstLine(res.stderr) || `exit ${res.exitCode}`;
+  progress(`${spec.label}: no grant yet (${why})`);
+  return { ...base, state: "pending", alreadyGranted: false, detail: why };
+}
+
+/**
+ * The Accessibility leg. Unlike Automation, the grant is not a dialog answer
+ * but a switch in System Settings, so the prompt is fire-and-forget and the
+ * ceremony polls the deputy's own trust bit until it flips.
+ */
+function accessibilityLeg(
+  channel: OnboardChannel,
+  axTrusted: boolean | undefined,
+  deps: Required<Pick<OnboardDeps, "progress" | "openUrl" | "sleep" | "now">> & {
+    timeoutMs: number;
+    intervalMs: number;
+  },
+): OnboardStep {
+  const base = { leg: "accessibility" as const, label: "accessibility" };
+  if (axTrusted === true) {
+    deps.progress("accessibility: already granted");
+    return { ...base, state: "granted", alreadyGranted: true, detail: "already granted" };
+  }
+  try {
+    const res = channel.request({ verb: "prime-ax" }, 10_000);
+    if (res["axTrusted"] === true) {
+      deps.progress("accessibility: already granted");
+      return { ...base, state: "granted", alreadyGranted: true, detail: "already granted" };
+    }
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    deps.progress(`accessibility: could not raise the prompt (${why})`);
+    return { ...base, state: "pending", alreadyGranted: false, detail: why };
+  }
+  deps.progress(
+    'accessibility: System Settings ▸ Privacy & Security ▸ Accessibility — turn on "Things API Helper"',
+  );
+  deps.openUrl(AX_SETTINGS_URL);
+  deps.progress("accessibility: waiting for the toggle — Ctrl-C and rerun anytime");
+  const deadline = deps.now() + deps.timeoutMs;
+  while (deps.now() < deadline) {
+    deps.sleep(deps.intervalMs);
+    try {
+      if (channel.hello().axTrusted === true) {
+        deps.progress("accessibility: granted");
+        return { ...base, state: "granted", alreadyGranted: false, detail: "granted" };
+      }
+    } catch {
+      // A restart mid-wait (or a momentary hiccup) is not an answer — keep
+      // asking until the deadline; the state is whatever the last read said.
+    }
+  }
+  deps.progress("accessibility: not toggled yet");
+  return {
+    ...base,
+    state: "pending",
+    alreadyGranted: false,
+    detail: `still off after ${Math.round(deps.timeoutMs / 1000)}s — turn on "Things API Helper" under System Settings ▸ Privacy & Security ▸ Accessibility, then rerun`,
+  };
+}
+
+/** The bundled proxy shortcuts, counted through the deputy's `shortcuts list`. */
+function shortcutsLeg(channel: OnboardChannel, progress: (line: string) => void): OnboardStep {
+  const base = { leg: "shortcuts" as const, label: "shortcuts" };
+  let installed: Set<string>;
+  try {
+    const res = channel.request(
+      { verb: "shortcuts", op: "list", timeoutMs: 20_000 },
+      20_000 + CLIENT_GRACE_MS,
+    ) as unknown as DeputyOsaResult;
+    if (res.exitCode !== 0 || res.timedOut === true) {
+      const why = firstLine(res.stderr) || `exit ${res.exitCode}`;
+      progress(`shortcuts: could not list them (${why})`);
+      return { ...base, state: "pending", alreadyGranted: false, detail: why };
+    }
+    installed = new Set(
+      res.stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== ""),
+    );
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    progress(`shortcuts: could not list them (${why})`);
+    return { ...base, state: "pending", alreadyGranted: false, detail: why };
+  }
+  const missing = EXPECTED_PROXIES.filter((name) => !installed.has(name));
+  if (missing.length === 0) {
+    progress(`shortcuts: all ${EXPECTED_PROXIES.length} installed`);
+    return {
+      ...base,
+      state: "granted",
+      alreadyGranted: true,
+      detail: `all ${EXPECTED_PROXIES.length} installed`,
+    };
+  }
+  progress(`shortcuts: ${missing.length} missing — run \`things setup\``);
+  return {
+    ...base,
+    state: "skipped-not-installed",
+    alreadyGranted: false,
+    detail: `missing ${missing.join(", ")} — run \`things setup\` (it opens the import screen for each)`,
+  };
+}
+
+/** The reader's durable read grant — skipped when a database already resolves inside it. */
+function readerLeg(
+  env: NodeJS.ProcessEnv,
+  deps: Required<Pick<OnboardDeps, "progress" | "readerProbe" | "grant">>,
+): OnboardStep {
+  const base = { leg: "reader-read-grant" as const, label: "reader read grant" };
+  if (!existsSync(readerInstalledAppPath(env))) {
+    deps.progress("reader read grant: the reader is not part of the installed bundle");
+    return {
+      ...base,
+      state: "skipped-not-installed",
+      alreadyGranted: false,
+      detail:
+        "the bundle was built without things-reader (no Apple-issued signing identity) — database reads run direct",
+    };
+  }
+  const probe = deps.readerProbe();
+  if (probe !== null && probe.granted && probe.locates) {
+    deps.progress("reader read grant: already granted");
+    return { ...base, state: "granted", alreadyGranted: true, detail: "already granted" };
+  }
+  deps.progress("reader read grant: accept the folder panel the reader is opening");
+  const result = deps.grant();
+  if (result.granted) {
+    deps.progress("reader read grant: granted");
+    return { ...base, state: "granted", alreadyGranted: false, detail: "granted" };
+  }
+  deps.progress(`reader read grant: not granted (${result.detail})`);
+  return { ...base, state: "pending", alreadyGranted: false, detail: result.detail };
+}
+
+function closingLine(steps: OnboardStep[], mode: HelpersMode): string {
+  const denied = steps.filter((s) => s.state === "denied");
+  if (denied.length > 0) {
+    return `${denied.map((s) => s.label).join(" and ")} ${denied.length === 1 ? "is" : "are"} denied — grant it in System Settings ▸ Privacy & Security, then rerun \`things helpers grant\`.`;
+  }
+  const pending = steps.filter((s) => s.state === "pending");
+  if (pending.length > 0) {
+    return `${pending.map((s) => s.label).join(", ")} still needs you — rerun \`things helpers grant\` when it is done; everything already granted is skipped.`;
+  }
+  const shortcutsMissing = steps.some(
+    (s) => s.leg === "shortcuts" && s.state === "skipped-not-installed",
+  );
+  if (mode === "false") {
+    return "everything asked for is granted, but routing is off — `things config set helpers-enabled auto` to send reads and writes through the helpers.";
+  }
+  const base = "you're done — writes and reads route through the helpers with no further prompts.";
+  return shortcutsMissing
+    ? `${base} The bundled shortcuts are still missing; run \`things setup\` if you want that path too.`
+    : base;
+}
+
+/**
+ * The full onboarding ceremony behind `things helpers grant`: fire every
+ * consent macOS will ever ask for while a human is sitting there, then report
+ * where each one landed. Every leg is IDEMPOTENT — an already-granted leg is
+ * detected prompt-free (the deputy's own `hello` carries its TCC standing) and
+ * skipped — so a rerun on a fully onboarded machine raises nothing and reports
+ * all-green. Interactive by design: run it at the machine.
+ *
+ * Throws when the helpers are not installed or the deputy does not answer;
+ * every other outcome is reported per leg. See docs/design/helpers-onboarding.md.
+ */
+export function onboardHelpers(
+  mode: HelpersMode,
+  env: NodeJS.ProcessEnv = process.env,
+  deps: OnboardDeps = {},
+): HelpersOnboardResult {
+  const progress =
+    deps.progress ??
+    ((line: string) => {
+      process.stdout.write(`${line}\n`);
+    });
+  if (deps.channel === undefined && !existsSync(deputyInstalledBinaryPath(env))) {
+    throw new Error("the helpers are not installed — run `things helpers install` first");
+  }
+  const channel = deps.channel ?? openDeputyChannel(env);
+  const steps: OnboardStep[] = [];
+  try {
+    let hello: DeputyHello;
+    try {
+      hello = channel.hello();
+    } catch (err) {
+      throw new Error(
+        `the deputy is installed but did not answer (${err instanceof Error ? err.message : String(err)}) — \`things helpers restart\`, then rerun`,
+        { cause: err },
+      );
+    }
+    if (hello.deputyVersion !== EXPECTED_HELPERS_VERSION) {
+      progress(
+        `note: the installed helpers are v${hello.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} — rebuild with \`bash scripts/build-helpers.sh\` and rerun \`things helpers install\` for the full ceremony`,
+      );
+    }
+    steps.push(
+      readerLeg(env, {
+        progress,
+        readerProbe: deps.readerProbe ?? (() => readerProbeDefault(env)),
+        grant: deps.grant ?? (() => grantReader(env)),
+      }),
+    );
+    const automationTimeoutMs = deps.automationTimeoutMs ?? AUTOMATION_PROMPT_TIMEOUT_MS;
+    steps.push(
+      automationLeg(
+        channel,
+        {
+          leg: "automation-things",
+          label: "automation → Things",
+          script: 'tell application "Things3" to version',
+          settingsName: "Things3",
+        },
+        hello.automation?.things,
+        automationTimeoutMs,
+        progress,
+      ),
+    );
+    steps.push(
+      automationLeg(
+        channel,
+        {
+          leg: "automation-system-events",
+          label: "automation → System Events",
+          script: 'tell application "System Events" to name of first process',
+          settingsName: "System Events",
+        },
+        hello.automation?.systemEvents,
+        automationTimeoutMs,
+        progress,
+      ),
+    );
+    steps.push(
+      accessibilityLeg(channel, hello.axTrusted, {
+        progress,
+        openUrl: deps.openUrl ?? openUrlBestEffort,
+        sleep: deps.sleep ?? syncSleepMs,
+        now: deps.now ?? Date.now,
+        timeoutMs: deps.axTimeoutMs ?? AX_WAIT_TIMEOUT_MS,
+        intervalMs: deps.axIntervalMs ?? AX_POLL_INTERVAL_MS,
+      }),
+    );
+    steps.push(shortcutsLeg(channel, progress));
+  } finally {
+    channel.close();
+  }
+  return {
+    steps,
+    denied: steps.some((s) => s.state === "denied"),
+    pending: steps.some((s) => s.state === "pending"),
+    closing: closingLine(steps, mode),
+  };
+}
+
+function openUrlBestEffort(url: string): void {
+  try {
+    execFileSync("open", [url], { stdio: "ignore", timeout: 10_000 });
+  } catch {
+    // The deep link is a convenience; the written path works without it.
+  }
 }
 
 export interface DeputyHalfStatus {

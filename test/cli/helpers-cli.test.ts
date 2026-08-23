@@ -7,14 +7,52 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildProgram } from "../../src/cli/main.ts";
+import {
+  deputySocketPath,
+  deputyTokenPath,
+  EXPECTED_HELPERS_VERSION,
+} from "../../src/deputy/protocol.ts";
+import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
 
 let stateDir: string;
 let stdout: string[];
 let stderr: string[];
+let workers: Worker[] = [];
 const savedEnv: Record<string, string | undefined> = {};
+
+const TOKEN = "beef".repeat(16);
+
+/**
+ * A mock deputy answering on the state dir's socket. `tcc` carries the TCC
+ * standing helpers 1.2.0+ report in `hello`; omitting it mocks an OLDER
+ * deputy, whose status rows must simply not appear.
+ */
+async function startMockDeputy(tcc?: {
+  axTrusted: boolean;
+  automation: { things: string; systemEvents: string };
+}): Promise<void> {
+  mkdirSync(join(stateDir, "deputy"), { recursive: true });
+  writeFileSync(deputyTokenPath(process.env), TOKEN);
+  const worker = new Worker(new URL("../unit/helpers/mock-deputy-worker.ts", import.meta.url), {
+    workerData: {
+      socketPath: deputySocketPath(process.env),
+      token: TOKEN,
+      deputyVersion: EXPECTED_HELPERS_VERSION,
+      protocol: 1,
+      dbPath: null,
+      helloDbPath: null,
+      sqlRows: [],
+      osaResult: { exitCode: 0, stdout: "", stderr: "" },
+      ...tcc,
+    },
+  });
+  workers.push(worker);
+  await new Promise((resolve) => worker.once("message", resolve));
+}
 
 async function run(argv: string[]): Promise<void> {
   const program = buildProgram();
@@ -50,7 +88,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const worker of workers) await worker.terminate();
+  workers = [];
+  resetDeputyRoutingForTests();
   vi.restoreAllMocks();
   process.exitCode = undefined;
   for (const [key, value] of Object.entries(savedEnv)) {
@@ -138,6 +179,50 @@ describe("helpers install", () => {
   it("refuses cleanly when no bundle has been built", async () => {
     await run(["helpers", "install", "--bundle", join(stateDir, "missing-bundle.app")]);
     expect(stderr.join("")).toContain("not found");
+    expect(process.exitCode).toBe(7);
+  });
+});
+
+describe("helpers status — the deputy's TCC standing", () => {
+  it("renders the automation and accessibility rows the handshake carries", async () => {
+    await startMockDeputy({
+      axTrusted: false,
+      automation: { things: "granted", systemEvents: "not-running" },
+    });
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    expect(out).toContain("automation: Things granted, System Events not-running");
+    expect(out).toContain("accessibility: not granted");
+    expect(out).toContain("next: `things helpers grant`");
+  });
+
+  it("omits both rows for a deputy that predates them", async () => {
+    await startMockDeputy();
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    expect(out).toContain("version:");
+    expect(out).not.toContain("automation:");
+    expect(out).not.toContain("accessibility:");
+  });
+
+  it("--json carries the fields through untouched", async () => {
+    await startMockDeputy({
+      axTrusted: true,
+      automation: { things: "granted", systemEvents: "granted" },
+    });
+    await run(["helpers", "status", "--json"]);
+    const parsed = JSON.parse(stdout.join("")) as {
+      data: { deputy: { hello: { axTrusted: boolean; automation: { things: string } } } };
+    };
+    expect(parsed.data.deputy.hello.axTrusted).toBe(true);
+    expect(parsed.data.deputy.hello.automation.things).toBe("granted");
+  });
+});
+
+describe("helpers grant", () => {
+  it("refuses on a machine with nothing installed and names the install command", async () => {
+    await run(["helpers", "grant"]);
+    expect(stderr.join("")).toContain("things helpers install");
     expect(process.exitCode).toBe(7);
   });
 });

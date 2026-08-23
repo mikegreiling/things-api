@@ -16,13 +16,15 @@
 import type { Command } from "commander";
 
 import {
+  type HelpersOnboardResult,
   type HelpersStatus,
   helpersStatus,
   ExitCode,
-  grantReader,
   installHelpers,
   loadConfig,
   okEnvelope,
+  onboardHelpers,
+  type OnboardStep,
   restartHelpers,
   uninstallHelpers,
   type EnvelopeMeta,
@@ -71,6 +73,23 @@ function renderStatus(status: HelpersStatus): string {
     lines.push(
       `  version: ${deputy.hello.deputyVersion} (protocol ${deputy.hello.protocol}, pid ${deputy.hello.pid})`,
     );
+    // Absent on helpers older than 1.2.0 — the rows are simply omitted there
+    // rather than guessed at.
+    if (deputy.hello.automation !== undefined) {
+      lines.push(
+        `  automation: Things ${deputy.hello.automation.things}, System Events ${deputy.hello.automation.systemEvents}`,
+      );
+    }
+    if (deputy.hello.axTrusted !== undefined) {
+      lines.push(`  accessibility: ${deputy.hello.axTrusted ? "granted" : "not granted"}`);
+    }
+    if (
+      deputy.hello.axTrusted === false ||
+      deputy.hello.automation?.things === "denied" ||
+      deputy.hello.automation?.systemEvents === "denied"
+    ) {
+      lines.push("  next: `things helpers grant` — one sitting settles every outstanding prompt");
+    }
   }
   if (deputy.signing !== null) {
     lines.push(
@@ -95,6 +114,16 @@ function renderStatus(status: HelpersStatus): string {
     lines.push("  next: `things helpers restart` — the socket is present but no handshake answers");
   }
   return `${lines.join("\n")}\n`;
+}
+
+/** The closing report: one row per permission, then the single next-step line. */
+function renderOnboard(result: HelpersOnboardResult): string {
+  const width = Math.max(...result.steps.map((step: OnboardStep) => step.label.length));
+  const rows = result.steps.map(
+    (step: OnboardStep) =>
+      `  ${step.label.padEnd(width)}  ${step.state}${step.state === "granted" ? "" : ` — ${step.detail}`}`,
+  );
+  return `\n${rows.join("\n")}\n\n${result.closing}\n`;
 }
 
 export function registerHelpers(program: Command): void {
@@ -151,10 +180,13 @@ export function registerHelpers(program: Command): void {
             result.readerGranted === true
               ? "reader: granted — file reads ride the scoped reader\n"
               : result.readerGranted === false
-                ? "reader: installed — run `things helpers grant` once to give it durable read access\n"
+                ? "reader: installed, no read access yet\n"
                 : "reader: installed, not answering yet — check `things helpers status`\n",
           );
         }
+        process.stdout.write(
+          "next: `things helpers grant` — one sitting settles every macOS permission the helpers need\n",
+        );
         for (const warning of result.warnings) {
           process.stderr.write(`warning: ${warning}\n`);
         }
@@ -168,21 +200,39 @@ export function registerHelpers(program: Command): void {
   helpers
     .command("grant")
     .description(
-      "One-time ceremony: opens a folder panel presented by the sandboxed reader helper, " +
-        "already showing the Things data folder. Accepting gives the reader durable read " +
-        "access to exactly that folder — it survives restarts, reboots, and updates, and " +
-        "macOS enforces that the reader can reach nothing else. Interactive: run this at " +
-        "the machine, not from an unattended session.",
+      "One sitting that settles every macOS permission the helpers need: a folder panel " +
+        "for durable read access to the Things data folder, the two app-control prompts " +
+        "(Things and System Events), the Accessibility switch, and a check that the " +
+        "bundled shortcuts are installed. Already-granted steps are detected and skipped, " +
+        "so rerunning is safe and prompts nothing. Interactive: run this at the machine, " +
+        "not from an unattended session.",
     )
-    .action(() => {
-      const result = grantReader();
-      if (result.granted) {
-        process.stdout.write("granted — file reads now ride the scoped reader\n");
-        process.exitCode = ExitCode.Ok;
-      } else {
-        process.stderr.write(`not granted: ${result.detail}\n`);
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .action((opts: { json?: boolean }) => {
+      const started = Date.now();
+      // Under --json stdout belongs to the envelope alone; the human still
+      // needs the instructions, so progress goes to stderr instead.
+      const progress = (line: string): void => {
+        (opts.json === true ? process.stderr : process.stdout).write(`${line}\n`);
+      };
+      let result: HelpersOnboardResult;
+      try {
+        result = onboardHelpers(loadConfig().helpersMode, process.env, { progress });
+      } catch (err) {
+        process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
         process.exitCode = ExitCode.Environment;
+        return;
       }
+      if (opts.json === true) {
+        process.stdout.write(
+          `${JSON.stringify(okEnvelope("helpers-onboard", result, envelopeMeta(started)))}\n`,
+        );
+      } else {
+        process.stdout.write(renderOnboard(result));
+      }
+      // A human-pace `pending` is not a failure — the ceremony resumes on the
+      // next run. Only a refusal earns a nonzero exit.
+      process.exitCode = result.denied ? ExitCode.Environment : ExitCode.Ok;
     });
 
   helpers

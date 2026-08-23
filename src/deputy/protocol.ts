@@ -25,7 +25,7 @@ export const DEPUTY_PROTOCOL_VERSION = 1;
  * any helper-source change; a drift test asserts this constant matches it.
  * The PROTOCOL version above remains the hard compatibility gate.
  */
-export const EXPECTED_HELPERS_VERSION = "1.1.0";
+export const EXPECTED_HELPERS_VERSION = "1.2.0";
 
 /** The outer helper bundle's identifier (Things API Helper.app) — TCC + BTM identity. */
 export const HELPERS_BUNDLE_ID = "com.pixelcog.things-api-helper";
@@ -120,6 +120,19 @@ export class DeputyRequestError extends Error {
   }
 }
 
+/**
+ * One Automation target's standing, as the deputy reads it prompt-free:
+ * `not-running` means the target was not up, so macOS had no answer to give;
+ * `unknown` covers "never asked" (the consent record does not exist yet) and
+ * anything unrecognized. Only `granted` lets the ceremony skip that leg.
+ */
+export type AutomationPermission = "granted" | "denied" | "not-running" | "unknown";
+
+export interface DeputyAutomationStatus {
+  things: AutomationPermission;
+  systemEvents: AutomationPermission;
+}
+
 export interface DeputyHello {
   protocol: number;
   deputyVersion: string;
@@ -127,6 +140,14 @@ export interface DeputyHello {
   /** Reader only: its cached container-db resolution (absent on the deputy). */
   dbPath?: string | null;
   uptimeMs: number;
+  /**
+   * The deputy's own Accessibility trust. Absent on helpers older than 1.2.0
+   * (and on the reader, which drives nothing) — absent means "unknown", never
+   * "false".
+   */
+  axTrusted?: boolean;
+  /** The deputy's Automation standing per target. Absent on helpers older than 1.2.0. */
+  automation?: DeputyAutomationStatus;
 }
 
 /**

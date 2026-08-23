@@ -14,7 +14,7 @@ import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
 import { createDeputyDbFacade } from "./deputy/db-facade.ts";
 import { helpersStatus, type HelpersStatus } from "./deputy/install.ts";
-import { EXPECTED_HELPERS_VERSION } from "./deputy/protocol.ts";
+import { type DeputyHello, EXPECTED_HELPERS_VERSION } from "./deputy/protocol.ts";
 import {
   deputyDbPath,
   deputyRoutesDb,
@@ -124,6 +124,19 @@ export interface HelpersReportDeps {
   routing?: HelpersRouting;
 }
 
+/**
+ * Does the deputy still owe macOS a consent it can only collect with a human
+ * present? Reads the TCC standing its handshake carries (helpers v1.2.0+);
+ * an older deputy reports nothing here, so nothing is claimed about it.
+ */
+function outstandingConsent(hello: DeputyHello | null): boolean {
+  if (hello === null) return false;
+  if (hello.axTrusted === false) return true;
+  const automation = hello.automation;
+  if (automation === undefined) return false;
+  return automation.things !== "granted" || automation.systemEvents !== "granted";
+}
+
 function buildHelpersReport(configMode: HelpersMode, deps: HelpersReportDeps = {}): HelpersReport {
   // The routing resolution carries the mode it resolved (helpersRouting reads
   // the same config), so the section has ONE source for it.
@@ -145,7 +158,9 @@ function buildHelpersReport(configMode: HelpersMode, deps: HelpersReportDeps = {
           ? "`things helpers grant` once, at the machine, to give the reader durable read access"
           : status.bundleInstalled && !status.deputy.running
             ? "`things helpers install` (re-registers both helpers with launchd and starts them)"
-            : null;
+            : outstandingConsent(status.deputy.hello)
+              ? "`things helpers grant` once, at the machine — one sitting settles every macOS permission the helpers still need"
+              : null;
   const detail =
     mode === "false"
       ? "routing off — every primitive runs in this process (`things config set helpers-enabled auto` to use an installed helper)"

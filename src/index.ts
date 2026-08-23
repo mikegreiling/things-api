@@ -227,6 +227,7 @@ export {
   helpersStatus,
   installedHelpersVersion,
   installHelpers,
+  onboardHelpers,
   readerPlistPath,
   restartHelpers,
   uninstallHelpers,
@@ -235,8 +236,14 @@ export type {
   DeputyHalfStatus,
   DeputySigning,
   HelpersInstallResult,
+  HelpersOnboardResult,
   HelpersStatus,
   HelpersUninstallResult,
+  OnboardChannel,
+  OnboardDeps,
+  OnboardLeg,
+  OnboardState,
+  OnboardStep,
   ReaderHalfStatus,
 } from "./deputy/install.ts";
 export {
@@ -245,6 +252,11 @@ export {
   helpersInstallDir,
   helpersInstalledBundlePath,
   readerInstalledAppPath,
+} from "./deputy/protocol.ts";
+export type {
+  AutomationPermission,
+  DeputyAutomationStatus,
+  DeputyHello,
 } from "./deputy/protocol.ts";
 export { deputyRouting, helpersRouting, readerRouting } from "./deputy/routing.ts";
 export type { DeputyRouting, HelpersRouting } from "./deputy/routing.ts";

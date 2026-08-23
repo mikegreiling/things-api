@@ -12,7 +12,7 @@ Two small launchd-supervised Swift helpers, shipped inside ONE signed bundle (`T
 ```sh
 bash scripts/build-helpers.sh        # swiftc → deputy/build/Things API Helper.app, signed when an identity exists
 things helpers install               # copy to the stable path + launchd bootstrap (both halves)
-things helpers grant                 # ONCE: accept the panel → durable scoped read grant for the reader
+things helpers grant                 # ONCE, at the machine: the full consent ceremony (read grant, both Automation prompts, Accessibility, shortcuts census)
 things helpers status                # verify: running, signed, granted
 ```
 
@@ -37,7 +37,7 @@ Rebuild flow after pulling changes: `bash scripts/build-helpers.sh && things hel
 
 ## Protocol
 
-JSON lines over each UNIX socket; one request → one response. Deputy verbs: `hello`, `osascript` (`{script, lang, timeoutMs}` → `{exitCode, stdout, stderr, timedOut?, signal?}` — the deputy kills the child at the deadline, so a dead caller never leaves an unbounded osascript), `shortcuts` (`op: "list"`, or `op: "run"` restricted to the bundled `things-proxy-*` names, fixed argv, same deadline-kill). Reader verbs: `hello` (carries `granted`), `sql` (`{sql, params}` → `{rows}`; BLOBs as `{"$b64": …}`), `read-file`, `locate`. Each half answers the other's verbs with `unsupported-verb`. TypeScript twin: `src/deputy/protocol.ts`.
+JSON lines over each UNIX socket; one request → one response. Deputy verbs: `hello` (carries the deputy's own prompt-free TCC standing: `axTrusted`, `automation.{things,systemEvents}` ∈ granted|denied|not-running|unknown — see `src/tcc.swift`), `prime-ax` (raises the Accessibility dialog for the deputy's identity, fire-and-forget; the caller polls `hello`), `osascript` (`{script, lang, timeoutMs}` → `{exitCode, stdout, stderr, timedOut?, signal?}` — the deputy kills the child at the deadline, so a dead caller never leaves an unbounded osascript), `shortcuts` (`op: "list"`, or `op: "run"` restricted to the bundled `things-proxy-*` names, fixed argv, same deadline-kill). Reader verbs: `hello` (carries `granted`), `sql` (`{sql, params}` → `{rows}`; BLOBs as `{"$b64": …}`), `read-file`, `locate`. Each half answers the other's verbs with `unsupported-verb`. TypeScript twin: `src/deputy/protocol.ts`.
 
 ## Tests
 

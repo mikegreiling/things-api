@@ -23,6 +23,9 @@ interface MockConfig {
   helloDbPath: string | null;
   /** Mock a READER: hello carries role+granted; automation verbs refuse. */
   reader?: { granted: boolean };
+  /** hello's TCC standing (helpers 1.2.0+). Omitted = an OLDER deputy. */
+  axTrusted?: boolean;
+  automation?: { things: string; systemEvents: string };
   sqlRows: Record<string, unknown>[];
   osaResult: Record<string, unknown>;
 }
@@ -48,7 +51,13 @@ function respond(req: Record<string, unknown>): Record<string, unknown> {
         dbPath: cfg.helloDbPath,
         uptimeMs: 7,
         ...(cfg.reader !== undefined && { role: "reader", granted: cfg.reader.granted }),
+        ...(cfg.axTrusted !== undefined && { axTrusted: cfg.axTrusted }),
+        ...(cfg.automation !== undefined && { automation: cfg.automation }),
       };
+    case "prime-ax":
+      return cfg.axTrusted === undefined
+        ? { id, ok: false, error: { code: "bad-request", message: "unknown verb prime-ax" } }
+        : { id, ok: true, axTrusted: cfg.axTrusted };
     case "sql":
       return { id, ok: true, rows: cfg.sqlRows };
     case "osascript":
