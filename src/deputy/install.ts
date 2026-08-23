@@ -68,9 +68,27 @@ export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): st
   return join(helpersInstalledBundlePath(env), "Contents/Helpers/things-reader.app");
 }
 
-/** The build output of scripts/build-helpers.sh in this package checkout. */
-export function helpersDefaultBuildPath(): string {
-  return fileURLToPath(new URL("../../deputy/build/Things API Helper.app", import.meta.url));
+/**
+ * Where an install looks for the bundle when the caller names no path, in
+ * preference order: `deputy/prebuilt` — the signed + notarized bundle the
+ * release workflow stages into the published tarball, so an npm install needs
+ * neither Xcode nor a certificate — then `deputy/build`, the output of
+ * scripts/build-helpers.sh in a source checkout.
+ */
+export function helpersBundleCandidates(): string[] {
+  return [
+    fileURLToPath(new URL("../../deputy/prebuilt/Things API Helper.app", import.meta.url)),
+    fileURLToPath(new URL("../../deputy/build/Things API Helper.app", import.meta.url)),
+  ];
+}
+
+/** The first candidate bundle that carries a deputy executable; null when none does. */
+export function helpersDefaultBuildPath(): string | null {
+  return (
+    helpersBundleCandidates().find((path) =>
+      existsSync(join(path, "Contents/MacOS/things-deputy")),
+    ) ?? null
+  );
 }
 
 function readerLaunchTarget(): string {
@@ -223,6 +241,12 @@ export function installHelpers(
   env: NodeJS.ProcessEnv = process.env,
 ): HelpersInstallResult {
   const source = options.bundlePath ?? helpersDefaultBuildPath();
+  if (source === null) {
+    throw new Error(
+      `helpers bundle not found — looked for ${helpersBundleCandidates().join(" and ")}. ` +
+        `Build it first: bash scripts/build-helpers.sh`,
+    );
+  }
   if (!existsSync(join(source, "Contents/MacOS/things-deputy"))) {
     throw new Error(
       `helpers bundle not found at ${source} — build it first: bash scripts/build-helpers.sh`,

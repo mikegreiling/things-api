@@ -17,6 +17,8 @@ things helpers status                # verify: running, signed, granted
 things config set helpers-enabled true   # opt the CLI into routing (per-call: --helpers/--no-helpers)
 ```
 
+The build step above is the **source-checkout** path. A published `things-api` install already carries a signed + notarized bundle at `deputy/prebuilt/Things API Helper.app` (staged there by the release workflow), and `things helpers install` prefers it — so from an npm install the sequence starts at `things helpers install`, with no Xcode and no certificate. A local `deputy/build/` bundle is the fallback, which is what a checkout uses. Maintainer setup for the release-time signing secrets: [docs/design/release-signing.md](../docs/design/release-signing.md).
+
 Rebuild flow after pulling changes: `bash scripts/build-helpers.sh && things helpers install`. Install owns its `bin/` directory wholesale — every install is a fresh copy (which also resets the kernel's per-vnode code-signature cache), so there is no upgrade ceremony and no migration logic.
 
 **Never ad-hoc sign.** TCC identity follows the certificate; an ad-hoc identity changes per build, which silently re-introduces the grant churn these helpers exist to end. The build script picks the best stable identity present — **Developer ID Application** (distribution-grade, 5-year, notarizable) > **Apple Development** (Apple-issued dev cert) > the self-signed ceremony cert (`scripts/deputy-cert-setup.sh`; deputy-only — the sandboxed reader REQUIRES an Apple-issued chain and is skipped without one) — signing with hardened runtime + timestamp, and warns loudly when none exists. Verified 2026-08-20: an Apple-chain signature also stops the EDR exec-time conviction that killed unsigned builds (see design §3a).
