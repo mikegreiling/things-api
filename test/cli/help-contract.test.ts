@@ -377,6 +377,26 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--allow-non-empty");
   });
 
+  // #509: the runtime ACCEPTS a repeating template — it ends the series with the
+  // disclosure warnings and no undo token. The help said the opposite; these
+  // assertions keep the two from diverging again.
+  it("todo/project delete: deleting a repeating template ends the series (never 'unavailable')", () => {
+    for (const path of [
+      ["todo", "delete"],
+      ["project", "delete"],
+    ]) {
+      const help = helpFor(...(path as [string, string]));
+      expect(help).not.toMatch(/not available for repeating/i);
+      expect(help).toContain("stops generating new occurrences");
+      expect(help).toContain("existing occurrences are left in place");
+      expect(help).toContain("Put Back in the Things app's Trash");
+      expect(help).toContain("no undo token is returned");
+    }
+    expect(helpFor("todo", "delete")).toContain(
+      "Deleting a single occurrence leaves the series running",
+    );
+  });
+
   it("doctor: exit-code contract + setup guidance", () => {
     const help = helpFor("doctor");
     expect(help).toContain("Exit 0 healthy; 5 schema drift");

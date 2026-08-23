@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fixed — `delete`'s help said repeating to-dos were off limits; they are not, and the copy now says what actually happens (#509).** `things todo delete --help` and the MCP `delete` tool both claimed "not available for repeating to-dos", while the operation has accepted a repeating TEMPLATE since the 2026-08-13 ruling: it ends the series (no new occurrences), leaves the existing occurrences in place (the result names how many, and the current one), returns no undo token, and is reversible only through Put Back in the Things app's Trash. Both surfaces now state that, `things project delete --help` gained the same disclosure for repeating projects, and the wording is pinned by the help/description contract tests so runtime and copy cannot drift apart again. Behavior is unchanged. (`src/cli/commands/writes.ts`, `src/mcp/server.ts`. Tests: `test/cli/help-contract.test.ts`, `test/mcp/server.test.ts`.)
+
 - **Fixed — the lab runner's preflight garbage collection no longer deletes a concurrent campaign's VM.** `npm run lab:run` (and `npm run lab:gc`) reaped every `things-run-*` VM on the host, so starting a run destroyed the VM a sibling campaign was in the middle of using — the reason campaigns had to serialize even though the host allows two. The gc now reaps only VMs that are stopped AND that tart last accessed before the current run started; a running VM, or one touched since the run began, is left alone and reported instead. An unreadable access timestamp spares the VM. (`lab/runner/tart.ts`, `lab/runner/run.ts`, `lab/runner/main.ts`. Tests: `test/unit/lab-harness.test.ts`.)
 
 ## 0.18.0 — 2026-08-23
