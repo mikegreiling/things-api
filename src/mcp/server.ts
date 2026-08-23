@@ -2971,8 +2971,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "reference a tag by title) and unique per batch. IDEMPOTENCY: op_id makes resubmission " +
         "safe — an operation matching an earlier success is reported already-applied, not " +
         "re-created (put an op_id on EVERY operation so a stopped batch can be resubmitted " +
-        "verbatim to resume). The result adds temp_id_mapping (handle → uuid) and undo_token, " +
-        "which reverses the whole batch as one unit via the undo tool.",
+        "verbatim to resume). TIMELINE: preserve_modified applies to EVERY operation (an " +
+        "operation may override it with its own options.preserve_modified), so a bulk re-tag " +
+        "stays off the modification-date timeline under one undo token. The result adds " +
+        "temp_id_mapping (handle → uuid) and undo_token, which reverses the whole batch as one " +
+        "unit via the undo tool.",
       inputSchema: {
         ops: z
           .array(
@@ -2997,6 +3000,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                   acknowledge_tag_subtree: z.boolean().optional(),
                   allow_non_empty_area: z.boolean().optional(),
                   dangerously_drive_gui: z.boolean().optional(),
+                  preserve_modified: z
+                    .boolean()
+                    .optional()
+                    .describe(
+                      "Keep THIS operation off the modification-date timeline; overrides the " +
+                        "run-level preserve_modified (false opts one operation back on)",
+                    ),
                 })
                 .optional(),
             }),
@@ -3026,6 +3036,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             ...(o?.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
             ...(o?.allow_non_empty_area === true && { allowNonEmptyArea: true }),
             ...(o?.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
+            // Per-op override of the run-level preserve_modified; passed through
+            // when EXPLICIT (including false, which opts one op back onto the
+            // timeline) so the batch engine's `??` precedence sees it.
+            ...(o?.preserve_modified !== undefined && {
+              preserveModified: o.preserve_modified,
+            }),
             ...(ceiling !== undefined && { maxDisruption: ceiling }),
           };
           return {
@@ -3039,6 +3055,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const batchResult = await getClient().write.batch(ops, {
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.continue_on_error === true && { continueOnError: true }),
+          ...(args.preserve_modified === true && { preserveModified: true }),
           actor: mcpActor(),
         });
         // First block: the per-op results, each FLATTENED to the wire shape (a

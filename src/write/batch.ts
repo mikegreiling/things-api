@@ -27,6 +27,14 @@
  *  - batch undo token: every leg records under one shared txn, and the batch
  *    writes a summary record whose undo token undoes the WHOLE submission as one
  *    unit (`things undo --txn <token>`), replaying leg inverses in reverse.
+ *
+ * `preserveModified` (the universal timeline-silent write flag) rides the same
+ * submission in BOTH shapes: a run-level default on {@link BatchOptions} that
+ * applies to every line, and a per-line `options.preserveModified` that outranks
+ * it. Each leg then takes the ordinary single-op path — capture pre-write `umd`,
+ * restore after verify, disclose `preservedModified`/`preserveFailures` on that
+ * line's result — so a bulk re-tag stays off the `changes` timeline under one
+ * undo token.
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { OPERATION_KINDS, type OperationKind, type OperationParamsMap } from "./operations.ts";
@@ -69,6 +77,18 @@ export interface BatchOp {
     dangerouslyDriveGui?: boolean;
     /** Create any missing tag (mkdir-p for parent/child) instead of failing on an unknown tag. */
     createTags?: boolean;
+    /**
+     * Keep THIS line's change off the modification-date timeline (the universal
+     * write flag): the leg captures each pre-existing edited row's
+     * `userModificationDate` and restores it after the change verifies, so a
+     * `changes`/watch query keyed on it does not surface the edit. Best-effort —
+     * a failed restore is disclosed on the line's result
+     * (`preservedModified`/`preserveFailures`), never fatal. A no-op on a pure
+     * create. An explicit value here OUTRANKS the run-level
+     * {@link BatchOptions.preserveModified} default (including an explicit
+     * `false`, which opts this one line out of a preserving run).
+     */
+    preserveModified?: boolean;
     vector?: WriteOptions["vector"];
     verifyTimeoutMs?: number;
     maxDisruption?: WriteOptions["maxDisruption"];
@@ -143,6 +163,14 @@ export interface BatchOptions {
   continueOnError?: boolean;
   /** Plan every op without executing (each result is its dry-run plan). */
   dryRun?: boolean;
+  /**
+   * Run-level DEFAULT for the universal `--preserve-modified` flag: every line
+   * that does not set `options.preserveModified` itself runs with this value, so
+   * a whole bulk submission stays off the modification-date timeline in one
+   * flag. A line's own explicit value always outranks this (an explicit `false`
+   * opts that line back onto the timeline).
+   */
+  preserveModified?: boolean;
   actor?: string;
 }
 
@@ -629,6 +657,7 @@ export async function runBatch(
     if (!resolved.ok) {
       return { outcome: { kind: "invalid", op: entry.op, detail: resolved.detail } };
     }
+    const preserveModified = entry.options?.preserveModified ?? options.preserveModified;
     const writeOptions: WriteOptions = {
       ...(entry.options?.acknowledgeChecklistReset !== undefined && {
         acknowledgeChecklistReset: entry.options.acknowledgeChecklistReset,
@@ -649,6 +678,10 @@ export async function runBatch(
         dangerouslyDriveGui: entry.options.dangerouslyDriveGui,
       }),
       ...(entry.options?.createTags !== undefined && { createTags: entry.options.createTags }),
+      // --preserve-modified: the line's own explicit value wins; otherwise the
+      // run-level default applies. `??` (not `||`) so an explicit per-line
+      // `false` opts one line out of an otherwise-preserving submission.
+      ...(preserveModified !== undefined && { preserveModified }),
       ...(entry.options?.vector !== undefined && { vector: entry.options.vector }),
       ...(entry.options?.verifyTimeoutMs !== undefined && {
         verifyTimeoutMs: entry.options.verifyTimeoutMs,

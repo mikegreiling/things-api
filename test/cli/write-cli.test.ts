@@ -648,6 +648,37 @@ describe("batch (Phase 13)", () => {
     expect(lines[0].outcome).toBe("blocked");
     expect(lines[1].outcome).toBe("blocked");
   });
+
+  it("accepts the run-level --preserve-modified alongside a per-line options.preserveModified", async () => {
+    const a = seedTodo(fixture.db, { title: "pm-a" });
+    const b = seedTodo(fixture.db, { title: "pm-b" });
+    const batchFile = join(stateDir, "pm.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({ op: "todo.update", params: { uuid: a, title: "x" } }),
+        // The per-line value outranks the run level (engine coverage:
+        // test/engine/write-batch.test.ts "runBatch — preserveModified").
+        JSON.stringify({
+          op: "todo.update",
+          params: { uuid: b, title: "y" },
+          options: { preserveModified: false },
+        }),
+      ].join("\n"),
+    );
+    // --dry-run so nothing executes; what is asserted here is that the run-level
+    // flag is REGISTERED and parsed (an unknown option would throw) and that the
+    // batch still plans every line.
+    await run(["batch", batchFile, "--dry-run", "--preserve-modified"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.outcome)).toEqual(["dry-run", "dry-run", undefined]);
+    expect(process.exitCode).toBe(0);
+  });
 });
 
 describe("undo selection flags", () => {

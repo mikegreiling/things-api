@@ -66,10 +66,10 @@ const CONFIG: ThingsApiConfig = {
   host: "test-host",
 };
 
-function deps(vector: WriteVector): WriteDeps {
+function deps(...vectors: WriteVector[]): WriteDeps {
   return {
     db: fixture.db,
-    vectors: [vector],
+    vectors,
     config: CONFIG,
     audit: { append: (r) => auditRecords.push(r) },
     fingerprint: (): FingerprintStatus => ({
@@ -383,5 +383,151 @@ describe("runBatch", () => {
     expect(results[0]?.tempId).toBe("copy");
     expect(results[0]?.boundUuid).toBe("COPY-P");
     expect(tempIdMapping["copy"]).toBe("COPY-P");
+  });
+});
+
+/**
+ * `preserveModified` through a batch (the mass tag-cleanup vehicle): a per-line
+ * `options.preserveModified`, a RUN-LEVEL default applied to every line, and the
+ * per-line explicit value outranking the run level in BOTH directions. The
+ * restore machinery itself is the shipped single-op path — locked in
+ * test/engine/write-preserve-modified.test.ts — so what is asserted here is the
+ * threading: which legs emit an AppleScript `set modification date` restore, and
+ * that each line's result carries the presence-keyed `preservedModified`.
+ */
+/** The `preservedModified` count on an ok batch line (absent when nothing restored). */
+const preservedOn = (r: { outcome: { kind: string } }): number | undefined =>
+  (r.outcome as { preservedModified?: number }).preservedModified;
+
+describe("runBatch — preserveModified", () => {
+  /** A seeded pre-write umd well in the past — the value a restore returns to. */
+  const ORIG = 1_780_000_000;
+
+  /** The url-scheme vector every leg dispatches through: bumps title + umd. */
+  const renamingVector = (): WriteVector => ({
+    id: "url-scheme",
+    matrix: MATRIX,
+    async execute(invocation) {
+      const m = /[?&]id=([^&]+)/.exec(invocation.payload);
+      const uuid = m?.[1];
+      if (uuid !== undefined) {
+        fixture.db
+          .prepare("UPDATE TMTask SET title = 'renamed', userModificationDate = ? WHERE uuid = ?")
+          .run(NOW_EPOCH + 1, uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  /**
+   * The AppleScript vector the restore leg lands on (empty matrix — it is never
+   * chosen to deliver a mutation): records each restore and writes the umd back.
+   */
+  const restoringVector = (): { vector: WriteVector; restored: string[] } => {
+    const restored: string[] = [];
+    const vector: WriteVector = {
+      id: "applescript",
+      matrix: {} as VectorMatrix,
+      async execute(invocation) {
+        if (invocation.payload.includes("set modification date")) {
+          const m = /set modification date of (?:to do|project) id "([^"]+)"/.exec(
+            invocation.payload,
+          );
+          const uuid = m?.[1];
+          if (uuid !== undefined) {
+            restored.push(uuid);
+            fixture.db
+              .prepare("UPDATE TMTask SET userModificationDate = ? WHERE uuid = ?")
+              .run(ORIG, uuid);
+          }
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    return { vector, restored };
+  };
+
+  const umdOf = (uuid: string): number | null =>
+    (
+      fixture.db
+        .prepare("SELECT userModificationDate AS u FROM TMTask WHERE uuid = ?")
+        .get(uuid) as { u: number | null } | undefined
+    )?.u ?? null;
+
+  it("a per-line options.preserveModified restores that line's umd and discloses the count", async () => {
+    const a = seedTodo(fixture.db, { title: "A", modificationDate: ORIG });
+    const b = seedTodo(fixture.db, { title: "B", modificationDate: ORIG });
+    const as = restoringVector();
+    const { results } = await runBatch(deps(renamingVector(), as.vector), [
+      {
+        op: "todo.update",
+        params: { uuid: a, title: "renamed" },
+        options: { preserveModified: true },
+      },
+      { op: "todo.update", params: { uuid: b, title: "renamed" } },
+    ]);
+    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "ok"]);
+    // Only the flagged line restored; the plain line stayed on the timeline.
+    expect(as.restored).toEqual([a]);
+    expect(preservedOn(results[0]!)).toBe(1);
+    expect(preservedOn(results[1]!)).toBeUndefined();
+    expect(umdOf(a)).toBe(ORIG);
+    expect(umdOf(b)).toBe(NOW_EPOCH + 1);
+  });
+
+  it("a run-level preserveModified defaults every line", async () => {
+    const a = seedTodo(fixture.db, { title: "A", modificationDate: ORIG });
+    const b = seedTodo(fixture.db, { title: "B", modificationDate: ORIG });
+    const as = restoringVector();
+    const { results } = await runBatch(
+      deps(renamingVector(), as.vector),
+      [
+        { op: "todo.update", params: { uuid: a, title: "renamed" } },
+        { op: "todo.update", params: { uuid: b, title: "renamed" } },
+      ],
+      { preserveModified: true },
+    );
+    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "ok"]);
+    expect(as.restored).toEqual([a, b]);
+    expect(results.map(preservedOn)).toEqual([1, 1]);
+    expect(umdOf(a)).toBe(ORIG);
+    expect(umdOf(b)).toBe(ORIG);
+  });
+
+  it("a per-line explicit value OUTRANKS the run level, in both directions", async () => {
+    const a = seedTodo(fixture.db, { title: "A", modificationDate: ORIG });
+    const b = seedTodo(fixture.db, { title: "B", modificationDate: ORIG });
+    const c = seedTodo(fixture.db, { title: "C", modificationDate: ORIG });
+    const as = restoringVector();
+    // Run level ON: line b opts OUT with an explicit false.
+    const on = await runBatch(
+      deps(renamingVector(), as.vector),
+      [
+        { op: "todo.update", params: { uuid: a, title: "renamed" } },
+        {
+          op: "todo.update",
+          params: { uuid: b, title: "renamed" },
+          options: { preserveModified: false },
+        },
+      ],
+      { preserveModified: true },
+    );
+    expect(on.results.map((r) => r.outcome.kind)).toEqual(["ok", "ok"]);
+    expect(as.restored).toEqual([a]);
+    expect(on.results.map(preservedOn)).toEqual([1, undefined]);
+    expect(umdOf(b)).toBe(NOW_EPOCH + 1);
+
+    // Run level OFF (absent): line c opts IN with an explicit true.
+    const off = await runBatch(deps(renamingVector(), as.vector), [
+      {
+        op: "todo.update",
+        params: { uuid: c, title: "renamed" },
+        options: { preserveModified: true },
+      },
+    ]);
+    expect(off.results[0]?.outcome.kind).toBe("ok");
+    expect(as.restored).toEqual([a, c]);
+    expect(preservedOn(off.results[0]!)).toBe(1);
+    expect(umdOf(c)).toBe(ORIG);
   });
 });
