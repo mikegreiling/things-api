@@ -2113,8 +2113,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Delete a to-do/project (kind item), an area, or a tag — kind selects which. " +
         "kind item: moves a to-do or project to the Trash (recoverable via restore_item until " +
-        "the Trash is emptied; a deleted project takes its to-dos with it; not available for " +
-        "repeating to-dos). kind area: PERMANENT — areas do not go to the Trash, so this cannot " +
+        "the Trash is emptied; a deleted project takes its to-dos with it). Deleting a repeating " +
+        "series' TEMPLATE is allowed and ends the series: it stops generating new occurrences and " +
+        "its existing occurrences are left in place (the result names how many, and the current " +
+        "one). That one cannot be undone — neither undo nor restore_item brings a template back, " +
+        "so no undo token is returned; the series returns only via Put Back in the Things app's " +
+        "Trash. Deleting a single occurrence leaves the series running. kind area: PERMANENT — " +
+        "areas do not go to the Trash, so this cannot " +
         "be undone and requires dangerously_permanent; deleting an area moves its to-dos and " +
         "projects to the Trash, so a non-empty area is refused unless you pass " +
         "allow_non_empty_area (empty it first to keep its contents). kind tag: PERMANENT — requires " +

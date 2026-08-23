@@ -1427,8 +1427,12 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("delete <uuid>")
       .description(
-        "Move a to-do to the Trash (recover with `things todo restore`). Not available " +
-          "for repeating to-dos.",
+        "Move a to-do to the Trash (recover with `things todo restore`). Deleting a repeating " +
+          "series' TEMPLATE is allowed and ends the series: it stops generating new occurrences " +
+          "and its existing occurrences are left in place (the result names how many, and the " +
+          "current one). That cannot be undone here — the series comes back only via Put Back " +
+          "in the Things app's Trash — so no undo token is returned. Deleting a single " +
+          "occurrence leaves the series running.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.deleteTodo(uuid, writeOptionsFrom(opts)));
@@ -2347,7 +2351,10 @@ export function registerWriteCommands(program: Command): void {
       .command("delete <ref>")
       .description(
         "Move a project (target by uuid or unique name) to the Trash; its children go with " +
-          "it (recover with `things project restore`).",
+          "it (recover with `things project restore`). Deleting a repeating series' TEMPLATE is " +
+          "allowed and ends the series: it stops generating new occurrences and its existing " +
+          "occurrences are left in place. That cannot be undone here — the series comes back " +
+          "only via Put Back in the Things app's Trash — so no undo token is returned.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.deleteProject(uuid, writeOptionsFrom(opts)));

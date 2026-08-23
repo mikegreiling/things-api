@@ -1896,6 +1896,21 @@ describe("things MCP server", () => {
         }
       }
     });
+
+    // #509: the op ACCEPTS a repeating template — it ends the series with the
+    // disclosure warnings and no undo token. The description said the opposite;
+    // these assertions keep the two from diverging again.
+    it("delete states what a repeating template does, never that it is unavailable", async () => {
+      await connect([fakeVector(null).vector]);
+      const { tools } = await client.listTools();
+      const description = tools.find((t) => t.name === "delete")?.description ?? "";
+      expect(description).not.toMatch(/not available for repeating/i);
+      expect(description).toContain("stops generating new occurrences");
+      expect(description).toContain("existing occurrences are left in place");
+      expect(description).toContain("Put Back in the Things app's Trash");
+      expect(description).toContain("no undo token is returned");
+      expect(description).toContain("Deleting a single occurrence leaves the series running");
+    });
   });
 
   describe("tool-argument casing", () => {
