@@ -177,13 +177,26 @@ export function bounceJsonCollapsible(kind: BounceKind): boolean {
 function bounceSpecOf(kind: BounceKind): BounceSpec {
   switch (kind) {
     case "today":
+      // VMRES1 (2026-08-23, golden-v4 / Things 3.23): the daytime Today section
+      // takes MIXED movees too. `update-project?when=today` FRONT-INSERTS a
+      // project row at the day cohort's todayIndex minimum — measured over five
+      // separate re-entries (keyword and dated `when=` spellings alike), and the
+      // interleaved reverse-order round-trip landed the exact target order 2/2.
+      // This RETIRES the ORD-12 / SIT3 EVEPROJ "a project's daytime when=today
+      // lands mid-pack" caveat the project refusal used to rest on: mid-pack is
+      // not what 3.23 does. Two adjacent negatives from the same campaign, so no
+      // one re-derives them: a project's `when=today` re-issue on a row ALREADY
+      // in Today is a NO-OP (the row must leave the day first — which is what
+      // the away leg is for), and neither an area MOVE round-trip (AREABACK /
+      // PROJROOT) nor the DLBNC deadline-cycle touches a project's todayIndex at
+      // all, so the bounce is the only surface here.
       return {
         away: "evening",
         back: "today",
         dated: false,
         direction: "front",
         rankKey: "todayIndex",
-        legOp: "todo.update",
+        legOp: "per-type",
         // todayIndex leg, not an anytime placement — json reindex unproven here.
         jsonCollapsible: false,
       };
@@ -1135,17 +1148,17 @@ async function runBounce(
   }
   for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
   if (legOp === "todo.update") {
-    // The bounce re-schedules via `todo.update`, validated for to-dos only: a
-    // project row's daytime `when=today` landing is mid-pack, not the front-insert
-    // this protocol needs (ORD-12 / SIT3 EVEPROJ). The native wire is the only one
-    // that carries a project row on this axis (O12) — so when the version gate has
-    // taken the native path away, name THAT rather than advise an unreachable one.
+    // The bounce re-schedules via `todo.update`, validated for to-dos only. The
+    // mixed-kind bounces (`today`, `evening`, `day`) carry a project row on a
+    // `per-type` leg and never reach here; the classes that DO — the index-axis
+    // someday/anytime/heading bounces — have no measured project front-insert
+    // law, so a project member still fails closed rather than land a wrong order.
     const projectRemedy = nativeVersionGated(deps)
       ? `and the native path that carries a project row here is unavailable (${nativeUnavailableReason(deps)}), so this set has no working order surface — reorder it without the project row, or arrange it in the app`
-      : "use the native strategy for Today lists containing projects";
+      : "use the native strategy for a set containing projects";
     for (const uuid of pre.projectMembers) {
       problems.push(
-        `${uuid} is a project — bounce re-schedules via todo.update, which is only validated ` +
+        `${uuid} is a project — this bounce re-schedules via todo.update, which is only validated ` +
           `for to-dos; ${projectRemedy}`,
       );
     }

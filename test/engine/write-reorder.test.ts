@@ -2410,6 +2410,43 @@ describe("evening scope: PROJECT movees (SIT4 EVEORD — shared evening axis)", 
   });
 });
 
+describe("today scope: PROJECT movees (VMRES1 — the daytime Today axis is mixed too)", () => {
+  it("front-inserts a project via update-project on the shared daytime Today axis", async () => {
+    // VMRES1 measured `update-project?when=today` as a FRONT-insert at the day
+    // cohort's todayIndex minimum, retiring the ORD-12 / SIT3 EVEPROJ "mid-pack"
+    // caveat the old refusal rested on.
+    const tt = seedToday("TT", 10);
+    const tp = seedProject(fixture.db, { title: "TP", startDate: TODAY_ISO, todayIndex: 20 });
+    const { vector, calls } = datedBounceVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "today",
+      uuids: [tp, tt],
+      strategy: "bounce",
+    });
+    expect(result.kind).toBe("ok"); // a project movee is NOT rejected in today
+    // Per-type legs: the project rides update-project, the to-do rides update.
+    const projLegs = calls.filter((c) => c.includes(`id=${tp}`));
+    expect(projLegs.length).toBeGreaterThan(0);
+    expect(projLegs.every((c) => c.includes("update-project"))).toBe(true);
+    const todoLegs = calls.filter((c) => c.includes(`id=${tt}`));
+    expect(todoLegs.every((c) => !c.includes("update-project"))).toBe(true);
+    // Target tp, tt → tp front-inserts above tt.
+    expect(ranks([tp])[0]!).toBeLessThan(ranks([tt])[0]!);
+  });
+
+  it("no longer emits the project refusal that named the unavailable native strategy", async () => {
+    const tp = seedProject(fixture.db, { title: "TP", startDate: TODAY_ISO, todayIndex: 5 });
+    const { vector } = datedBounceVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "today",
+      uuids: [tp],
+      strategy: "bounce",
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "blocked") expect(result.detail).not.toContain("is a project");
+  });
+});
+
 describe('tomorrow scope (ORDFIN2 TOMORROWLIST one-call `list "Tomorrow"` day-sort)', () => {
   const TOMORROW_ISO = "2026-07-06"; // NOW = 2026-07-05
   const seedTomorrow = (title: string, todayIndex: number, project?: string) =>

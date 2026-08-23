@@ -552,6 +552,19 @@ end tell`;
  * selection-landed verification, so a match guarantees the intended row is
  * selected. One stable command shape per primitive.
  *
+ * VMRES1 correction (2026-08-23, golden-v4 / Things 3.23): the readback LAGS the
+ * `select` action, so reading `name of selected to dos` immediately after it can
+ * return the PREVIOUS iteration's selection. A row whose `select` lands nothing
+ * (the blank spacer that follows the project rows) then matched the prior row's
+ * title, the loop returned "OK" one row LATE, and the table was left with NOTHING
+ * selected — `Items ▸ Repeat…` never materialized and the drive died at its wait
+ * (`verify-failed:silent-noop`). It reproduced 3/3 on the second project-repeat
+ * drive of a Things session and 0/2 on the first, which is the signature of a
+ * race, not of app state. Fixed the way the heading sibling below already does
+ * it: settle after `select`, then require `selected of (row i)` — the row THIS
+ * iteration targeted must itself hold the selection — before trusting the title
+ * readback. Evidence: [docs/lab/vmres1-residuals.md](../../../docs/lab/vmres1-residuals.md) §2.
+ *
  * UIC5 correction: the shipped form set the TABLE's `AXSelectedRows` attribute
  * to a one-row list, which is a SILENT NO-OP on Things' content table via System
  * Events (no error, selection never lands). The row `select` action is the
@@ -567,9 +580,12 @@ export function axSelectRowScript(tablePath: string, title: string): string {
   repeat with i from 1 to n
     try
       select (row i of theTable)
-      tell application "Things3" to set selNames to (name of selected to dos)
-      if (count of selNames) is 1 and ((item 1 of selNames) as text) is "${t}" then
-        return "OK"
+      delay 0.25
+      if (selected of (row i of theTable)) then
+        tell application "Things3" to set selNames to (name of selected to dos)
+        if (count of selNames) is 1 and ((item 1 of selNames) as text) is "${t}" then
+          return "OK"
+        end if
       end if
     end try
   end repeat
