@@ -302,6 +302,37 @@ function instanceStartDate(db: WriteDeps["db"], instanceUuid: string): IsoDate |
 }
 
 /**
+ * The oracle for the post-drive first-occurrence check, picked by rule KIND
+ * (issue #508).
+ *
+ * A FIXED-schedule series is anchored on the calendar: the dialog's "Next:" field
+ * IS driven, and the template's own cursor (`rt1_instanceCreationStartDate`) holds
+ * the resulting first occurrence — the right thing to compare against.
+ *
+ * An AFTER-COMPLETION series has NO calendar anchor, so {@link ruleParamsFor}
+ * deliberately leaves "Next:" alone, and the app mints the template with an EMPTY
+ * cursor (RSIM2 / RSIM-P P4: no next / reference dates exist until a completion
+ * happens). Comparing that empty cursor against `--when` reported a FALSE
+ * `verify-failed:mismatch` on a perfectly correct creation (#508, reproduced 6/6
+ * on the live host). The requested date lives on the materialized INSTANCE's own
+ * `startDate` — the row the promote preserved and relinked — so that is the oracle
+ * for an after-completion series.
+ *
+ * Returns `null` when no oracle is reachable. For an after-completion rule that
+ * means "unverifiable" and the caller SKIPS the check (the create delta already
+ * proved the series landed); for a fixed rule an absent cursor is a genuine miss.
+ */
+function landedFirstStart(
+  deps: WriteDeps,
+  templateUuid: string,
+  instanceUuid: string | null,
+  afterCompletion: boolean,
+): IsoDate | null {
+  if (!afterCompletion) return firstOccurrenceOf(deps.db, templateUuid);
+  return instanceUuid === null ? null : instanceStartDate(deps.db, instanceUuid);
+}
+
+/**
  * DBLSPAWN1 (docs/lab/dblspawn1-preserved-instance.md, golden-v3 / Things 3.22.14):
  * a promote whose source is PRESERVED (SRCFATE deadline / terminal-element trigger)
  * relinks that source IN PLACE as the current-occurrence instance. When the first
@@ -328,7 +359,16 @@ async function trashRedundantFuturePreservedInstance(
   options: WriteOptions,
   txnId: string,
   now: Date,
+  afterCompletion: boolean,
 ): Promise<{ warning: string; trashedUuid: string } | null> {
+  // AFTER-COMPLETION series are exempt: the double-book is a CURSOR phenomenon
+  // (`rt1_nextInstanceStartDate` pointing at an already-materialized occurrence),
+  // and an after-completion template is minted with NO cursor at all — the next
+  // occurrence is unknown until a completion happens (RSIM2 / RSIM-P P4). Its
+  // preserved instance is therefore the series' ONLY occurrence, whatever its
+  // date; trashing it would destroy the series' current occurrence rather than a
+  // duplicate. (Unreachable before #508, whose false verify-failed returned first.)
+  if (afterCompletion) return null;
   const rep = promote.repeating;
   // Preserved iff the native promote relinked the source (replacedUuid === null) AND
   // there is a materialized instance. A DELETE-fate promote reports replacedUuid !==
@@ -698,10 +738,12 @@ async function makeRepeatingViaClone(
   // requested `--when` — for a deadlined rule the driven Next is the deadline
   // (when + startDaysEarlier) and the app back-shifts the start to `--when`, so the
   // check is against `expectedStartIso`, not the raw drive date. Fail closed on
-  // mismatch rather than report a wrong-phase ok.
+  // mismatch rather than report a wrong-phase ok. The ORACLE is rule-kind dependent
+  // (#508) — see landedFirstStart; an unverifiable after-completion series skips.
+  const afterCompletion = effParams.afterCompletion === true;
   if (expectedStartIso !== undefined) {
-    const landed = firstOccurrenceOf(deps.db, templateUuid);
-    if (landed !== expectedStartIso) {
+    const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
+    if (!(afterCompletion && landed === null) && landed !== expectedStartIso) {
       return nextMismatch(op, templateUuid, expectedStartIso, landed);
     }
   }
@@ -715,7 +757,15 @@ async function makeRepeatingViaClone(
   // DBLSPAWN1: if the promote PRESERVED the source (deadline / terminal-element
   // trigger) as a FUTURE-dated instance, the app would spawn a duplicate on that date
   // — trash the redundant occurrence and disclose (cursor mints the single real one).
-  const dbl = await trashRedundantFuturePreservedInstance(deps, kind, promote, options, txnId, now);
+  const dbl = await trashRedundantFuturePreservedInstance(
+    deps,
+    kind,
+    promote,
+    options,
+    txnId,
+    now,
+    afterCompletion,
+  );
   if (dbl !== null) {
     warnings.push(dbl.warning);
     if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
@@ -918,10 +968,13 @@ async function addRepeatingViaCreate(
   // startDaysEarlier) and the app back-shifts the start to `--when`, so the check is
   // against `expectedStartIso`, not the raw drive date. Fail closed on mismatch rather
   // than report a wrong-phase ok. The series EXISTS here (promote landed) but on the
-  // wrong phase, so this is a genuine partial success, NOT a seed to trash.
+  // wrong phase, so this is a genuine partial success, NOT a seed to trash. The
+  // ORACLE is rule-kind dependent (#508) — see landedFirstStart; an after-completion
+  // series verifies against its materialized instance, and skips when it has none.
+  const afterCompletion = effRuleWithReminder.afterCompletion === true;
   if (expectedStartIso !== undefined) {
-    const landed = firstOccurrenceOf(deps.db, templateUuid);
-    if (landed !== expectedStartIso)
+    const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
+    if (!(afterCompletion && landed === null) && landed !== expectedStartIso)
       return nextMismatch(op, templateUuid, expectedStartIso, landed);
   }
 
@@ -939,6 +992,7 @@ async function addRepeatingViaCreate(
     options,
     txnId,
     startedAt,
+    afterCompletion,
   );
   if (dbl !== null) {
     warnings.push(dbl.warning);

@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
-import { decodePackedDate } from "../../src/model/dates.ts";
+import { decodePackedDate, encodePackedDate } from "../../src/model/dates.ts";
 import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
 import { runCloneProject, runCloneTodo } from "../../src/write/clone.ts";
 import type { RepeatRuleParams } from "../../src/write/operations.ts";
@@ -649,6 +649,120 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     expect(res.repeating?.instanceUuid).not.toBeNull();
     expect(instancesOf(res.uuid)).toBe(1);
     expect((res.warnings ?? []).join(" ")).not.toMatch(/duplicate/i);
+  });
+});
+
+// #508: the post-drive first-occurrence verify used ONE oracle — the template's
+// `rt1_instanceCreationStartDate` cursor. An AFTER-COMPLETION template is minted with
+// that cursor EMPTY (no next occurrence exists until a completion happens), so a
+// perfectly correct after-completion creation reported verify-failed:mismatch (exit 3;
+// 6/6 on the live host). The oracle is now picked by rule kind: fixed → the template
+// cursor, after-completion → the materialized instance's own startDate.
+describe("#508 — the after-completion first-occurrence verify uses the instance oracle", () => {
+  const instancesOf = (templateUuid: string): number =>
+    (
+      fixture.db
+        .prepare("SELECT count(*) AS n FROM TMTask WHERE rt1_repeatingTemplate = ? AND trashed = 0")
+        .get(templateUuid) as { n: number }
+    ).n;
+
+  it("add-repeating: --after-completion with a FUTURE --when succeeds (was a false mismatch)", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "Rotate the filters",
+        when: "2026-07-20", // future (NOW = 2026-07-05)
+        afterCompletion: true,
+        frequency: "weekly",
+        interval: 2,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // The oracle the OLD verify used is empty on an after-completion template —
+    // exactly why it produced a false mismatch.
+    expect(row(res.uuid)?.["rt1_instanceCreationStartDate"]).toBeNull();
+    // The requested date landed on the materialized instance (the new oracle).
+    const instanceUuid = res.repeating?.instanceUuid;
+    expect(instanceUuid).not.toBeNull();
+    expect(decodePackedDate(row(instanceUuid as string)?.["startDate"] as number)).toBe(
+      "2026-07-20",
+    );
+    // The DBLSPAWN1 backstop must NOT trash it: an after-completion series has no
+    // cursor to double-book, so its preserved instance is the only occurrence.
+    expect(instancesOf(res.uuid)).toBe(1);
+    expect(row(instanceUuid as string)?.["trashed"]).toBe(0);
+  });
+
+  it("add-repeating: --after-completion with a TODAY --when succeeds", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "Refill the water jug",
+        when: "2026-07-05", // today
+        afterCompletion: true,
+        frequency: "daily",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    expect(instancesOf(res.uuid)).toBe(1);
+  });
+
+  it("make-repeating: --after-completion on a FUTURE-scheduled source succeeds", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Descale the kettle",
+      start: "active",
+      startDate: "2026-07-20", // future
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "monthly", interval: 1, afterCompletion: true },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // The promoted CLONE was preserved in place as the sole instance, still on the
+    // source's own date; the original went to the Trash as usual.
+    const instanceUuid = res.repeating?.instanceUuid;
+    expect(instanceUuid).not.toBeNull();
+    expect(decodePackedDate(row(instanceUuid as string)?.["startDate"] as number)).toBe(
+      "2026-07-20",
+    );
+    expect(row(src)?.["trashed"]).toBe(1);
+  });
+
+  it("a FIXED series whose Next drive did NOT take still fails closed", async () => {
+    // The simulator honors the driven Next faithfully, so bend the landed cursor
+    // after the promote — the shape of a "Next:" field that did not commit.
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    const driftVector: WriteVector = {
+      ...sim,
+      async execute(inv) {
+        const out = await sim.execute(inv);
+        if (inv.op === "todo.make-repeating") {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET rt1_instanceCreationStartDate = ? " +
+                "WHERE rt1_recurrenceRule IS NOT NULL AND rt1_instanceCreationStartDate IS NOT NULL",
+            )
+            .run(encodePackedDate("2026-07-06"));
+        }
+        return out;
+      },
+    };
+    const res = await runAddRepeatingTodo(
+      deps(driftVector),
+      { title: "Drifted", when: "2026-07-20", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("verify-failed");
+    if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
+    expect(res.detail).toContain("2026-07-06");
+    expect(res.detail).toContain("2026-07-20");
   });
 });
 
