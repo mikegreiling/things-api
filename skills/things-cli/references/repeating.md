@@ -2,6 +2,10 @@
 
 A repeating item is a **template** plus the **instances** it spawns. The template holds the rule (how often, on what calendar day, with what deadline/reminder/end bound); each occurrence the app materializes is a separate to-do (or project) you complete normally. Completing an instance never touches the template; the template keeps spawning the next occurrence on schedule.
 
+## Finding a series in the first place
+
+`things repeaters` lists every repeating series in the library — to-dos and projects — with its uuid, its next occurrence, its container, and its decoded rule. Reach for it before any repeat write, because a template is invisible to every other read: the list views show the OCCURRENCES a series spawns rather than the series itself, and `search` matches those occurrences but never the template behind them. Paused and ended series are listed too (each row says which), which is usually the fastest answer to "why has this stopped appearing?". `--json` carries the rule structurally under `repeating.rule`; the uuid it gives you is what `reschedule-repeat`, `pause-repeat`, `resume-repeat`, and `show` all take.
+
 ## The verbs
 
 - `things todo make-repeating <ref> --frequency … --interval …` — turn an existing plain to-do into a repeating series. This **REPLACES the item**: the original to-do disappears and a fresh template takes its place, so the uuid you get back is the TEMPLATE's, not the original's. Cannot be undone through the normal path (the original is moved to the Trash; `things undo` removes the new series and restores it).

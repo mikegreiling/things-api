@@ -13,6 +13,7 @@ import {
   deadlinesView,
   logbookView,
   projectsView,
+  repeatersView,
   searchView,
   somedayView,
   todayView,
@@ -24,6 +25,7 @@ import type { AreaView } from "../../src/read/area-view.ts";
 import type { GroupBlock } from "../../src/contracts.ts";
 import { byUuid } from "../../src/read/detail.ts";
 import type { Todo } from "../../src/model/entities.ts";
+import type { RepeatRule } from "../../src/model/recurrence.ts";
 import { renderAreaView } from "../../src/cli/commands/area.ts";
 import { renderProjectView } from "../../src/cli/commands/project.ts";
 import { renderDetail } from "../../src/cli/commands/todo.ts";
@@ -33,9 +35,11 @@ import {
   renderLegend,
   renderLogbook,
   renderProjectsSidebar,
+  renderRepeaters,
   renderSections,
   renderToday,
   renderUpcoming,
+  repeatRuleSummary,
   todayMark,
   viewHeaderLines,
 } from "../../src/cli/render.ts";
@@ -1741,5 +1745,139 @@ describe("renderAreaView logbook footer (live count)", () => {
     expect(renderAreaView(emptyArea("Health"), trunc, {}).join("\n")).not.toContain(
       "logbook --area",
     );
+  });
+});
+
+// `things repeaters` — the repeating-template catalogue. Each series renders as
+// its ordinary row plus an indented rule line; the rule prose is the view's
+// whole reason to exist, so it gets its own assertions per rule shape.
+/** A decodable weekly-every-1 rule, with the field under test overridden. */
+const rule = (over: Partial<RepeatRule> = {}): RepeatRule => ({
+  type: "fixed",
+  unit: "weekly",
+  interval: 1,
+  startOffsetDays: 0,
+  offsets: [],
+  endDate: null,
+  occurrenceCount: null,
+  version: 4,
+  ...over,
+});
+
+describe("repeatRuleSummary", () => {
+  it("singularizes an interval of 1 and pluralizes the rest", () => {
+    expect(repeatRuleSummary(rule({ unit: "daily" }))).toBe("every day");
+    expect(repeatRuleSummary(rule({ unit: "weekly", interval: 2 }))).toBe("every 2 weeks");
+    expect(repeatRuleSummary(rule({ unit: "monthly", interval: 3 }))).toBe("every 3 months");
+    expect(repeatRuleSummary(rule({ unit: "yearly" }))).toBe("every year");
+  });
+
+  it("names the weekdays a weekly rule fires on", () => {
+    expect(repeatRuleSummary(rule({ offsets: [{ weekday: 1 }, { weekday: 4 }] }))).toBe(
+      "every week on Mon, Thu",
+    );
+  });
+
+  it("reads a monthly day-of-month, a last day, and an nth weekday", () => {
+    expect(repeatRuleSummary(rule({ unit: "monthly", offsets: [{ day: 3 }] }))).toBe(
+      "every month on the 3rd",
+    );
+    expect(repeatRuleSummary(rule({ unit: "monthly", offsets: [{ day: -1 }] }))).toBe(
+      "every month on the last day",
+    );
+    expect(
+      repeatRuleSummary(rule({ unit: "monthly", offsets: [{ weekday: 5, weekdayOrdinal: -1 }] })),
+    ).toBe("every month on the last Fri");
+    expect(
+      repeatRuleSummary(rule({ unit: "monthly", offsets: [{ weekday: 2, weekdayOrdinal: 2 }] })),
+    ).toBe("every month on the 2nd Tue");
+  });
+
+  it("reads a yearly month+day anchor", () => {
+    expect(repeatRuleSummary(rule({ unit: "yearly", offsets: [{ month: 4, day: 15 }] }))).toBe(
+      "every year on Apr the 15th",
+    );
+  });
+
+  it("states an after-completion cadence and no calendar anchors", () => {
+    expect(
+      repeatRuleSummary(
+        rule({ type: "after-completion", unit: "daily", interval: 3, offsets: [{ weekday: 1 }] }),
+      ),
+    ).toBe("every 3 days after each is completed");
+  });
+
+  it("states the deadline lead and the end bound", () => {
+    expect(repeatRuleSummary(rule({ startOffsetDays: -4 }))).toBe(
+      "every week · due 4 days after each start",
+    );
+    expect(repeatRuleSummary(rule({ startOffsetDays: -1 }))).toBe(
+      "every week · due 1 day after each start",
+    );
+    expect(repeatRuleSummary(rule({ endDate: "2026-12-31" }))).toBe("every week · ends 2026-12-31");
+    expect(repeatRuleSummary(rule({ occurrenceCount: 10 }))).toBe(
+      "every week · ends after 10 occurrences",
+    );
+    expect(repeatRuleSummary(rule({ occurrenceCount: 1 }))).toBe(
+      "every week · ends after 1 occurrence",
+    );
+  });
+});
+
+describe("renderRepeaters", () => {
+  afterEach(() => setRenderClock({ now: () => new Date(), zone: undefined }));
+
+  const DAILY_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>fa</key><integer>1</integer>
+  <key>fu</key><integer>16</integer>
+  <key>of</key><array/>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>
+</dict>
+</plist>`;
+
+  it("frames the list with the house `── ↻ Repeating ──` header", () => {
+    expect(renderRepeaters([])).toEqual(["── ↻ Repeating ──", "(empty)"]);
+  });
+
+  it("renders each series as its row plus an indented rule line", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    seedTodo(fixture.db, {
+      title: "Water the plants",
+      recurrenceRuleXml: DAILY_XML,
+      nextInstanceStartDate: "2026-07-08",
+    });
+    const lines = renderRepeaters(repeatersView(fixture.db, NOW));
+    // The ↻ seats INSIDE the box (glyphs.ts) and the next occurrence chips.
+    expect(lines[1]).toContain("[↻]");
+    expect(lines[1]).toContain("Water the plants");
+    expect(lines[2]).toBe("  every day");
+  });
+
+  it("says so when a rule cannot be decoded, instead of dropping the series", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    seedTodo(fixture.db, { title: "Future format", recurrenceRule: true });
+    const lines = renderRepeaters(repeatersView(fixture.db, NOW));
+    expect(lines[1]).toContain("Future format");
+    expect(lines[2]).toBe("  (rule not readable)");
+  });
+
+  it("chips the state of a series that projects nowhere", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    seedTodo(fixture.db, {
+      title: "Suspended",
+      recurrenceRuleXml: DAILY_XML,
+      instanceCreationStartDate: "2026-07-15",
+      instanceCreationPaused: true,
+    });
+    expect(renderRepeaters(repeatersView(fixture.db, NOW))[1]).toContain("‹paused›");
   });
 });

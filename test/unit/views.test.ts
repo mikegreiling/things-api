@@ -24,6 +24,7 @@ import {
   liteTitleSearch,
   logbookView,
   projectsView,
+  repeatersView,
   searchView,
   somedayView,
   todayView,
@@ -2692,5 +2693,142 @@ describe("DBV27 fail-closed — templates that project nowhere", () => {
     expect((byUuid(fx.db, uuid, NOW) as Todo | null)?.repeating.nextOccurrence).toBe(
       over.nextInstanceStartDate ?? null,
     );
+  });
+});
+
+// The repeating-template CATALOGUE (`things repeaters`). Templates are excluded
+// from every other view by NOT_TEMPLATE, so this is the only read that lists the
+// series themselves — with the decoded rule attached, ordered by next occurrence.
+describe("repeatersView", () => {
+  it("lists to-do AND project templates, each carrying its decoded rule", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "Water the plants",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-19",
+      deadline: "4001-01-01",
+    });
+    seedProject(fx.db, {
+      title: "Monthly review",
+      recurrenceRuleXml: fixedDaily({ fu: 8, fa: 1 }),
+      nextInstanceStartDate: "2026-07-21",
+    });
+
+    const items = repeatersView(fx.db, NOW);
+    expect(items.map((i) => [i.title, i.type])).toEqual([
+      ["Water the plants", "to-do"],
+      ["Monthly review", "project"],
+    ]);
+    // The rule is DECODED onto the row — the reason the view exists (an ordinary
+    // list row carries `repeating.rule` undefined; only detail reads attach it).
+    expect(items[0]?.repeating.rule).toMatchObject({
+      type: "fixed",
+      unit: "weekly",
+      interval: 2,
+      startOffsetDays: -4,
+      offsets: [{ weekday: 0 }],
+    });
+    expect(items[1]?.repeating.rule?.unit).toBe("monthly");
+  });
+
+  it("excludes non-templates, instances, trashed and completed rows", () => {
+    fx = buildFixtureDb();
+    const tmpl = seedTodo(fx.db, {
+      title: "Template",
+      recurrenceRuleXml: fixedDaily(),
+      nextInstanceStartDate: "2026-07-10",
+    });
+    seedTodo(fx.db, { title: "Plain to-do" });
+    seedTodo(fx.db, { title: "An occurrence", repeatingTemplate: tmpl });
+    seedTodo(fx.db, { title: "Trashed series", recurrenceRuleXml: fixedDaily(), trashed: true });
+    seedTodo(fx.db, {
+      title: "Finished series",
+      recurrenceRuleXml: fixedDaily(),
+      status: "completed",
+    });
+
+    expect(repeatersView(fx.db, NOW).map((i) => i.title)).toEqual(["Template"]);
+  });
+
+  it("INCLUDES paused, ended and after-completion series — with no next occurrence", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "Paused",
+      recurrenceRuleXml: fixedDaily(),
+      instanceCreationStartDate: "2026-07-15",
+      instanceCreationPaused: true,
+    });
+    seedTodo(fx.db, {
+      title: "After completion",
+      recurrenceRuleXml: ruleXml({ tp: 1, fu: 16, fa: 3, anchor: 1_783_000_000 }),
+      instanceCreationStartDate: "2026-07-15",
+    });
+    seedTodo(fx.db, {
+      title: "Scheduled",
+      recurrenceRuleXml: fixedDaily(),
+      nextInstanceStartDate: "2026-07-09",
+    });
+
+    const items = repeatersView(fx.db, NOW);
+    // Scheduled first (ordered by next occurrence); the two that project
+    // nowhere follow, in title order — a catalogue that hid them would hide
+    // exactly the series a reader is asking about.
+    expect(items.map((i) => [i.title, i.repeating.nextOccurrence ?? null])).toEqual([
+      ["Scheduled", "2026-07-09"],
+      ["After completion", null],
+      ["Paused", null],
+    ]);
+    expect(items[2]?.repeating.paused).toBe(true);
+    expect(items[1]?.repeating.rule?.type).toBe("after-completion");
+  });
+
+  it("orders by next occurrence, then title, then uuid", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "Later",
+      recurrenceRuleXml: fixedDaily(),
+      nextInstanceStartDate: "2026-08-01",
+    });
+    seedTodo(fx.db, {
+      title: "Beta",
+      recurrenceRuleXml: fixedDaily(),
+      nextInstanceStartDate: "2026-07-09",
+    });
+    seedTodo(fx.db, {
+      title: "Alpha",
+      recurrenceRuleXml: fixedDaily(),
+      nextInstanceStartDate: "2026-07-09",
+    });
+
+    expect(repeatersView(fx.db, NOW).map((i) => i.title)).toEqual(["Alpha", "Beta", "Later"]);
+  });
+
+  it("lists a template whose rule cannot be decoded, without a rule", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "Future format", recurrenceRule: true });
+
+    const items = repeatersView(fx.db, NOW);
+    expect(items.map((i) => i.title)).toEqual(["Future format"]);
+    expect(items[0]?.repeating.rule).toBeUndefined();
+  });
+
+  it("honors the tag filter", () => {
+    fx = buildFixtureDb();
+    const tag = seedTag(fx.db, "home");
+    const tagged = seedTodo(fx.db, {
+      title: "Tagged series",
+      recurrenceRuleXml: fixedDaily(),
+      nextInstanceStartDate: "2026-07-09",
+    });
+    tagTask(fx.db, tagged, tag);
+    seedTodo(fx.db, {
+      title: "Untagged series",
+      recurrenceRuleXml: fixedDaily(),
+      nextInstanceStartDate: "2026-07-09",
+    });
+
+    expect(repeatersView(fx.db, NOW, { tags: ["home"] }).map((i) => i.title)).toEqual([
+      "Tagged series",
+    ]);
   });
 });

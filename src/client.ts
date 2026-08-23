@@ -46,6 +46,7 @@ import {
   liteTitleSearch,
   logbookView,
   projectsView,
+  repeatersView,
   searchView,
   somedayView,
   todayView,
@@ -57,6 +58,7 @@ import {
   type LiteSearchResult,
   type ListItem,
   type LogbookFilter,
+  type RepeatersFilter,
   type SearchOptions,
   type SearchResultItem,
   type SidebarSection,
@@ -527,6 +529,15 @@ export interface ThingsClient {
      * container; the tag filters compose.
      */
     deadlines(options?: DeadlinesFilter & ListBound & ClockScopedRead): BoundedList<ListItem>;
+    /**
+     * The repeating-template catalogue: every live repeating template in the
+     * library — to-do and project — each carrying its DECODED rule, ordered by
+     * next occurrence (the ones that project nowhere last). Paused and ended
+     * series are included and say so. Bounded (default 50). Templates appear in
+     * no other list view, and a series' rule is otherwise reachable only through
+     * a detail read of a uuid this view is the way to learn.
+     */
+    repeaters(options?: RepeatersFilter & ListBound & ClockScopedRead): BoundedList<ListItem>;
     byUuid(uuid: string): AnyTask | null;
     /**
      * Classify a loose reference (uuid, >=6-char prefix, share link, or
@@ -1352,6 +1363,13 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         let items = deadlinesView(conn.db, now(), filter, zoneOf(o));
         // A container jail is an additive post-filter (parity with search): keep
         // only in-scope rows so an out-of-scope deadline never leaks.
+        if (scope !== undefined) items = items.filter((i) => inScopeItem(i, scope));
+        const { data, truncation } = truncateList(items, listCap(o));
+        return { items: data, truncation };
+      },
+      repeaters: (o) => {
+        const { limit: _limit, ...filter } = o ?? {};
+        let items = repeatersView(conn.db, now(), filter, zoneOf(o));
         if (scope !== undefined) items = items.filter((i) => inScopeItem(i, scope));
         const { data, truncation } = truncateList(items, listCap(o));
         return { items: data, truncation };

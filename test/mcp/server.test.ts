@@ -321,6 +321,40 @@ describe("things MCP server", () => {
     expect(result.isError ?? false).toBe(false);
   });
 
+  it("read_view repeaters lists the series themselves, each carrying its decoded rule", async () => {
+    // A repeating series appears in no other view — the others show the
+    // occurrences it spawns — and its rule rides only a detail read. This is
+    // the one list that carries both.
+    const DAILY_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>fa</key><integer>2</integer>
+  <key>fu</key><integer>16</integer>
+  <key>of</key><array/>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>
+</dict>
+</plist>`;
+    seedTodo(fixture.db, {
+      title: "MCP-series",
+      recurrenceRuleXml: DAILY_XML,
+      nextInstanceStartDate: "2026-07-09",
+    });
+    seedTodo(fixture.db, { title: "MCP-plain" });
+    await connect([fakeVector(null).vector]);
+    const result = await client.callTool({ name: "read_view", arguments: { view: "repeaters" } });
+    const items = textOf(result) as {
+      title: string;
+      repeating?: { rule?: { unit: string; interval: number } };
+    }[];
+    expect(items.map((i) => i.title)).toEqual(["MCP-series"]);
+    expect(items[0]?.repeating?.rule).toMatchObject({ unit: "daily", interval: 2 });
+    expect(result.isError ?? false).toBe(false);
+  });
+
   it("read_view logbook carries the log-move cadence on the metadata block (meta.logging analog)", async () => {
     const manual = Math.floor(NOW.getTime() / 1000) - 60;
     fixture.db

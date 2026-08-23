@@ -322,6 +322,7 @@ export type WireOkKind =
   | "changes"
   | "search"
   | "deadlines"
+  | "repeaters"
   | "projects"
   | "areas"
   | "tags"

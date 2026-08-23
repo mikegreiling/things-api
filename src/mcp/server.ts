@@ -845,7 +845,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "upcoming, someday, logbook, trash, or deadlines (a flat items list of everything " +
         "carrying a deadline — to-dos and projects — in deadline order, most-overdue first; " +
         "repeating items appear at their next occurrence's projected deadline; scope with " +
-        "today/overdue/project/area/tag). For upcoming, " +
+        "today/overdue/project/area/tag), or repeaters (every repeating series in the " +
+        "library — to-dos and projects — each carrying its decoded rule under " +
+        "repeating.rule; series appear in no other view, which show the occurrences a " +
+        "series spawns instead; paused and ended series are included; ordered by next " +
+        "occurrence, the ones with none last). For upcoming, " +
         "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
         "anytime/someday return sections in canonical order (area + items; null area = the " +
         "top-level block); children of someday/future-scheduled projects are excluded " +
@@ -869,6 +873,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           "logbook",
           "trash",
           "deadlines",
+          "repeaters",
         ]),
         ...tagFilterShape,
         ...tzShape,
@@ -1161,6 +1166,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               });
               return truncatedResult(
                 shapeReadPayload("deadlines", items, full, c.refPromoter()),
+                truncation,
+              );
+            }
+            case "repeaters": {
+              const { items, truncation } = c.read.repeaters({ ...filter, ...zone, limit });
+              return truncatedResult(
+                shapeReadPayload("repeaters", items, full, c.refPromoter()),
                 truncation,
               );
             }

@@ -585,6 +585,55 @@ describe("cli deadlines (fixture db)", () => {
   });
 });
 
+describe("cli repeaters (fixture db)", () => {
+  const DAILY_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>fa</key><integer>2</integer>
+  <key>fu</key><integer>16</integer>
+  <key>of</key><array/>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>
+</dict>
+</plist>`;
+
+  it("things repeaters --json lists the series, each with its decoded rule", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "series",
+      recurrenceRuleXml: DAILY_XML,
+      nextInstanceStartDate: isoFromToday(2),
+    });
+    seedTodo(fx.db, { title: "plain", start: "active" }); // excluded — not a series
+
+    const { stdout, exitCode } = runCli(["repeaters", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.apiVersion).toBe(1);
+    expect(env.ok).toBe(true);
+    expect(env.kind).toBe("repeaters");
+    expect(titlesOf(stdout)).toEqual(["series"]);
+    // The decoded rule rides the wire — the whole point of the view.
+    expect(env.data.items[0].repeating.rule).toMatchObject({ unit: "daily", interval: 2 });
+  });
+
+  it("the TTY view puts each series' rule on its own line under the house header", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "Water the plants",
+      recurrenceRuleXml: DAILY_XML,
+      nextInstanceStartDate: isoFromToday(1),
+    });
+    const out = runTty(["repeaters", "--db", fx.path]);
+    expect(out).toContain("── ↻ Repeating ──");
+    expect(out).toContain("Water the plants");
+    expect(out).toContain("every 2 days");
+  });
+});
+
 describe('cli --untagged (GUI "No Tag")', () => {
   function seedTagged() {
     fx = buildFixtureDb();
