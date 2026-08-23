@@ -300,6 +300,70 @@ describe("plural list views accept a ref (true synonym of show, with the canonic
   });
 });
 
+// Single-op idempotency is phase 1: a multi-leg COMPOUND records several results
+// (or a summary), so `--op-id` is refused before dispatch. Help must not offer a
+// flag the command can never accept, and the runtime refusal stays as the
+// backstop — with its bespoke pointer at `things batch`, which is why the option
+// is registered hidden rather than dropped (a dropped option would degrade the
+// message to commander's "unknown option").
+const COMPOUND_NO_OP_ID: { path: [string, ...string[]]; argv: string[] }[] = [
+  { path: ["todo", "move"], argv: ["todo", "move", "u1", "--to-project", "p"] },
+  { path: ["project", "move"], argv: ["project", "move", "u1", "--to-area", "a"] },
+  { path: ["reorder"], argv: ["reorder", "u1", "u2"] },
+  { path: ["project", "add-heading"], argv: ["project", "add-heading", "p", "H"] },
+  { path: ["project", "archive-heading"], argv: ["project", "archive-heading", "p", "H"] },
+  { path: ["project", "unarchive-heading"], argv: ["project", "unarchive-heading", "p", "H"] },
+  {
+    path: ["project", "make-repeating"],
+    argv: ["project", "make-repeating", "u1", "--frequency", "daily", "--interval", "1"],
+  },
+  {
+    path: ["project", "add-repeating"],
+    argv: ["project", "add-repeating", "T", "--frequency", "daily", "--interval", "1"],
+  },
+  {
+    path: ["todo", "add-repeating"],
+    argv: ["todo", "add-repeating", "T", "--frequency", "daily", "--interval", "1"],
+  },
+  { path: ["project", "reopen"], argv: ["project", "reopen", "u1"] },
+];
+
+describe("--op-id: help matches the runtime capability", () => {
+  it("a compound command omits --op-id from its help", () => {
+    for (const { path } of COMPOUND_NO_OP_ID) {
+      expect(helpFor(...path), path.join(" ")).not.toContain("--op-id");
+    }
+  });
+
+  it("the same commands still refuse --op-id at runtime, naming the batch analogue", () => {
+    for (const { path, argv } of COMPOUND_NO_OP_ID) {
+      const label = path.join(" ");
+      const { stdout, exitCode } = runCli([...argv, "--op-id", "k", "--json"]);
+      const env = JSON.parse(stdout.trim()) as Record<string, unknown>;
+      expect(env["ok"], label).toBe(false);
+      const error = env["error"] as Record<string, unknown>;
+      expect(error["code"], label).toBe("usage");
+      expect(String(error["message"]), label).toContain("--op-id is not available");
+      expect(String(error["message"]), label).toContain("batch");
+      expect(exitCode, label).toBe(2);
+    }
+  });
+
+  it("a single-mutation command still advertises --op-id", () => {
+    for (const path of [
+      ["todo", "add"],
+      ["todo", "update"],
+      ["todo", "delete"],
+      ["todo", "make-repeating"],
+      ["project", "delete"],
+      ["project", "move-heading"],
+      ["area", "reorder"],
+    ]) {
+      expect(helpFor(...(path as [string, string])), path.join(" ")).toContain("--op-id <key>");
+    }
+  });
+});
+
 describe("error ergonomics", () => {
   it("excess arguments name the command and its usage line", () => {
     const { stderr, exitCode } = runCli(["tags", "X", "Y"]);
