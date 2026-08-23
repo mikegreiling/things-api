@@ -22,7 +22,9 @@ import {
 import {
   aggregateExitCode,
   blockedCode,
+  buildUpdatePatch,
   capabilitiesTable,
+  CLI_UPDATE_LABELS,
   ClockError,
   closeCliTrace,
   describeConfig,
@@ -1224,40 +1226,15 @@ export function registerWriteCommands(program: Command): void {
         "rewrite the completion timestamp of an already-resolved to-do (a canceled one stays canceled); open to-dos are refused — use complete/cancel",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    const notesModes = ["notes", "appendNotes", "prependNotes"].filter(
-      (k) => opts[k] !== undefined,
-    );
-    if (notesModes.length > 1) {
-      usageError(opts, "--notes, --append-notes, --prepend-notes are exclusive");
-      return;
-    }
     if (!(await resolveNotesStdin(opts))) return;
-    if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
-      usageError(opts, "pass at most one of --reminder / --clear-reminder");
+    // The patch (and every exclusive-flag pair in it, the @time sugar included)
+    // comes from the ONE update-vocabulary builder both surfaces share.
+    const built = buildUpdatePatch(opts, CLI_UPDATE_LABELS);
+    if (built.kind === "error") {
+      usageError(opts, built.message);
       return;
     }
-    if (!whenSugarOk(opts)) return;
-    await runWrite(opts, (c) =>
-      c.write.updateTodo(
-        uuid,
-        {
-          ...(opts["title"] !== undefined && { title: opts["title"] as string }),
-          ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
-          ...(opts["appendNotes"] !== undefined && { appendNotes: opts["appendNotes"] as string }),
-          ...(opts["prependNotes"] !== undefined && {
-            prependNotes: opts["prependNotes"] as string,
-          }),
-          ...(opts["when"] !== undefined && { when: opts["when"] as never }),
-          ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
-          ...(opts["clearReminder"] === true && { reminder: null }),
-          ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
-          ...(opts["clearDeadline"] === true && { deadline: null }),
-          ...(opts["createdAt"] !== undefined && { createdAt: opts["createdAt"] as string }),
-          ...(opts["completedAt"] !== undefined && { completedAt: opts["completedAt"] as string }),
-        },
-        writeOptionsFrom(opts),
-      ),
-    );
+    await runWrite(opts, (c) => c.write.updateTodo(uuid, built.patch, writeOptionsFrom(opts)));
   });
 
   for (const verb of ["complete", "cancel"] as const) {
@@ -2168,44 +2145,13 @@ export function registerWriteCommands(program: Command): void {
       "rewrite the completion timestamp of an already-resolved project (a canceled one stays canceled); open projects are refused — use complete/cancel",
     )
     .action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-      const notesModes = ["notes", "appendNotes", "prependNotes"].filter(
-        (k) => opts[k] !== undefined,
-      );
-      if (notesModes.length > 1) {
-        usageError(opts, "--notes, --append-notes, --prepend-notes are exclusive");
-        return;
-      }
       if (!(await resolveNotesStdin(opts))) return;
-      if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
-        usageError(opts, "pass at most one of --reminder / --clear-reminder");
+      const built = buildUpdatePatch(opts, CLI_UPDATE_LABELS);
+      if (built.kind === "error") {
+        usageError(opts, built.message);
         return;
       }
-      if (!whenSugarOk(opts)) return;
-      await runWrite(opts, (c) =>
-        c.write.updateProject(
-          uuid,
-          {
-            ...(opts["title"] !== undefined && { title: opts["title"] as string }),
-            ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
-            ...(opts["appendNotes"] !== undefined && {
-              appendNotes: opts["appendNotes"] as string,
-            }),
-            ...(opts["prependNotes"] !== undefined && {
-              prependNotes: opts["prependNotes"] as string,
-            }),
-            ...(opts["when"] !== undefined && { when: opts["when"] as never }),
-            ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
-            ...(opts["clearReminder"] === true && { reminder: null }),
-            ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
-            ...(opts["clearDeadline"] === true && { deadline: null }),
-            ...(opts["createdAt"] !== undefined && { createdAt: opts["createdAt"] as string }),
-            ...(opts["completedAt"] !== undefined && {
-              completedAt: opts["completedAt"] as string,
-            }),
-          },
-          writeOptionsFrom(opts),
-        ),
-      );
+      await runWrite(opts, (c) => c.write.updateProject(uuid, built.patch, writeOptionsFrom(opts)));
     });
 
   addCreateTagsFlag(

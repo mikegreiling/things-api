@@ -52,6 +52,7 @@ import { isUiDriveOp, type OperationKind, type ReorderParams } from "./operation
 import type { RepeatRule } from "../model/recurrence.ts";
 import { restoreModDates, type ModRestoreTarget } from "./preserve-modified.ts";
 import { ruleToInverseParams } from "./repeat-rule.ts";
+import { updateRestoreParams } from "./update-fields.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
 
@@ -980,13 +981,10 @@ export function planUndo(
     case "todo.update": {
       if (uuid === null) return irreversible("no target uuid recorded");
       const steps: UndoStep[] = [];
-      const params: Record<string, unknown> = { uuid };
-      const title = preField(record, "title");
-      const notesPre = preField(record, "notes");
-      const deadline = preField(record, "deadline");
-      if (title !== undefined) params["title"] = title;
-      if (notesPre !== undefined) params["notes"] = notesPre; // covers append/prepend too
-      if (deadline !== undefined) params["deadline"] = deadline;
+      // The per-field inverses come from the ONE update registry (exhaustive over
+      // the vocabulary — a new field is a compile error there until its restore
+      // leg is written), not from a hand-listed set of fields here.
+      const params: Record<string, unknown> = { uuid, ...updateRestoreParams(record.pre) };
       const requestedWhen =
         (record.requested["when"] ?? record.requested["reminder"]) !== undefined;
       // Schedule axes the restore overwrites — guarded against the recorded
@@ -1021,13 +1019,8 @@ export function planUndo(
 
     case "project.update": {
       if (uuid === null) return irreversible("no target uuid recorded");
-      const params: Record<string, unknown> = { uuid };
-      const title = preField(record, "title");
-      const notesPre = preField(record, "notes");
-      const deadline = preField(record, "deadline");
-      if (title !== undefined) params["title"] = title;
-      if (notesPre !== undefined) params["notes"] = notesPre;
-      if (deadline !== undefined) params["deadline"] = deadline;
+      // Same registry-derived per-field inverses as todo.update (one vocabulary).
+      const params: Record<string, unknown> = { uuid, ...updateRestoreParams(record.pre) };
       // when/reminder restore reuses the schedule reconstructor (emitting a
       // project.update); projects never live in the Inbox so that branch is
       // unreachable here.

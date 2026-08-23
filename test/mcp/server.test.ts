@@ -799,6 +799,23 @@ describe("things MCP server", () => {
     expect(outcome.op).toBe("todo.update");
   });
 
+  it("update kind project accepts the @time sugar exactly as kind todo does", async () => {
+    // Both kinds build their patch with the ONE shared update-vocabulary builder
+    // (#491 doctrine), so the surfaces cannot drift on which spellings they take:
+    // the project branch used to pass `when` through unsplit, and the raw
+    // `date@time` string then died in the schedule assertions.
+    const uuid = seedProject(fixture.db, { title: "sugar-proj" });
+    await connect([fakeVector(null, { ops: ["project.update"] }).vector]);
+    const outcome = textOf(
+      await client.callTool({
+        name: "update",
+        arguments: { kind: "project", uuid, when: "2026-08-01@09:00", dry_run: true },
+      }),
+    ) as { op: string; invocation: string };
+    expect(outcome.op).toBe("project.update");
+    expect(outcome.invocation).toContain("when=2026-08-01%4009%3A00");
+  });
+
   it("update kind project on an ambiguous NAME returns structured candidates (name sugar + machine detail)", async () => {
     // MCP inherits the name/partial-uuid write-target sugar via the shared
     // pipeline: passing a NAME (not a uuid) resolves it — proven by the

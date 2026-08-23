@@ -6,20 +6,11 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import {
-  decodeReminderTime,
-  encodeReminderTime,
-  localToday,
-  reminderUrlToken,
-  zonedWallInstant,
-  type IsoDate,
-  type ReminderTime,
-} from "../model/dates.ts";
+import { localToday, zonedWallInstant, type IsoDate, type ReminderTime } from "../model/dates.ts";
 import type { Todo } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { manualLogDateEpoch, pendingLogCount } from "../read/log-boundary.ts";
 import { isLooseRef } from "../read/pseudo-area.ts";
-import { reminderIsLive } from "../read/stage.ts";
 import type { HazardId } from "./guards.ts";
 import type {
   ContainerRef,
@@ -51,6 +42,14 @@ import {
   trashedCount,
   type PreState,
 } from "./pre-state.ts";
+import {
+  assertNotesModesExclusive,
+  normalizeReminder,
+  updateAssertions,
+  updateWireParams,
+  whenAssertions,
+  whenWithReminder,
+} from "./update-fields.ts";
 import { resolveTagRefs } from "./tag-refs.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { assertRepeatRule } from "./repeat-rule.ts";
@@ -173,74 +172,6 @@ function unsupportedVector(op: string, vector: VectorId): never {
   throw new Error(`${op} cannot be compiled for vector ${vector} (planner bug)`);
 }
 
-function whenAssertions(
-  when: WhenValue,
-  todayIso: IsoDate,
-  opts: { mode: "add" | "update" } = { mode: "add" },
-): FieldAssertion[] {
-  // Strict shape check: an unvalidated string used to flow straight into the
-  // URL (e.g. "2026-07-20@09:30", the raw URL grammar) — the app would SET
-  // date+reminder while verification asserted the literal string as the date,
-  // reporting a false mismatch on a write that succeeded.
-  if (
-    when !== "today" &&
-    when !== "evening" &&
-    when !== "anytime" &&
-    when !== "someday" &&
-    !/^\d{4}-\d{2}-\d{2}$/.test(when)
-  ) {
-    throw new RangeError(
-      when.includes("@")
-        ? `invalid when "${when}" — a reminder time is a separate parameter (reminder: "HH:mm"; CLI --reminder), not an @ suffix`
-        : `invalid when "${when}" — expected today | evening | anytime | someday | YYYY-MM-DD`,
-    );
-  }
-  switch (when) {
-    case "today":
-      // Today's non-evening section: in Today (the `today` marker) AND NOT in the
-      // evening sub-bucket (the presence-keyed `evening` marker absent — asserted
-      // as null, which valuesEqual treats as absent). Gated to Today members under
-      // the verify clock exactly as the retired `todaySection` was.
-      //
-      // The `startDate` assertion differs by op (field bug §0½.8):
-      //  - ADD mints a fresh Today item with no schedule history, so the app dates
-      //    it EXACTLY today — exact equality is right.
-      //  - UPDATE of an item ALREADY in Today whose `startDate` has already arrived
-      //    (past or today): the app PRESERVES that historical date rather than
-      //    rewriting the storage byte to today (arrived-date law). Assert the
-      //    arrived-date PREDICATE (non-null and <= today) so a preserved historical
-      //    date verifies, while an undated deadline-only pull (null startDate) is
-      //    still rejected — the item's Today membership then rests only on a
-      //    deadline, not on the requested schedule.
-      return [
-        { field: "start", equals: "active" },
-        opts.mode === "update"
-          ? { field: "startDate", satisfies: { predicate: "arrived-on-or-before", date: todayIso } }
-          : { field: "startDate", equals: todayIso },
-        { field: "today", equals: true },
-        { field: "evening", equals: null },
-      ];
-    case "evening":
-      // The This-Evening sub-bucket: the `evening` marker (which implies `today`).
-      return [
-        { field: "start", equals: "active" },
-        { field: "startDate", equals: todayIso },
-        { field: "evening", equals: true },
-      ];
-    case "anytime":
-      return [
-        { field: "start", equals: "active" },
-        { field: "startDate", equals: null },
-      ];
-    case "someday":
-      return [{ field: "start", equals: "someday" }];
-    default:
-      // Concrete date: assert only the date — start-state semantics differ
-      // for past/today/future dates (only the date itself is invariant).
-      return [{ field: "startDate", equals: when }];
-  }
-}
-
 function sortedTags(tags: string[]): string[] {
   return [...tags].toSorted();
 }
@@ -256,20 +187,6 @@ function applyTagRefs(db: DatabaseSync, pre: PreState, tags: string[]): void {
   const res = resolveTagRefs(db, tags);
   pre.missingTags = res.missing;
   pre.resolvedTagTitles = res.titles;
-}
-
-/** Round-trip normalization: "6:5"-style inputs → canonical "06:05". */
-function normalizeReminder(time: ReminderTime): ReminderTime {
-  return decodeReminderTime(encodeReminderTime(time)) ?? time;
-}
-
-/**
- * The URL `when` value with an optional reminder token appended through the
- * deterministic emitter (never a bare 1–11 hour — oddity 2d).
- */
-function whenWithReminder(when: WhenValue, reminder: ReminderTime | null | undefined): string {
-  if (reminder === undefined || reminder === null) return when;
-  return `${when}@${reminderUrlToken(reminder)}`;
 }
 
 function containerGiven(ref: ContainerRef | undefined): boolean {
@@ -496,117 +413,42 @@ const todoAdd: CommandSpec<"todo.add"> = {
 };
 
 /**
- * The effective reminder a when-bearing update should leave behind. A bare
- * `when=` CLEARS an existing reminder (R07/R20), so when the caller
- * re-schedules to today/evening/a date without addressing the reminder we
- * auto-preserve the current one; an explicit null is the intentional clear.
- *
- * §9n: a reminder whose row's `startDate` is already strictly PAST is
- * presentation-dead (the GUI hides its bell; the byte lingers in the DB). We do
- * NOT auto-preserve such a stale byte — carrying it into the re-schedule would
- * RESURRECT a reminder the user believes gone. A LIVE reminder (startDate
- * today/future) is preserved as before. The liveness test is the SAME
- * {@link reminderIsLive} predicate the read side gates on, consulted against the
- * target's CURRENT `startDate` under the response clock.
+ * The to-do / project update pair. Both legs — the URL parameters and the
+ * expected-delta assertions — are DERIVED from the single exhaustive registry in
+ * update-fields.ts (the #491 exhaustive-map doctrine): the only per-verb
+ * difference is the URL command name, so neither verb can accept a field the
+ * other drops, and a field added to `UpdateFields` breaks compilation there
+ * until every leg handles it.
  */
-function effectiveReminder(
-  pre: PreState,
-  params: { when?: WhenValue; reminder?: ReminderTime | null },
-): ReminderTime | null {
-  if (params.reminder !== undefined) return params.reminder;
-  const when = params.when;
-  const schedulable =
-    when === "today" ||
-    when === "evening" ||
-    (typeof when === "string" && /^\d{4}-\d{2}-\d{2}$/.test(when));
-  if (!schedulable) return null;
-  const target = pre.target;
-  if (target === null || target.type === "heading") return null;
-  if (!reminderIsLive(target.startDate, pre.todayIso)) return null;
-  // Read the RAW stored byte off the substrate (top-level `reminder` is
-  // live-gated under the LOAD clock, which can differ from `pre.todayIso` under a
-  // pinned THINGS_NOW). The `reminderIsLive` guard above applies liveness under
-  // the injected clock explicitly, so the raw byte + this gate reproduce the
-  // former semantics exactly.
-  return target.derived.reminder;
+function updateSpec<K extends "todo.update" | "project.update">(
+  op: K,
+  urlCommand: "update" | "update-project",
+): CommandSpec<K> {
+  return {
+    op,
+    hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
+    preRead(db, params, now) {
+      assertNotesModesExclusive(params);
+      const pre = emptyPreState();
+      pre.todayIso = localToday(now);
+      pre.target = loadTarget(db, params.uuid);
+      return pre;
+    },
+    expectedDelta(pre, params, ctx) {
+      return { mode: "update", uuid: params.uuid, assert: updateAssertions(params, pre, ctx) };
+    },
+    compile(params, vector, pre, ctx) {
+      if (vector !== "url-scheme") unsupportedVector(op, vector);
+      return thingsUrl(
+        urlCommand,
+        { id: params.uuid, ...updateWireParams(params, pre) },
+        ctx.token,
+      );
+    },
+  };
 }
 
-function assertNotesModesExclusive(params: {
-  notes?: string;
-  appendNotes?: string;
-  prependNotes?: string;
-}): void {
-  if (
-    params.notes !== undefined &&
-    (params.appendNotes !== undefined || params.prependNotes !== undefined)
-  ) {
-    throw new RangeError("notes (replace) is exclusive with appendNotes/prependNotes");
-  }
-  if (params.appendNotes !== undefined && params.prependNotes !== undefined) {
-    throw new RangeError("appendNotes and prependNotes cannot be combined in one update");
-  }
-}
-
-function expectedNotes(pre: PreState, params: { appendNotes?: string; prependNotes?: string }) {
-  const current = pre.target !== null && pre.target.type !== "heading" ? pre.target.notes : "";
-  // Separator semantics probed: newline-joined, no stray newline against an
-  // empty note (E04/E05/E11/E12).
-  if (params.appendNotes !== undefined) {
-    return current === "" ? params.appendNotes : `${current}\n${params.appendNotes}`;
-  }
-  if (params.prependNotes !== undefined) {
-    return current === "" ? params.prependNotes : `${params.prependNotes}\n${current}`;
-  }
-  return undefined;
-}
-
-const todoUpdate: CommandSpec<"todo.update"> = {
-  op: "todo.update",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
-  preRead(db, params, now) {
-    assertNotesModesExclusive(params);
-    const pre = emptyPreState();
-    pre.todayIso = localToday(now);
-    pre.target = loadTarget(db, params.uuid);
-    return pre;
-  },
-  expectedDelta(pre, params, ctx) {
-    const assert: FieldAssertion[] = [];
-    if (params.title !== undefined) assert.push({ field: "title", equals: params.title });
-    if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
-    const joined = expectedNotes(pre, params);
-    if (joined !== undefined) assert.push({ field: "notes", equals: joined });
-    if (params.when !== undefined) {
-      assert.push(...whenAssertions(params.when, ctx.todayIso, { mode: "update" }));
-      const reminder = effectiveReminder(pre, params);
-      assert.push({
-        field: "reminder",
-        equals: reminder === null ? null : normalizeReminder(reminder),
-      });
-    }
-    if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
-    return { mode: "update", uuid: params.uuid, assert };
-  },
-  compile(params, vector, pre, ctx) {
-    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
-    return thingsUrl(
-      "update",
-      {
-        id: params.uuid,
-        title: params.title,
-        notes: params.notes,
-        "append-notes": params.appendNotes,
-        "prepend-notes": params.prependNotes,
-        when:
-          params.when === undefined
-            ? undefined
-            : whenWithReminder(params.when, effectiveReminder(pre, params)),
-        deadline: params.deadline === null ? "" : params.deadline,
-      },
-      ctx.token,
-    );
-  },
-};
+const todoUpdate = updateSpec("todo.update", "update");
 
 function statusSpec<K extends "todo.complete" | "todo.cancel" | "todo.reopen">(
   op: K,
@@ -1021,6 +863,14 @@ const projectAdd: CommandSpec<"project.add"> = {
     assert.push(...addDateAssertions(params, ctx.zone));
     const area = pre.destArea?.resolved;
     if (area !== undefined && area !== null) assert.push({ field: "area.uuid", equals: area.uuid });
+    // KNOWN SHALLOW SPOT (audited 2026-08-23, exhaustive-map sweep): the seeded
+    // children — `todos` and the structured `items` (headings + rich children) —
+    // contribute NO assertion, so a project born with an empty body still
+    // verifies `ok`. Unlike a to-do's `checklistItems` (asserted through
+    // `checklistTitles`) there is no child-list field on the delta vocabulary to
+    // compare against, and adding one needs probe evidence that the imported
+    // children are readable inside the verify window before a missing child may
+    // be called a failure. Tracked in docs/up-next.md; do NOT "fix" it blind.
     return {
       mode: "create",
       probe: {
@@ -1067,55 +917,9 @@ const projectAdd: CommandSpec<"project.add"> = {
   },
 };
 
-const projectUpdate: CommandSpec<"project.update"> = {
-  op: "project.update",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
-  preRead(db, params, now) {
-    assertNotesModesExclusive(params);
-    const pre = emptyPreState();
-    pre.todayIso = localToday(now);
-    pre.target = loadTarget(db, params.uuid);
-    return pre;
-  },
-  expectedDelta(pre, params, ctx) {
-    const assert: FieldAssertion[] = [];
-    if (params.title !== undefined) assert.push({ field: "title", equals: params.title });
-    if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
-    const joined = expectedNotes(pre, params);
-    if (joined !== undefined) assert.push({ field: "notes", equals: joined });
-    if (params.when !== undefined) {
-      assert.push(...whenAssertions(params.when, ctx.todayIso, { mode: "update" }));
-      // Projects carry the same reminderTime codec as to-dos (A3); a bare
-      // when= clears an existing reminder unless auto-preserved.
-      const reminder = effectiveReminder(pre, params);
-      assert.push({
-        field: "reminder",
-        equals: reminder === null ? null : normalizeReminder(reminder),
-      });
-    }
-    if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
-    return { mode: "update", uuid: params.uuid, assert };
-  },
-  compile(params, vector, pre, ctx) {
-    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
-    return thingsUrl(
-      "update-project",
-      {
-        id: params.uuid,
-        title: params.title,
-        notes: params.notes,
-        "append-notes": params.appendNotes,
-        "prepend-notes": params.prependNotes,
-        when:
-          params.when === undefined
-            ? undefined
-            : whenWithReminder(params.when, effectiveReminder(pre, params)),
-        deadline: params.deadline === null ? "" : params.deadline,
-      },
-      ctx.token,
-    );
-  },
-};
+// Projects carry the same reminderTime codec and notes/schedule semantics as
+// to-dos (A3/E18) — same registry, same legs, only the URL command differs.
+const projectUpdate = updateSpec("project.update", "update-project");
 
 const projectSetTags: CommandSpec<"project.set-tags"> = {
   op: "project.set-tags",
