@@ -2,7 +2,7 @@
 //   npm run lab:run                          full clone→probe→collect→teardown
 //   npm run lab:run -- --keep-vm             leave the VM for debugging
 //   npm run lab:compare -- <runA> <runB>     acceptance gate: identical verdicts
-//   npm run lab:gc                           delete stray things-run-* VMs
+//   npm run lab:gc                           delete stray things-run-* VMs (spares in-use ones)
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -57,10 +57,11 @@ program
 
 program
   .command("gc")
-  .description("stop + delete stray things-run-* VMs")
+  .description("stop + delete stray things-run-* VMs, sparing any a concurrent campaign holds")
   .action(() => {
-    const removed = gcRunVms();
+    const { removed, spared } = gcRunVms(new Date().toISOString());
     console.log(removed.length > 0 ? `removed: ${removed.join(", ")}` : "no stray run VMs");
+    if (spared.length > 0) console.log(`spared (running or in use): ${spared.join(", ")}`);
   });
 
 await program.parseAsync(process.argv);

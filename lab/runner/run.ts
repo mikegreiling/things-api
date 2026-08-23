@@ -66,13 +66,17 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
   const artifactsDir = join(REPO_ROOT, "lab/artifacts", runId);
   mkdirSync(join(artifactsDir, "evidence"), { recursive: true });
 
+  const startedAt = new Date().toISOString();
+
   preflight();
   if (options.skipGc !== true) {
-    const strays = gcRunVms();
-    if (strays.length > 0) log(`gc: removed stray run VM(s): ${strays.join(", ")}`);
+    // Polite gc: strays from crashed prior runs only — a VM that is running, or
+    // that tart touched after this run started, belongs to a sibling campaign.
+    const { removed, spared } = gcRunVms(startedAt);
+    if (removed.length > 0) log(`gc: removed stray run VM(s): ${removed.join(", ")}`);
+    if (spared.length > 0) log(`gc: sparing in-use run VM(s): ${spared.join(", ")}`);
   }
 
-  const startedAt = new Date().toISOString();
   log(`run ${runId}: cloning ${GOLDEN} -> ${vm}`);
   tartClone(GOLDEN, vm);
 
