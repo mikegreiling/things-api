@@ -27,6 +27,9 @@ export const DEPUTY_PROTOCOL_VERSION = 1;
  */
 export const EXPECTED_HELPERS_VERSION = "1.0.0";
 
+/** The outer helper bundle's identifier (Things API Helper.app) — TCC + BTM identity. */
+export const HELPERS_BUNDLE_ID = "com.pixelcog.things-api-helper";
+
 /** launchd label (and signing identifier) of the broker. */
 export const DEPUTY_LAUNCHD_LABEL = "com.pixelcog.things-deputy";
 

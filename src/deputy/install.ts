@@ -22,6 +22,7 @@ import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import {
   DEPUTY_LAUNCHD_LABEL,
+  HELPERS_BUNDLE_ID,
   READER_LAUNCHD_LABEL,
   DEPUTY_PROTOCOL_VERSION,
   type DeputyHello,
@@ -96,6 +97,13 @@ function renderReaderPlist(appPath: string): string {
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <!-- Background Task Management groups the login item under the helper
+       bundle's display name ("Things API Helper") instead of the signing
+       certificate's personal name. -->
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>${HELPERS_BUNDLE_ID}</string>
+  </array>
 </dict>
 </plist>
 `;
@@ -145,6 +153,13 @@ function renderPlist(binaryPath: string, stateDir: string): string {
   <string>Interactive</string>
   <key>StandardErrorPath</key>
   <string>${stateDir}/deputy.stderr.log</string>
+  <!-- Background Task Management groups the login item under the helper
+       bundle's display name ("Things API Helper") instead of the signing
+       certificate's personal name. -->
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>${HELPERS_BUNDLE_ID}</string>
+  </array>
 </dict>
 </plist>
 `;
