@@ -105,6 +105,14 @@ These operations do not re-stamp a row — they **destroy the row and mint a fre
 
 A `umd`-keyed change detector — the obvious design for `things watch` — **misses the entire silent class of §2b.** The native reorder family (ORD-20 Today reorder, ORD-22 partial-wire, ORD-12 open-heading reorder, ORD-13 open/unswept-child reorder, ORD-18 someday re-ranks, ORD-19 template wiring) re-ranks rows without touching `umd`, so a naive watcher keyed on `userModificationDate` would report **no change** after a user drag-reorders a project or Today. This is the load-bearing constraint recorded on the up-next **`things watch`** item (§9r): the member-snapshot diff must compare `index`/`todayIndex`/order **directly**, not just `umd`. (The wake signal — `main.sqlite-wal` mtime — does fire on a reorder; it is the *diff* that must not rely on `umd`.) See [up-next.md](../up-next.md) "Change-watch / poll mode".
 
+### 2e. The operator consequence — the mass-cleanup recipe (cross-reference)
+
+The §2a/§2b split has a directly usable shape for the one bulk job that hits the timeline hardest, a **tag-vocabulary cleanup**: tag RENAME and tag DELETE are `umd`-SILENT on every member (RD-23 (2)/(3), TAGMOD-T2/T3), tag APPLY/REMOVE is the only member-bumping move (RD-23 (1), TAGMOD-T1/T6) and therefore the only one that wants `--preserve-modified` (§4, sync-safe per SYNC-2 / [sync2b-durable-account](../lab/sync2b-durable-account.md)), and the adjacent area retirement is STATUS-dependent — deleting an area TRASHES + bumps its open direct members while merely DETACHING its logged ones, `umd`-silent (RD-5 refinement, TAGMOD-T4). Reshape the vocabulary first (free), re-tag last (flagged).
+
+The consumer-facing write-up of that ordering lives in the agent skill: [skills/things-cli/references/tag-cleanup.md](../../skills/things-cli/references/tag-cleanup.md). The `umd` footprint of the individual ops it composes is this document's §2a/§2b and the register rows above; the reconciliation sweep that closed the surrounding cells is [srcfate-reconciliation-sweep](../lab/srcfate-reconciliation-sweep.md).
+
+**Gap the recipe exposes:** `things batch` carries no `--preserve-modified` — not as a run flag, not as a per-line `options` key (`BatchOp["options"]`, `src/write/batch.ts`) — so the natural bulk vehicle for step 3 cannot stay off the timeline; a silent cleanup has to loop the per-item verb.
+
 ---
 
 ## 3. `stopDate` — the resolution instant
