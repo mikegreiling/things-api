@@ -8,7 +8,7 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,8 +18,10 @@ import { readContainerFileSync } from "../../src/deputy/files.ts";
 import { osaExec, osaExecSync } from "../../src/deputy/osa.ts";
 import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-exec.ts";
 import {
+  deputyInstalledBinaryPath,
   deputySocketPath,
   deputyTokenPath,
+  readerInstalledAppPath,
   readerSocketPath,
   readerTokenPath,
   reviveRow,
@@ -29,6 +31,8 @@ import {
   deputyFilesActive,
   deputyRoutesDb,
   deputyRouting,
+  helpersRouting,
+  readerRouting,
   resetDeputyRoutingForTests,
 } from "../../src/deputy/routing.ts";
 
@@ -144,38 +148,132 @@ afterEach(async () => {
   rmSync(stateDir, { recursive: true, force: true });
 });
 
-describe("activation matrix", () => {
-  it("is inactive by default (no env, no config)", () => {
-    delete process.env["THINGS_API_HELPERS"];
-    const routing = deputyRouting();
-    expect(routing.active).toBe(false);
-    expect(routing.reason).toBe("disabled");
-  });
+/**
+ * The tri-state matrix (docs/design/agent-daemon.md §3c): mode × helper state.
+ * The cell that carries the whole design is `auto` + ABSENT — silent, because
+ * a machine that never installed the helpers is not a degraded machine — set
+ * against `auto` + INSTALLED-but-broken, which must always speak up.
+ */
+/** Pretend `things helpers install` ran: the bundle exists on disk. */
+function markInstalled(): void {
+  mkdirSync(dirname(deputyInstalledBinaryPath(process.env)), { recursive: true });
+  writeFileSync(deputyInstalledBinaryPath(process.env), "#!/bin/sh\n");
+}
 
-  it("THINGS_API_HELPERS=false forces inactive even with a live broker", async () => {
+function noticesFrom(spy: { mock: { calls: unknown[][] } }): string[] {
+  return spy.mock.calls
+    .map((call) => String(call[0]))
+    .filter((line) => line.includes("things-api helpers"));
+}
+
+describe("activation matrix (helpers-enabled tri-state)", () => {
+  it("false + healthy helper: inactive, silent (never route)", async () => {
     await startMock();
     process.env["THINGS_API_HELPERS"] = "false";
-    expect(deputyRouting().active).toBe(false);
-  });
-
-  it("enabled but not running: inactive with one stderr notice, direct fallback", () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const routing = deputyRouting();
     expect(routing.active).toBe(false);
-    expect(routing.reason).toContain("not running");
-    deputyRouting(); // second ask: memoized, no second notice
-    const notices = stderrSpy.mock.calls.filter((c) => String(c[0]).includes("things-api deputy"));
-    expect(notices).toHaveLength(1);
-    expect(String(notices[0]?.[0])).toContain("running DIRECT");
+    expect(routing.reason).toBe("disabled");
+    expect(noticesFrom(stderrSpy)).toEqual([]);
     stderrSpy.mockRestore();
   });
 
-  it("activates against a live broker and carries the handshake", async () => {
+  it("false + absent helper: inactive, silent", () => {
+    process.env["THINGS_API_HELPERS"] = "false";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().reason).toBe("disabled");
+    expect(noticesFrom(stderrSpy)).toEqual([]);
+    stderrSpy.mockRestore();
+  });
+
+  it("true + healthy helper: active, carries the handshake", async () => {
     await startMock();
     const routing = deputyRouting();
     expect(routing.active).toBe(true);
     expect(routing.hello?.deputyVersion).toBe(EXPECTED_HELPERS_VERSION);
     expect(routing.hello?.dbPath).toContain("main.sqlite");
+  });
+
+  it("true + absent helper: inactive with ONE stderr notice, direct fallback", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(routing.reason).toContain("not installed");
+    deputyRouting(); // second ask: memoized, no second notice
+    const notices = noticesFrom(stderrSpy);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("running DIRECT");
+    stderrSpy.mockRestore();
+  });
+
+  it("true + unhealthy helper (socket present, handshake refused): inactive + notice", async () => {
+    await startMock();
+    writeFileSync(deputyTokenPath(process.env), "0".repeat(64));
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(routing.reason).toContain("handshake failed");
+    expect(noticesFrom(stderrSpy)[0]).toContain("handshake failed");
+    stderrSpy.mockRestore();
+  });
+
+  it("auto + healthy helper: active, and says nothing about it", async () => {
+    await startMock();
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().active).toBe(true);
+    expect(noticesFrom(stderrSpy)).toEqual([]);
+    stderrSpy.mockRestore();
+  });
+
+  it("auto + absent helper: inactive and SILENT — absence is not degradation", () => {
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(routing.reason).toBe("deputy not installed");
+    expect(noticesFrom(stderrSpy)).toEqual([]);
+    stderrSpy.mockRestore();
+  });
+
+  it("auto + INSTALLED but not running: inactive and LOUD", () => {
+    process.env["THINGS_API_HELPERS"] = "auto";
+    markInstalled();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(routing.reason).toContain("not running");
+    expect(noticesFrom(stderrSpy)[0]).toContain("running DIRECT");
+    stderrSpy.mockRestore();
+  });
+
+  it("auto + unhealthy helper (socket present, handshake refused): inactive and LOUD", async () => {
+    await startMock();
+    writeFileSync(deputyTokenPath(process.env), "0".repeat(64));
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(noticesFrom(stderrSpy)[0]).toContain("handshake failed");
+    stderrSpy.mockRestore();
+  });
+
+  it("auto is the default when neither env nor config says otherwise", () => {
+    delete process.env["THINGS_API_HELPERS"];
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(routing.reason).toBe("deputy not installed");
+    expect(noticesFrom(stderrSpy)).toEqual([]);
+    stderrSpy.mockRestore();
+  });
+
+  it("an unrecognized THINGS_API_HELPERS value falls through to the default", () => {
+    process.env["THINGS_API_HELPERS"] = "yes-please";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().reason).toBe("deputy not installed");
+    expect(noticesFrom(stderrSpy)).toEqual([]);
+    stderrSpy.mockRestore();
   });
 
   it("protocol skew deactivates with a notice", async () => {
@@ -184,6 +282,7 @@ describe("activation matrix", () => {
     const routing = deputyRouting();
     expect(routing.active).toBe(false);
     expect(routing.reason).toContain("protocol skew");
+    expect(noticesFrom(stderrSpy)[0]).toContain("protocol");
     stderrSpy.mockRestore();
   });
 
@@ -192,19 +291,23 @@ describe("activation matrix", () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const routing = deputyRouting();
     expect(routing.active).toBe(true);
-    const notices = stderrSpy.mock.calls.filter((c) => String(c[0]).includes("things-api deputy"));
+    const notices = noticesFrom(stderrSpy);
     expect(notices.length).toBeGreaterThanOrEqual(1);
-    expect(String(notices[0]?.[0])).toContain("0.0.1");
+    expect(notices[0]).toContain("0.0.1");
     stderrSpy.mockRestore();
   });
 
-  it("a wrong token file fails the handshake closed (inactive, direct)", async () => {
+  it("spends at most ONE notice per process across both halves", async () => {
+    // Deputy socket refuses the handshake AND the reader is installed-but-down:
+    // two degradations, one line — stacked notices are noise, not information.
     await startMock();
     writeFileSync(deputyTokenPath(process.env), "0".repeat(64));
+    mkdirSync(dirname(readerInstalledAppPath(process.env)), { recursive: true });
+    writeFileSync(readerInstalledAppPath(process.env), "app");
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const routing = deputyRouting();
-    expect(routing.active).toBe(false);
-    expect(routing.reason).toContain("handshake failed");
+    deputyRouting();
+    readerRouting();
+    expect(noticesFrom(stderrSpy)).toHaveLength(1);
     stderrSpy.mockRestore();
   });
 });
@@ -270,6 +373,39 @@ describe("reader transport (file verbs)", () => {
   it("neither half up: files inactive, everything direct", () => {
     expect(deputyFilesActive()).toBe(false);
     expect(deputyRoutesDb(undefined)).toBe(false);
+  });
+});
+
+describe("helpersRouting (what the mode resolved to — doctor's input)", () => {
+  it("reports both halves carrying traffic", async () => {
+    await startMock();
+    await startMockReader({ granted: true });
+    const routing = helpersRouting();
+    expect(routing).toMatchObject({ mode: "true", automation: true, files: true });
+    expect(routing.deputyReason).toBeNull();
+    expect(routing.readerReason).toBeNull();
+  });
+
+  it("names the ceremony when the reader is running but ungranted", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await startMock();
+    await startMockReader({ granted: false });
+    const routing = helpersRouting();
+    expect(routing.automation).toBe(true);
+    expect(routing.files).toBe(false);
+    expect(routing.readerReason).toContain("things helpers grant");
+    stderrSpy.mockRestore();
+  });
+
+  it("reports mode false as fully direct", () => {
+    process.env["THINGS_API_HELPERS"] = "false";
+    expect(helpersRouting()).toMatchObject({
+      mode: "false",
+      automation: false,
+      files: false,
+      deputyReason: "disabled",
+      readerReason: "disabled",
+    });
   });
 });
 

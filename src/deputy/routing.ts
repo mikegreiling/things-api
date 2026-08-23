@@ -3,32 +3,49 @@
  * reads, osascript, container file reads) go through the things-deputy broker
  * or run direct exactly as they always have.
  *
- * Mode resolution (highest wins): the CLI `--helpers/--no-helpers` flag (which * writes THINGS_API_HELPERS before any load) → THINGS_API_HELPERS env → stored
- * `helpers-enabled` config → default OFF. Direct execution is the contract's
- * ground truth; the deputy is an alternative transport for the same
+ * Mode resolution (highest wins): the CLI `--helpers/--no-helpers` flag (which
+ * writes THINGS_API_HELPERS before any load) → THINGS_API_HELPERS env → stored
+ * `helpers-enabled` config → default `auto`. Direct execution is the contract's
+ * ground truth; the helpers are an alternative transport for the same
  * primitives.
  *
- * Fallback is decided at ACTIVATION, never mid-operation: if the deputy is
- * enabled but unreachable (or speaks a different protocol), the whole process
+ * The tri-state (docs/design/agent-daemon.md §3c):
+ *
+ * | mode    | helper absent            | installed, unhealthy | installed, healthy |
+ * |---------|--------------------------|----------------------|--------------------|
+ * | `auto`  | direct, SILENT           | direct, LOUD         | routed             |
+ * | `true`  | direct, LOUD             | direct, LOUD         | routed             |
+ * | `false` | direct, silent           | direct, silent       | direct, silent     |
+ *
+ * Under `auto` installation IS the intent signal, so absence is not a
+ * degradation to report (a fresh machine must not nag) while an installed
+ * helper that cannot serve is — silence there would hide the very consent churn
+ * the helpers exist to end.
+ *
+ * Fallback is decided at ACTIVATION, never mid-operation: if a helper is
+ * expected but unreachable (or speaks a different protocol), the whole process
  * runs direct with one stderr notice — a half-routed operation is worse than
- * an honestly direct one. A deputy that dies mid-request surfaces as that
+ * an honestly direct one. A helper that dies mid-request surfaces as that
  * request's error; it is never silently retried on the other path.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
-import { loadConfig } from "../config.ts";
+import { type HelpersMode, loadConfig } from "../config.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import { DeputyAsyncClient } from "./client.ts";
+import { emitHelpersNotice, resetHelpersNoticeForTests } from "./notice.ts";
 import {
   DEPUTY_LAUNCHD_LABEL,
   DEPUTY_PROTOCOL_VERSION,
   type DeputyHello,
   DeputyRequestError,
+  deputyInstalledBinaryPath,
   deputySocketPath,
   deputyTokenPath,
   EXPECTED_HELPERS_VERSION,
   type ReaderHello,
+  readerInstalledAppPath,
   readerSocketPath,
   readerTokenPath,
 } from "./protocol.ts";
@@ -79,7 +96,6 @@ interface ReaderState {
 
 let state: RoutingState | null = null;
 let readerState: ReaderState | null = null;
-let noticed = false;
 
 /** Test seam: forget the per-process activation memo (and close transports). */
 export function resetDeputyRoutingForTests(): void {
@@ -90,13 +106,16 @@ export function resetDeputyRoutingForTests(): void {
   readerState?.bridge?.close();
   state = null;
   readerState = null;
-  noticed = false;
+  resetHelpersNoticeForTests();
 }
 
-function notice(message: string): void {
-  if (noticed) return;
-  noticed = true;
-  process.stderr.write(`things-api deputy: ${message}\n`);
+/**
+ * Report a degradation — but only when the mode asks to hear about it. Under
+ * `auto` an ABSENT helper is an ordinary machine, not a fault: `loud` is false
+ * there and the process just runs direct.
+ */
+function notice(loud: boolean, message: string): void {
+  if (loud) emitHelpersNotice(message);
 }
 
 function syncSleep(ms: number): void {
@@ -133,12 +152,15 @@ function reconcileVersions(
     execFileSync(
       "launchctl",
       ["kickstart", "-k", `gui/${process.getuid?.() ?? 501}/${DEPUTY_LAUNCHD_LABEL}`],
-      { stdio: "ignore", timeout: 5000 },
+      // Clears the helpers' drain bound: kickstart -k waits for the old
+      // process, which finishes an in-flight request before exiting.
+      { stdio: "ignore", timeout: 30_000 },
     );
   } catch {
     // Not installed under launchd (foreground/test deputy) — nothing to restart.
     notice(
-      `helpers are v${first.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with scripts/build-helpers.sh + \`things helpers install\` to align`,
+      true,
+      `installed helpers are v${first.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\` to align`,
     );
     return first;
   }
@@ -153,24 +175,48 @@ function reconcileVersions(
   }
   const current = hello(bridge, token);
   notice(
-    `helpers are v${current.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild + \`things helpers install\` to align`,
+    true,
+    `installed helpers are v${current.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\` to align`,
   );
   return current;
 }
 
+/**
+ * Is a helper half INSTALLED on this machine? Installation is what separates
+ * "this host does not use the helpers" (silent under `auto`) from "the helper
+ * this host installed cannot serve" (always loud). The installed bundle on disk
+ * is the durable signal — a stopped launchd job leaves no socket but the bundle
+ * stays put.
+ */
+function halfInstalled(path: string, socketPath: string, tokenPath: string): boolean {
+  return existsSync(path) || (existsSync(socketPath) && existsSync(tokenPath));
+}
+
 function activate(env: NodeJS.ProcessEnv): RoutingState {
-  const cfg = loadConfig(env);
-  if (!cfg.helpersEnabled) return { active: false, reason: "disabled", hello: null };
+  const mode: HelpersMode = loadConfig(env).helpersMode;
+  if (mode === "false") return { active: false, reason: "disabled", hello: null };
 
   const socketPath = deputySocketPath(env);
   const tokenPath = deputyTokenPath(env);
+  const installed = halfInstalled(deputyInstalledBinaryPath(env), socketPath, tokenPath);
+  // `auto` + nothing installed = an ordinary un-onboarded machine, not a fault.
+  const loud = mode === "true" || installed;
   if (!existsSync(socketPath) || !existsSync(tokenPath)) {
     notice(
-      `enabled but not running (no socket at ${socketPath}) — running DIRECT, so TCC prompts attach to this process. \`things helpers status\` to inspect.`,
+      loud,
+      `${
+        installed
+          ? `installed but not running (no socket at ${socketPath})`
+          : "not installed on this machine"
+      } — running DIRECT, so TCC prompts attach to this process. \`things helpers ${
+        installed ? "status` to inspect" : "install` to change that"
+      }.`,
     );
     return {
       active: false,
-      reason: `deputy not running (no socket at ${socketPath})`,
+      reason: installed
+        ? `deputy not running (no socket at ${socketPath})`
+        : "deputy not installed",
       hello: null,
     };
   }
@@ -182,15 +228,19 @@ function activate(env: NodeJS.ProcessEnv): RoutingState {
   } catch (err) {
     bridge.close();
     const why = err instanceof Error ? err.message : String(err);
+    // A socket that will not handshake is a broken helper under EVERY non-off
+    // mode — never silent, whatever the mode says about absence.
     notice(
-      `enabled but the handshake failed (${why}) — running DIRECT. \`things helpers status\` to inspect.`,
+      true,
+      `the handshake failed (${why}) — running DIRECT. \`things helpers restart\`, then \`things helpers status\` to inspect.`,
     );
     return { active: false, reason: `handshake failed: ${why}`, hello: null };
   }
   if (helloResult.protocol !== DEPUTY_PROTOCOL_VERSION) {
     bridge.close();
     notice(
-      `deputy speaks protocol ${helloResult.protocol}, library speaks ${DEPUTY_PROTOCOL_VERSION} — running DIRECT. Rebuild + \`things helpers restart\`.`,
+      true,
+      `the deputy speaks protocol ${helloResult.protocol}, this package speaks ${DEPUTY_PROTOCOL_VERSION} — running DIRECT. Rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\`.`,
     );
     return {
       active: false,
@@ -224,11 +274,24 @@ function readerInactive(reason: string): ReaderState {
 }
 
 function activateReader(env: NodeJS.ProcessEnv): ReaderState {
-  if (!loadConfig(env).helpersEnabled) return readerInactive("disabled");
+  const mode: HelpersMode = loadConfig(env).helpersMode;
+  if (mode === "false") return readerInactive("disabled");
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
+  const installed = halfInstalled(readerInstalledAppPath(env), socketPath, tokenPath);
   if (!existsSync(socketPath) || !existsSync(tokenPath)) {
-    return readerInactive(`reader not running (no socket at ${socketPath})`);
+    // Absence is silent under `auto`; under `true` the caller asserted routing.
+    // An UNGRANTED reader is deliberately NOT noticed here — that is the
+    // ceremony's own state, reported by `things helpers status` and doctor.
+    notice(
+      mode === "true" || installed,
+      installed
+        ? `the reader is installed but not running (no socket at ${socketPath}) — database reads run DIRECT. \`things helpers status\` to inspect.`
+        : "the reader is not installed on this machine — database reads run DIRECT. `things helpers install` to change that.",
+    );
+    return readerInactive(
+      installed ? `reader not running (no socket at ${socketPath})` : "reader not installed",
+    );
   }
   const token = readFileSync(tokenPath, "utf8").trim();
   const bridge = new DeputySyncBridge(socketPath);
@@ -238,6 +301,10 @@ function activateReader(env: NodeJS.ProcessEnv): ReaderState {
     const readerHello = res as unknown as ReaderHello;
     if (readerHello.protocol !== DEPUTY_PROTOCOL_VERSION) {
       bridge.close();
+      notice(
+        true,
+        `the reader speaks protocol ${readerHello.protocol}, this package speaks ${DEPUTY_PROTOCOL_VERSION} — database reads run DIRECT. Rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\`.`,
+      );
       return readerInactive(`protocol skew (reader ${readerHello.protocol})`);
     }
     return {
@@ -250,9 +317,12 @@ function activateReader(env: NodeJS.ProcessEnv): ReaderState {
     };
   } catch (err) {
     bridge.close();
-    return readerInactive(
-      `reader handshake failed: ${err instanceof Error ? err.message : String(err)}`,
+    const why = err instanceof Error ? err.message : String(err);
+    notice(
+      true,
+      `the reader handshake failed (${why}) — database reads run DIRECT. \`things helpers restart\`, then \`things helpers status\` to inspect.`,
     );
+    return readerInactive(`reader handshake failed: ${why}`);
   }
 }
 
@@ -282,6 +352,42 @@ function fileTransport(env: NodeJS.ProcessEnv): { bridge: DeputySyncBridge; toke
     return { bridge: rs.bridge as DeputySyncBridge, token: rs.token };
   }
   return null;
+}
+
+/**
+ * What routing actually RESOLVED to in this process: the configured mode plus
+ * whether each half is carrying traffic. Activates both halves (memoized), so
+ * it reports the same decision every other call in this process sees — doctor's
+ * helpers section reads it rather than re-deriving one.
+ */
+export interface HelpersRouting {
+  mode: HelpersMode;
+  /** Automation verbs (osascript/shortcuts) ride the deputy. */
+  automation: boolean;
+  /** File verbs (sql/read-file/locate) ride the granted reader. */
+  files: boolean;
+  /** Why automation is not routed (null when it is). */
+  deputyReason: string | null;
+  /** Why file verbs are not routed (null when they are). */
+  readerReason: string | null;
+}
+
+export function helpersRouting(env: NodeJS.ProcessEnv = process.env): HelpersRouting {
+  const mode = loadConfig(env).helpersMode;
+  const deputy = deputyRouting(env);
+  const reader = readerRouting(env);
+  const files = deputyFilesActive(env);
+  return {
+    mode,
+    automation: deputy.active,
+    files,
+    deputyReason: deputy.reason,
+    readerReason: files
+      ? null
+      : reader.active && !reader.granted
+        ? "reader running but NOT granted (things helpers grant)"
+        : reader.reason,
+  };
 }
 
 /** True when file verbs ride the reader (present, protocol-matched, granted). */
@@ -367,9 +473,7 @@ export function deputyDbPath(env: NodeJS.ProcessEnv = process.env): string | nul
   } catch (err) {
     rs.dbPathMemo = null;
     const why = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `things-api deputy: the reader could not resolve the database (${why}) — this read runs DIRECT\n`,
-    );
+    emitHelpersNotice(`the reader could not resolve the database (${why}) — this read runs DIRECT`);
   }
   return rs.dbPathMemo;
 }

@@ -114,6 +114,36 @@ describe("boolean env overrides are bidirectional", () => {
   });
 });
 
+describe("helpers-enabled is tri-state (auto | true | false)", () => {
+  it("defaults to auto — installation is the intent signal", () => {
+    expect(loadConfig(env()).helpersMode).toBe("auto");
+    expect(sourceOf("helpers-enabled", env())).toBe("default");
+  });
+
+  it("round-trips every mode through the stored config", () => {
+    for (const mode of ["auto", "true", "false"] as const) {
+      saveConfigKey("helpersMode", mode, env());
+      expect(loadConfig(env()).helpersMode).toBe(mode);
+      expect(sourceOf("helpers-enabled", env())).toBe("stored");
+    }
+  });
+
+  it("THINGS_API_HELPERS outranks the stored mode in every direction", () => {
+    saveConfigKey("helpersMode", "false", env());
+    expect(loadConfig(env({ THINGS_API_HELPERS: "auto" })).helpersMode).toBe("auto");
+    expect(loadConfig(env({ THINGS_API_HELPERS: "true" })).helpersMode).toBe("true");
+    saveConfigKey("helpersMode", "true", env());
+    expect(loadConfig(env({ THINGS_API_HELPERS: "false" })).helpersMode).toBe("false");
+    expect(sourceOf("helpers-enabled", env({ THINGS_API_HELPERS: "false" }))).toBe("env");
+  });
+
+  it("an unrecognized value — env or stored — falls through to the default", () => {
+    expect(loadConfig(env({ THINGS_API_HELPERS: "1" })).helpersMode).toBe("auto");
+    saveConfigKey("helpersMode", "sometimes" as never, env());
+    expect(loadConfig(env()).helpersMode).toBe("auto");
+  });
+});
+
 describe("THINGS_API_PROFILE accepts both profiles", () => {
   it("workstation env wins over a stored dedicated-server", () => {
     saveConfigKey("profile", "dedicated-server", env());

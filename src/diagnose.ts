@@ -5,7 +5,7 @@
  */
 import { existsSync } from "node:fs";
 
-import { loadConfig } from "./config.ts";
+import { type HelpersMode, loadConfig } from "./config.ts";
 import { resolveScope } from "./read/scope.ts";
 import { auditDir } from "./paths.ts";
 import { readAuditRecords, scanAuditIntegrity } from "./write/undo.ts";
@@ -13,7 +13,14 @@ import { decodeRecurrenceRule } from "./model/recurrence.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
 import { createDeputyDbFacade } from "./deputy/db-facade.ts";
-import { deputyDbPath, deputyRoutesDb } from "./deputy/routing.ts";
+import { helpersStatus, type HelpersStatus } from "./deputy/install.ts";
+import { EXPECTED_HELPERS_VERSION } from "./deputy/protocol.ts";
+import {
+  deputyDbPath,
+  deputyRoutesDb,
+  helpersRouting,
+  type HelpersRouting,
+} from "./deputy/routing.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
 import {
@@ -87,6 +94,81 @@ function scanRecurrenceRules(db: {
         : `${undecodable} rule(s) failed to decode (first: ${firstError}) — a Things update ` +
           "may have changed the repeat-rule format; occurrence projections for those " +
           "templates are unavailable",
+  };
+}
+
+/** The helper pair's section of the report — see {@link DiagnoseReport.helpers}. */
+export interface HelpersReport {
+  /** Configured routing mode (`helpers-enabled`): auto | true | false. */
+  mode: HelpersMode;
+  /** What that mode RESOLVED to in this process (per-half, with reasons). */
+  routing: HelpersRouting;
+  /** Installation + liveness + signing + grant, both halves. */
+  status: HelpersStatus;
+  /** The installed bundle's version, null when nothing is installed. */
+  installedVersion: string | null;
+  /** The version this package's protocol/library was built against. */
+  expectedVersion: string;
+  /** Installed but not the expected version — the remedy is a rebuild + reinstall. */
+  versionSkew: boolean;
+  /** Either half left a socket behind that no longer answers a handshake. */
+  hungSocket: boolean;
+  /** One line naming the fix, or null when there is nothing to fix. */
+  remedy: string | null;
+  detail: string;
+}
+
+/** Test seam for the helpers section (see {@link DiagnoseOptions.helpers}). */
+export interface HelpersReportDeps {
+  status?: HelpersStatus;
+  routing?: HelpersRouting;
+}
+
+function buildHelpersReport(configMode: HelpersMode, deps: HelpersReportDeps = {}): HelpersReport {
+  // The routing resolution carries the mode it resolved (helpersRouting reads
+  // the same config), so the section has ONE source for it.
+  const routing = deps.routing ?? helpersRouting();
+  const mode = routing.mode;
+  const status = deps.status ?? helpersStatus(configMode);
+  const installedVersion = status.installedVersion;
+  const versionSkew = installedVersion !== null && installedVersion !== EXPECTED_HELPERS_VERSION;
+  const hungSocket = status.deputy.hungSocket || status.reader.hungSocket;
+  const remedy = versionSkew
+    ? "rebuild the bundle (`bash scripts/build-helpers.sh`) and rerun `things helpers install`"
+    : hungSocket
+      ? "`things helpers restart` — a socket is present but no handshake comes back"
+      : !status.bundleInstalled
+        ? mode === "false"
+          ? null
+          : "`things helpers install` to move macOS permission grants onto the helpers"
+        : status.reader.installed && status.reader.running && !status.reader.granted
+          ? "`things helpers grant` once, at the machine, to give the reader durable read access"
+          : status.bundleInstalled && !status.deputy.running
+            ? "`things helpers install` (re-registers both helpers with launchd and starts them)"
+            : null;
+  const detail =
+    mode === "false"
+      ? "routing off — every primitive runs in this process (`things config set helpers-enabled auto` to use an installed helper)"
+      : routing.automation && routing.files
+        ? "both halves carrying traffic"
+        : !status.bundleInstalled
+          ? mode === "auto"
+            ? "nothing installed — running direct, which is the normal state for a machine that has not onboarded the helpers"
+            : "routing is set to true but nothing is installed — running direct"
+          : `running direct for ${[
+              ...(routing.automation ? [] : [`automation (${routing.deputyReason ?? "unknown"})`]),
+              ...(routing.files ? [] : [`database reads (${routing.readerReason ?? "unknown"})`]),
+            ].join(" and ")}`;
+  return {
+    mode,
+    routing,
+    status,
+    installedVersion,
+    expectedVersion: EXPECTED_HELPERS_VERSION,
+    versionSkew,
+    hungSocket,
+    remedy,
+    detail,
   };
 }
 
@@ -207,6 +289,14 @@ export interface DiagnoseReport {
     newestOrphanIntent: string | null;
   };
   /**
+   * The optional helper pair (docs/design/agent-daemon.md §3b–§3c): what
+   * routing is configured to do, what it actually resolved to in THIS process,
+   * and each half's installation/liveness/signing/grant state. Prompt-free —
+   * every field comes from the same probes `things helpers status` runs, so
+   * doctor never triggers a consent dialog of its own.
+   */
+  helpers: HelpersReport;
+  /**
    * Freshness + sync-liveness proxies for long-running headless operation
    * (docs/lab/headless-research.md SYNC1 + SYNC2): app-running, WAL write
    * activity, last local edit, last foreground, and — only when a Things Cloud
@@ -237,6 +327,12 @@ export interface DiagnoseOptions {
   availability?: AvailabilityDeps;
   /** Test seams for the sync-health section (clock, process check, WAL/plist readers). */
   syncHealth?: SyncHealthDeps;
+  /**
+   * Test seam for the helpers section. Without it the section probes the real
+   * machine (launchd, sockets, codesign) — honest for a diagnostic, useless for
+   * an assertion, since the host running the suite may have live helpers.
+   */
+  helpers?: HelpersReportDeps;
   /** Directory holding the audit JSONL files; defaults to the state dir. Test seam. */
   auditDir?: string;
 }
@@ -445,6 +541,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
         shortcuts: readShortcutProxies(options.availability),
       },
       recurrence: scanRecurrenceRules(conn.db),
+      helpers: buildHelpersReport(config.helpersMode, options.helpers),
       syncHealth: computeSyncHealth(conn.db, located.path, options.syncHealth),
       audit: scanAuditIntegrity(readAuditRecords(options.auditDir ?? auditDir())),
     };

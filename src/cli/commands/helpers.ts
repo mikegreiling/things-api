@@ -7,10 +7,11 @@
  *
  * Running them means macOS permission prompts and grants attach to two stable
  * identities instead of every terminal or agent runtime that invokes
- * `things`, so grants stop re-prompting when those runtimes update. Routing
- * is opt-in (`things config set helpers-enabled true`, THINGS_API_HELPERS, or
- * the global `--helpers` flag) and the CLI always falls back to direct
- * execution when a helper is unavailable.
+ * `things`, so grants stop re-prompting when those runtimes update. Routing is
+ * tri-state (`helpers-enabled`: auto | true | false, default auto —
+ * installation is the intent signal), overridable per invocation with
+ * THINGS_API_HELPERS or the global `--helpers`/`--no-helpers` flags; the CLI
+ * always falls back to direct execution when a helper is unavailable.
  */
 import type { Command } from "commander";
 
@@ -31,6 +32,20 @@ function envelopeMeta(started: number): EnvelopeMeta {
   return { dbVersion: null, fingerprint: "unknown", elapsedMs: Date.now() - started };
 }
 
+/** One line describing what the configured mode means for this machine. */
+function routingLine(status: HelpersStatus): string {
+  switch (status.mode) {
+    case "true":
+      return "enabled — every process routes through the helpers, and reports when it cannot";
+    case "false":
+      return "disabled (things config set helpers-enabled auto)";
+    case "auto":
+      return status.bundleInstalled
+        ? "auto — the installed helpers are used while healthy; a failure is reported, never silent"
+        : "auto — nothing installed, so everything runs direct (things helpers install to change that)";
+  }
+}
+
 function renderStatus(status: HelpersStatus): string {
   const deputy = status.deputy;
   const lines = [`deputy: ${deputy.running ? "running" : "does not appear to be running"}`];
@@ -39,10 +54,17 @@ function renderStatus(status: HelpersStatus): string {
   if (!deputy.running && !deputy.detail.startsWith("not running")) {
     lines.push(`  detail: ${deputy.detail}`);
   }
+  if (deputy.hungSocket) {
+    lines.push("  next: `things helpers restart` — the socket is present but no handshake answers");
+  }
   lines.push(
-    `  routing: ${status.enabled ? "enabled" : "disabled (things config set helpers-enabled true)"}`,
+    `  routing: ${routingLine(status)}`,
     `  launchd: ${deputy.plistInstalled ? (deputy.loaded ? "installed + loaded" : "installed, NOT loaded") : "not installed (things helpers install)"}`,
-    `  bundle: ${status.bundleInstalled ? "installed" : "not installed"}`,
+    `  bundle: ${
+      status.bundleInstalled
+        ? `installed${status.installedVersion !== null ? ` (v${status.installedVersion})` : ""}`
+        : "not installed"
+    }`,
     `  socket: ${deputy.socketPath}`,
   );
   if (deputy.hello !== null) {
@@ -69,6 +91,9 @@ function renderStatus(status: HelpersStatus): string {
       "  next: run `things helpers grant` and accept the panel (one time; the grant survives restarts, reboots, and rebuilds)",
     );
   }
+  if (reader.hungSocket) {
+    lines.push("  next: `things helpers restart` — the socket is present but no handshake answers");
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -85,14 +110,14 @@ export function registerHelpers(program: Command): void {
   helpers
     .command("status")
     .description(
-      "Report both helpers' state: running or not, launchd installation, code-signing " +
-        "identity, the reader's grant, and whether routing is enabled on this machine. " +
+      "Report both helpers' state: running or not, launchd installation, installed version, " +
+        "code-signing identity, the reader's grant, and the routing mode on this machine. " +
         "Read-only.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .action((opts: { json?: boolean }) => {
       const started = Date.now();
-      const status = helpersStatus(loadConfig().helpersEnabled);
+      const status = helpersStatus(loadConfig().helpersMode);
       if (opts.json === true) {
         process.stdout.write(
           `${JSON.stringify(okEnvelope("helpers-status", status, envelopeMeta(started)))}\n`,
@@ -108,7 +133,8 @@ export function registerHelpers(program: Command): void {
     .description(
       "Install the helper bundle: copy it to its stable location, register both helpers " +
         "with launchd (starts now and on every login), and report signing + grant state. " +
-        "Does NOT enable routing — set helpers-enabled true when ready. Rerun after every rebuild.",
+        "Under the default helpers-enabled auto, an installed and healthy helper is used from " +
+        "the next command on. Rerun after every rebuild.",
     )
     .option(
       "--bundle <path>",

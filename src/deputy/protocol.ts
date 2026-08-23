@@ -25,7 +25,7 @@ export const DEPUTY_PROTOCOL_VERSION = 1;
  * any helper-source change; a drift test asserts this constant matches it.
  * The PROTOCOL version above remains the hard compatibility gate.
  */
-export const EXPECTED_HELPERS_VERSION = "1.0.0";
+export const EXPECTED_HELPERS_VERSION = "1.1.0";
 
 /** The outer helper bundle's identifier (Things API Helper.app) — TCC + BTM identity. */
 export const HELPERS_BUNDLE_ID = "com.pixelcog.things-api-helper";
@@ -48,6 +48,32 @@ export function deputySocketPath(env: NodeJS.ProcessEnv = process.env): string {
 
 export function deputyTokenPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(deputyStateDir(env), "token");
+}
+
+/**
+ * The directory `helpers install` owns WHOLESALE: it is deleted and recreated
+ * on every install, so any previous layout (however old) is erased without
+ * dedicated migration logic, and the fresh inodes reset the kernel's
+ * per-vnode code-signature cache (copying over an executed inode makes every
+ * future exec die with SIGKILL — observed live 2026-08-21).
+ */
+export function helpersInstallDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(deputyStateDir(env), "bin");
+}
+
+/** Where `helpers install` places the bundle. */
+export function helpersInstalledBundlePath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(helpersInstallDir(env), "Things API Helper.app");
+}
+
+/** The installed deputy executable (the bundle's main executable). */
+export function deputyInstalledBinaryPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(helpersInstalledBundlePath(env), "Contents/MacOS/things-deputy");
+}
+
+/** The installed nested reader app. */
+export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(helpersInstalledBundlePath(env), "Contents/Helpers/things-reader.app");
 }
 
 /** launchd label (and bundle identifier) of the sandboxed reader. */

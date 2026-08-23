@@ -11,6 +11,12 @@
  */
 import Foundation
 
+/// How long a shutting-down deputy waits for requests already in flight. An
+/// upgrade (`things helpers install` / `restart`) boots the old process out
+/// mid-flight; without a drain the in-flight request dies with it. launchd's
+/// own bootout wait, and the CLI's `launchctl` timeout, both clear this bound.
+let DRAIN_TIMEOUT_SECONDS: TimeInterval = 10
+
 final class Server {
   let paths: DeputyPaths
   let config: DeputyConfig
@@ -19,6 +25,10 @@ final class Server {
   private let osaQueue = DispatchQueue(label: "things-deputy.osa")
   private let logQueue = DispatchQueue(label: "things-deputy.log")
   private var listenFd: Int32 = -1
+  /// Requests between dispatch and their written response. Guarded by
+  /// `inflightCond`, which the drain waits on.
+  private let inflightCond = NSCondition()
+  private var inflight = 0
 
   init(paths: DeputyPaths, config: DeputyConfig, token: String) {
     self.paths = paths
@@ -76,10 +86,48 @@ final class Server {
     }
   }
 
-  func shutdown() {
-    if listenFd >= 0 { close(listenFd) }
+  /**
+   * Graceful drain, then teardown. Order matters:
+   *
+   * 1. unlink the socket path FIRST — a new client cannot even find us, which
+   *    is deterministic where waking a thread blocked in accept() is not.
+   * 2. close the listener so no further connection is accepted.
+   * 3. wait (bounded) for requests already dispatched to write their response.
+   * 4. flush the audit log and return; the caller exits 0.
+   *
+   * SIGKILL remains the hard stop — nothing here tries to survive it.
+   */
+  func drainAndShutdown(timeout: TimeInterval = DRAIN_TIMEOUT_SECONDS) {
     unlink(paths.socket)
-    audit(["event": "stopped"])
+    if listenFd >= 0 {
+      Darwin.shutdown(listenFd, SHUT_RDWR)
+      close(listenFd)
+      listenFd = -1
+    }
+    let deadline = Date().addingTimeInterval(timeout)
+    inflightCond.lock()
+    while inflight > 0 && Date() < deadline {
+      _ = inflightCond.wait(until: deadline)
+    }
+    let remaining = inflight
+    inflightCond.unlock()
+    audit(["event": "stopped", "drained": remaining == 0, "inflight": remaining])
+    // The audit log is written asynchronously; a barrier makes "stopped" the
+    // last thing on disk instead of a line lost to exit().
+    logQueue.sync {}
+  }
+
+  private func beginRequest() {
+    inflightCond.lock()
+    inflight += 1
+    inflightCond.unlock()
+  }
+
+  private func endRequest() {
+    inflightCond.lock()
+    inflight -= 1
+    if inflight == 0 { inflightCond.broadcast() }
+    inflightCond.unlock()
   }
 
   private func fatalDie(_ message: String) -> Never {
@@ -108,8 +156,13 @@ final class Server {
       while let nl = buffer.firstIndex(of: 0x0A) {
         let line = buffer.subdata(in: buffer.startIndex..<nl)
         buffer.removeSubrange(buffer.startIndex...nl)
+        // In flight from dispatch until the response is on the wire — that
+        // span is exactly what a drain must not cut short.
+        beginRequest()
         let response = dispatch(line: line, peerPid: peerPid)
-        if !writeLine(conn, response) { return }
+        let written = writeLine(conn, response)
+        endRequest()
+        if !written { return }
       }
     }
   }

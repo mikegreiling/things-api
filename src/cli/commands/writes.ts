@@ -28,8 +28,10 @@ import {
   describeConfig,
   errorEnvelope,
   ExitCode,
+  HELPERS_MODES,
   installCliTrace,
   getConfigKey,
+  parseHelpersMode,
   mutationWireData,
   okEnvelope,
   openThings,
@@ -2968,7 +2970,8 @@ export function registerWriteCommands(program: Command): void {
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
         "accepted-fingerprint | certified-app-version | allow-experimental | bounce-enabled | " +
-        "bounce-max-items | auto-launch | helpers-enabled | ui-enabled | ui-drive-budget-ms | trace | scope",
+        "bounce-max-items | auto-launch | helpers-enabled (auto | true | false) | ui-enabled | " +
+        "ui-drive-budget-ms | trace | scope",
     )
     .action((key: string, value: string, opts: { dryRun?: boolean }) => {
       const map: Record<string, string> = {
@@ -2982,7 +2985,7 @@ export function registerWriteCommands(program: Command): void {
         "bounce-enabled": "bounceEnabled",
         "bounce-max-items": "bounceMaxItems",
         "auto-launch": "autoLaunch",
-        "helpers-enabled": "helpersEnabled",
+        "helpers-enabled": "helpersMode",
         "ui-enabled": "uiEnabled",
         "ui-drive-budget-ms": "uiDriveBudgetMs",
         trace: "traceEnabled",
@@ -2994,6 +2997,16 @@ export function registerWriteCommands(program: Command): void {
         process.exitCode = ExitCode.Usage;
         return;
       }
+      // `helpers-enabled` is TRI-state (auto | true | false): anything else is
+      // refused rather than silently coerced to a boolean, so a typo can never
+      // read as "off" on a machine that meant "auto".
+      if (target === "helpersMode" && parseHelpersMode(value) === undefined) {
+        process.stderr.write(
+          `error: helpers-enabled accepts ${HELPERS_MODES.join(" | ")} (got "${value}")\n`,
+        );
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
       const parsed: string | number | boolean =
         target === "maxDisruption" || target === "bounceMaxItems" || target === "uiDriveBudgetMs"
           ? Number(value)
@@ -3001,7 +3014,6 @@ export function registerWriteCommands(program: Command): void {
               target === "allowExperimental" ||
               target === "bounceEnabled" ||
               target === "autoLaunch" ||
-              target === "helpersEnabled" ||
               target === "uiEnabled" ||
               target === "traceEnabled"
             ? value === "true"

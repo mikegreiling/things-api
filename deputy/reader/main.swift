@@ -139,11 +139,19 @@ func loadOrCreateToken() -> String {
   return tok
 }
 
+/// How long a shutting-down reader waits for requests already in flight (the
+/// deputy's DRAIN_TIMEOUT_SECONDS; the two halves are booted out together).
+let READER_DRAIN_TIMEOUT_SECONDS: TimeInterval = 10
+
 final class ReaderServer {
   let token: String
   let startedAt = Date()
   private let dbQueue = DispatchQueue(label: "things-reader.db")
   private let logQueue = DispatchQueue(label: "things-reader.log")
+  private var listenFd: Int32 = -1
+  /// Requests between dispatch and their written response; the drain waits on it.
+  private let inflightCond = NSCondition()
+  private var inflight = 0
   private var reader: SqliteReader?  // guarded by dbQueue
   private var readerRoot: String?  // scope the open handle belongs to; guarded by dbQueue
   private let cacheLock = NSLock()
@@ -168,6 +176,7 @@ final class ReaderServer {
   func run() {
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else { fatalDie("socket() errno \(errno)") }
+    listenFd = fd
     unlink(socketPath)
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
@@ -210,6 +219,42 @@ final class ReaderServer {
     exit(1)
   }
 
+  /**
+   * Graceful drain, then teardown (mirrors the deputy): remove the socket path
+   * so no new client can find us, close the listener, wait out the in-flight
+   * requests within a bound, flush the log. SIGKILL is still the hard stop.
+   */
+  func drainAndShutdown(timeout: TimeInterval = READER_DRAIN_TIMEOUT_SECONDS) {
+    unlink(socketPath)
+    if listenFd >= 0 {
+      Darwin.shutdown(listenFd, SHUT_RDWR)
+      close(listenFd)
+      listenFd = -1
+    }
+    let deadline = Date().addingTimeInterval(timeout)
+    inflightCond.lock()
+    while inflight > 0 && Date() < deadline {
+      _ = inflightCond.wait(until: deadline)
+    }
+    let remaining = inflight
+    inflightCond.unlock()
+    audit(["event": "stopped", "drained": remaining == 0, "inflight": remaining])
+    logQueue.sync {}
+  }
+
+  private func beginRequest() {
+    inflightCond.lock()
+    inflight += 1
+    inflightCond.unlock()
+  }
+
+  private func endRequest() {
+    inflightCond.lock()
+    inflight -= 1
+    if inflight == 0 { inflightCond.broadcast() }
+    inflightCond.unlock()
+  }
+
   private func handleConnection(_ conn: Int32) {
     defer { close(conn) }
     var buffer = Data()
@@ -222,8 +267,13 @@ final class ReaderServer {
       while let nl = buffer.firstIndex(of: 0x0A) {
         let line = buffer.subdata(in: buffer.startIndex..<nl)
         buffer.removeSubrange(buffer.startIndex...nl)
+        // In flight from dispatch until the response is on the wire.
+        beginRequest()
         let response = dispatch(line: line)
-        guard var data = try? JSONSerialization.data(withJSONObject: response) else { return }
+        guard var data = try? JSONSerialization.data(withJSONObject: response) else {
+          endRequest()
+          return
+        }
         data.append(0x0A)
         let ok = data.withUnsafeBytes { raw -> Bool in
           var offset = 0
@@ -234,6 +284,7 @@ final class ReaderServer {
           }
           return true
         }
+        endRequest()
         if !ok { return }
       }
     }
@@ -424,7 +475,10 @@ case "--serve":
   let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
   for source in [termSource, intSource] {
     source.setEventHandler {
-      unlink(socketPath)
+      // Graceful drain: stop accepting, finish in-flight reads within a bound,
+      // then remove the socket and exit cleanly (an upgrade boots both halves
+      // out mid-flight).
+      server.drainAndShutdown()
       exit(0)
     }
     source.resume()

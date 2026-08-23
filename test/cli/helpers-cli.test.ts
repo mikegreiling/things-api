@@ -4,7 +4,7 @@
  * run), and the global flag must outrank the environment before any action
  * loads config — that is the whole point of a per-invocation override.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -61,34 +61,56 @@ afterEach(() => {
 });
 
 describe("things helpers status", () => {
-  it("reports a bare machine honestly (nothing installed, not running, routing disabled)", async () => {
+  it("reports a bare machine honestly (nothing installed, not running, auto ⇒ direct)", async () => {
     await run(["helpers", "status"]);
     const out = stdout.join("");
     expect(out).toContain("deputy: does not appear to be running");
     expect(out).not.toContain("detail:");
-    expect(out).toContain("routing: disabled");
+    expect(out).toContain("routing: auto — nothing installed");
     expect(out).toContain("reader: not installed");
     expect(process.exitCode).toBe(0);
   });
 
-  it("--json carries the structured status", async () => {
+  it("--json carries the structured status, including the tri-state mode", async () => {
     await run(["helpers", "status", "--json"]);
     const parsed = JSON.parse(stdout.join("")) as {
       kind: string;
       data: {
-        enabled: boolean;
+        mode: string;
         bundleInstalled: boolean;
-        deputy: { running: boolean; hello: unknown };
-        reader: { installed: boolean; granted: boolean };
+        installedVersion: string | null;
+        deputy: { running: boolean; hungSocket: boolean; hello: unknown };
+        reader: { installed: boolean; granted: boolean; hungSocket: boolean };
       };
     };
     expect(parsed.kind).toBe("helpers-status");
-    expect(parsed.data.enabled).toBe(false);
+    expect(parsed.data.mode).toBe("auto");
     expect(parsed.data.bundleInstalled).toBe(false);
+    expect(parsed.data.installedVersion).toBeNull();
     expect(parsed.data.deputy.running).toBe(false);
+    expect(parsed.data.deputy.hungSocket).toBe(false);
     expect(parsed.data.deputy.hello).toBeNull();
     expect(parsed.data.reader.installed).toBe(false);
     expect(parsed.data.reader.granted).toBe(false);
+    expect(parsed.data.reader.hungSocket).toBe(false);
+  });
+
+  it("reports the installed bundle's version and a hung socket", async () => {
+    const bundle = join(stateDir, "deputy/bin/Things API Helper.app");
+    mkdirSync(join(bundle, "Contents/MacOS"), { recursive: true });
+    writeFileSync(join(bundle, "Contents/MacOS/things-deputy"), "#!/bin/sh\n");
+    writeFileSync(
+      join(bundle, "Contents/Info.plist"),
+      "<plist><dict><key>CFBundleShortVersionString</key><string>9.9.9</string></dict></plist>",
+    );
+    // A socket + token with nothing listening = the hung-socket class.
+    writeFileSync(join(stateDir, "deputy/deputy.sock"), "");
+    writeFileSync(join(stateDir, "deputy/token"), "0".repeat(64));
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    expect(out).toContain("bundle: installed (v9.9.9)");
+    expect(out).toContain("things helpers restart");
+    expect(out).toContain("routing: auto — the installed helpers are used while healthy");
   });
 });
 
@@ -100,7 +122,7 @@ describe("global --helpers/--no-helpers", () => {
   });
 
   it("--no-helpers outranks an enabling environment", async () => {
-    process.env["THINGS_API_HELPERS"] = "true";
+    process.env["THINGS_API_HELPERS"] = "auto";
     await run(["--no-helpers", "helpers", "status"]);
     expect(process.env["THINGS_API_HELPERS"]).toBe("false");
     expect(stdout.join("")).toContain("routing: disabled");
