@@ -196,7 +196,16 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const meta: string[] = [];
   if (opts.mark != null) meta.push(opts.mark);
   // ↻ now lives INSIDE the box for templates (glyphs.ts) — no separate mark.
-  if (item.status !== "open" && item.stopped !== null)
+  // A resolution dated TODAY is the unmarked case (resolved-is-normal): the
+  // blue logged-date prefix exists to date OLDER resolutions. Without this, a
+  // checked-unswept row in Today wears today's own date like an upcoming chip
+  // (Mike, live 2026-08-24); the GUI's Logbook likewise carries no per-row
+  // date inside its "Today" group. Detail cards keep the date unconditionally.
+  if (
+    item.status !== "open" &&
+    item.stopped !== null &&
+    instantDateIso(item.stopped, renderZone()) !== todayIso
+  )
     meta.push(loggedDate(item.stopped, todayIso, renderZone()));
   if (opts.hideDateChip === true) {
     // rows under a day header — the header carries the date

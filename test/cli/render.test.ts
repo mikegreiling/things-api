@@ -420,6 +420,34 @@ describe("formatItem", () => {
     expect(formatItem(item, 8, { now: NOW })).toMatch(/\[✓\] Jun 15 2025 Old win$/);
   });
 
+  it("omits the logged date on a row completed TODAY (checked-unswept in Today wears no chip)", () => {
+    fixture = buildFixtureDb();
+    // Completed on the render-clock's own day: the resolution is the unmarked
+    // case — the blue prefix exists to date OLDER resolutions. Regression for
+    // the Today-view bug where a checked-off row wore today's date like an
+    // upcoming chip (Mike, 2026-08-24).
+    seedTodo(fixture.db, {
+      title: "Fresh win",
+      status: "completed",
+      stopDate: new Date("2026-07-05T09:00:00Z").getTime() / 1000,
+    });
+    const [item] = searchView(fixture.db, "Fresh win", { logged: true });
+    if (!item) throw new Error("seed missing");
+    expect(formatItem(item, 8, { now: NOW })).toMatch(/\[✓\] Fresh win$/);
+  });
+
+  it("keeps the logged date on a row completed YESTERDAY (an unswept stale row is informative)", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, {
+      title: "Stale win",
+      status: "completed",
+      stopDate: new Date("2026-07-04T12:00:00Z").getTime() / 1000,
+    });
+    const [item] = searchView(fixture.db, "Stale win", { logged: true });
+    if (!item) throw new Error("seed missing");
+    expect(formatItem(item, 8, { now: NOW })).toMatch(/\[✓\] Jul 4 Stale win$/);
+  });
+
   it("renders canceled rows as [×]", () => {
     fixture = buildFixtureDb();
     seedTodo(fixture.db, {
