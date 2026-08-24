@@ -740,13 +740,13 @@ describe("write-command help states the contract", () => {
   it("project add-heading: existing-project requirement + setup pointer", () => {
     const help = helpFor("project", "add-heading");
     expect(help).toContain("existing project");
-    expect(help).toContain("things setup shortcuts");
+    expect(help).toContain("things setup");
   });
 
   it("todo clear-reminder: date-scheduled reminder + setup pointer", () => {
     const help = helpFor("todo", "clear-reminder");
     expect(help).toContain("date-scheduled");
-    expect(help).toContain("things setup shortcuts");
+    expect(help).toContain("things setup");
   });
 
   it("legend: exists as a read command with --json", () => {
@@ -786,12 +786,17 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("acknowledged in the app");
   });
 
-  it("setup shortcuts: names the unlocked operations, the click, and --check", () => {
-    const help = helpFor("setup", "shortcuts");
-    expect(help).toContain("creating a heading in an existing project");
-    expect(help).toContain("Add Shortcut");
-    expect(help).toContain("Always Allow");
-    expect(help).toContain("--check");
+  // `things setup` is the direct-path ceremony (permissions doctrine, Article
+  // V), not the old Shortcuts importer — the import is now one of its legs.
+  it("setup: names all three grants, the sitting, and the helpers alternative", () => {
+    const help = helpFor("setup");
+    expect(help).toContain("read access");
+    expect(help).toContain("control the Things app");
+    expect(help).toContain("shortcuts");
+    expect(help).toContain("already satisfied are detected and skipped");
+    expect(help).toContain("things helpers setup");
+    // The old `shortcuts` subcommand is gone, not aliased (ALPHA-CONTRACT).
+    expect(buildProgram().commands.find((c) => c.name() === "setup")?.commands).toHaveLength(0);
   });
 });
 

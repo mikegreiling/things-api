@@ -32,7 +32,7 @@ export const SHORTCUTS_MATRIX: VectorMatrix = {
     notes:
       "`things-proxy-create-heading` — the one surface that creates a heading in an " +
       "EXISTING project (dead on URL T09/U09 and AppleScript A31). Requires the Things " +
-      "proxy shortcuts (`things setup shortcuts`); no transactional undo (heading delete " +
+      "proxy shortcuts (`things setup`); no transactional undo (heading delete " +
       "is interactive-only, so undo reports irreversible)",
   },
   "todo.clear-dated-reminder": {
@@ -48,7 +48,7 @@ export const SHORTCUTS_MATRIX: VectorMatrix = {
       "(RC01/RC02) for NON-REPEATING items when it is not (the bounce when= CRASHES a repeating " +
       "template, R09 — repeating stays Shortcuts-only). The clear is REVERSIBLE either way: undo " +
       "re-attaches the reminder via the URL set path (R17/R18). Same-date bare `when=` is sticky " +
-      "(R20/R21, oddity 2e). Requires the Things proxy shortcuts (`things setup shortcuts`)",
+      "(R20/R21, oddity 2e). Requires the Things proxy shortcuts (`things setup`)",
   },
 };
 

@@ -399,4 +399,18 @@ export interface WriteVector {
    * directly. Undefined/false for every real transport vector.
    */
   simulates?: boolean;
+  /**
+   * This vector dispatches REAL Apple Events to Things, so it is subject to the
+   * app-control gate (docs/design/permissions-doctrine.md, Articles I + II):
+   * on a machine macOS holds no consent record for, that event IS the dialog,
+   * so the pipeline establishes standing prompt-free and refuses before
+   * dispatch rather than letting the send raise a modal.
+   *
+   * Set ONLY by {@link import("./applescript.ts").createAppleScriptVector}. It
+   * is deliberately not inferred from {@link id}: engine tests substitute fake
+   * vectors under the real ids, and a fake that sends nothing must not be
+   * gated on the host's actual TCC state — that would make test outcomes
+   * depend on the developer's own grants.
+   */
+  sendsAppleEvents?: boolean;
 }

@@ -70,7 +70,7 @@
         "capabilities",
         "config",
         "legend",
-        "setup-shortcuts",
+        "setup",
         "install-skill"
       ],
       "description": "The envelope `kind` discriminators a SUCCESSFUL response carries today (the error envelope's `kind` is always the literal `\"error\"`). This union is the schema's record of the known payload classes — the flat-list reads (`data.items`), the sectioned reads (`data.sections`), the composite cards (`data.view`), the single-entity detail (`data.item`), the mutations/plans (flat `data` fields), and the diagnostic payloads.\n\nPer the compatibility covenant (docs/contract.md) a consumer MUST tolerate an UNKNOWN `kind`: adding a new kind is additive / non-breaking. So this union is \"the kinds known to THIS build\", not a closed set a generic reader may assume complete — the JSON Schema pins it as an enum so drift is caught, but a forward-compatible consumer routes on the wrapper it finds in `data`."
@@ -343,10 +343,11 @@
                 },
                 "tracePath": {
                   "type": "string"
-                }
+                },
+                "capability": {}
               },
               "additionalProperties": false,
-              "description": "The SINGLE structured, machine-readable failure-context object (there is no separate `details` field — the two were reconciled into this one). Each key is present only for the failures that produce it:  - `expected` / `observed` — a verify-failed mutation's expected delta and    the observed post-write state.  - `candidates` — the disambiguation list for a not-found / ambiguous    resolution (or a show/bare-noun did-you-mean): the ONE fixed, flag-    invariant candidate shape (`CandidateRef`; see docs/contract.md), a    LIVE-scoped pool capped at 8, so an agent can self-correct without    another round-trip.  - `suggestions` — for a bare mutation verb (`things update <ref>`), the    concrete namespaced command(s) to run instead.  - `considered` — the vectors weighed (and why each was rejected) for an    unsupported operation.  - `placed` / `remaining` / `cause` — a bounce reorder that aborted    part-way: the items already placed, those not yet placed, and the cause.  - `failed` / `completed` — a multi-leg move that failed mid-way: the leg    that failed and the legs already completed before it."
+              "description": "The SINGLE structured, machine-readable failure-context object (there is no separate `details` field — the two were reconciled into this one). Each key is present only for the failures that produce it:  - `expected` / `observed` — a verify-failed mutation's expected delta and    the observed post-write state.  - `candidates` — the disambiguation list for a not-found / ambiguous    resolution (or a show/bare-noun did-you-mean): the ONE fixed, flag-    invariant candidate shape (`CandidateRef`; see docs/contract.md), a    LIVE-scoped pool capped at 8, so an agent can self-correct without    another round-trip.  - `suggestions` — for a bare mutation verb (`things update <ref>`), the    concrete namespaced command(s) to run instead.  - `considered` — the vectors weighed (and why each was rejected) for an    unsupported operation.  - `placed` / `remaining` / `cause` — a bounce reorder that aborted    part-way: the items already placed, those not yet placed, and the cause.  - `failed` / `completed` — a multi-leg move that failed mid-way: the leg    that failed and the legs already completed before it.  - `capability` — a permissions-doctrine refusal: the prompt-free verdict    (mode, provenance detail, host identity, remediation list) that made    the call refuse before touching the app or the container."
             }
           },
           "required": ["code", "message"],

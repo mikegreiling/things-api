@@ -1530,7 +1530,7 @@ export function registerWriteCommands(program: Command): void {
       .command("clear-reminder <uuid>")
       .description(
         "Clear a to-do's time-of-day reminder, keeping its scheduled date. With the proxy " +
-          "shortcuts installed (`things setup shortcuts`) this is in place, and is the only " +
+          "shortcuts installed (`things setup`) this is in place, and is the only " +
           "way for a repeating to-do; otherwise a date-scheduled to-do is cleared by a brief " +
           "re-schedule through Today. Reversible with `things undo`.",
       ),
@@ -1655,7 +1655,7 @@ export function registerWriteCommands(program: Command): void {
         .description(
           "Create a heading inside an existing project; its uuid is printed on success. The " +
             "project must name an existing project (uuid or unique name). Uses the Things proxy " +
-            "shortcuts — run `things setup shortcuts` once first. By default the heading is " +
+            "shortcuts — run `things setup` once first. By default the heading is " +
             "appended; a placement flag positions it among the project's headings (that leg " +
             "needs `things config set allow-experimental true`).",
         ),

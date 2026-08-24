@@ -265,6 +265,9 @@ export function createAppleScriptVector(): WriteVector {
   return {
     id: "applescript",
     matrix: APPLESCRIPT_MATRIX,
+    // The one transport that puts a real Apple Event on the wire — so the one
+    // the pipeline's app-control gate applies to (permissions doctrine).
+    sendsAppleEvents: true,
     execute(invocation: CompiledInvocation): Promise<ExecuteResult> {
       return runOsascript(invocation.payload);
     },

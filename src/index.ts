@@ -373,6 +373,48 @@ export type {
 export { shortcutProxies } from "./diagnose.ts";
 export type { ShortcutsState } from "./write/availability.ts";
 
+// Prompt-free capability detection and the direct-path ceremony
+// (docs/design/permissions-doctrine.md).
+export {
+  fdaGranted,
+  hostApp,
+  hostDisplayName,
+  readAllowed,
+  readCapability,
+  ReadCapabilityError,
+  resetCapabilityForTests,
+  tccDbPath,
+  writeCapability,
+  WriteCapabilityError,
+  THINGS_BUNDLE_ID,
+} from "./capability.ts";
+export type {
+  Capability,
+  CapabilityDeps,
+  FdaVerdict,
+  HostApp,
+  ReadCapability,
+  ReadCapabilityMode,
+  WriteCapability,
+  WriteCapabilityMode,
+} from "./capability.ts";
+export {
+  clearSessionGrant,
+  sessionGrantPath,
+  sessionGrantValid,
+  witnessSessionGrant,
+} from "./session-grant.ts";
+export type { SessionGrantDeps, SessionGrantMarker, SessionGrantVerdict } from "./session-grant.ts";
+export { directSetup, surveySetup } from "./direct-setup.ts";
+export type {
+  DirectSetupDeps,
+  DirectSetupResult,
+  SetupLeg,
+  SetupState,
+  SetupStep,
+  SetupSurvey,
+} from "./direct-setup.ts";
+
 // Dev-mode step-timeline trace (TRACE1, #487): the CLI write driver installs a
 // file sink (isDevVersion / config-forced) and the signal handler reads the
 // in-flight-write marker to emit an honest "interrupted, outcome uncertain"

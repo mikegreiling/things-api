@@ -76,7 +76,7 @@ describe("readShortcutProxies", () => {
     });
     expect(state.present).toEqual(["things-proxy-find-items", "things-proxy-create-heading"]);
     expect(state.missing).toHaveLength(EXPECTED_PROXIES.length - 2);
-    expect(state.detail).toContain("things setup shortcuts");
+    expect(state.detail).toContain("things setup");
   });
 
   it("all present → clean detail", () => {

@@ -108,7 +108,7 @@ export function readUrlSchemeEnabled(deps: AvailabilityDeps = {}): UrlSchemeStat
   return { enabled: null, detail: `unexpected uriSchemeEnabled value: ${raw}` };
 }
 
-/** Which proxy shortcuts are installed (drives the Shortcuts surface + `setup shortcuts`). */
+/** Which proxy shortcuts are installed (drives the Shortcuts surface + `setup`). */
 export function readShortcutProxies(deps: AvailabilityDeps = {}): ShortcutsState {
   let listing: string;
   try {
@@ -136,7 +136,7 @@ export function readShortcutProxies(deps: AvailabilityDeps = {}): ShortcutsState
         ? "all proxy shortcuts are installed"
         : present.length === 0
           ? "no proxy shortcuts are installed — heading creation and dated-reminder clearing " +
-            "need them (run `things setup shortcuts`)"
-          : `missing: ${missing.join(", ")} (run \`things setup shortcuts\`)`,
+            "need them (run `things setup`)"
+          : `missing: ${missing.join(", ")} (run \`things setup\`)`,
   };
 }

@@ -11,6 +11,7 @@ import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
 import { createDeputyDbFacade } from "./deputy/db-facade.ts";
 import { deputyDbPath, deputyRoutesDb } from "./deputy/routing.ts";
+import { readAllowed, readCapability, ReadCapabilityError } from "./capability.ts";
 import {
   compareToBaseline,
   observeSchema,
@@ -655,7 +656,7 @@ export interface ThingsClient {
     /**
      * Create a heading inside an EXISTING project; the new heading's uuid is
      * on the result. Delivered through the Things proxy shortcuts (run
-     * `things setup shortcuts` once first). A `placement` positions the new
+     * `things setup` once first). A `placement` positions the new
      * heading among the project's headings via a native `move-heading` leg
      * (requires allow-experimental); omitted, it appends. Anchor uuids in the
      * placement are resolved by the caller.
@@ -913,6 +914,18 @@ export { applyChecklistEdit } from "./write/checklist.ts";
 
 export function openThings(options: OpenOptions = {}): ThingsClient {
   const env = options.env ?? process.env;
+  // THE READ GATE (docs/design/permissions-doctrine.md, Articles I–III). Asked
+  // BEFORE anything touches the group container — even the discovery glob is a
+  // container access, and under direct mode the first access is what raises the
+  // app-data consent. The verdict is ground truth for this invocation: one
+  // open(2) in the common case, no stored "onboarded" flag anywhere.
+  //
+  // An explicit dbPath/THINGS_DB short-circuits the whole doctrine (Article VI)
+  // and gets plain file semantics: ordinary ENOENT/EPERM, no consent vocabulary.
+  const readGate = readCapability(options.dbPath !== undefined ? { dbPath: options.dbPath } : {}, {
+    env,
+  });
+  if (!readAllowed(readGate)) throw new ReadCapabilityError(readGate);
   // Deputy routing (docs/design/agent-daemon.md §β1): when the broker is
   // active and the caller wants the default container database, reads flow
   // through the deputy's read-only connection so the TCC grant is the

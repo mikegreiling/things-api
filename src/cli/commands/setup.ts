@@ -1,131 +1,98 @@
 /**
- * `things setup shortcuts` — install the bundled Apple Shortcuts that unlock
- * the few operations available on no other surface. The signed .shortcut
- * files ship with the package (shortcuts/); installing one is an explicit
- * user action (Apple offers no silent import), so this command opens each
- * missing shortcut's install sheet and the user clicks "Add Shortcut".
+ * `things setup` — the direct-path onboarding ceremony (the library's
+ * ./direct-setup.ts; docs/design/permissions-doctrine.md, Article V).
+ *
+ * One of the two commands allowed to raise a macOS consent dialog. It settles
+ * read access, app control, and the bundled shortcuts for the CURRENT host app
+ * in one sitting; `things helpers setup` is the other path, where the grants
+ * attach to a signed helper instead.
  */
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 
 import {
+  directSetup,
   ExitCode,
   okEnvelope,
-  shortcutProxies,
-  simFenceActive,
+  surveySetup,
+  type DirectSetupResult,
   type EnvelopeMeta,
-  type ShortcutsState,
+  type SetupStep,
 } from "../../index.ts";
-
-/** Package root — one level above src/ AND dist/, so both layouts resolve. */
-const SHORTCUTS_DIR = fileURLToPath(new URL("../../../shortcuts", import.meta.url));
-
-interface SetupShortcutsData {
-  installed: string[];
-  missing: string[];
-  opened: string[];
-  detail: string;
-}
 
 function meta(started: number): EnvelopeMeta {
   return { dbVersion: null, fingerprint: "unknown", elapsedMs: Date.now() - started };
 }
 
-function renderState(state: ShortcutsState, opened: string[]): string[] {
-  const lines = [
-    `installed: ${state.present.length ? state.present.join(", ") : "(none)"}`,
-    `missing:   ${state.missing.length ? state.missing.join(", ") : "(none)"}`,
-  ];
-  if (opened.length > 0) {
-    lines.push(
-      "",
-      `Opened ${opened.length} install sheet${opened.length === 1 ? "" : "s"} in the Shortcuts app.`,
-      "For each sheet: click “Add Shortcut”. The first time each shortcut runs, macOS",
-      "asks for permission — choose “Always Allow” so later runs need no clicks",
-      "(the two delete shortcuts re-ask on every run; Apple offers no always-allow there).",
-      "",
-      "Then verify with: things setup shortcuts --check",
-    );
-  } else if (state.missing.length === 0) {
-    lines.push("", "All shortcuts are installed.");
-  }
-  return lines;
+/** The closing report: one row per grant, then the single next-step line. */
+function renderSetup(result: DirectSetupResult): string {
+  const width = Math.max(...result.steps.map((step: SetupStep) => step.label.length));
+  const rows = result.steps.map(
+    (step: SetupStep) =>
+      `  ${step.label.padEnd(width)}  ${step.state}${step.state === "granted" ? "" : ` — ${step.detail}`}`,
+  );
+  return `\n${rows.join("\n")}\n\n${result.closing}\n`;
 }
 
 export function registerSetup(program: Command): void {
-  const setup = program
+  program
     .command("setup")
-    .description("One-time environment setup helpers (see also: things doctor)");
-  setup
-    .command("shortcuts")
     .description(
-      "Install the bundled Apple Shortcuts that enable the operations nothing else can " +
-        "perform: creating a heading in an existing project, clearing a reminder from a " +
-        "date-scheduled item, and permanently deleting a single item. Opens an install " +
-        "sheet in the Shortcuts app for each missing shortcut (click “Add Shortcut” on " +
-        "each, then choose “Always Allow” on each one's first run). Exit 0 when all are " +
-        "installed or sheets were opened; 7 when the Shortcuts tool or the bundled files " +
-        "are unavailable.",
+      "Settle everything this Mac needs to reach Things from the terminal, in one sitting: " +
+        "read access to the Things data folder, permission to control the Things app, and " +
+        "the bundled shortcuts that carry the operations no other route can perform. Steps " +
+        "already satisfied are detected and skipped, so rerunning is safe and asks nothing. " +
+        "Interactive: run this at the machine, not from an unattended session — it puts " +
+        "macOS dialogs on screen and counts them upfront. Grants attach to the terminal or " +
+        "harness you run it from; `things helpers setup` attaches them to a helper instead, " +
+        "which survives updates to that app. Exits 0 when everything is in place; 7 while " +
+        "anything is still outstanding or was refused.",
     )
-    .option("--check", "report which shortcuts are installed without opening anything")
     .option("--json", "emit versioned JSON envelope on stdout")
-    .action((opts: { check?: boolean; json?: boolean; dryRun?: boolean }) => {
+    .action((opts: { json?: boolean; dryRun?: boolean }) => {
       const started = Date.now();
-      const state = shortcutProxies();
-      const opened: string[] = [];
-      let exitCode: number = ExitCode.Ok;
-      let detail = state.detail;
-
-      // Universal `--dry-run` (../dry-run.ts): opening an install sheet is a
-      // local side effect (it drives the Shortcuts app), so the flag honors the
-      // "nothing changes" promise — report what WOULD be opened, open nothing.
-      // The bench simulator fence takes the same no-side-effect path.
-      if (
-        opts.check !== true &&
-        state.missing.length > 0 &&
-        (simFenceActive() || opts.dryRun === true)
-      ) {
-        detail =
-          opts.dryRun === true
-            ? `dry run: would open ${state.missing.length} install sheet${state.missing.length === 1 ? "" : "s"} in the Shortcuts app — nothing was opened`
-            : "simulated: install sheets were not opened (the Shortcuts app was not touched)";
-      } else if (opts.check !== true && state.missing.length > 0) {
-        for (const name of state.missing) {
-          const file = join(SHORTCUTS_DIR, `${name}.shortcut`);
-          if (!existsSync(file)) {
-            detail = `bundled shortcut file not found: ${file}`;
-            exitCode = ExitCode.Environment;
-            continue;
-          }
-          try {
-            execFileSync("open", [file], { timeout: 10000 });
-            opened.push(name);
-          } catch {
-            detail = `could not open ${file} — open it manually to install`;
-            exitCode = ExitCode.Environment;
-          }
+      // Universal `--dry-run` (../dry-run.ts): the ceremony's whole purpose is
+      // to raise dialogs and change grant state, so the flag reports what it
+      // would ask for and asks nothing.
+      if (opts.dryRun === true) {
+        const survey = surveySetup();
+        const lines = [
+          `host app:    ${survey.host.name}`,
+          `read access: ${survey.read.mode} — ${survey.read.detail}`,
+          `app control: ${survey.write.mode} — ${survey.write.detail}`,
+          `shortcuts:   ${
+            survey.shortcutsMissing.length === 0
+              ? "all installed"
+              : `missing ${survey.shortcutsMissing.join(", ")}`
+          }`,
+          "",
+          survey.outstanding.length === 0
+            ? "dry run: everything is already in place — a real run would ask nothing"
+            : `dry run: a real run would ask for ${survey.outstanding.join(", ")} — nothing was asked`,
+        ];
+        if (opts.json === true) {
+          process.stdout.write(
+            `${JSON.stringify(okEnvelope("setup", { dryRun: true, ...survey }, meta(started)))}\n`,
+          );
+        } else {
+          process.stdout.write(`${lines.join("\n")}\n`);
         }
-      } else if (opts.check === true && state.missing.length > 0) {
-        exitCode = ExitCode.Environment;
+        process.exitCode = ExitCode.Ok;
+        return;
       }
-
-      const data: SetupShortcutsData = {
-        installed: state.present,
-        missing: state.missing,
-        opened,
-        detail,
+      // Under --json stdout belongs to the envelope alone; the human still
+      // needs the running commentary, so progress goes to stderr instead.
+      const progress = (line: string): void => {
+        (opts.json === true ? process.stderr : process.stdout).write(`${line}\n`);
       };
+      const result = directSetup({ progress });
       if (opts.json === true) {
-        process.stdout.write(
-          `${JSON.stringify(okEnvelope("setup-shortcuts", data, meta(started)))}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(okEnvelope("setup", result, meta(started)))}\n`);
       } else {
-        process.stdout.write(`${renderState(state, opened).join("\n")}\n`);
-        if (detail !== state.detail) process.stderr.write(`setup: ${detail}\n`);
+        process.stdout.write(renderSetup(result));
       }
-      process.exitCode = exitCode;
+      // A setup that ends with anything outstanding is an UNFINISHED setup —
+      // nonzero, so an agent driving this for an absent human sees it. Pending
+      // is still human-pace and resumable; the closing line says where.
+      process.exitCode = result.denied || result.pending ? ExitCode.Environment : ExitCode.Ok;
     });
 }

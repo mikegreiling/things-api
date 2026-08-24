@@ -25,6 +25,7 @@ import { namedProjectClause, taskMembershipClause, type ResolvedScope } from "..
 import { evaluateScope } from "./scope-guard.ts";
 import { isThingsRunning } from "./automation-probe.ts";
 import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
+import { writeCapability as writeCapabilityDefault, type WriteCapability } from "../capability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
   describeEnvironmentChanges,
@@ -324,6 +325,8 @@ export interface WriteDeps {
   urlSchemeEnabled?: () => boolean | null;
   /** Seam: installed Things proxy shortcuts, for the pre-dispatch availability gate (availability.ts). */
   shortcutProxies?: () => ShortcutsState;
+  /** Seam: prompt-free app-automation standing, for the write gate (capability.ts). */
+  writeCapability?: () => WriteCapability;
   now?: () => Date;
   /** Default consumer IANA zone (client-resolved from THINGS_TZ); normalizes consumer `when` tokens. */
   zone?: string;
@@ -1040,7 +1043,33 @@ export async function runMutation<K extends OperationKind>(
           detail:
             `the Things proxy shortcut "${invocation.shortcut}" is not installed — this ` +
             "operation is delivered through it",
-          remediation: "run `things setup shortcuts` to install the proxy shortcuts, then retry",
+          remediation: "run `things setup` to install the proxy shortcuts, then retry",
+        };
+      }
+    }
+
+    // 5c. THE WRITE GATE (docs/design/permissions-doctrine.md, Articles I+II).
+    // The AppleScript vector sends a real Apple Event, and on a machine macOS
+    // has no consent record for, that event IS the dialog. So the standing is
+    // established prompt-free first — the deputy's own handshake when it is
+    // onboarded, the host app's Automation record otherwise — and anything
+    // short of a grant refuses here, before the app is touched. An unknown
+    // standing is NOT resolved by trying: that is what `things setup` is for.
+    if (vector.sendsAppleEvents === true && vector.simulates !== true) {
+      const capability = (deps.writeCapability ?? (() => writeCapabilityDefault()))();
+      if (capability.mode === "direct-denied" || capability.mode === "direct-unknown") {
+        audit({
+          result: blockedCode({ reason: "environment" }),
+          vector: vector.id,
+          disruption: effectiveTier,
+          invocation: invocation.redactedPayload,
+        });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          detail: `this operation drives the Things app, and ${capability.detail}`,
+          remediation: capability.remediation.join("; "),
         };
       }
     }

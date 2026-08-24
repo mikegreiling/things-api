@@ -2178,7 +2178,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Manage a project's headings — action selects which; project is always required, and a " +
         "heading is selected by its exact title or its uuid (never an ordinal). add_heading: a " +
         "new heading in the project (project + title; returns its uuid; uses the Things proxy " +
-        "shortcuts, set up once with `things setup shortcuts`); a placement flag positions it, " +
+        "shortcuts, set up once with `things setup`); a placement flag positions it, " +
         "else it appends. rename_heading: rename in place (project + heading + title; works on " +
         "archived headings). archive_heading: retire a heading so it leaves the active project " +
         "view (reversible with unarchive_heading); with open children pass children — complete " +

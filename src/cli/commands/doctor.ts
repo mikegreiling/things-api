@@ -17,6 +17,26 @@ import {
 // Back-compat alias for pre-seam consumers of the CLI module.
 export const runDoctor: (dbPath?: string) => DiagnoseResult = diagnose;
 
+/**
+ * What this process may do and who holds the grant that lets it
+ * (docs/design/permissions-doctrine.md, Article II). Two lines, always first:
+ * every other row below is downstream of these two answers.
+ */
+function capabilityLines(capability: DiagnoseReport["capability"]): string[] {
+  const { read, write } = capability;
+  const host =
+    read.host.bundleId !== null ? `${read.host.name} (${read.host.bundleId})` : read.host.name;
+  const lines = [
+    `host app:    ${host}`,
+    `read access: ${read.mode} — ${read.detail}`,
+    `app control: ${write.mode} — ${write.detail}`,
+  ];
+  for (const line of [...read.remediation, ...write.remediation]) {
+    lines.push(`  next:      ${line}`);
+  }
+  return lines;
+}
+
 function environmentLine(env: DiagnoseReport["environment"]): string {
   if (env.lastVerifiedWrite === null) {
     return "no verified write recorded yet (the tuple is recorded on the first successful write)";
@@ -189,6 +209,7 @@ export function registerDoctor(program: Command): void {
           process.stdout.write(`${JSON.stringify(envelope)}\n`);
         } else if (report) {
           const lines = [
+            ...capabilityLines(report.capability),
             `db:          ${report.db.path} (${report.db.source})`,
             `db version:  ${report.db.databaseVersion ?? "unknown"}`,
             `fingerprint: ${report.fingerprint.status} (${report.fingerprint.value.slice(0, 23)}…)`,
