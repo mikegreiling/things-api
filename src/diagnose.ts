@@ -30,6 +30,7 @@ import {
   type UiCapability,
   type WriteCapability,
 } from "./capability.ts";
+import { readerUnreachableRemedy } from "./host-access.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
 import {
@@ -163,13 +164,15 @@ function buildHelpersReport(configMode: HelpersMode, deps: HelpersReportDeps = {
         ? mode === "false"
           ? null
           : "`things helpers setup` to move macOS permission grants onto the helpers"
-        : status.reader.installed && status.reader.running && !status.reader.granted
-          ? "`things helpers setup` once, at the machine, to give the reader durable read access"
-          : status.bundleInstalled && !status.deputy.running
-            ? "`things helpers setup` (re-registers both helpers with launchd and starts them)"
-            : outstandingConsent(status.deputy.hello)
-              ? "`things helpers setup` once, at the machine — one sitting settles every macOS permission the helpers still need"
-              : null;
+        : status.reader.unreachable
+          ? readerUnreachableRemedy()
+          : status.reader.installed && status.reader.running && !status.reader.granted
+            ? "`things helpers setup` once, at the machine, to give the reader durable read access"
+            : status.bundleInstalled && !status.deputy.running
+              ? "`things helpers setup` (re-registers both helpers with launchd and starts them)"
+              : outstandingConsent(status.deputy.hello)
+                ? "`things helpers setup` once, at the machine — one sitting settles every macOS permission the helpers still need"
+                : null;
   const detail =
     mode === "false"
       ? "routing off — every primitive runs in this process (`things config set helpers-enabled auto` to use an installed helper)"

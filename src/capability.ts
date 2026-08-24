@@ -29,6 +29,14 @@
  *  4. a witnessed session app-data grant — see ./session-grant.ts;
  *  5. otherwise: refuse, naming both setup ceremonies.
  *
+ * Step 2 carries one gate that is easy to miss: the reader's socket and token
+ * live inside ITS App Sandbox container, so asking "is the reader serving?" is
+ * itself a cross-app container access. It runs only behind
+ * `readerContainerAccessible()` (./host-access.ts); on a host that cannot look
+ * prompt-free the reader reads `unreachable` and the chain falls through to the
+ * direct tiers — which is not the no-fallback rule being bent, since that rule
+ * governs a REACHABLE reader that is failing.
+ *
  * The Things group container is NEVER opened as a probe (Article I corollary):
  * the open is itself what raises the app-data consent, so "try it and see" is
  * forbidden — except inside `things setup`, which provokes it deliberately.
@@ -50,33 +58,37 @@
  * already read that file. Where the row cannot be read the verdict is an honest
  * "unknown", which the write gate refuses on rather than resolving with a dialog.
  */
-import { execFileSync } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig } from "./config.ts";
+import { readerInstalledAppPath } from "./deputy/protocol.ts";
 import { deputyRouting, deputyRoutesDb, helpersExpected } from "./deputy/routing.ts";
-import { sessionGrantValid, type SessionGrantDeps } from "./session-grant.ts";
+import {
+  fdaGranted,
+  type HostAccessDeps,
+  type HostApp,
+  hostApp,
+  hostDisplayName,
+  readerContainerAccessible,
+  readerUnreachableRemedy,
+  resetHostAccessForTests,
+  tccDbPath,
+} from "./host-access.ts";
+import { sessionGrantValid } from "./session-grant.ts";
+
+export {
+  fdaGranted,
+  type FdaVerdict,
+  type HostApp,
+  hostApp,
+  hostDisplayName,
+  readerContainerAccessible,
+  tccDbPath,
+} from "./host-access.ts";
 
 /** The Things application's bundle identifier — the Automation grant's target. */
 export const THINGS_BUNDLE_ID = "com.culturedcode.ThingsMac";
-
-/** The user TCC database. Readable iff the calling process holds Full Disk Access. */
-const TCC_DB_RELATIVE = "Library/Application Support/com.apple.TCC/TCC.db";
-
-/** The host app that macOS attributes this process's grants to (Article III). */
-export interface HostApp {
-  /**
-   * The responsible process's bundle identifier when the environment names one
-   * (`__CFBundleIdentifier`), else null. This is the TCC *client* identity —
-   * the string a grant is recorded against.
-   */
-  bundleId: string | null;
-  /** A display name for copy ("Ghostty", "Terminal"), or "this terminal". */
-  name: string;
-}
 
 /** How reads may reach the live library, if at all. */
 export type ReadCapabilityMode =
@@ -153,15 +165,17 @@ export function writeAllowed(capability: WriteCapability): boolean {
  * Injection seams. Every one of these defaults to a real, prompt-free probe;
  * tests replace them so no test ever touches the host's TCC state.
  */
-export interface CapabilityDeps extends SessionGrantDeps {
-  env?: NodeJS.ProcessEnv;
-  /**
-   * Attempt the FDA-class read-open. Returns normally when the host holds Full
-   * Disk Access; throws a Node fs error (EPERM when it does not) otherwise.
-   */
-  fdaProbe?: () => void;
+export interface CapabilityDeps extends HostAccessDeps {
   /** Are this process's database reads actually being served by the reader? */
   helpersServing?: () => boolean;
+  /**
+   * May the reader's rendezvous be touched at all from this host, prompt-free?
+   * False sends the read chain straight to the direct verdict — see
+   * {@link readerContainerAccessible}.
+   */
+  readerReachable?: () => boolean;
+  /** Is a reader bundle installed on this machine? (An ordinary state-dir path.) */
+  readerInstalled?: () => boolean;
   /** Are the helpers expected on this machine (enabled, and installed under auto)? */
   helpersExpected?: () => boolean;
   /** Why the helpers are not serving, for the loud refusal. */
@@ -188,127 +202,7 @@ export interface CapabilityDeps extends SessionGrantDeps {
   lookupAppName?: (bundleId: string) => string | null;
 }
 
-// ── Host identity ────────────────────────────────────────────────────────────
-
-/**
- * Terminals and agent harnesses whose display name we can state without asking
- * LaunchServices. Only an exec-free shortcut: an unlisted host still resolves,
- * it just pays one `lsappinfo` call on a copy path.
- */
-const KNOWN_HOSTS: Readonly<Record<string, string>> = {
-  "com.apple.Terminal": "Terminal",
-  "com.googlecode.iterm2": "iTerm2",
-  "com.mitchellh.ghostty": "Ghostty",
-  "dev.warp.Warp-Stable": "Warp",
-  "net.kovidgoyal.kitty": "kitty",
-  "io.alacritty": "Alacritty",
-  "com.microsoft.VSCode": "Visual Studio Code",
-  "com.anthropic.claude-code": "Claude Code",
-  "com.anthropic.claudefordesktop": "Claude",
-};
-
-/** TERM_PROGRAM values, for hosts that set it but expose no bundle id. */
-const TERM_PROGRAM_NAMES: Readonly<Record<string, string>> = {
-  Apple_Terminal: "Terminal",
-  iTerm: "iTerm2",
-  "iTerm.app": "iTerm2",
-  ghostty: "Ghostty",
-  WarpTerminal: "Warp",
-  vscode: "Visual Studio Code",
-  Hyper: "Hyper",
-  WezTerm: "WezTerm",
-};
-
-/** The fallback used everywhere a host cannot be named — never a guess. */
-const ANONYMOUS_HOST = "this terminal";
-
-let hostNameMemo: string | null = null;
-
-function lookupAppNameDefault(bundleId: string): string | null {
-  try {
-    // LaunchServices knows the display name of every RUNNING app, which the
-    // host terminal always is. Quoted-value output: "LSDisplayName"="Ghostty".
-    const out = execFileSync("lsappinfo", ["info", "-only", "name", bundleId], {
-      encoding: "utf8",
-      timeout: 3000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const match = /"LSDisplayName"\s*=\s*"([^"]+)"/.exec(out);
-    return match?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The host app, resolved from the environment alone — no subprocess, so this is
- * safe on the hot path. `__CFBundleIdentifier` is set by macOS when a process
- * descends from an app bundle, which is how a terminal's shell (and everything
- * it spawns) carries its emulator's identity.
- */
-export function hostApp(deps: CapabilityDeps = {}): HostApp {
-  const env = deps.env ?? process.env;
-  const bundleId = env["__CFBundleIdentifier"] ?? null;
-  const termProgram = env["TERM_PROGRAM"] ?? "";
-  const name =
-    (bundleId !== null ? KNOWN_HOSTS[bundleId] : undefined) ??
-    TERM_PROGRAM_NAMES[termProgram] ??
-    ANONYMOUS_HOST;
-  return { bundleId, name };
-}
-
-/**
- * The host app's display name for COPY. Identical to {@link hostApp}'s name
- * except for an unlisted bundle id, where LaunchServices is asked once per
- * process. Only call this from a path that is about to print.
- */
-export function hostDisplayName(deps: CapabilityDeps = {}): string {
-  if (hostNameMemo !== null) return hostNameMemo;
-  const host = hostApp(deps);
-  if (host.name !== ANONYMOUS_HOST || host.bundleId === null) {
-    hostNameMemo = host.name;
-    return hostNameMemo;
-  }
-  hostNameMemo = (deps.lookupAppName ?? lookupAppNameDefault)(host.bundleId) ?? ANONYMOUS_HOST;
-  return hostNameMemo;
-}
-
 // ── The prompt-free probes ───────────────────────────────────────────────────
-
-/** Where the FDA probe reads. Exported so `doctor` and the ceremony can name it. */
-export function tccDbPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(env["HOME"] ?? homedir(), TCC_DB_RELATIVE);
-}
-
-export interface FdaVerdict {
-  granted: boolean;
-  /** The errno when the open failed, for honest reporting of the unexpected. */
-  code: string | null;
-}
-
-function fdaProbeDefault(env: NodeJS.ProcessEnv): void {
-  // ONE open(2), read-only, immediately closed. This file is FDA-class: macOS
-  // answers it with a plain EPERM rather than a dialog, which is precisely why
-  // the doctrine picks it as the probe (Article III). Deliberately NOT cached:
-  // read capability is ground truth per invocation.
-  const fd = openSync(tccDbPath(env), "r");
-  closeSync(fd);
-}
-
-/**
- * Does the host app hold Full Disk Access? Prompt-free by construction. An
- * EPERM (or the sandbox's EACCES) is the ordinary "no"; any other errno is
- * reported as itself rather than folded into a false negative.
- */
-export function fdaGranted(deps: CapabilityDeps = {}): FdaVerdict {
-  const env = deps.env ?? process.env;
-  try {
-    (deps.fdaProbe ?? (() => fdaProbeDefault(env)))();
-    return { granted: true, code: null };
-  } catch (err) {
-    return { granted: false, code: (err as NodeJS.ErrnoException).code ?? null };
-  }
-}
 
 /**
  * One Automation row from TCC.db: the `auth_value` macOS records for `client`
@@ -398,9 +292,20 @@ export function readCapability(
       host,
     };
   }
+  // The reader's socket and token live inside its App Sandbox container, so a
+  // host without durable file access cannot even LOOK at them without risking
+  // the "access data from other apps" dialog. That is not "the helpers are
+  // failing" — it is "this host cannot see them", so the no-fallback rule below
+  // does not apply and the chain proceeds to the direct verdict (which, on a
+  // host with no grant of its own, is the doctrine's loud refusal anyway).
+  const readerReachable = (deps.readerReachable ?? (() => readerContainerAccessible(deps)))();
+  // Only worth SAYING when a reader is actually installed here: on a machine
+  // that never onboarded the helpers there is nothing out of reach.
+  const readerOutOfReach =
+    !readerReachable && (deps.readerInstalled ?? (() => existsSync(readerInstalledAppPath(env))))();
   // No silent fall-through: a machine that asked for the helpers and cannot
   // have them is refused, not quietly downgraded onto the terminal's own grants.
-  const expected = (deps.helpersExpected ?? (() => helpersExpected(env)))();
+  const expected = readerReachable && (deps.helpersExpected ?? (() => helpersExpected(env)))();
   if (expected) {
     const why = (deps.helpersReason ?? (() => null))();
     return {
@@ -444,8 +349,11 @@ export function readCapability(
       `${hostDisplayName(deps)} cannot open the Things data folder — ${session.reason}` +
       (fda.code !== null && !ORDINARY_DENIALS.has(fda.code)
         ? ` (the access check ended in ${fda.code})`
-        : ""),
-    remediation: readRemediation(hostDisplayName(deps)),
+        : "") +
+      (readerOutOfReach ? ", and the reader installed here cannot be reached from this host" : ""),
+    remediation: readerOutOfReach
+      ? [readerUnreachableRemedy(deps)]
+      : readRemediation(hostDisplayName(deps)),
     host,
   };
 }
@@ -677,5 +585,5 @@ export class UiCapabilityError extends Error {
 
 /** Test seam: forget the one memo this module keeps (the host's display name). */
 export function resetCapabilityForTests(): void {
-  hostNameMemo = null;
+  resetHostAccessForTests();
 }

@@ -9,6 +9,7 @@ import {
   diagnose,
   errorEnvelope,
   okEnvelope,
+  READER_UNREACHABLE_REASON,
   type DiagnoseReport,
   type DiagnoseResult,
   type EnvelopeMeta,
@@ -236,18 +237,20 @@ function helpersLines(helpers: DiagnoseReport["helpers"]): string[] {
             : "not running",
       )}`,
       `reader:      ${
-        status.reader.installed
-          ? helperHalfLine(
-              status.reader,
-              status.reader.running
-                ? status.reader.granted
-                  ? "running, granted"
-                  : "running, NOT granted"
-                : status.reader.hungSocket
-                  ? "SOCKET PRESENT, NOT ANSWERING"
-                  : "not running",
-            )
-          : "not installed (the bundle was built without an Apple-issued signing identity)"
+        status.reader.unreachable
+          ? `UNREACHABLE — ${READER_UNREACHABLE_REASON}`
+          : status.reader.installed
+            ? helperHalfLine(
+                status.reader,
+                status.reader.running
+                  ? status.reader.granted
+                    ? "running, granted"
+                    : "running, NOT granted"
+                  : status.reader.hungSocket
+                    ? "SOCKET PRESENT, NOT ANSWERING"
+                    : "not running",
+              )
+            : "not installed (the bundle was built without an Apple-issued signing identity)"
       }`,
     );
   }
