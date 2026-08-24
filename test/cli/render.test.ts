@@ -1399,10 +1399,10 @@ describe("upcoming", () => {
     // Day-bucket rows drop the redundant date chip; coarser buckets keep it.
     expect(lines.find((l) => l.includes("Near"))).not.toContain("‹");
     expect(lines.find((l) => l.includes("Later this month"))).toContain("‹Jul 25›");
-    // No-date templates seat ↻ inside the box (not a separate mark) and keep
-    // their status word.
+    // No-date templates keep a normal box and lead with the ↻ mark (3.23), and
+    // keep their status word.
     const restingLine = lines.find((l) => l.includes("Between instances"));
-    expect(restingLine).toContain("[↻]");
+    expect(restingLine).toContain("[ ] ↻ ");
     // The repeat status word renders as a ‹chevron› chip (matching ‹date›).
     expect(restingLine).toContain("‹waiting›");
   });
@@ -1715,12 +1715,12 @@ describe("renderLegend (things legend)", () => {
       "[✓]",
       "[×]",
       "[~]",
-      "[↻]",
+      "[ ] ↻",
       "( )",
       "(✓)",
       "(×)",
       "(~)",
-      "(↻)",
+      "( ) ↻",
       NOTES_MARK,
       REMINDER_MARK,
       CHECKLIST_MARK,
@@ -1882,8 +1882,9 @@ describe("renderRepeaters", () => {
       nextInstanceStartDate: "2026-07-08",
     });
     const lines = renderRepeaters(repeatersView(fixture.db, NOW));
-    // The ↻ seats INSIDE the box (glyphs.ts) and the next occurrence chips.
-    expect(lines[1]).toContain("[↻]");
+    // The box stays normal, the ↻ leads the row (glyphs.ts), the next
+    // occurrence chips.
+    expect(lines[1]).toContain("[ ] ↻ ");
     expect(lines[1]).toContain("Water the plants");
     expect(lines[2]).toBe("  every day");
   });

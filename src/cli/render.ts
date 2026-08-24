@@ -45,7 +45,9 @@ import {
   projectCircle,
   projectTitleAccent,
   provisionalPip,
+  repeatInstanceMark,
   REPEAT_MARK,
+  repeatTemplateMark,
   REMINDER_MARK,
   shortDate,
   todayStar,
@@ -167,9 +169,12 @@ function promotedRefBracket(
 
 /**
  * One item line:
- * `<uuid-prefix>  <box> [★|⏾] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
- * Repeating templates seat ↻ INSIDE the box (`[↻]`/`(↻)`) rather than as a
- * separate mark; open project circles render blue, and project TITLES render
+ * `<uuid-prefix>  <box> [↻] [★|⏾] [logged-date] [‹chip›] <title> [↻] [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
+ * The two ↻ slots are the repeat pair (Things 3.23 parity): a repeating
+ * TEMPLATE keeps an ordinary box/circle and leads its meta run with a BLUE ↻
+ * (repeatTemplateMark — the row IS the rule), while a spawned INSTANCE carries a
+ * MUTED ↻ at the head of the post-title cluster (repeatInstanceMark). Open
+ * project circles render blue, and project TITLES render
  * bold + default-colored in every state (projectTitleAccent — the render-
  * language law). The box is the glyph-language state carrier (../glyphs.ts):
  * `[ ]`-family for to-dos, `( )`-family for projects — state survives with
@@ -194,8 +199,13 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const asTitle = opts.projectTitle === true && item.type === "project";
   const box = item.type === "project" ? projectCircle(item) : todoBox(item);
   const meta: string[] = [];
+  // A repeating TEMPLATE leads with a BLUE ↻ — the FIRST thing after the
+  // ordinary box/circle, ahead of the date chip, the ‹waiting/paused/ended›
+  // state chip, and the title (Things 3.23 moved the mark out of the checkbox;
+  // we used to seat it inside as `[↻]`/`(↻)`). Instances carry the muted ↻ in
+  // the post-title cluster instead (`tail`, below).
+  if (item.repeating.isTemplate) meta.push(repeatTemplateMark());
   if (opts.mark != null) meta.push(opts.mark);
-  // ↻ now lives INSIDE the box for templates (glyphs.ts) — no separate mark.
   // A resolution dated TODAY is the unmarked case (resolved-is-normal): the
   // blue logged-date prefix exists to date OLDER resolutions. Without this, a
   // checked-unswept row in Today wears today's own date like an upcoming chip
@@ -302,11 +312,17 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     if (asTitle) t = underline(t);
     return t;
   };
-  // GUI indicator order after the title: bell, document, checklist. The bell
-  // reads the top-level `reminder` — the LIVE value the model already gated (§9n):
-  // it is null for a stale reminder (past startDate, bell hidden in the GUI), so
-  // no chip shows there either.
+  // GUI indicator order after the title: repeat, bell, document, checklist. The
+  // muted ↻ leads because the GUI seats the occurrence mark immediately after
+  // the title, ahead of the notes/tag pills; it says this row was SPAWNED from a
+  // repeating series (the rt1_repeatingTemplate FK, surfaced as
+  // `repeating.isInstance` / the wire's `instanceOf`), where the blue ↻ in the
+  // meta run says the row IS the rule. The bell reads the top-level `reminder` —
+  // the LIVE value the model already gated (§9n): it is null for a stale
+  // reminder (past startDate, bell hidden in the GUI), so no chip shows there
+  // either.
   const tail = [
+    ...(item.repeating.isInstance ? [repeatInstanceMark()] : []),
     ...(item.type === "project" ? [countChip(item)] : []),
     ...(item.reminder !== null ? [dim(REMINDER_MARK)] : []),
     ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
@@ -375,9 +391,12 @@ export const UUID_DISPLAY_MIN = 8;
  *   - the id column (never shrinks) + its two-space separator
  *   - the checkbox glyph
  *   - a space + the widest meta chip (a future ‹date› carrying a year)
- *   - a space + the tail: project count chip + all three marks ◷ ≡ ≔
- *     (a conservative superset — the count chip and checklist never truly
- *     co-occur on one row, but budgeting both keeps the floor safe)
+ *   - a space + the tail: project count chip + the repeat ↻ + all three marks
+ *     ◷ ≡ ≔ (a conservative superset — the count chip and checklist never truly
+ *     co-occur on one row, but budgeting both keeps the floor safe). The ↻ is
+ *     budgeted ONCE for both repeat slots: a row is either a TEMPLATE (blue ↻
+ *     in the meta run) or an INSTANCE (muted ↻ in this tail), and each spends
+ *     the same one cell plus its separating space.
  *   - a space + the bare `#…` marker (tags never fully vanish)
  *   - a space + the longest deadline token (full or compact worst case)
  *   - a space + a TITLE_MIN-column title
@@ -398,7 +417,7 @@ function computeFitFloors(): { full: number; compact: number } {
     untrashedLeafActionsCount: 999,
     openUntrashedLeafActionsCount: 999,
   } as Project);
-  const tail = [countChipWorst, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
+  const tail = [countChipWorst, REPEAT_MARK, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
   const fullDeadline = deadlineToken("2000-01-15", todayIso); // ⚑ 14 days left — longest full form
   // Compact worst case: the widest token that can appear in compact mode. Far
   // dates collapse to the bare year (`⚑ 2001`, 6 cells), so the narrow
@@ -675,7 +694,7 @@ export function repeatRuleSummary(rule: RepeatRule): string {
 
 /**
  * The repeating-template catalogue (`things repeaters`). Each series renders as
- * its ordinary list row — the `[↻]` box, the next-occurrence chip or the
+ * its ordinary list row — the plain box + blue ↻, the next-occurrence chip or the
  * ‹waiting›/‹paused›/‹ended› state chip, the container hint — followed by an
  * indented dim line carrying the rule itself. The rule rides its OWN line rather
  * than the meta run because it is the longest thing on the row and the row

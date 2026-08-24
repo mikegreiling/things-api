@@ -9,6 +9,9 @@ import {
   deadlineDetail,
   deadlineToken,
   projectCircle,
+  repeatInstanceMark,
+  REPEAT_MARK,
+  repeatTemplateMark,
   shortDate,
   todoBox,
   weekdayDate,
@@ -67,20 +70,40 @@ describe("projectCircle", () => {
     expect(projectCircle(project({ start: "someday" }))).toBe("(~)");
   });
 
-  it("seats ↻ inside the circle for a repeating project template", () => {
+  it("keeps the ordinary OPEN circle for a repeating project template — the ↻ rides outside it", () => {
     expect(
       projectCircle(
         project({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } }),
       ),
-    ).toBe("(↻)");
+    ).toBe("( )");
   });
 });
 
 describe("todoBox — repeating templates", () => {
-  it("seats ↻ inside the box (the rule row, not a checkable instance)", () => {
+  it("keeps a NORMAL empty box (3.23 moved ↻ out of the checkbox)", () => {
     expect(
       todoBox(todo({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } })),
-    ).toBe("[↻]");
+    ).toBe("[ ]");
+  });
+
+  it("a template stored start=someday still boxes `[ ]`, never the someday `[~]`", () => {
+    expect(
+      todoBox(
+        todo({
+          start: "someday",
+          repeating: { isTemplate: true, isInstance: false, templateUuid: null },
+        }),
+      ),
+    ).toBe("[ ]");
+  });
+});
+
+describe("the repeat pair", () => {
+  // Colors are OFF here, so both marks strip to the ONE shared glyph; the
+  // blue/dim channels are asserted in render-styling.test.ts (color forced on).
+  it("both marks spend the ONE ↻ — no invented second glyph", () => {
+    expect(repeatTemplateMark()).toBe(REPEAT_MARK);
+    expect(repeatInstanceMark()).toBe(REPEAT_MARK);
   });
 });
 

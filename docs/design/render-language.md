@@ -20,7 +20,7 @@ Each visual channel carries **one** kind of meaning. Reading a row means decodin
 | **Bracket shape** | type | `[ ]` to-do, `( )` project — never altered, survives color-strip, the primary type cue |
 | **Weight (bold)** | type | project titles are **bold** everywhere, every state (the single law `projectTitleAccent`); to-dos are regular weight |
 | **Color (one meaning per hue)** | — | **blue** = the project checkbox accent + the resolved `✓`/`×` marks; **yellow** `★` = Today; **bright-blue** `⏾` = This Evening; **red** = overdue/due deadline; **green** = area mark + tags |
-| **Glyph interior** | state | `✓` completed, `×` canceled, `↻` repeating template, `~` someday |
+| **Glyph interior** | state | `✓` completed, `×` canceled, `~` someday (the repeat `↻` used to sit here; since 3.23 it rides OUTSIDE the box — see The repeat pair) |
 | **Dim** | secondary metadata + corollary-2 deviations | uuid prefix, tags, chips, container suffixes — plus a resolved row that deviates from its list's norm |
 | **Underline** | heading ROLE only | a project (or heading) that heads the group beneath it; never a plain row |
 
@@ -48,6 +48,21 @@ Two contextual decisions drive `formatItem` options. "Project role" is whether a
 | detail-card **headers** (`project show` / `area show` title line) | heading (bold+underline / bold) | — | the opened resource's own header, untouched |
 
 Only the **Logbook** treats resolved as normal. Only **anytime**, the **anytime preview**, and **someday**'s "From active projects" section treat list-row projects as headings; detail-card title lines are headers (a separate, untouched role).
+
+## The repeat pair
+
+Ratified by Mike, 2026-08-24 (GUI screenshots of Things 3.23). A repeating series has two halves and the row language now marks BOTH, in two distinct slots and two distinct colors. The one shared glyph is `REPEAT_MARK` (`↻`, U+21BB); the two wrappers are `repeatTemplateMark()` / `repeatInstanceMark()` in `glyphs.ts`, and nothing else may mint a ↻.
+
+| Half | Slot | Style | Row form |
+|---|---|---|---|
+| **Template** (the rule) | first element of the meta run — immediately after the box, ahead of the date/state chip and the title | **blue** | `[ ] ↻ ‹Jul 8› Water plants` · `( ) ↻ ‹waiting› Weekly review ‹0›` |
+| **Instance** (a spawned occurrence) | head of the post-title marker cluster, before `◷ ≡ ≔` and the tag pills | **dim** | `[ ] Water plants ↻ ≡` |
+
+Three consequences worth stating outright:
+
+- **The box is a box again.** A template's checkbox is an ordinary `[ ]` / `blue("( )")` — the pre-3.23 `[↻]` / `(↻)` are gone. The template branches survive in `todoBox`/`projectCircle` only to defeat the someday fall-through (the DB stores templates `start=someday`; a `[~]` would misread the rule row). Shape still carries state with color stripped: a template row is the only one whose ↻ precedes its title, an instance row the only one whose ↻ follows it, so the two never collide in plain output.
+- **Blue is spent deliberately.** The blue channel already means "project checkbox accent + the resolved ✓/× marks"; the template mark joins it because "this row is the RULE, not an occurrence" is the loudest fact about a template row. The instance mark is dim, per the dim channel's existing meaning — an occurrence is an ordinary to-do whose only deviation is its provenance.
+- **Instances stopped being invisible.** Before this, a spawned occurrence rendered identically to a plain to-do; the fact was already in the read model (`repeating.isInstance` / `repeating.templateUuid`, from the `rt1_repeatingTemplate` FK) and already on the wire (the presence-keyed `instanceOf`), but no TTY surface spent it. The muted ↻ is that fact's render.
 
 ## The single law (delta 1)
 
@@ -82,8 +97,8 @@ The **PLOG1 stranded-open-child advisory** on `project show` (`contains 2 unfini
 ## The nine deltas (the 2026-07-13 change)
 
 1. **Project titles bold + default (white), never blue, in all list rows** — via the single law `projectTitleAccent`.
-2. **Repeating project template circle** `dim("(↻)")` → `blue("(↻)")` — a template is still a project (GUI shows a solid blue circle with the arrow).
-3. **Repeating to-do template box** `dim("[↻]")` → plain `"[↻]"` — the GUI's repeat pseudo-checkbox is white.
+2. **Repeating project template circle** `dim("(↻)")` → `blue("(↻)")` — a template is still a project. *(SUPERSEDED 2026-08-24 by The repeat pair below: the circle is now a plain `blue("( )")` and the ↻ moved out in front of the title.)*
+3. **Repeating to-do template box** `dim("[↻]")` → plain `"[↻]"` — the GUI's repeat pseudo-checkbox is white. *(SUPERSEDED 2026-08-24 by The repeat pair below: the box is now a plain `"[ ]"`.)*
 4. **Someday project circle** `blue("(~)")` → `dim("(~)")` — the GUI mutes someday projects like someday to-dos; type is carried by the parens + bold title.
 5. **Someday project titles** — no special case; bold white via the delta-1 law.
 6. **Logbook: resolved-is-normal** — completed titles plain (not dim), canceled titles keep the strikethrough but drop the dim; project rows bold via delta 1; the blue `[✓]`/`[×]`/`(✓)`/`(×)` marks stay. Mechanism: the `resolvedNormal` `formatItem` option, passed only by the logbook renderer; global status styling is unchanged.
