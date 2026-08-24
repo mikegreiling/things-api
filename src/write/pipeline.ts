@@ -1055,7 +1055,7 @@ export async function runMutation<K extends OperationKind>(
     // onboarded, the host app's Automation record otherwise — and anything
     // short of a grant refuses here, before the app is touched. An unknown
     // standing is NOT resolved by trying: that is what `things setup` is for.
-    if (vector.id === "applescript" && vector.simulates !== true) {
+    if (vector.sendsAppleEvents === true && vector.simulates !== true) {
       const capability = (deps.writeCapability ?? (() => writeCapabilityDefault()))();
       if (capability.mode === "direct-denied" || capability.mode === "direct-unknown") {
         audit({

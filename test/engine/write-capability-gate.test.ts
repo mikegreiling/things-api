@@ -85,6 +85,10 @@ function fakeAppleScriptVector(uuid: string): {
     vector: {
       id: "applescript",
       matrix: MATRIX,
+      // What actually arms the gate — the real vector sets this; fakes that
+      // send nothing deliberately do not, so ordinary engine tests are not
+      // subject to the developer's own TCC state.
+      sendsAppleEvents: true,
       async execute(invocation): Promise<ExecuteResult> {
         calls.push(invocation);
         fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(uuid);
@@ -163,6 +167,35 @@ describe("app control missing blocks BEFORE the app is touched", () => {
     await update(capability({ mode: "direct-unknown", remediation: ["run `things setup`"] }));
     expect(auditRecords.length).toBeGreaterThan(0);
     expect(JSON.stringify(auditRecords)).toContain("environment");
+  });
+});
+
+describe("the gate keys on what a vector DOES, not on its id", () => {
+  // Regression: keying the gate on `id === "applescript"` made every engine
+  // test that substitutes a fake under that id depend on the developer's own
+  // TCC grants — green on a granted workstation, red on CI. The real vector
+  // declares `sendsAppleEvents`; a fake that sends nothing does not.
+  it("a fake vector under the applescript id is NOT gated on the host's grants", async () => {
+    const uuid = seedTodo(fixture.db, { title: "a synthetic to-do" });
+    const calls: CompiledInvocation[] = [];
+    const silentFake: WriteVector = {
+      id: "applescript",
+      matrix: MATRIX,
+      async execute(invocation): Promise<ExecuteResult> {
+        calls.push(invocation);
+        fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(uuid);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    // The verdict says "no app control" — and it must not matter, because this
+    // vector never reaches the app.
+    const result = await runMutation(
+      deps(silentFake, capability({ mode: "direct-unknown", remediation: ["run `things setup`"] })),
+      "todo.delete",
+      { uuid },
+    );
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
   });
 });
 
