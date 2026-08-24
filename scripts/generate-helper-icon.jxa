@@ -1,0 +1,64 @@
+#!/usr/bin/osascript -l JavaScript
+// Renders the Things API Helper app icon master (1024×1024 PNG) with Cocoa.
+// Original artwork drawn in code — a white checkmark over a blue rounded
+// square on the standard macOS icon grid (824pt plate, 100pt margin).
+// Usage: osascript -l JavaScript scripts/generate-helper-icon.jxa <out.png>
+ObjC.import("Cocoa");
+
+function run(argv) {
+  const out = argv[0];
+  if (!out) throw new Error("usage: generate-helper-icon.jxa <out.png>");
+  const size = 1024;
+
+  const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(
+    $(), size, size, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0,
+  );
+  const ctx = $.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep);
+  $.NSGraphicsContext.saveGraphicsState;
+  $.NSGraphicsContext.setCurrentContext(ctx);
+
+  // Plate: 824×824 rounded square, Big-Sur-era corner radius.
+  const inset = 100;
+  const plate = $.NSMakeRect(inset, inset, size - 2 * inset, size - 2 * inset);
+  const path = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius(plate, 185, 185);
+  const top = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.13, 0.5, 0.92, 1.0);
+  const bottom = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.07, 0.32, 0.72, 1.0);
+  const grad = $.NSGradient.alloc.initWithStartingColorEndingColor(bottom, top);
+  grad.drawInBezierPathAngle(path, 90);
+
+  // Checkmark: thick, round-capped, slightly high of center.
+  const check = $.NSBezierPath.bezierPath;
+  check.moveToPoint($.NSMakePoint(310, 515));
+  check.lineToPoint($.NSMakePoint(455, 365));
+  check.lineToPoint($.NSMakePoint(720, 645));
+  check.setLineWidth(92);
+  check.setLineCapStyle($.NSLineCapStyleRound);
+  check.setLineJoinStyle($.NSLineJoinStyleRound);
+  $.NSColor.whiteColor.setStroke;
+  check.stroke;
+
+  // A small prompt chevron under the check — this is the API helper, not the app.
+  const chevron = $.NSBezierPath.bezierPath;
+  chevron.moveToPoint($.NSMakePoint(430, 300));
+  chevron.lineToPoint($.NSMakePoint(505, 245));
+  chevron.lineToPoint($.NSMakePoint(430, 190));
+  chevron.setLineWidth(40);
+  chevron.setLineCapStyle($.NSLineCapStyleRound);
+  chevron.setLineJoinStyle($.NSLineJoinStyleRound);
+  $.NSColor.colorWithSRGBRedGreenBlueAlpha(1, 1, 1, 0.85).setStroke;
+  chevron.stroke;
+  const dash = $.NSBezierPath.bezierPath;
+  dash.moveToPoint($.NSMakePoint(545, 190));
+  dash.lineToPoint($.NSMakePoint(645, 190));
+  dash.setLineWidth(40);
+  dash.setLineCapStyle($.NSLineCapStyleRound);
+  $.NSColor.colorWithSRGBRedGreenBlueAlpha(1, 1, 1, 0.85).setStroke;
+  dash.stroke;
+
+  ctx.flushGraphics;
+  $.NSGraphicsContext.restoreGraphicsState;
+
+  const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $());
+  if (!png.writeToFileAtomically($(out), true)) throw new Error("could not write " + out);
+  return "wrote " + out;
+}
