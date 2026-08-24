@@ -10,6 +10,7 @@
 import type { Command } from "commander";
 
 import {
+  CeremonyStopped,
   directSetup,
   ExitCode,
   okEnvelope,
@@ -84,7 +85,17 @@ export function registerSetup(program: Command): void {
       const progress = (line: string): void => {
         (opts.json === true ? process.stderr : process.stdout).write(`${line}\n`);
       };
-      const result = directSetup({ progress });
+      let result: DirectSetupResult;
+      try {
+        result = directSetup({ progress });
+      } catch (err) {
+        // The human stopped at a gate. Every leg is resumable, so this is a
+        // clean stop with an honest exit code, not a crash.
+        if (!(err instanceof CeremonyStopped)) throw err;
+        process.stderr.write("\nstopped — rerunning `things setup` resumes exactly here\n");
+        process.exitCode = ExitCode.Environment;
+        return;
+      }
       if (opts.json === true) {
         process.stdout.write(`${JSON.stringify(okEnvelope("setup", result, meta(started)))}\n`);
       } else {
