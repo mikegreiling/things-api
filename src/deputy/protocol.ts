@@ -25,7 +25,7 @@ export const DEPUTY_PROTOCOL_VERSION = 1;
  * any helper-source change; a drift test asserts this constant matches it.
  * The PROTOCOL version above remains the hard compatibility gate.
  */
-export const EXPECTED_HELPERS_VERSION = "1.2.0";
+export const EXPECTED_HELPERS_VERSION = "1.3.0";
 
 /** The outer helper bundle's identifier (Things API Helper.app) — TCC + BTM identity. */
 export const HELPERS_BUNDLE_ID = "com.pixelcog.things-api-helper";
@@ -79,13 +79,13 @@ export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): st
 /** launchd label (and bundle identifier) of the sandboxed reader. */
 export const READER_LAUNCHD_LABEL = "com.pixelcog.things-reader";
 
-/** Points {@link readerContainerDir} somewhere else (mock readers in tests/lab). */
+/** Points every reader-side path somewhere else (mock readers in tests/lab). */
 export const READER_DIR_ENV = "THINGS_API_READER_DIR";
 
 /**
  * The override path when one is set, else null. A set override means the
- * rendezvous is an ORDINARY directory the caller chose — no App Sandbox
- * container, so none of the cross-app-container access rules apply to it.
+ * rendezvous is an ORDINARY directory the caller chose — a mock reader is just
+ * a socket and a token file, with no bundle and no sandbox behind it.
  */
 export function readerDirOverride(env: NodeJS.ProcessEnv = process.env): string | null {
   const explicit = env[READER_DIR_ENV];
@@ -93,30 +93,55 @@ export function readerDirOverride(env: NodeJS.ProcessEnv = process.env): string 
 }
 
 /**
- * The reader's state lives in its App Sandbox container home — the OS picks
- * the path from the bundle identifier. THINGS_API_READER_DIR overrides for
- * tests (a mock reader is just a socket; no sandbox involved).
+ * Where clients meet the reader: `<state>/reader`, a directory WE own, outside
+ * every App Sandbox container.
  *
- * IMPORTANT: everything under this directory belongs to ANOTHER app's
- * container, so a client-side `stat`/`open` on it is a cross-app container
- * access — the `kTCCServiceSystemPolicyAppData` consent class. Under a host
- * that lacks durable file access macOS raises a modal for it, which Article I
- * forbids outside a ceremony. Guard every such touch with
- * `readerContainerAccessible()` (src/host-access.ts).
+ * This placement is the whole point. launchd creates, binds, listens on and
+ * owns `reader.sock` here (the `Sockets` key in the reader's LaunchAgent) and
+ * hands the sandboxed process the already-listening fd at activation, so the
+ * reader never opens this path at all — a sandboxed process could not have
+ * bound anywhere but its own container. The access token is a sibling file the
+ * INSTALLER mints. Both are therefore ordinary files in the user's own state
+ * directory: a client `stat`/`open` on them crosses no container boundary,
+ * needs no TCC class, and works identically from every host app.
+ *
+ * Until helpers 1.3.0 both files lived in the reader's container home, which
+ * made every client probe a cross-app container access (the
+ * `kTCCServiceSystemPolicyAppData` consent class) — silent under an FDA host,
+ * a modal from anywhere else. See docs/design/permissions-doctrine.md
+ * (§ RESOLVED 2026-08-24).
  */
-export function readerContainerDir(env: NodeJS.ProcessEnv = process.env): string {
+export function readerRendezvousDir(env: NodeJS.ProcessEnv = process.env): string {
+  return readerDirOverride(env) ?? join(stateDir(env), "reader");
+}
+
+export function readerSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(readerRendezvousDir(env), "reader.sock");
+}
+
+export function readerTokenPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(readerRendezvousDir(env), "token");
+}
+
+/**
+ * The reader's App Sandbox container home — the OS picks the path from the
+ * bundle identifier, and the security-scoped bookmark that IS the read grant
+ * lives there. Reader-internal: nothing on the client side reads it. The one
+ * client-side use is `helpers uninstall --revoke`, which deletes the grant
+ * (a deliberate destructive act a human asked for), and the override redirects
+ * it so a suite never touches the developer's real container.
+ */
+export function readerSandboxContainerDir(env: NodeJS.ProcessEnv = process.env): string {
   return (
     readerDirOverride(env) ?? join(homedir(), "Library/Containers", READER_LAUNCHD_LABEL, "Data")
   );
 }
 
-export function readerSocketPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(readerContainerDir(env), "reader.sock");
-}
+/** The env var carrying the reader's expected token, injected by its LaunchAgent. */
+export const READER_TOKEN_ENV = "THINGS_READER_TOKEN";
 
-export function readerTokenPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(readerContainerDir(env), "token");
-}
+/** The `Sockets` key entry name launchd hands the reader at activation. */
+export const READER_SOCKET_KEY = "Listener";
 
 /** Reader handshake: DeputyHello plus the grant state. */
 export interface ReaderHello extends DeputyHello {

@@ -13,7 +13,6 @@ import {
   readAllowed,
   readCapability,
   ReadCapabilityError,
-  readerContainerAccessible,
   resetCapabilityForTests,
   uiAllowed,
   uiCapability,
@@ -31,10 +30,6 @@ function bareMachine(over: Partial<CapabilityDeps> = {}): CapabilityDeps {
     },
     helpersServing: () => false,
     helpersExpected: () => false,
-    // Never consult the DEVELOPER's own state directory for this: whether a
-    // reader bundle happens to be installed on the machine running the suite
-    // must not change a verdict.
-    readerInstalled: () => false,
     deputyAutomation: () => undefined,
     automationAuthValue: () => null,
     lookupAppName: () => null,
@@ -69,43 +64,6 @@ describe("host identity", () => {
 
   it("never guesses: an unidentifiable host is 'this terminal'", () => {
     expect(hostApp({ env: {} })).toEqual({ bundleId: null, name: "this terminal" });
-  });
-});
-
-describe("readerContainerAccessible — may we touch the reader's container at all?", () => {
-  /** The three yeses and the one no, with nothing touching the container. */
-  it("an explicit reader dir short-circuits everything: that is no sandbox container", () => {
-    const deps = bareMachine({
-      env: { __CFBundleIdentifier: "com.mitchellh.ghostty", THINGS_API_READER_DIR: "/tmp/mock" },
-      fdaProbe: () => {
-        throw new Error("an overridden rendezvous must not cost an FDA probe");
-      },
-    });
-    expect(readerContainerAccessible(deps)).toBe(true);
-  });
-
-  it("Full Disk Access is a yes", () => {
-    expect(readerContainerAccessible(bareMachine({ fdaProbe: () => undefined }))).toBe(true);
-  });
-
-  it("a live witnessed app-data grant is a yes — it IS the same consent class", () => {
-    expect(
-      readerContainerAccessible(
-        bareMachine({
-          env: {
-            __CFBundleIdentifier: "com.mitchellh.ghostty",
-            THINGS_API_STATE_DIR: sessionFixture(),
-          },
-          hostPid: () => 4242,
-          processStart: () => "Thu Jul 16 00:29:43 2026",
-          bootTime: () => 1_784_187_814,
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("no grant of any kind is a no", () => {
-    expect(readerContainerAccessible(bareMachine())).toBe(false);
   });
 });
 
@@ -165,30 +123,21 @@ describe("readCapability — the helpers are ground truth, not a stored flag", (
     expect(cap.detail).toContain("holds no read grant");
   });
 
-  it("a host that cannot reach the rendezvous never asks whether the helpers are expected", () => {
-    // The reader's socket and token sit in ITS sandbox container. On a host
-    // with no durable file access, statting them is the "access data from
-    // other apps" dialog — so the chain must not even consult the question
-    // that would lead there, and must land on the direct verdict instead.
-    const cap = readCapability(
-      {},
-      bareMachine({
-        readerInstalled: () => true,
-        helpersExpected: () => {
-          throw new Error("the rendezvous must not be consulted from an unreachable host");
-        },
-      }),
-    );
-    expect(cap.mode).toBe("none");
-    expect(cap.detail).toContain("cannot be reached from this host");
-    expect(cap.remediation).toEqual([
-      "grant Full Disk Access to Ghostty, run `things setup`, or use a host with access — " +
-        "reader routing is host-gated today; a fix is queued",
-    ]);
+  it("a grant-less host is asked the helpers question all the same — nothing gates it", () => {
+    // Before helpers 1.3.0 the rendezvous sat in the reader's sandbox
+    // container, so on a host with no durable file access the chain had to
+    // SKIP "are the helpers expected?" — asking it meant statting another
+    // app's container, which is the "access data from other apps" dialog. The
+    // rendezvous is ours now, so the question is always safe to ask, and a
+    // machine that expects the helpers is refused loudly rather than falling
+    // through to a direct verdict it never asked for.
+    const cap = readCapability({}, bareMachine({ helpersExpected: () => true }));
+    expect(cap.mode).toBe("helpers-unavailable");
+    expect(cap.remediation.join(" | ")).toContain("things helpers setup");
   });
 
-  it("an unreachable rendezvous is only NAMED when a reader is installed here", () => {
-    const cap = readCapability({}, bareMachine({ readerInstalled: () => false }));
+  it("a grant-less host with no helpers lands on the ordinary refusal", () => {
+    const cap = readCapability({}, bareMachine());
     expect(cap.mode).toBe("none");
     expect(cap.detail).not.toContain("cannot be reached from this host");
     expect(cap.remediation.join(" | ")).toContain("things helpers setup");

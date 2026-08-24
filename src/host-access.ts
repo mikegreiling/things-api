@@ -1,46 +1,24 @@
 /**
- * Host identity, the Full Disk Access probe, and the reader-container guard
+ * Host identity and the Full Disk Access probe
  * (docs/design/permissions-doctrine.md, Articles I and III).
  *
  * This module is deliberately dependency-light — it imports nothing that could
  * import it back — so the routing layer, the capability verdict, and the
  * helpers ceremonies can all consult the same prompt-free facts.
  *
- * ── Why the reader-container guard exists ───────────────────────────────────
- *
- * The sandboxed reader's rendezvous files (its socket and its access token)
- * live INSIDE its App Sandbox container, `~/Library/Containers/
- * com.pixelcog.things-reader/Data`. That is another application's container, so
- * every client-side `stat`/`open` on those paths is a cross-app container
- * access — the `kTCCServiceSystemPolicyAppData` consent class, the same one the
- * Things group container sits behind. Under a host app that holds Full Disk
- * Access macOS answers it silently, which is why the whole reader path looked
- * host-neutral for as long as it was only ever exercised from an FDA terminal.
- * From ANY other host it raises the "would like to access data from other apps"
- * modal — outside a ceremony, which Article I forbids — and a denial then turns
- * the token read into a raw EPERM crash.
- *
- * So no probe touches the rendezvous unless it can PROVE the touch is
- * prompt-free. The proof is {@link readerContainerAccessible}; when it says no,
- * the reader is reported as `unreachable` (an honest third state, distinct from
- * "not installed" and from "installed but not answering") and reads fall
- * through to the direct verdict — which on a grant-less host is the doctrine's
- * loud refusal. That scoping matters: the no-fallback rule governs a reader
- * that is REACHABLE and failing, not a host that cannot see the rendezvous at
- * all.
- *
- * This is an INTERIM rule. The durable fix is to move the rendezvous out of the
- * sandbox container entirely (launchd's `Sockets` key hands the reader a
- * listening fd at a host-neutral path, so the reader never opens it and the
- * client never crosses a container boundary); it is tracked in docs/up-next.md.
+ * Its facts serve DIRECT mode: whether this host app holds Full Disk Access,
+ * and what to call it in copy. The helpers path needs none of them — since
+ * helpers 1.3.0 the reader's rendezvous is a launchd-owned socket plus an
+ * installer-minted token in `<state>/reader`, ordinary files this process owns,
+ * so reaching the reader crosses no container boundary and raises no consent
+ * class from any host.
  */
 import { execFileSync } from "node:child_process";
 import { closeSync, openSync, readFileSync, existsSync as realExistsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { readerDirOverride } from "./deputy/protocol.ts";
-import { sessionGrantValid, type SessionGrantDeps } from "./session-grant.ts";
+import { type SessionGrantDeps } from "./session-grant.ts";
 
 /** The user TCC database. Readable iff the calling process holds Full Disk Access. */
 const TCC_DB_RELATIVE = "Library/Application Support/com.apple.TCC/TCC.db";
@@ -196,47 +174,17 @@ export function fdaGranted(deps: HostAccessDeps = {}): FdaVerdict {
   }
 }
 
-// ── The reader-container guard ───────────────────────────────────────────────
-
-/**
- * May this process touch the reader's rendezvous files WITHOUT risking a
- * consent dialog? True in exactly three cases, and nothing here touches the
- * container to find out:
- *
- *  1. `THINGS_API_READER_DIR` names the rendezvous — that is an ordinary
- *     directory the caller chose (mock readers in tests and in the lab), not an
- *     App Sandbox container, so no cross-app rule applies;
- *  2. the host app holds Full Disk Access — one `open(2)` on an FDA-class file,
- *     which never prompts;
- *  3. a ceremony witnessed the instance-scoped app-data grant and it is still
- *     live — that grant IS the "access data from other apps" class, so it
- *     covers another app's container exactly as it covers Things' own.
- */
-export function readerContainerAccessible(deps: HostAccessDeps = {}): boolean {
-  const env = deps.env ?? process.env;
-  if (readerDirOverride(env) !== null) return true;
-  if (fdaGranted(deps).granted) return true;
-  return sessionGrantValid(hostApp(deps).bundleId, deps).valid;
-}
-
-/** The one honest reason string a guarded probe reports when it may not look. */
-export const READER_UNREACHABLE_REASON =
-  "this host cannot verify or reach the reader without durable file access";
-
-/** The single remediation line every unreachable-reader surface prints. */
-export function readerUnreachableRemedy(deps: HostAccessDeps = {}): string {
-  return (
-    `grant Full Disk Access to ${hostDisplayName(deps)}, run \`things setup\`, or use a host ` +
-    "with access — reader routing is host-gated today; a fix is queued"
-  );
-}
-
 // ── EPERM-safe rendezvous reads ──────────────────────────────────────────────
+//
+// The rendezvous is ours now, so these are ordinary reads of ordinary files.
+// The belt stays on anyway: a `stat`/`open` that ends in EPERM (a stray chmod,
+// a filesystem that answers oddly) is a STATE to report, never a crash out of
+// a routing probe, and never a second attempt.
 
 /**
  * `existsSync` for a rendezvous path. It already swallows errno, but it is
- * wrapped anyway so no future refactor can turn a TCC denial into a throw, and
- * so every container touch reads the same at the call site.
+ * wrapped anyway so no future refactor can turn a denial into a throw, and so
+ * every rendezvous touch reads the same at the call site.
  */
 export function rendezvousExists(path: string): boolean {
   try {
@@ -247,10 +195,9 @@ export function rendezvousExists(path: string): boolean {
 }
 
 /**
- * Read the reader's access token. Returns null instead of throwing when macOS
- * refuses (EPERM/EACCES after a denial, ENOENT when the reader never wrote
- * one). A refusal is a state to report, never a crash, and never a second
- * attempt that could raise the modal again.
+ * Read the reader's access token. Returns null instead of throwing when the
+ * read fails (ENOENT before the first install; EPERM if something outside our
+ * flows re-permissioned the file).
  */
 export function readRendezvousToken(path: string): string | null {
   try {

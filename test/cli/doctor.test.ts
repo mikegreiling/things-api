@@ -437,7 +437,7 @@ function status(over: Partial<HelpersStatus> = {}): HelpersStatus {
     bundleInstalled: true,
     installedVersion: EXPECTED_HELPERS_VERSION,
     deputy: half(),
-    reader: { ...half(), installed: true, granted: true, unreachable: false },
+    reader: { ...half(), installed: true, granted: true },
     ...over,
   };
 }
@@ -499,28 +499,10 @@ describe("doctor — helpers section", () => {
     expect(helpers.detail).toContain("automation");
   });
 
-  it("an unreachable reader points at the host, not at the ceremony", () => {
-    // `things helpers setup` would be the wrong advice here: the helpers are
-    // fine, this HOST cannot reach them. Nothing about the reader's grant is
-    // even known, because asking is what raises the dialog.
-    const helpers = helpersOf({
-      status: status({
-        reader: { ...half(), installed: true, granted: false, unreachable: true },
-      }),
-      routing: routing({
-        files: false,
-        readerReason: "this host cannot verify or reach the reader without durable file access",
-      }),
-    });
-    expect(helpers.remedy).toContain("reader routing is host-gated today; a fix is queued");
-    expect(helpers.remedy).not.toContain("things helpers setup");
-    expect(helpers.detail).toContain("database reads");
-  });
-
   it("an ungranted reader points at the ceremony", () => {
     const helpers = helpersOf({
       status: status({
-        reader: { ...half(), installed: true, granted: false, unreachable: false },
+        reader: { ...half(), installed: true, granted: false },
       }),
       routing: routing({ files: false, readerReason: "reader running but NOT granted" }),
     });
@@ -534,7 +516,7 @@ describe("doctor — helpers section", () => {
         bundleInstalled: false,
         installedVersion: null,
         deputy: absentHalf,
-        reader: { ...absentHalf, installed: false, granted: false, unreachable: false },
+        reader: { ...absentHalf, installed: false, granted: false },
       }),
       routing: routing({
         automation: false,
@@ -622,12 +604,11 @@ describe("doctor CLI — helpers section render", () => {
     expect(out).toContain("next:        `things helpers setup`");
   });
 
-  it("renders the reader as UNREACHABLE from a host that may not touch its container", async () => {
-    // No reader-dir override, no Full Disk Access, no witnessed app-data
-    // grant: the rendezvous sits in another app's sandbox container, so doctor
-    // must report the third state and print the one remediation line — without
-    // statting anything in there (that stat is the consent dialog).
-    delete process.env["THINGS_API_READER_DIR"];
+  it("answers identically from a host with no grants at all — nothing is gated", async () => {
+    // The rendezvous left the reader's sandbox container in helpers 1.3.0, so
+    // a host with no Full Disk Access and no witnessed app-data grant reaches
+    // the same verdict an FDA one does: it looks, finds nothing installed, and
+    // says so. There is no third `unreachable` state left to report.
     process.env["HOME"] = join(stateDir, "home");
     mkdirSync(join(stateDir, "deputy/bin/Things API Helper.app/Contents/MacOS"), {
       recursive: true,
@@ -640,11 +621,9 @@ describe("doctor CLI — helpers section render", () => {
     program.exitOverride();
     await program.parseAsync(["node", "things", "doctor"]);
     const out = stdout.join("");
-    expect(out).toContain(
-      "reader:      UNREACHABLE — this host cannot verify or reach the reader without durable file access",
-    );
-    expect(out).toContain("run `things setup`, or use a host with access");
-    expect(out).toContain("reader routing is host-gated today; a fix is queued");
+    expect(out).not.toContain("UNREACHABLE");
+    expect(out).not.toContain("host-gated");
+    expect(out).toContain("reader:      not installed");
   });
 
   it("--json carries the section in the envelope", async () => {

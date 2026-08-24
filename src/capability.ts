@@ -29,13 +29,12 @@
  *  4. a witnessed session app-data grant — see ./session-grant.ts;
  *  5. otherwise: refuse, naming both setup ceremonies.
  *
- * Step 2 carries one gate that is easy to miss: the reader's socket and token
- * live inside ITS App Sandbox container, so asking "is the reader serving?" is
- * itself a cross-app container access. It runs only behind
- * `readerContainerAccessible()` (./host-access.ts); on a host that cannot look
- * prompt-free the reader reads `unreachable` and the chain falls through to the
- * direct tiers — which is not the no-fallback rule being bent, since that rule
- * governs a REACHABLE reader that is failing.
+ * Step 2 asks nothing of this host's grants. Since helpers 1.3.0 the reader's
+ * socket and token live in `<state>/reader` — launchd owns the socket, install
+ * mints the token, and both are ordinary files this user owns — so "is the
+ * reader serving?" is answerable identically from every host app, with no
+ * consent class in play. (Before 1.3.0 they sat in the reader's App Sandbox
+ * container and that question was itself a cross-app container access.)
  *
  * The Things group container is NEVER opened as a probe (Article I corollary):
  * the open is itself what raises the app-data consent, so "try it and see" is
@@ -58,11 +57,9 @@
  * already read that file. Where the row cannot be read the verdict is an honest
  * "unknown", which the write gate refuses on rather than resolving with a dialog.
  */
-import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig } from "./config.ts";
-import { readerInstalledAppPath } from "./deputy/protocol.ts";
 import { deputyRouting, deputyRoutesDb, helpersExpected } from "./deputy/routing.ts";
 import {
   fdaGranted,
@@ -70,8 +67,6 @@ import {
   type HostApp,
   hostApp,
   hostDisplayName,
-  readerContainerAccessible,
-  readerUnreachableRemedy,
   resetHostAccessForTests,
   tccDbPath,
 } from "./host-access.ts";
@@ -83,7 +78,6 @@ export {
   type HostApp,
   hostApp,
   hostDisplayName,
-  readerContainerAccessible,
   tccDbPath,
 } from "./host-access.ts";
 
@@ -168,14 +162,6 @@ export function writeAllowed(capability: WriteCapability): boolean {
 export interface CapabilityDeps extends HostAccessDeps {
   /** Are this process's database reads actually being served by the reader? */
   helpersServing?: () => boolean;
-  /**
-   * May the reader's rendezvous be touched at all from this host, prompt-free?
-   * False sends the read chain straight to the direct verdict — see
-   * {@link readerContainerAccessible}.
-   */
-  readerReachable?: () => boolean;
-  /** Is a reader bundle installed on this machine? (An ordinary state-dir path.) */
-  readerInstalled?: () => boolean;
   /** Are the helpers expected on this machine (enabled, and installed under auto)? */
   helpersExpected?: () => boolean;
   /** Why the helpers are not serving, for the loud refusal. */
@@ -292,20 +278,12 @@ export function readCapability(
       host,
     };
   }
-  // The reader's socket and token live inside its App Sandbox container, so a
-  // host without durable file access cannot even LOOK at them without risking
-  // the "access data from other apps" dialog. That is not "the helpers are
-  // failing" — it is "this host cannot see them", so the no-fallback rule below
-  // does not apply and the chain proceeds to the direct verdict (which, on a
-  // host with no grant of its own, is the doctrine's loud refusal anyway).
-  const readerReachable = (deps.readerReachable ?? (() => readerContainerAccessible(deps)))();
-  // Only worth SAYING when a reader is actually installed here: on a machine
-  // that never onboarded the helpers there is nothing out of reach.
-  const readerOutOfReach =
-    !readerReachable && (deps.readerInstalled ?? (() => existsSync(readerInstalledAppPath(env))))();
   // No silent fall-through: a machine that asked for the helpers and cannot
   // have them is refused, not quietly downgraded onto the terminal's own grants.
-  const expected = readerReachable && (deps.helpersExpected ?? (() => helpersExpected(env)))();
+  // Nothing gates this question any more — the rendezvous is ours, so whether
+  // the helpers are expected and whether they are serving are both answerable
+  // from every host app alike.
+  const expected = (deps.helpersExpected ?? (() => helpersExpected(env)))();
   if (expected) {
     const why = (deps.helpersReason ?? (() => null))();
     return {
@@ -349,11 +327,8 @@ export function readCapability(
       `${hostDisplayName(deps)} cannot open the Things data folder — ${session.reason}` +
       (fda.code !== null && !ORDINARY_DENIALS.has(fda.code)
         ? ` (the access check ended in ${fda.code})`
-        : "") +
-      (readerOutOfReach ? ", and the reader installed here cannot be reached from this host" : ""),
-    remediation: readerOutOfReach
-      ? [readerUnreachableRemedy(deps)]
-      : readRemediation(hostDisplayName(deps)),
+        : ""),
+    remediation: readRemediation(hostDisplayName(deps)),
     host,
   };
 }

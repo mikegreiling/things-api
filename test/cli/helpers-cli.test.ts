@@ -157,24 +157,21 @@ describe("things helpers status", () => {
     expect(out).toContain("the deputy is not answering");
   });
 
-  it("says UNREACHABLE — and never stats the container — from a host with no file access", async () => {
-    // The reader's socket and token live in its App Sandbox container. From a
-    // host holding neither Full Disk Access nor a witnessed app-data grant,
-    // even looking is the "access data from other apps" dialog, so status
-    // reports the honest third state and names the one way out. (The crash
-    // this replaces: readFileSync on the token, raw EPERM, stack trace.)
+  it("reports the reader plainly from a host with no file access — nothing is gated", async () => {
+    // The rendezvous left the reader's sandbox container in helpers 1.3.0, so
+    // a host holding neither Full Disk Access nor a witnessed app-data grant
+    // reads it exactly as an FDA host does. No `unreachable` third state, no
+    // host-gating line — and, as before, no crash: the token read is still
+    // EPERM-safe. (The bug this cell descends from: readFileSync on the token,
+    // raw EPERM, stack trace.)
     delete process.env["THINGS_API_READER_DIR"];
     process.env["HOME"] = join(stateDir, "home");
     mkdirSync(process.env["HOME"], { recursive: true });
     await run(["helpers", "status"]);
     const out = stdout.join("");
-    expect(out).toContain(
-      "reader: unreachable — this host cannot verify or reach the reader without durable file access",
-    );
-    expect(out).toContain("next: grant Full Disk Access to ");
-    expect(out).toContain(
-      "run `things setup`, or use a host with access — reader routing is host-gated today; a fix is queued",
-    );
+    expect(out).toContain("reader: not installed");
+    expect(out).not.toContain("unreachable");
+    expect(out).not.toContain("host-gated");
     expect(process.exitCode).toBe(0);
   });
 });
