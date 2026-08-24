@@ -25,6 +25,7 @@ import {
   okEnvelope,
   onboardHelpers,
   type OnboardStep,
+  resetHelpers,
   restartHelpers,
   uninstallHelpers,
   type EnvelopeMeta,
@@ -133,7 +134,7 @@ export function registerHelpers(program: Command): void {
       "Manage the optional helper pair that performs database reads and app automation " +
         "on the CLI's behalf, so macOS permission grants attach to stable helpers instead " +
         "of every terminal or agent runtime that runs `things`. Subcommands: status, " +
-        "install, grant, restart, uninstall.",
+        "install, grant, restart, uninstall, reset.",
     );
 
   helpers
@@ -264,5 +265,64 @@ export function registerHelpers(program: Command): void {
           : "nothing installed\n",
       );
       process.exitCode = ExitCode.Ok;
+    });
+
+  helpers
+    .command("reset")
+    .description(
+      "Return this machine to the never-onboarded state: uninstall the helpers, revoke " +
+        "their macOS permission grants (Automation, Accessibility, and every other class " +
+        "keyed to the helper identities), and delete their local state including the " +
+        "reader's read grant. The next `things helpers install` + `grant` replays " +
+        "onboarding from zero. Idempotent: runs from any partial state — an " +
+        "already-uninstalled helper still gets its grants revoked — and a rerun is a " +
+        "no-op. The bundled things-proxy-* shortcuts cannot be removed by any tool and " +
+        "are reported as a manual step.",
+    )
+    .option("--yes", "skip the interactive confirmation (required when stdin is not a terminal)")
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .action(async (opts: { yes?: boolean; json?: boolean }) => {
+      const started = Date.now();
+      if (opts.yes !== true) {
+        if (opts.json === true || !process.stdin.isTTY) {
+          process.stderr.write(
+            "helpers reset revokes macOS permission grants and deletes helper state — pass --yes to confirm\n",
+          );
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+        const readline = await import("node:readline/promises");
+        const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+        const answer = await rl.question(
+          "This uninstalls the helpers, revokes their macOS permission grants, and deletes " +
+            "their local state (including the reader's read grant). Type 'reset' to continue: ",
+        );
+        rl.close();
+        if (answer.trim() !== "reset") {
+          process.stderr.write("not confirmed — nothing was changed\n");
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+      }
+      const result = resetHelpers();
+      if (opts.json === true) {
+        process.stdout.write(
+          `${JSON.stringify(okEnvelope("helpers-reset", result, envelopeMeta(started)))}\n`,
+        );
+      } else {
+        const lines: string[] = [];
+        lines.push(
+          result.removed.length > 0
+            ? `removed:\n${result.removed.map((p) => `  ${p}`).join("\n")}`
+            : "nothing was installed — grants and state legs still ran",
+        );
+        for (const t of result.tccResets) {
+          lines.push(`permissions: ${t.target} — ${t.ok ? "revoked" : t.detail}`);
+        }
+        for (const w of result.warnings) lines.push(`warning: ${w}`);
+        lines.push(`note: ${result.shortcutsNote}`);
+        process.stdout.write(`${lines.join("\n")}\n`);
+      }
+      process.exitCode = result.warnings.length > 0 ? ExitCode.Environment : ExitCode.Ok;
     });
 }

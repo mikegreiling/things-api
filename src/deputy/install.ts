@@ -38,6 +38,7 @@ import {
   EXPECTED_HELPERS_VERSION,
   helpersInstallDir,
   helpersInstalledBundlePath,
+  readerContainerDir,
   readerInstalledAppPath,
   readerSocketPath,
   readerTokenPath,
@@ -353,6 +354,84 @@ export function uninstallHelpers(env: NodeJS.ProcessEnv = process.env): HelpersU
     removed.push(installDir);
   }
   return { removed };
+}
+
+export interface HelpersResetResult {
+  /** Files/directories that existed and were removed (uninstall legs + state). */
+  removed: string[];
+  /** One row per macOS permission-store reset attempted. */
+  tccResets: { target: string; ok: boolean; detail: string }[];
+  warnings: string[];
+  /** The one leg no tool can perform — surfaced, never silently skipped. */
+  shortcutsNote: string;
+}
+
+function runToolDefault(bin: string, args: string[]): { ok: boolean; output: string } {
+  try {
+    const output = execFileSync(bin, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+    });
+    return { ok: true, output };
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    return { ok: false, output: `${e.stdout ?? ""}${e.stderr ?? ""}` || (e.message ?? "failed") };
+  }
+}
+
+/**
+ * Return the machine to the never-onboarded state: uninstall the helpers,
+ * revoke their macOS permission grants (`tccutil reset All` per bundle
+ * identity — Automation, Accessibility, and any other class keyed to them),
+ * and delete their local state — the deputy's tokens/logs and the reader's
+ * container, which holds the security-scoped bookmark (the read grant is a
+ * bookmark FILE, not a TCC row, so revocation is deletion).
+ *
+ * Every leg is independent and IDEMPOTENT: an already-uninstalled helper, an
+ * empty permission store, and absent state directories are all fine — each
+ * leg does whatever is still outstanding and reports honestly, so `reset`
+ * works from any partial state and a second run is an all-no-op. The bundled
+ * `things-proxy-*` shortcuts are the one thing no tool can remove (the
+ * `shortcuts` CLI has no delete); that leg is a reported manual step.
+ */
+export function resetHelpers(
+  env: NodeJS.ProcessEnv = process.env,
+  runTool: (bin: string, args: string[]) => { ok: boolean; output: string } = runToolDefault,
+): HelpersResetResult {
+  const warnings: string[] = [];
+  const removed = [...uninstallHelpers(env).removed];
+  const tccResets: HelpersResetResult["tccResets"] = [];
+  for (const target of [HELPERS_BUNDLE_ID, READER_LAUNCHD_LABEL]) {
+    const res = runTool("/usr/bin/tccutil", ["reset", "All", target]);
+    tccResets.push({
+      target,
+      ok: res.ok,
+      detail: res.output.trim() || (res.ok ? "reset" : "failed"),
+    });
+    if (!res.ok) {
+      warnings.push(`tccutil reset All ${target} failed: ${res.output.trim() || "unknown"}`);
+    }
+  }
+  for (const dir of [readerContainerDir(env), deputyStateDir(env)]) {
+    if (existsSync(dir)) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+        removed.push(dir);
+      } catch (err) {
+        warnings.push(
+          `could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+  return {
+    removed,
+    tccResets,
+    warnings,
+    shortcutsNote:
+      "the bundled things-proxy-* shortcuts cannot be removed by any tool — delete them by hand in Shortcuts.app if a truly fresh machine is wanted (`things setup` re-imports them)",
+  };
 }
 
 /** Restart the launchd-managed helpers (picks up a rebuilt installed bundle). */

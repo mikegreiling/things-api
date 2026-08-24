@@ -68,3 +68,9 @@ The new `hello` fields and the `prime-ax` verb are **additive** — `DEPUTY_PROT
 ## Where the copy lives
 
 The per-step progress lines and the closing report are **runtime output**, not description copy, so they may name mechanisms as operational fact ([surface-copy.md](surface-copy.md) §Scope). Under `--json` the progress lines move to stderr and stdout carries the `helpers-onboard` envelope alone: `steps[]` (leg, label, state, `alreadyGranted`, detail), `denied`, `pending`, `closing`.
+
+## Resetting — the ceremony's inverse (`things helpers reset`)
+
+The teardown that returns a machine to the never-onboarded state, for testing the ceremony or genuinely decommissioning: `uninstallHelpers` (launchd registrations + bundle) → `tccutil reset All` against **both** helper identities (`com.pixelcog.things-api-helper`, `com.pixelcog.things-reader` — revokes Automation, Accessibility, and every other TCC class keyed to them) → delete the reader's container (the read grant is a security-scoped bookmark FILE, so revocation is deletion) and the deputy's state dir (tokens, logs). Routing config is untouched.
+
+Idempotent by construction (the maintainer's pin, 2026-08-24): every leg is independent and best-effort — an already-uninstalled helper still gets its grants revoked, absent directories are fine, and a rerun is an all-no-op. Interactive confirmation (type `reset`) or `--yes`; `--json` requires `--yes`. Two honest limits: the bundled `things-proxy-*` shortcuts have no removable tool surface (Apple's `shortcuts` CLI has no delete) and are reported as a manual Shortcuts.app step, and one legacy path-keyed AppData row from the pre-bundle layout is invisible to `tccutil`'s bundle-id addressing (harmless). System Settings may show stale rows until reopened.

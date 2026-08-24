@@ -240,6 +240,7 @@ export {
   installHelpers,
   onboardHelpers,
   readerPlistPath,
+  resetHelpers,
   restartHelpers,
   uninstallHelpers,
 } from "./deputy/install.ts";
@@ -249,6 +250,7 @@ export type {
   HelpersInstallResult,
   HelpersOnboardResult,
   HelpersStatus,
+  HelpersResetResult,
   HelpersUninstallResult,
   OnboardChannel,
   OnboardDeps,
