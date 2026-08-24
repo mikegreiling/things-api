@@ -41,6 +41,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
 import { type HelpersMode, loadConfig } from "../config.ts";
+import {
+  READER_UNREACHABLE_REASON,
+  readerContainerAccessible,
+  readRendezvousToken,
+  rendezvousExists,
+} from "../host-access.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import { DeputyAsyncClient } from "./client.ts";
 import { emitHelpersNotice, resetHelpersNoticeForTests } from "./notice.ts";
@@ -96,6 +102,14 @@ type RoutingState = ActiveState | InactiveState;
 interface ReaderState {
   active: boolean;
   granted: boolean;
+  /**
+   * True when this host may not even LOOK at the rendezvous — the socket and
+   * token sit in the reader's App Sandbox container, and touching another
+   * app's container without durable file access is what raises the "access
+   * data from other apps" dialog (src/host-access.ts). Distinct from "not
+   * installed" and from "installed but silent": we did not, and must not, ask.
+   */
+  unreachable: boolean;
   hello: ReaderHello | null;
   token: string;
   bridge: DeputySyncBridge | null;
@@ -301,17 +315,39 @@ function activeState(env: NodeJS.ProcessEnv): ActiveState | null {
   return routing.active ? (state as ActiveState) : null;
 }
 
-function readerInactive(reason: string): ReaderState {
-  return { active: false, granted: false, hello: null, token: "", bridge: null, reason };
+function readerInactive(reason: string, unreachable = false): ReaderState {
+  return {
+    active: false,
+    granted: false,
+    unreachable,
+    hello: null,
+    token: "",
+    bridge: null,
+    reason,
+  };
 }
 
 function activateReader(env: NodeJS.ProcessEnv): ReaderState {
   const mode: HelpersMode = loadConfig(env).helpersMode;
   if (mode === "false") return readerInactive("disabled");
+  // BEFORE any rendezvous touch: may this host look at all? The socket and the
+  // token live inside the reader's sandbox container, so a stat from a host
+  // without durable file access is the "access data from other apps" consent
+  // class — a modal outside a ceremony, which Article I forbids. When the
+  // answer is no we report `unreachable` and route nothing; the read gate then
+  // refuses on the direct verdict rather than falling silently back.
+  if (!readerContainerAccessible({ env })) {
+    const installedHere = existsSync(readerInstalledAppPath(env));
+    notice(
+      mode === "true" || installedHere,
+      `${READER_UNREACHABLE_REASON} — database reads run DIRECT. \`things helpers status\` to inspect.`,
+    );
+    return readerInactive(READER_UNREACHABLE_REASON, true);
+  }
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
   const installed = halfInstalled(readerInstalledAppPath(env), socketPath, tokenPath);
-  if (!existsSync(socketPath) || !existsSync(tokenPath)) {
+  if (!rendezvousExists(socketPath) || !rendezvousExists(tokenPath)) {
     // Absence is silent under `auto`; under `true` the caller asserted routing.
     // An UNGRANTED reader is deliberately NOT noticed here — that is the
     // ceremony's own state, reported by `things helpers status` and doctor.
@@ -325,7 +361,16 @@ function activateReader(env: NodeJS.ProcessEnv): ReaderState {
       installed ? `reader not running (no socket at ${socketPath})` : "reader not installed",
     );
   }
-  const token = readFileSync(tokenPath, "utf8").trim();
+  // EPERM-safe: a denial on the token read is a state to report, never a crash
+  // — and never a second attempt, which could raise the dialog again.
+  const token = readRendezvousToken(tokenPath);
+  if (token === null) {
+    notice(
+      true,
+      `${READER_UNREACHABLE_REASON} (its access token could not be read) — database reads run DIRECT. \`things helpers status\` to inspect.`,
+    );
+    return readerInactive(READER_UNREACHABLE_REASON, true);
+  }
   const bridge = new DeputySyncBridge(socketPath);
   try {
     const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
@@ -342,6 +387,7 @@ function activateReader(env: NodeJS.ProcessEnv): ReaderState {
     return {
       active: true,
       granted: readerHello.granted === true,
+      unreachable: false,
       hello: readerHello,
       token,
       bridge,
@@ -362,6 +408,8 @@ function activateReader(env: NodeJS.ProcessEnv): ReaderState {
 export function readerRouting(env: NodeJS.ProcessEnv = process.env): {
   active: boolean;
   granted: boolean;
+  /** This host may not touch the rendezvous at all — see {@link ReaderState}. */
+  unreachable: boolean;
   hello: ReaderHello | null;
   reason: string | null;
 } {
@@ -442,7 +490,12 @@ export function helpersExpected(env: NodeJS.ProcessEnv = process.env): boolean {
   const mode = loadConfig(env).helpersMode;
   if (mode === "false") return false;
   if (mode === "true") return true;
-  return halfInstalled(readerInstalledAppPath(env), readerSocketPath(env), readerTokenPath(env));
+  // The installed bundle lives in our own state directory, so that half of the
+  // question is always answerable; the rendezvous half is only consulted when
+  // this host may touch the reader's container prompt-free.
+  if (existsSync(readerInstalledAppPath(env))) return true;
+  if (!readerContainerAccessible({ env })) return false;
+  return rendezvousExists(readerSocketPath(env)) && rendezvousExists(readerTokenPath(env));
 }
 
 /** Why the reader is not carrying reads (null when it is). */

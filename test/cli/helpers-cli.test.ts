@@ -67,6 +67,7 @@ beforeEach(() => {
     "THINGS_API_HELPERS",
     "THINGS_API_CONFIG_DIR",
     "THINGS_API_READER_DIR",
+    "HOME",
   ]) {
     savedEnv[key] = process.env[key];
   }
@@ -154,6 +155,27 @@ describe("things helpers status", () => {
     // A bundle that cannot answer cannot prove its grants either: dormant.
     expect(out).toContain("routing: auto — dormant: onboarding incomplete");
     expect(out).toContain("the deputy is not answering");
+  });
+
+  it("says UNREACHABLE — and never stats the container — from a host with no file access", async () => {
+    // The reader's socket and token live in its App Sandbox container. From a
+    // host holding neither Full Disk Access nor a witnessed app-data grant,
+    // even looking is the "access data from other apps" dialog, so status
+    // reports the honest third state and names the one way out. (The crash
+    // this replaces: readFileSync on the token, raw EPERM, stack trace.)
+    delete process.env["THINGS_API_READER_DIR"];
+    process.env["HOME"] = join(stateDir, "home");
+    mkdirSync(process.env["HOME"], { recursive: true });
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    expect(out).toContain(
+      "reader: unreachable — this host cannot verify or reach the reader without durable file access",
+    );
+    expect(out).toContain("next: grant Full Disk Access to ");
+    expect(out).toContain(
+      "run `things setup`, or use a host with access — reader routing is host-gated today; a fix is queued",
+    );
+    expect(process.exitCode).toBe(0);
   });
 });
 

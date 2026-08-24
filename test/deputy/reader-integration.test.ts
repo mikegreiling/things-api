@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DeputySyncBridge } from "../../src/deputy/bridge.ts";
 import { readerSocketPath, readerTokenPath } from "../../src/deputy/protocol.ts";
+import { readerContainerAccessible } from "../../src/host-access.ts";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const appBinary = join(
@@ -39,11 +40,16 @@ function hasSigningIdentity(): boolean {
 
 // The reader's home is fixed by its bundle id — no env override reaches the
 // sandbox. A production reader already serving there must not be disturbed.
-const productionReaderPresent = existsSync(readerSocketPath({}));
+// The stat is behind the same host-access guard the shipped probes use: the
+// container belongs to another app, so looking without durable file access is
+// the "access data from other apps" dialog, and a test run must never raise one.
+const containerReachable = readerContainerAccessible({});
+const productionReaderPresent = containerReachable && existsSync(readerSocketPath({}));
 
 const runnable =
   process.platform === "darwin" &&
   process.env["THINGS_DEPUTY_LIVE"] === "1" &&
+  containerReachable &&
   !productionReaderPresent &&
   hasSigningIdentity();
 

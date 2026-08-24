@@ -28,6 +28,8 @@ import {
   okEnvelope,
   onboardHelpers,
   type OnboardStep,
+  READER_UNREACHABLE_REASON,
+  readerUnreachableRemedy,
   restartHelpers,
   uninstallHelpers,
   type EnvelopeMeta,
@@ -52,7 +54,11 @@ function missingRequisites(status: HelpersStatus): string[] {
   } else if (hello.automation.things !== "granted") {
     missing.push(`automation → Things (${hello.automation.things})`);
   }
-  if (status.reader.installed && !status.reader.granted) missing.push("the reader's read grant");
+  if (status.reader.unreachable) {
+    missing.push("the reader cannot be reached from this host");
+  } else if (status.reader.installed && !status.reader.granted) {
+    missing.push("the reader's read grant");
+  }
   return missing;
 }
 
@@ -130,8 +136,21 @@ function renderStatus(status: HelpersStatus): string {
   }
   const reader = status.reader;
   lines.push(
-    `reader: ${reader.running ? (reader.granted ? "running, granted" : "running, NOT granted") : reader.installed ? reader.detail : "not installed"}`,
+    `reader: ${
+      reader.unreachable
+        ? `unreachable — ${READER_UNREACHABLE_REASON}`
+        : reader.running
+          ? reader.granted
+            ? "running, granted"
+            : "running, NOT granted"
+          : reader.installed
+            ? reader.detail
+            : "not installed"
+    }`,
   );
+  if (reader.unreachable) {
+    lines.push(`  next: ${readerUnreachableRemedy()}`);
+  }
   if (reader.running && !reader.granted) {
     lines.push(
       "  next: run `things helpers setup` and accept the panel (one time; the grant survives restarts, reboots, and rebuilds)",

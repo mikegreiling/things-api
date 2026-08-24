@@ -6,7 +6,7 @@
  * db-routing override rules. The REAL Swift broker is certified separately in
  * test/deputy/broker-integration.test.ts (darwin-gated).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -31,6 +31,7 @@ import {
   deputyFilesActive,
   deputyRoutesDb,
   deputyRouting,
+  helpersExpected,
   helpersRouting,
   readerRouting,
   resetDeputyRoutingForTests,
@@ -135,6 +136,7 @@ beforeEach(() => {
     THINGS_API_STATE_DIR: process.env["THINGS_API_STATE_DIR"],
     THINGS_API_READER_DIR: process.env["THINGS_API_READER_DIR"],
     THINGS_API_HELPERS: process.env["THINGS_API_HELPERS"],
+    HOME: process.env["HOME"],
     THINGS_API_CONFIG_DIR: process.env["THINGS_API_CONFIG_DIR"],
     THINGS_DB: process.env["THINGS_DB"],
   };
@@ -473,6 +475,82 @@ describe("reader transport (file verbs)", () => {
   it("neither half up: files inactive, everything direct", () => {
     expect(deputyFilesActive()).toBe(false);
     expect(deputyRoutesDb(undefined)).toBe(false);
+  });
+
+  it("the THINGS_API_READER_DIR override keeps mock readers working with no FDA at all", async () => {
+    // The override IS the guard's first yes: a caller-named directory is not
+    // an App Sandbox container, so no cross-app consent class is in play. This
+    // cell is what keeps every mock reader (unit suites, the guest lab bundle)
+    // running on a host with no grants whatsoever.
+    process.env["HOME"] = join(stateDir, "no-grants-home");
+    await startMockReader({ granted: true });
+    expect(readerRouting()).toMatchObject({ active: true, granted: true, unreachable: false });
+    expect(deputyFilesActive()).toBe(true);
+  });
+});
+
+/**
+ * The reader's rendezvous lives INSIDE its App Sandbox container, so a client
+ * `stat`/`open` on it is a cross-app container access — the "access data from
+ * other apps" consent class. On a host that holds no durable file access that
+ * access raises a modal outside any ceremony (Article I), and a denial then
+ * turns the token read into a raw EPERM. Neither may happen: the guard answers
+ * first, and every rendezvous read is EPERM-safe.
+ */
+describe("the reader rendezvous is host-gated (permissions doctrine, Article I)", () => {
+  /** No override, no FDA (an empty HOME has no TCC.db), no witnessed grant. */
+  function ungrantedHost(): string {
+    const home = join(stateDir, "home");
+    mkdirSync(home, { recursive: true });
+    delete process.env["THINGS_API_READER_DIR"];
+    process.env["HOME"] = home;
+    return home;
+  }
+
+  it("an unreachable rendezvous is reported as such — and is never even statted", () => {
+    // A populated rendezvous is placed at the REAL container path, and the
+    // guard must still refuse to look: any fs call that reached it would end
+    // in a handshake failure, which reads differently from `unreachable`.
+    ungrantedHost();
+    mkdirSync(dirname(readerSocketPath(process.env)), { recursive: true });
+    writeFileSync(readerSocketPath(process.env), "");
+    writeFileSync(readerTokenPath(process.env), TOKEN);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(readerRouting()).toMatchObject({
+      active: false,
+      granted: false,
+      unreachable: true,
+      reason: "this host cannot verify or reach the reader without durable file access",
+    });
+    expect(deputyFilesActive()).toBe(false);
+    expect(deputyRoutesDb(undefined)).toBe(false);
+    stderrSpy.mockRestore();
+  });
+
+  it("helpersExpected answers from our own state dir, never from the container", () => {
+    ungrantedHost();
+    // Nothing installed under `auto`: the answer is a plain no, reached
+    // without a single look at the rendezvous.
+    process.env["THINGS_API_HELPERS"] = "auto";
+    expect(helpersExpected()).toBe(false);
+    // The installed bundle lives in OUR state dir, which is always readable.
+    mkdirSync(dirname(readerInstalledAppPath(process.env)), { recursive: true });
+    writeFileSync(readerInstalledAppPath(process.env), "app");
+    expect(helpersExpected()).toBe(true);
+  });
+
+  it("an unreadable access token is a reported state, never a thrown EPERM", async () => {
+    // The guard passes (an overridden dir), but macOS still refuses the read —
+    // exactly what a denied app-data prompt leaves behind. `helpers status`
+    // used to die here with a raw EPERM out of readFileSync.
+    await startMockReader({ granted: true });
+    resetDeputyRoutingForTests();
+    chmodSync(readerTokenPath(process.env), 0o000);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(() => readerRouting()).not.toThrow();
+    expect(readerRouting()).toMatchObject({ active: false, unreachable: true });
+    chmodSync(readerTokenPath(process.env), 0o600);
+    stderrSpy.mockRestore();
   });
 });
 

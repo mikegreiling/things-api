@@ -79,15 +79,35 @@ export function readerInstalledAppPath(env: NodeJS.ProcessEnv = process.env): st
 /** launchd label (and bundle identifier) of the sandboxed reader. */
 export const READER_LAUNCHD_LABEL = "com.pixelcog.things-reader";
 
+/** Points {@link readerContainerDir} somewhere else (mock readers in tests/lab). */
+export const READER_DIR_ENV = "THINGS_API_READER_DIR";
+
+/**
+ * The override path when one is set, else null. A set override means the
+ * rendezvous is an ORDINARY directory the caller chose — no App Sandbox
+ * container, so none of the cross-app-container access rules apply to it.
+ */
+export function readerDirOverride(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicit = env[READER_DIR_ENV];
+  return explicit !== undefined && explicit !== "" ? explicit : null;
+}
+
 /**
  * The reader's state lives in its App Sandbox container home — the OS picks
  * the path from the bundle identifier. THINGS_API_READER_DIR overrides for
  * tests (a mock reader is just a socket; no sandbox involved).
+ *
+ * IMPORTANT: everything under this directory belongs to ANOTHER app's
+ * container, so a client-side `stat`/`open` on it is a cross-app container
+ * access — the `kTCCServiceSystemPolicyAppData` consent class. Under a host
+ * that lacks durable file access macOS raises a modal for it, which Article I
+ * forbids outside a ceremony. Guard every such touch with
+ * `readerContainerAccessible()` (src/host-access.ts).
  */
 export function readerContainerDir(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = env["THINGS_API_READER_DIR"];
-  if (explicit !== undefined && explicit !== "") return explicit;
-  return join(homedir(), "Library/Containers", READER_LAUNCHD_LABEL, "Data");
+  return (
+    readerDirOverride(env) ?? join(homedir(), "Library/Containers", READER_LAUNCHD_LABEL, "Data")
+  );
 }
 
 export function readerSocketPath(env: NodeJS.ProcessEnv = process.env): string {

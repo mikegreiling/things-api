@@ -20,6 +20,12 @@ import { fileURLToPath } from "node:url";
 
 import { loadConfig, saveConfigKey, type HelpersMode } from "../config.ts";
 import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
+import {
+  READER_UNREACHABLE_REASON,
+  readerContainerAccessible,
+  readRendezvousToken,
+  rendezvousExists,
+} from "../host-access.ts";
 import { createWizard, withDefaultInterrupts, type Wizard } from "../wizard.ts";
 import { EXPECTED_PROXIES } from "../write/availability.ts";
 import { DeputySyncBridge } from "./bridge.ts";
@@ -229,12 +235,30 @@ export interface HelpersInstallResult {
   warnings: string[];
 }
 
-/** One handshake against the reader's socket; null when it cannot complete. */
-function readerHelloProbe(env: NodeJS.ProcessEnv): ReaderHello | null {
+/**
+ * May this call touch the reader's rendezvous? Outside a ceremony the answer
+ * is the host-access guard: the socket and token sit in the reader's App
+ * Sandbox container, and a stat from a host without durable file access is the
+ * "access data from other apps" consent class — a modal Article I forbids
+ * outside `things setup` / `things helpers setup`. INSIDE a ceremony the touch
+ * is allowed (a consent context, with a human present), which is what
+ * `ceremony: true` asserts at the call site.
+ */
+function mayTouchRendezvous(env: NodeJS.ProcessEnv, ceremony: boolean): boolean {
+  return ceremony || readerContainerAccessible({ env });
+}
+
+/**
+ * One handshake against the reader's socket; null when it cannot complete —
+ * including when this host may not look (see {@link mayTouchRendezvous}).
+ */
+function readerHelloProbe(env: NodeJS.ProcessEnv, ceremony = false): ReaderHello | null {
+  if (!mayTouchRendezvous(env, ceremony)) return null;
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
-  if (!existsSync(socketPath) || !existsSync(tokenPath)) return null;
-  const token = readFileSync(tokenPath, "utf8").trim();
+  if (!rendezvousExists(socketPath) || !rendezvousExists(tokenPath)) return null;
+  const token = readRendezvousToken(tokenPath);
+  if (token === null) return null;
   const bridge = new DeputySyncBridge(socketPath);
   try {
     const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
@@ -310,7 +334,7 @@ export function installHelpers(
       // hedge — the reader knows, so ask it (bounded: it just booted).
       const deadline = Date.now() + 4000;
       while (Date.now() < deadline) {
-        const hello = readerHelloProbe(env);
+        const hello = readerHelloProbe(env, true);
         if (hello !== null) {
           readerGranted = hello.granted === true;
           break;
@@ -569,13 +593,16 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
     };
   }
   // The serving reader re-checks its bookmark per request — no restart needed.
+  // This poll DOES cross into the reader's sandbox container, which a ceremony
+  // may do (a human is here, and consent is the point); the reads are still
+  // EPERM-safe so a refusal reports honestly instead of crashing the ceremony.
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
   const deadline = Date.now() + 15_000;
   let detail = "the reader is not running — `things helpers status`";
   while (Date.now() < deadline) {
-    if (existsSync(socketPath) && existsSync(tokenPath)) {
-      const token = readFileSync(tokenPath, "utf8").trim();
+    const token = rendezvousExists(socketPath) ? readRendezvousToken(tokenPath) : null;
+    if (token !== null) {
       const bridge = new DeputySyncBridge(socketPath);
       try {
         const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
@@ -779,12 +806,20 @@ function openDeputyChannel(env: NodeJS.ProcessEnv, waitMs: number): OnboardChann
   };
 }
 
-/** Reader handshake + a `locate` inside the granted scope, on one connection. */
-function readerProbeDefault(env: NodeJS.ProcessEnv): { granted: boolean; locates: boolean } | null {
+/**
+ * Reader handshake + a `locate` inside the granted scope, on one connection.
+ * The ceremony's own survey, so it may cross into the reader's container.
+ */
+function readerProbeDefault(
+  env: NodeJS.ProcessEnv,
+  ceremony = true,
+): { granted: boolean; locates: boolean } | null {
+  if (!mayTouchRendezvous(env, ceremony)) return null;
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
-  if (!existsSync(socketPath) || !existsSync(tokenPath)) return null;
-  const token = readFileSync(tokenPath, "utf8").trim();
+  if (!rendezvousExists(socketPath) || !rendezvousExists(tokenPath)) return null;
+  const token = readRendezvousToken(tokenPath);
+  if (token === null) return null;
   const bridge = new DeputySyncBridge(socketPath);
   try {
     const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
@@ -1381,6 +1416,14 @@ export interface DeputyHalfStatus {
 export interface ReaderHalfStatus extends DeputyHalfStatus {
   installed: boolean;
   granted: boolean;
+  /**
+   * This host cannot verify or reach the reader without durable file access:
+   * its rendezvous lives inside the reader's App Sandbox container, and
+   * touching another app's container is the consent class Article I keeps
+   * inside ceremonies (src/host-access.ts). Nothing was asked, so `running`,
+   * `granted` and `hello` are simply unknown — never claimed as false facts.
+   */
+  unreachable: boolean;
 }
 
 export interface HelpersStatus {
@@ -1454,9 +1497,30 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
   let granted = false;
   let hello: DeputyHello | null = null;
   let detail = "not running (no socket)";
-  const socketPresent = existsSync(socketPath) && existsSync(tokenPath);
-  if (socketPresent) {
-    const token = readFileSync(tokenPath, "utf8").trim();
+  // `helpers status` is an ordinary command, not a ceremony: if this host
+  // cannot reach the reader's container prompt-free, it reports that and stops
+  // — it does NOT stat the rendezvous to find out (that stat is the dialog).
+  if (!readerContainerAccessible({ env })) {
+    return {
+      installed,
+      plistInstalled: existsSync(readerPlistPath()),
+      loaded,
+      running: false,
+      granted: false,
+      unreachable: true,
+      socketPath,
+      hungSocket: false,
+      hello: null,
+      signing: installed ? deputySigningInfo(readerExecPath(appPath)) : null,
+      detail: READER_UNREACHABLE_REASON,
+    };
+  }
+  const socketPresent = rendezvousExists(socketPath) && rendezvousExists(tokenPath);
+  const token = socketPresent ? readRendezvousToken(tokenPath) : null;
+  if (socketPresent && token === null) {
+    detail = `${READER_UNREACHABLE_REASON} (its access token could not be read)`;
+  }
+  if (token !== null) {
     const bridge = new DeputySyncBridge(socketPath);
     try {
       const res = bridge.request({ v: DEPUTY_PROTOCOL_VERSION, token, verb: "hello" }, 2000);
@@ -1480,8 +1544,9 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
     loaded,
     running,
     granted,
+    unreachable: socketPresent && token === null,
     socketPath,
-    hungSocket: socketPresent && !running,
+    hungSocket: socketPresent && token !== null && !running,
     hello,
     signing: installed ? deputySigningInfo(readerExecPath(appPath)) : null,
     detail,
