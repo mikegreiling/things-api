@@ -147,19 +147,19 @@ function buildHelpersReport(configMode: HelpersMode, deps: HelpersReportDeps = {
   const versionSkew = installedVersion !== null && installedVersion !== EXPECTED_HELPERS_VERSION;
   const hungSocket = status.deputy.hungSocket || status.reader.hungSocket;
   const remedy = versionSkew
-    ? "rebuild the bundle (`bash scripts/build-helpers.sh`) and rerun `things helpers install`"
+    ? "rebuild the bundle (`bash scripts/build-helpers.sh`) and rerun `things helpers setup`"
     : hungSocket
       ? "`things helpers restart` — a socket is present but no handshake comes back"
       : !status.bundleInstalled
         ? mode === "false"
           ? null
-          : "`things helpers install` to move macOS permission grants onto the helpers"
+          : "`things helpers setup` to move macOS permission grants onto the helpers"
         : status.reader.installed && status.reader.running && !status.reader.granted
-          ? "`things helpers grant` once, at the machine, to give the reader durable read access"
+          ? "`things helpers setup` once, at the machine, to give the reader durable read access"
           : status.bundleInstalled && !status.deputy.running
-            ? "`things helpers install` (re-registers both helpers with launchd and starts them)"
+            ? "`things helpers setup` (re-registers both helpers with launchd and starts them)"
             : outstandingConsent(status.deputy.hello)
-              ? "`things helpers grant` once, at the machine — one sitting settles every macOS permission the helpers still need"
+              ? "`things helpers setup` once, at the machine — one sitting settles every macOS permission the helpers still need"
               : null;
   const detail =
     mode === "false"

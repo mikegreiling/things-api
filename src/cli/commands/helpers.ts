@@ -16,8 +16,10 @@
 import type { Command } from "commander";
 
 import {
+  type HelpersInstallResult,
   type HelpersOnboardResult,
   type HelpersStatus,
+  type HelpersUninstallResult,
   helpersStatus,
   ExitCode,
   installHelpers,
@@ -25,7 +27,6 @@ import {
   okEnvelope,
   onboardHelpers,
   type OnboardStep,
-  resetHelpers,
   restartHelpers,
   uninstallHelpers,
   type EnvelopeMeta,
@@ -35,6 +36,25 @@ function envelopeMeta(started: number): EnvelopeMeta {
   return { dbVersion: null, fingerprint: "unknown", elapsedMs: Date.now() - started };
 }
 
+/**
+ * The grants `auto` routing requires before either half carries traffic — the
+ * same gate src/deputy/routing.ts applies, phrased for a human. Accessibility
+ * and System Events are deliberately absent: the UI vector is gated separately.
+ */
+function missingRequisites(status: HelpersStatus): string[] {
+  const missing: string[] = [];
+  const hello = status.deputy.hello;
+  if (hello === null) {
+    missing.push("the deputy is not answering");
+  } else if (hello.automation === undefined) {
+    missing.push("automation → Things (these helpers predate the permission handshake — rebuild)");
+  } else if (hello.automation.things !== "granted") {
+    missing.push(`automation → Things (${hello.automation.things})`);
+  }
+  if (status.reader.installed && !status.reader.granted) missing.push("the reader's read grant");
+  return missing;
+}
+
 /** One line describing what the configured mode means for this machine. */
 function routingLine(status: HelpersStatus): string {
   switch (status.mode) {
@@ -42,10 +62,15 @@ function routingLine(status: HelpersStatus): string {
       return "enabled — every process routes through the helpers, and reports when it cannot";
     case "false":
       return "disabled (things config set helpers-enabled auto)";
-    case "auto":
-      return status.bundleInstalled
-        ? "auto — the installed helpers are used while healthy; a failure is reported, never silent"
-        : "auto — nothing installed, so everything runs direct (things helpers install to change that)";
+    case "auto": {
+      if (!status.bundleInstalled) {
+        return "auto — nothing installed, so everything runs direct (things helpers setup to change that)";
+      }
+      const missing = missingRequisites(status);
+      return missing.length > 0
+        ? `auto — dormant: onboarding incomplete (missing: ${missing.join("; ")}) — things helpers setup`
+        : "auto — routing (onboarded): the installed helpers are used while healthy; a failure is reported, never silent";
+    }
   }
 }
 
@@ -62,7 +87,7 @@ function renderStatus(status: HelpersStatus): string {
   }
   lines.push(
     `  routing: ${routingLine(status)}`,
-    `  launchd: ${deputy.plistInstalled ? (deputy.loaded ? "installed + loaded" : "installed, NOT loaded") : "not installed (things helpers install)"}`,
+    `  launchd: ${deputy.plistInstalled ? (deputy.loaded ? "installed + loaded" : "installed, NOT loaded") : "not installed (things helpers setup)"}`,
     `  bundle: ${
       status.bundleInstalled
         ? `installed${status.installedVersion !== null ? ` (v${status.installedVersion})` : ""}`
@@ -89,7 +114,7 @@ function renderStatus(status: HelpersStatus): string {
       deputy.hello.automation?.things === "denied" ||
       deputy.hello.automation?.systemEvents === "denied"
     ) {
-      lines.push("  next: `things helpers grant` — one sitting settles every outstanding prompt");
+      lines.push("  next: `things helpers setup` — one sitting settles every outstanding prompt");
     }
   }
   if (deputy.signing !== null) {
@@ -108,7 +133,7 @@ function renderStatus(status: HelpersStatus): string {
   );
   if (reader.running && !reader.granted) {
     lines.push(
-      "  next: run `things helpers grant` and accept the panel (one time; the grant survives restarts, reboots, and rebuilds)",
+      "  next: run `things helpers setup` and accept the panel (one time; the grant survives restarts, reboots, and rebuilds)",
     );
   }
   if (reader.hungSocket) {
@@ -127,6 +152,32 @@ function renderOnboard(result: HelpersOnboardResult): string {
   return `\n${rows.join("\n")}\n\n${result.closing}\n`;
 }
 
+/** What the uninstall removed, plus the revocation legs when they ran. */
+function renderUninstall(result: HelpersUninstallResult): string {
+  const lines: string[] = [];
+  const revocation = result.revocation;
+  lines.push(
+    result.removed.length > 0
+      ? `removed:\n${result.removed.map((p) => `  ${p}`).join("\n")}`
+      : revocation !== null
+        ? "nothing was installed — the grant and state legs still ran"
+        : "nothing installed",
+  );
+  if (revocation !== null) {
+    if (revocation.registeredBundle !== null) {
+      lines.push(
+        `registered ${revocation.registeredBundle} with LaunchServices so the grants could be addressed (it stays registered — the file is really there)`,
+      );
+    }
+    for (const reset of revocation.tccResets) {
+      lines.push(`permissions: ${reset.target} — ${reset.detail}`);
+    }
+    lines.push(`note: ${revocation.shortcutsNote}`);
+  }
+  for (const warning of result.warnings) lines.push(`warning: ${warning}`);
+  return `${lines.join("\n")}\n`;
+}
+
 export function registerHelpers(program: Command): void {
   const helpers = program
     .command("helpers")
@@ -134,7 +185,7 @@ export function registerHelpers(program: Command): void {
       "Manage the optional helper pair that performs database reads and app automation " +
         "on the CLI's behalf, so macOS permission grants attach to stable helpers instead " +
         "of every terminal or agent runtime that runs `things`. Subcommands: status, " +
-        "install, grant, restart, uninstall, reset.",
+        "restart, setup, uninstall.",
     );
 
   helpers
@@ -159,66 +210,45 @@ export function registerHelpers(program: Command): void {
     });
 
   helpers
-    .command("install")
+    .command("setup")
     .description(
-      "Install the helper bundle: copy it to its stable location, register both helpers " +
-        "with launchd (starts now and on every login), and report signing + grant state. " +
-        "Under the default helpers-enabled auto, an installed and healthy helper is used from " +
-        "the next command on. Rerun after every rebuild.",
+      "Install (or update) the helper bundle and settle every macOS permission it needs, " +
+        "in one sitting: the bundle is copied to its stable location and registered with " +
+        "launchd, then a folder panel grants durable read access to the Things data folder, " +
+        "the two app-control prompts (Things and System Events) are raised, the " +
+        "Accessibility switch is offered, and the bundled shortcuts are counted. Steps " +
+        "already satisfied are detected and skipped, so rerunning is safe and asks nothing. " +
+        "Interactive: run this at the machine, not from an unattended session. Exits " +
+        "nonzero while any permission is still outstanding.",
     )
     .option(
       "--bundle <path>",
-      "path to a built Things API Helper.app (default: deputy/build/Things API Helper.app in this package)",
-    )
-    .action((opts: { bundle?: string }) => {
-      try {
-        const result = installHelpers(opts.bundle !== undefined ? { bundlePath: opts.bundle } : {});
-        process.stdout.write(
-          `installed ${result.bundlePath}\nlaunchd agent: ${result.plistPath}\n`,
-        );
-        if (result.readerInstalled) {
-          process.stdout.write(
-            result.readerGranted === true
-              ? "reader: granted — file reads ride the scoped reader\n"
-              : result.readerGranted === false
-                ? "reader: installed, no read access yet\n"
-                : "reader: installed, not answering yet — check `things helpers status`\n",
-          );
-        }
-        process.stdout.write(
-          "next: `things helpers grant` — one sitting settles every macOS permission the helpers need\n",
-        );
-        for (const warning of result.warnings) {
-          process.stderr.write(`warning: ${warning}\n`);
-        }
-        process.exitCode = ExitCode.Ok;
-      } catch (err) {
-        process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
-        process.exitCode = ExitCode.Environment;
-      }
-    });
-
-  helpers
-    .command("grant")
-    .description(
-      "One sitting that settles every macOS permission the helpers need: a folder panel " +
-        "for durable read access to the Things data folder, the two app-control prompts " +
-        "(Things and System Events), the Accessibility switch, and a check that the " +
-        "bundled shortcuts are installed. Already-granted steps are detected and skipped, " +
-        "so rerunning is safe and prompts nothing. Interactive: run this at the machine, " +
-        "not from an unattended session.",
+      "path to a built Things API Helper.app (default: the bundle shipped with this package)",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
-    .action((opts: { json?: boolean }) => {
+    .action((opts: { bundle?: string; json?: boolean }) => {
       const started = Date.now();
       // Under --json stdout belongs to the envelope alone; the human still
       // needs the instructions, so progress goes to stderr instead.
       const progress = (line: string): void => {
         (opts.json === true ? process.stderr : process.stdout).write(`${line}\n`);
       };
-      let result: HelpersOnboardResult;
+      let install: HelpersInstallResult;
       try {
-        result = onboardHelpers(loadConfig().helpersMode, process.env, { progress });
+        install = installHelpers(opts.bundle !== undefined ? { bundlePath: opts.bundle } : {});
+      } catch (err) {
+        process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exitCode = ExitCode.Environment;
+        return;
+      }
+      progress(`installed ${install.bundlePath}`);
+      progress(`launchd agent: ${install.plistPath}`);
+      for (const warning of install.warnings) {
+        process.stderr.write(`warning: ${warning}\n`);
+      }
+      let ceremony: HelpersOnboardResult;
+      try {
+        ceremony = onboardHelpers(loadConfig().helpersMode, process.env, { progress });
       } catch (err) {
         process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
         process.exitCode = ExitCode.Environment;
@@ -226,14 +256,16 @@ export function registerHelpers(program: Command): void {
       }
       if (opts.json === true) {
         process.stdout.write(
-          `${JSON.stringify(okEnvelope("helpers-onboard", result, envelopeMeta(started)))}\n`,
+          `${JSON.stringify(okEnvelope("helpers-setup", { install, ceremony }, envelopeMeta(started)))}\n`,
         );
       } else {
-        process.stdout.write(renderOnboard(result));
+        process.stdout.write(renderOnboard(ceremony));
       }
-      // A human-pace `pending` is not a failure — the ceremony resumes on the
-      // next run. Only a refusal earns a nonzero exit.
-      process.exitCode = result.denied ? ExitCode.Environment : ExitCode.Ok;
+      // A setup that ends with anything outstanding is an UNFINISHED setup —
+      // nonzero, so an agent driving this for an absent human sees it. Pending
+      // is still human-pace and resumable; the closing line says where to pick
+      // it up.
+      process.exitCode = ceremony.denied || ceremony.pending ? ExitCode.Environment : ExitCode.Ok;
     });
 
   helpers
@@ -254,39 +286,30 @@ export function registerHelpers(program: Command): void {
     .command("uninstall")
     .description(
       "Stop both helpers and remove their launchd registrations and the installed bundle. " +
-        "Local state (access token, logs, the reader's grant) is kept; routing config is " +
-        "untouched (commands fall back to direct execution).",
+        "Local state (access token, logs, the reader's grant) is kept and the macOS " +
+        "permission grants stay on record against the two helper identities, so a later " +
+        "setup picks them straight back up; routing config is untouched (commands fall " +
+        "back to direct execution). Pass --revoke to also revoke those grants and delete " +
+        "the local state, returning the machine to its never-onboarded condition.",
     )
-    .action(() => {
-      const result = uninstallHelpers();
-      process.stdout.write(
-        result.removed.length > 0
-          ? `removed:\n${result.removed.map((p) => `  ${p}`).join("\n")}\n`
-          : "nothing installed\n",
-      );
-      process.exitCode = ExitCode.Ok;
-    });
-
-  helpers
-    .command("reset")
-    .description(
-      "Return this machine to the never-onboarded state: uninstall the helpers, revoke " +
-        "their macOS permission grants (Automation, Accessibility, and every other class " +
-        "keyed to the helper identities), and delete their local state including the " +
-        "reader's read grant. The next `things helpers install` + `grant` replays " +
-        "onboarding from zero. Idempotent: runs from any partial state — an " +
-        "already-uninstalled helper still gets its grants revoked — and a rerun is a " +
-        "no-op. The bundled things-proxy-* shortcuts cannot be removed by any tool and " +
-        "are reported as a manual step.",
+    .option(
+      "--revoke",
+      "also revoke both helper identities' macOS permission grants and delete their local state, including the reader's read grant",
     )
-    .option("--yes", "skip the interactive confirmation (required when stdin is not a terminal)")
+    .option(
+      "--yes",
+      "skip the interactive confirmation for --revoke (required when stdin is not a terminal)",
+    )
     .option("--json", "emit versioned JSON envelope on stdout")
-    .action(async (opts: { yes?: boolean; json?: boolean }) => {
+    .action(async (opts: { revoke?: boolean; yes?: boolean; json?: boolean }) => {
       const started = Date.now();
-      if (opts.yes !== true) {
+      const revoke = opts.revoke === true;
+      // Only revocation is gated: a plain uninstall is reversible in one
+      // command, while revoking throws away grants a human had to sit through.
+      if (revoke && opts.yes !== true) {
         if (opts.json === true || !process.stdin.isTTY) {
           process.stderr.write(
-            "helpers reset revokes macOS permission grants and deletes helper state — pass --yes to confirm\n",
+            "helpers uninstall --revoke revokes macOS permission grants and deletes helper state — pass --yes to confirm\n",
           );
           process.exitCode = ExitCode.Usage;
           return;
@@ -295,33 +318,22 @@ export function registerHelpers(program: Command): void {
         const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
         const answer = await rl.question(
           "This uninstalls the helpers, revokes their macOS permission grants, and deletes " +
-            "their local state (including the reader's read grant). Type 'reset' to continue: ",
+            "their local state (including the reader's read grant). Type 'revoke' to continue: ",
         );
         rl.close();
-        if (answer.trim() !== "reset") {
+        if (answer.trim() !== "revoke") {
           process.stderr.write("not confirmed — nothing was changed\n");
           process.exitCode = ExitCode.Usage;
           return;
         }
       }
-      const result = resetHelpers();
+      const result = uninstallHelpers(revoke ? { revoke: true } : {});
       if (opts.json === true) {
         process.stdout.write(
-          `${JSON.stringify(okEnvelope("helpers-reset", result, envelopeMeta(started)))}\n`,
+          `${JSON.stringify(okEnvelope("helpers-uninstall", result, envelopeMeta(started)))}\n`,
         );
       } else {
-        const lines: string[] = [];
-        lines.push(
-          result.removed.length > 0
-            ? `removed:\n${result.removed.map((p) => `  ${p}`).join("\n")}`
-            : "nothing was installed — grants and state legs still ran",
-        );
-        for (const t of result.tccResets) {
-          lines.push(`permissions: ${t.target} — ${t.ok ? "revoked" : t.detail}`);
-        }
-        for (const w of result.warnings) lines.push(`warning: ${w}`);
-        lines.push(`note: ${result.shortcutsNote}`);
-        process.stdout.write(`${lines.join("\n")}\n`);
+        process.stdout.write(renderUninstall(result));
       }
       process.exitCode = result.warnings.length > 0 ? ExitCode.Environment : ExitCode.Ok;
     });

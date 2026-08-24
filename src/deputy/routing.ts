@@ -11,16 +11,25 @@
  *
  * The tri-state (docs/design/agent-daemon.md §3c):
  *
- * | mode    | helper absent            | installed, unhealthy | installed, healthy |
- * |---------|--------------------------|----------------------|--------------------|
- * | `auto`  | direct, SILENT           | direct, LOUD         | routed             |
- * | `true`  | direct, LOUD             | direct, LOUD         | routed             |
- * | `false` | direct, silent           | direct, silent       | direct, silent     |
+ * | mode    | helper absent  | installed, unhealthy | healthy, NOT onboarded | healthy + onboarded |
+ * |---------|----------------|----------------------|------------------------|---------------------|
+ * | `auto`  | direct, SILENT | direct, LOUD         | direct, LOUD           | routed              |
+ * | `true`  | direct, LOUD   | direct, LOUD         | routed                 | routed              |
+ * | `false` | direct, silent | direct, silent       | direct, silent         | direct, silent      |
  *
  * Under `auto` installation IS the intent signal, so absence is not a
  * degradation to report (a fresh machine must not nag) while an installed
  * helper that cannot serve is — silence there would hide the very consent churn
  * the helpers exist to end.
+ *
+ * There is no "installed but unpermissioned" routing state under `auto`: a
+ * deputy without an app-control grant for Things would move the consent dialog
+ * onto the helper, where nobody is watching for it, so it stays DORMANT until
+ * `things helpers setup` proves the grant. Each half is gated on its OWN
+ * requisite — writes on the deputy's `automation.things`, reads on the
+ * reader's bookmark grant — so a machine that finished half the ceremony gets
+ * the half it earned. Accessibility and System Events are NOT requisite: the
+ * UI vector is separately double-gated and refuses on its own.
  *
  * Fallback is decided at ACTIVATION, never mid-operation: if a helper is
  * expected but unreachable (or speaks a different protocol), the whole process
@@ -160,7 +169,7 @@ function reconcileVersions(
     // Not installed under launchd (foreground/test deputy) — nothing to restart.
     notice(
       true,
-      `installed helpers are v${first.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\` to align`,
+      `installed helpers are v${first.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers setup\` to align`,
     );
     return first;
   }
@@ -176,7 +185,7 @@ function reconcileVersions(
   const current = hello(bridge, token);
   notice(
     true,
-    `installed helpers are v${current.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\` to align`,
+    `installed helpers are v${current.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} (same protocol) — proceeding; rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers setup\` to align`,
   );
   return current;
 }
@@ -209,7 +218,7 @@ function activate(env: NodeJS.ProcessEnv): RoutingState {
           ? `installed but not running (no socket at ${socketPath})`
           : "not installed on this machine"
       } — running DIRECT, so TCC prompts attach to this process. \`things helpers ${
-        installed ? "status` to inspect" : "install` to change that"
+        installed ? "status` to inspect" : "setup` to change that"
       }.`,
     );
     return {
@@ -240,13 +249,36 @@ function activate(env: NodeJS.ProcessEnv): RoutingState {
     bridge.close();
     notice(
       true,
-      `the deputy speaks protocol ${helloResult.protocol}, this package speaks ${DEPUTY_PROTOCOL_VERSION} — running DIRECT. Rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\`.`,
+      `the deputy speaks protocol ${helloResult.protocol}, this package speaks ${DEPUTY_PROTOCOL_VERSION} — running DIRECT. Rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers setup\`.`,
     );
     return {
       active: false,
       reason: `protocol skew (deputy ${helloResult.protocol}, library ${DEPUTY_PROTOCOL_VERSION})`,
       hello: null,
     };
+  }
+  // The onboarding gate. Routing writes through a deputy that has no
+  // app-control grant for Things does not move the consent surface anywhere —
+  // it just relocates the dialog to the helper, where nobody is looking. Under
+  // `auto` (installation is the intent signal, not a promise) the deputy must
+  // PROVE the grant before it carries traffic; `true` is an explicit
+  // instruction to route regardless and stays loud on failure.
+  const automationThings = helloResult.automation?.things;
+  if (mode === "auto" && automationThings !== "granted") {
+    bridge.close();
+    // Absent fields = helpers predating the TCC handshake. Not provably
+    // onboarded is not onboarded: fail closed rather than guess.
+    const reason =
+      automationThings === undefined
+        ? `onboarding not provable (helpers v${helloResult.deputyVersion} predate the permission handshake)`
+        : `onboarding incomplete (automation → Things: ${automationThings})`;
+    notice(
+      true,
+      automationThings === undefined
+        ? `the installed helpers (v${helloResult.deputyVersion}) cannot report their macOS permission standing, so app automation runs DIRECT — rebuild with \`bash scripts/build-helpers.sh\`, then \`things helpers setup\`.`
+        : `the helpers have no app-control permission for Things (${automationThings}), so app automation runs DIRECT — \`things helpers setup\` settles it in one sitting.`,
+    );
+    return { active: false, reason, hello: null };
   }
   return {
     active: true,
@@ -287,7 +319,7 @@ function activateReader(env: NodeJS.ProcessEnv): ReaderState {
       mode === "true" || installed,
       installed
         ? `the reader is installed but not running (no socket at ${socketPath}) — database reads run DIRECT. \`things helpers status\` to inspect.`
-        : "the reader is not installed on this machine — database reads run DIRECT. `things helpers install` to change that.",
+        : "the reader is not installed on this machine — database reads run DIRECT. `things helpers setup` to change that.",
     );
     return readerInactive(
       installed ? `reader not running (no socket at ${socketPath})` : "reader not installed",
@@ -303,7 +335,7 @@ function activateReader(env: NodeJS.ProcessEnv): ReaderState {
       bridge.close();
       notice(
         true,
-        `the reader speaks protocol ${readerHello.protocol}, this package speaks ${DEPUTY_PROTOCOL_VERSION} — database reads run DIRECT. Rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers install\`.`,
+        `the reader speaks protocol ${readerHello.protocol}, this package speaks ${DEPUTY_PROTOCOL_VERSION} — database reads run DIRECT. Rebuild with \`bash scripts/build-helpers.sh\` + \`things helpers setup\`.`,
       );
       return readerInactive(`protocol skew (reader ${readerHello.protocol})`);
     }
@@ -385,7 +417,7 @@ export function helpersRouting(env: NodeJS.ProcessEnv = process.env): HelpersRou
     readerReason: files
       ? null
       : reader.active && !reader.granted
-        ? "reader running but NOT granted (things helpers grant)"
+        ? "reader running but NOT granted (things helpers setup)"
         : reader.reason,
   };
 }

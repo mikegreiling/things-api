@@ -101,7 +101,7 @@ export function computeHelpersNotice(options: HelpersNoticeOptions = {}): Helper
       kind: "version-skew",
       text:
         `helpers v${version} installed, this package expects v${EXPECTED_HELPERS_VERSION} — ` +
-        "rebuild with `bash scripts/build-helpers.sh` and rerun `things helpers install` " +
+        "rebuild with `bash scripts/build-helpers.sh` and rerun `things helpers setup` " +
         "(THINGS_API_NO_HELPERS_CHECK=1 silences this)",
     };
   }
@@ -119,7 +119,7 @@ export function computeHelpersNotice(options: HelpersNoticeOptions = {}): Helper
     kind: "absent-hint",
     text:
       "database reads and app automation run in THIS process, so macOS permission grants " +
-      "follow whichever terminal or agent runtime started it — `things helpers install` moves " +
+      "follow whichever terminal or agent runtime started it — `things helpers setup` moves " +
       "them onto two stable helpers (THINGS_API_NO_HELPERS_CHECK=1 silences this)",
   };
 }

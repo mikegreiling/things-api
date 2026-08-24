@@ -60,7 +60,7 @@ describe("computeHelpersNotice — version skew", () => {
     expect(notice?.kind).toBe("version-skew");
     expect(notice?.text).toContain("v0.9.0");
     expect(notice?.text).toContain(`v${EXPECTED_HELPERS_VERSION}`);
-    expect(notice?.text).toContain("things helpers install");
+    expect(notice?.text).toContain("things helpers setup");
   });
 
   it("says nothing when the installed bundle matches", () => {
@@ -92,7 +92,7 @@ describe("computeHelpersNotice — absence hint", () => {
   it("introduces the helpers on a machine that has never answered the question", () => {
     const notice = computeHelpersNotice({ env: env(), platform: "darwin" });
     expect(notice?.kind).toBe("absent-hint");
-    expect(notice?.text).toContain("things helpers install");
+    expect(notice?.text).toContain("things helpers setup");
     expect(notice?.text).toContain("THINGS_API_NO_HELPERS_CHECK=1");
   });
 
