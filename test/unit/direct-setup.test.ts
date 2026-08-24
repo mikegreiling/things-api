@@ -5,14 +5,14 @@
  * link, the Apple Event, the container open, the install sheets — is stubbed.
  * No cell in this file may reach the host's real consent state.
  */
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { directSetup, surveySetup, type DirectSetupDeps } from "../../src/direct-setup.ts";
 import { resetCapabilityForTests } from "../../src/capability.ts";
-import { createWizard } from "../../src/wizard.ts";
+import { CeremonyStopped, createWizard } from "../../src/wizard.ts";
 
 /**
  * A ceremony wired entirely to stubs. Defaults describe the hardest machine:
@@ -35,12 +35,6 @@ function ceremony(over: Partial<DirectSetupDeps> = {}): DirectSetupDeps {
     progress: (line) => lines.push(line),
     openUrl: () => {},
     openShortcut: () => {},
-    sleep: () => {},
-    elapsed: (() => {
-      // A clock that runs out immediately, so the bounded wait never blocks.
-      let t = 0;
-      return () => (t += 1_000_000);
-    })(),
     fdaProbe: () => {
       throw Object.assign(new Error("EPERM"), { code: "EPERM" });
     },
@@ -73,12 +67,27 @@ function progressOf(deps: DirectSetupDeps): string[] {
 }
 
 describe("the upfront banner (Article V, strict mode)", () => {
-  it("counts the dialogs BEFORE raising any of them", () => {
+  it("counts the dialogs BEFORE raising any of them, and names them flatly", () => {
     const lines = progressOf(ceremony());
     const banner = lines.find((l) => l.startsWith("about to raise"));
     expect(banner).toBeDefined();
     expect(banner).toContain("about to raise 3 dialogs");
-    expect(banner).toContain("someone must be at the screen");
+    // The DEFAULT path's dialogs, named without nesting: the session data
+    // dialog, app control, and the install sheets.
+    expect(banner).toContain("data access for Ghostty");
+    expect(banner).toContain("app control of Things");
+    expect(banner).toContain("Someone must be at the screen.");
+  });
+
+  it("counts two when the shortcuts are already installed", () => {
+    const lines = progressOf(
+      ceremony({
+        shortcutProxies: () => ({ present: ["x"], missing: [], detail: "all installed" }),
+      }),
+    );
+    const banner = lines.find((l) => l.startsWith("about to raise"));
+    expect(banner).toContain("about to raise 2 dialogs");
+    expect(banner).toContain("data access for Ghostty and app control of Things");
   });
 
   it("says so plainly when a settled machine has nothing to raise", () => {
@@ -98,6 +107,29 @@ describe("the upfront banner (Article V, strict mode)", () => {
   });
 });
 
+/** A wizard that answers the read-leg choice with `key`, recording what it saw. */
+function chooser(key: string): {
+  offered: string[];
+  explained: string[];
+  wizard: NonNullable<DirectSetupDeps["wizard"]>;
+} {
+  const offered: string[] = [];
+  const explained: string[] = [];
+  return {
+    offered,
+    explained,
+    wizard: {
+      interactive: true,
+      explain: (lines: string[]) => explained.push(lines.join(" ")),
+      ask: (_question: string, fallback: boolean) => fallback,
+      choose: (lines: string[]) => {
+        offered.push(lines.join("\n"));
+        return key;
+      },
+    },
+  };
+}
+
 describe("leg (a) — read access", () => {
   it("is skipped, prompt-free, when Full Disk Access is already held", () => {
     const result = directSetup(ceremony({ fdaProbe: () => {} }));
@@ -114,27 +146,117 @@ describe("leg (a) — read access", () => {
     });
   });
 
-  it("guides to Full Disk Access first, and polls for it", () => {
-    const opened: string[] = [];
-    const lines = progressOf(ceremony({ openUrl: (url) => opened.push(url) }));
-    expect(lines.some((l) => l.includes("Privacy & Security ▸ Full Disk Access"))).toBe(true);
-    expect(opened.some((u) => u.includes("Privacy_AllFiles"))).toBe(true);
+  it("a settled leg is never offered the choice", () => {
+    const { offered, wizard } = chooser("");
+    directSetup(ceremony({ wizard, fdaProbe: () => {} }));
+    expect(offered).toEqual([]);
   });
 
-  it("witnesses the session grant when the deliberate container open succeeds", () => {
-    const result = directSetup(ceremony({ openContainer: () => {} }));
+  it("offers exactly two ways, with the session grant on Enter", () => {
+    const { offered, wizard } = chooser("");
+    directSetup(ceremony({ wizard, openContainer: () => {} }));
+    expect(offered).toHaveLength(1);
+    const copy = offered[0] ?? "";
+    expect(copy).toContain("Next: read access to your Things data — two ways:");
+    expect(copy).toContain("Enter  allow this session only");
+    expect(copy).toContain("access ends when Ghostty quits");
+    expect(copy).toContain("f      Full Disk Access");
+    expect(copy).toContain("Ghostty must quit and reopen");
+  });
+
+  it("Enter provokes the session dialog now, and witnesses the grant it lands", () => {
+    const { wizard } = chooser("");
+    let opens = 0;
+    const deps = ceremony({ wizard, openContainer: () => (opens += 1) });
+    const result = directSetup(deps);
     const step = result.steps.find((s) => s.leg === "read-access");
+    expect(opens, "the one deliberate container open").toBe(1);
     expect(step?.state).toBe("granted");
+    // The marker is what makes the grant usable by the next invocation.
+    expect(existsSync(join(deps.env?.["THINGS_API_STATE_DIR"] ?? "", "session-grant.json"))).toBe(
+      true,
+    );
     // The copy must be honest about how long it lasts.
     expect(step?.detail).toContain("until it quits");
-    expect(step?.detail).toContain("Full Disk Access");
   });
 
-  it("stays pending — never claims a grant — when the open still fails", () => {
-    const result = directSetup(ceremony());
+  it("`f` deep-links Settings, waits for NOTHING, and goes pending on the relaunch", () => {
+    const { wizard } = chooser("f");
+    const opened: string[] = [];
+    const result = directSetup(
+      ceremony({
+        wizard,
+        openUrl: (url) => opened.push(url),
+        // Choosing Full Disk Access must not provoke the app-data modal too.
+        openContainer: forbidden("open the container"),
+      }),
+    );
+    const step = result.steps.find((s) => s.leg === "read-access");
+    expect(opened.some((u) => u.includes("Privacy_AllFiles"))).toBe(true);
+    expect(step?.state).toBe("pending");
+    expect(step?.detail).toContain("takes effect after Ghostty relaunches");
+    expect(step?.detail).toContain("quit and reopen Ghostty");
+  });
+
+  it("`f` prints the three steps, and says the rest of the setup continues", () => {
+    const { wizard } = chooser("f");
+    const lines = progressOf(ceremony({ wizard, openContainer: forbidden("open the container") }));
+    const read = lines.filter((l) => l.startsWith("read access:"));
+    expect(read[0]).toContain("Privacy & Security ▸ Full Disk Access");
+    expect(read[1]).toContain('"Quit & Reopen"');
+    expect(read[2]).toContain("run `things setup` again");
+    expect(read.join("\n")).toContain("the rest of the setup continues now");
+    // No poll: the FDA probe is never re-read after the deep link, because a
+    // running process cannot see the switch flip.
+    expect(read.join("\n")).not.toMatch(/waiting|watch/i);
+  });
+
+  it("`f` still runs the remaining legs — those grants land in THIS session", () => {
+    const { wizard } = chooser("f");
+    let sent = 0;
+    const sheets: string[] = [];
+    const result = directSetup(
+      ceremony({
+        wizard,
+        openContainer: forbidden("open the container"),
+        sendAutomationProbe: () => (sent += 1),
+        openShortcut: (f) => sheets.push(f),
+      }),
+    );
+    expect(sent, "app control is still asked for").toBe(1);
+    expect(sheets.length, "the install sheets still open").toBeGreaterThan(0);
+    expect(result.steps.map((s) => s.leg)).toEqual(["read-access", "app-control", "shortcuts"]);
+  });
+
+  it("strict mode provokes the session dialog directly — no choice, no poll", () => {
+    let opens = 0;
+    const lines: string[] = [];
+    // The REAL wizard, told there is no terminal.
+    const result = directSetup(
+      ceremony({
+        wizard: createWizard({ interactive: false, say: (l) => lines.push(l) }),
+        openContainer: () => (opens += 1),
+      }),
+    );
+    expect(lines, "strict mode prints no choice").toEqual([]);
+    expect(opens).toBe(1);
+    expect(result.steps.find((s) => s.leg === "read-access")?.state).toBe("granted");
+  });
+
+  it("stays pending — never claims a grant — when the dialog goes unanswered", () => {
+    const result = directSetup(
+      ceremony({
+        openContainer: () => {
+          throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+        },
+      }),
+    );
     const step = result.steps.find((s) => s.leg === "read-access");
     expect(step?.state).toBe("pending");
+    // One line, naming the Full Disk Access alternative and the helpers.
+    expect(step?.detail).toContain("Full Disk Access");
     expect(step?.detail).toContain("things helpers setup");
+    expect(step?.detail.split("\n")).toHaveLength(1);
   });
 });
 
@@ -252,25 +374,12 @@ describe("surveySetup is prompt-free by construction", () => {
  * as the helpers ceremony: one explainer per dialog that is actually coming,
  * a gate the human clears at their own pace, and nothing at all off a TTY.
  */
-/** A wizard that records every explainer instead of printing one. */
-function watcher(): { explained: string[]; wizard: NonNullable<DirectSetupDeps["wizard"]> } {
-  const explained: string[] = [];
-  return {
-    explained,
-    wizard: {
-      interactive: true,
-      explain: (lines: string[]) => explained.push(lines.join(" ")),
-      ask: (_question: string, fallback: boolean) => fallback,
-    },
-  };
-}
-
 describe("the TTY wizard", () => {
   it("explains each dialog in the words macOS will use, naming the host app", () => {
-    const { explained, wizard } = watcher();
-    directSetup(ceremony({ wizard }));
-    const all = explained.join("\n");
-    expect(all).toContain("Privacy & Security ▸ Full Disk Access");
+    const { explained, offered, wizard } = chooser("");
+    directSetup(ceremony({ wizard, openContainer: () => {} }));
+    const all = [...offered, ...explained].join("\n");
+    expect(all).toContain("Full Disk Access");
     expect(all).toContain('"Ghostty" wants access to control "Things"');
     expect(all).toContain("click Allow");
     expect(all).toContain('click "Add Shortcut"');
@@ -279,7 +388,7 @@ describe("the TTY wizard", () => {
   });
 
   it("explains only the legs that are actually about to raise something", () => {
-    const { explained, wizard } = watcher();
+    const { explained, offered, wizard } = chooser("");
     directSetup(
       ceremony({
         wizard,
@@ -288,6 +397,7 @@ describe("the TTY wizard", () => {
         automationAuthValue: () => 2,
       }),
     );
+    expect(offered).toEqual([]);
     expect(explained).toHaveLength(1);
     expect(explained[0]).toContain("the bundled shortcuts");
   });
@@ -311,5 +421,70 @@ describe("the TTY wizard", () => {
     );
     expect(said).toEqual([]);
     expect(reads).toBe(0);
+  });
+
+  it("stops the whole ceremony when the human stops at a gate", () => {
+    // Ctrl-D at the read-leg choice: no further leg may run.
+    let sent = 0;
+    expect(() =>
+      directSetup(
+        ceremony({
+          wizard: createWizard({ interactive: true, say: () => {}, readLine: () => null }),
+          sendAutomationProbe: () => (sent += 1),
+        }),
+      ),
+    ).toThrow(CeremonyStopped);
+    expect(sent).toBe(0);
+  });
+});
+
+/**
+ * Nested parentheticals were how the banner came to read "…the Full Disk Access
+ * switch (or a folder-access dialog), the app-control dialog…". Ceremony copy
+ * states one thing per clause; a parenthesis inside a parenthesis is the tell.
+ */
+function nestedParens(text: string): boolean {
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === "(") {
+      depth += 1;
+      if (depth > 1) return true;
+    } else if (ch === ")") depth = Math.max(0, depth - 1);
+  }
+  return false;
+}
+
+describe("ceremony copy is flat — no nested parentheticals", () => {
+  it("holds for every line the default path prints", () => {
+    const { explained, offered, wizard } = chooser("");
+    const printed: string[] = [];
+    directSetup({
+      ...ceremony({ wizard, openContainer: () => {} }),
+      progress: (line) => printed.push(line),
+    });
+    for (const line of [...printed, ...offered, ...explained]) {
+      expect(nestedParens(line), `nested parens in: ${line}`).toBe(false);
+    }
+  });
+
+  it("holds for the Full Disk Access branch and for a fully settled machine", () => {
+    const { explained, offered, wizard } = chooser("f");
+    const printed: string[] = [];
+    directSetup({
+      ...ceremony({ wizard, openContainer: forbidden("open the container") }),
+      progress: (line) => printed.push(line),
+    });
+    const settled: string[] = [];
+    directSetup({
+      ...ceremony({
+        fdaProbe: () => {},
+        automationAuthValue: () => 2,
+        shortcutProxies: () => ({ present: ["x"], missing: [], detail: "all installed" }),
+      }),
+      progress: (line) => settled.push(line),
+    });
+    for (const line of [...printed, ...offered, ...explained, ...settled]) {
+      expect(nestedParens(line), `nested parens in: ${line}`).toBe(false);
+    }
   });
 });

@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadConfig, saveConfigKey, type HelpersMode } from "../config.ts";
 import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
-import { createWizard, type Wizard } from "../wizard.ts";
+import { createWizard, withDefaultInterrupts, type Wizard } from "../wizard.ts";
 import { EXPECTED_PROXIES } from "../write/availability.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import {
@@ -1182,11 +1182,24 @@ const GUI_TIER_QUESTION =
  *
  * Throws when the helpers are not installed or the deputy does not answer;
  * every other outcome is reported per leg. See docs/design/helpers-onboarding.md.
+ *
+ * Runs under `withDefaultInterrupts` for its whole synchronous span, so Ctrl-C
+ * stops it at a gate AND inside the Accessibility wait (../wizard.ts, "Why a
+ * ceremony runs with the DEFAULT signal disposition"). Throws `CeremonyStopped`
+ * when the human stops at a gate.
  */
 export function onboardHelpers(
   options: OnboardOptions,
   env: NodeJS.ProcessEnv = process.env,
   deps: OnboardDeps = {},
+): HelpersOnboardResult {
+  return withDefaultInterrupts(() => runOnboardCeremony(options, env, deps));
+}
+
+function runOnboardCeremony(
+  options: OnboardOptions,
+  env: NodeJS.ProcessEnv,
+  deps: OnboardDeps,
 ): HelpersOnboardResult {
   const mode = options.mode;
   const progress =

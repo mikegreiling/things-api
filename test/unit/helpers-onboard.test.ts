@@ -582,6 +582,7 @@ describe("the GUI tier", () => {
           asked.push(question);
           return true;
         },
+        choose: () => "",
       },
     });
     expect(asked[0]).toContain("driven through the app's own window");
@@ -600,6 +601,7 @@ describe("the GUI tier", () => {
           asked += 1;
           return fallback;
         },
+        choose: () => "",
       },
     });
     // The wizard is consulted, but a non-interactive one answers with the
@@ -626,6 +628,7 @@ describe("the TTY wizard", () => {
           interactive: true,
           explain: (lines) => explained.push(lines.join(" ")),
           ask: (_q, fallback) => fallback,
+          choose: () => "",
         },
       },
     );
@@ -642,6 +645,7 @@ describe("the TTY wizard", () => {
         interactive: true,
         explain: (lines) => explained.push(lines.join(" ")),
         ask: (_q, fallback) => fallback,
+        choose: () => "",
       },
       readerProbe: () => ({ granted: false, locates: false }),
     });

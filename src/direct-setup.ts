@@ -10,13 +10,24 @@
  *
  * The legs, in order:
  *
- *  a. READ ACCESS. Full Disk Access for the host app is the durable answer and
- *     the one this leg guides toward: it survives quits, reboots and updates.
- *     When it is absent the ceremony offers the sub-FDA alternative — one
- *     deliberate container open, which raises the "would like to access data
- *     from other apps" modal — and, if that open then succeeds, witnesses the
- *     grant (./session-grant.ts). That grant lasts only as long as the host app
- *     stays open, and the copy says so rather than implying otherwise.
+ *  a. READ ACCESS. An explicit two-way choice, because the two answers differ in
+ *     kind rather than in quality. The DEFAULT — a bare Enter — is the session
+ *     grant: one deliberate container open, which raises the "would like to
+ *     access data from other apps" modal, and if the open then succeeds the
+ *     grant is witnessed (./session-grant.ts). It lasts only while the host app
+ *     stays open, and the copy says so. Typing `f` takes Full Disk Access
+ *     instead: durable, but it hands the whole disk to a general-purpose host
+ *     app, so it is offered, never assumed.
+ *
+ *     MEASURED: FDA does NOT take effect for a running app. macOS says so in
+ *     the Settings sheet itself — "…will not have full disk access until it is
+ *     quit", with Later / Quit & Reopen — and the responsible process keeps its
+ *     old answer for its whole life, so every child it spawns, including a
+ *     rerun of `things` in the same window, still sees no FDA. There is
+ *     therefore nothing for this leg to wait for: it deep-links Settings, says
+ *     what to flip and that the app must relaunch, leaves the leg PENDING, and
+ *     lets the remaining legs run — Automation and the shortcuts land fine in
+ *     this session, so the rerun after the relaunch has only this leg left.
  *  b. APP CONTROL. When macOS has no Automation record for the host app, the
  *     only way to mint one is to send a real Apple Event, which is what raises
  *     the dialog. Inside a ceremony that is exactly right. A recorded refusal
@@ -47,7 +58,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  fdaGranted,
   hostApp,
   hostDisplayName,
   readCapability,
@@ -58,7 +68,7 @@ import {
 import { loadConfig } from "./config.ts";
 import { locateThingsDb } from "./db/locate.ts";
 import { clearSessionGrant, witnessSessionGrant } from "./session-grant.ts";
-import { createWizard, type Wizard } from "./wizard.ts";
+import { createWizard, withDefaultInterrupts, type Wizard } from "./wizard.ts";
 import { readShortcutProxies, type ShortcutsState } from "./write/availability.ts";
 
 /** Deep link to the Full Disk Access pane. */
@@ -70,9 +80,10 @@ const AUTOMATION_SETTINGS_URL =
 /** Package root — one level above src/ AND dist/, so both layouts resolve. */
 const SHORTCUTS_DIR = fileURLToPath(new URL("../shortcuts", import.meta.url));
 
-const FDA_WAIT_MS = 120_000;
-const FDA_POLL_MS = 1000;
 const AUTOMATION_TIMEOUT_MS = 60_000;
+
+/** The key that picks Full Disk Access over the session grant at the read leg. */
+const FDA_CHOICE_KEY = "f";
 
 export type SetupLeg = "read-access" | "app-control" | "shortcuts";
 
@@ -121,16 +132,7 @@ export interface DirectSetupDeps extends CapabilityDeps {
   openShortcut?: (file: string) => void;
   /** The installed proxy-shortcut census (availability.ts). */
   shortcutProxies?: () => ShortcutsState;
-  sleep?: (ms: number) => void;
-  /** Millisecond clock for the bounded waits (distinct from the marker's wall clock). */
-  elapsed?: () => number;
-  fdaWaitMs?: number;
-  fdaPollMs?: number;
   automationTimeoutMs?: number;
-}
-
-function syncSleep(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function openUrlBestEffort(url: string): void {
@@ -164,7 +166,110 @@ function sendAutomationProbeDefault(timeoutMs: number): void {
 
 // ── Leg (a): read access ─────────────────────────────────────────────────────
 
-function readAccessLeg(capability: ReadCapability, deps: DirectSetupDeps): SetupStep {
+/**
+ * The two ways to read, offered as a choice rather than a ranking. Enter takes
+ * the session grant; `f` takes Full Disk Access, which is the wider grant and
+ * the one that costs the human a relaunch.
+ */
+function readAccessChoice(hostName: string): string[] {
+  return [
+    "Next: read access to your Things data — two ways:",
+    `  Enter  allow this session only: a dialog asks now; access ends when ${hostName} quits`,
+    `  f      Full Disk Access: durable, but grants ${hostName} broad file access —`,
+    `         flip it in System Settings, then ${hostName} must quit and reopen`,
+  ];
+}
+
+/**
+ * The `f` branch. Nothing here waits: FDA reaches a process only through a
+ * relaunch, so the leg hands over the three steps and goes pending. The
+ * remaining legs still run — their grants land in THIS session — so the rerun
+ * after the relaunch has only this one left.
+ */
+function fdaBranch(
+  base: { leg: "read-access"; label: string },
+  hostName: string,
+  deps: DirectSetupDeps,
+): SetupStep {
+  const progress = deps.progress ?? (() => {});
+  (deps.openUrl ?? openUrlBestEffort)(FDA_SETTINGS_URL);
+  progress(
+    `read access: 1. turn on ${hostName} under System Settings ▸ Privacy & Security ▸ Full Disk Access`,
+  );
+  progress(
+    `read access: 2. click "Quit & Reopen" when macOS offers it, or quit ${hostName} yourself`,
+  );
+  progress("read access: 3. run `things setup` again in the new window to confirm it");
+  progress("read access: the rest of the setup continues now — those grants land in this session");
+  return {
+    ...base,
+    state: "pending",
+    alreadySatisfied: false,
+    detail:
+      `Full Disk Access takes effect after ${hostName} relaunches — turn it on, quit and ` +
+      `reopen ${hostName}, then rerun \`things setup\``,
+  };
+}
+
+/**
+ * The default branch: provoke the app-data modal on purpose and record the
+ * grant only if the open then actually succeeded. The wait is the modal's own —
+ * macOS holds the open until someone answers it, which is the premise of a
+ * ceremony.
+ */
+function sessionGrantBranch(
+  base: { leg: "read-access"; label: string },
+  hostName: string,
+  deps: DirectSetupDeps,
+): SetupStep {
+  const progress = deps.progress ?? (() => {});
+  progress(
+    `read access: asking now — a dialog asks whether ${hostName} may access data from ` +
+      "other apps; click Allow",
+  );
+  const host = hostApp(deps);
+  try {
+    (deps.openContainer ?? openContainerDefault)();
+  } catch (err) {
+    clearSessionGrant(deps.env ?? process.env);
+    const why = err instanceof Error ? err.message : String(err);
+    progress(`read access: still no access — ${why}`);
+    return {
+      ...base,
+      state: "pending",
+      alreadySatisfied: false,
+      detail:
+        "no read access yet — rerun and answer the dialog, choose Full Disk Access at the " +
+        "read step instead, or run `things helpers setup` to let a helper hold the grant",
+    };
+  }
+  const witnessed = witnessSessionGrant(host.bundleId ?? "", deps);
+  if (witnessed === null) {
+    return {
+      ...base,
+      state: "pending",
+      alreadySatisfied: false,
+      detail:
+        "the folder opened, but this process has no host application whose lifetime the " +
+        "grant could be tied to — choose Full Disk Access instead, or run `things helpers setup`",
+    };
+  }
+  progress("read access: granted for as long as this app stays open");
+  return {
+    ...base,
+    state: "granted",
+    alreadySatisfied: false,
+    detail:
+      `${hostName} may read the Things data folder until it quits. Full Disk Access makes ` +
+      "it permanent; `things helpers setup` moves it onto a helper that keeps it across restarts",
+  };
+}
+
+function readAccessLeg(
+  capability: ReadCapability,
+  choice: string,
+  deps: DirectSetupDeps,
+): SetupStep {
   const base = { leg: "read-access" as const, label: "read access" };
   const progress = deps.progress ?? (() => {});
   const hostName = hostDisplayName(deps);
@@ -185,71 +290,10 @@ function readAccessLeg(capability: ReadCapability, deps: DirectSetupDeps): Setup
     progress("read access: already granted for as long as this app stays open");
     return { ...base, state: "granted", alreadySatisfied: true, detail: capability.detail };
   }
-  // Nothing on record. Guide to the durable grant first, and poll for it.
-  progress(
-    `read access: turn on ${hostName} under System Settings ▸ Privacy & Security ▸ Full Disk Access`,
-  );
-  (deps.openUrl ?? openUrlBestEffort)(FDA_SETTINGS_URL);
-  progress("read access: waiting for the switch — Ctrl-C and rerun anytime");
-  const sleep = deps.sleep ?? syncSleep;
-  const elapsed = deps.elapsed ?? Date.now;
-  const deadline = elapsed() + (deps.fdaWaitMs ?? FDA_WAIT_MS);
-  while (elapsed() < deadline) {
-    sleep(deps.fdaPollMs ?? FDA_POLL_MS);
-    if (fdaGranted(deps).granted) {
-      progress("read access: granted (Full Disk Access)");
-      return {
-        ...base,
-        state: "granted",
-        alreadySatisfied: false,
-        detail: `Full Disk Access is held by ${hostName}`,
-      };
-    }
-  }
-  // The sub-FDA alternative: provoke the app-data modal on purpose, and record
-  // the grant only if the open actually then succeeded.
-  progress(
-    "read access: Full Disk Access was not granted — asking for folder access instead " +
-      '(answer "Allow" if a dialog appears)',
-  );
-  const host = hostApp(deps);
-  try {
-    (deps.openContainer ?? openContainerDefault)();
-  } catch (err) {
-    clearSessionGrant(deps.env ?? process.env);
-    const why = err instanceof Error ? err.message : String(err);
-    progress(`read access: still no access (${why})`);
-    return {
-      ...base,
-      state: "pending",
-      alreadySatisfied: false,
-      detail:
-        `no read access yet — grant Full Disk Access to ${hostName} under System Settings ▸ ` +
-        "Privacy & Security ▸ Full Disk Access and rerun, or run `things helpers setup` " +
-        "to let a helper hold the grant instead",
-    };
-  }
-  const witnessed = witnessSessionGrant(host.bundleId ?? "", deps);
-  if (witnessed === null) {
-    return {
-      ...base,
-      state: "pending",
-      alreadySatisfied: false,
-      detail:
-        "the folder opened, but this process has no host application whose lifetime the " +
-        "grant could be tied to — grant Full Disk Access, or run `things helpers setup`",
-    };
-  }
-  progress("read access: granted for as long as this app stays open");
-  return {
-    ...base,
-    state: "granted",
-    alreadySatisfied: false,
-    detail:
-      `${hostName} may read the Things data folder until it quits. Full Disk Access ` +
-      "(System Settings ▸ Privacy & Security) makes it permanent; `things helpers setup` " +
-      "moves it onto a helper that keeps it across restarts",
-  };
+  // Nothing on record: the human's choice decides which grant this leg gathers.
+  return choice === FDA_CHOICE_KEY
+    ? fdaBranch(base, hostName, deps)
+    : sessionGrantBranch(base, hostName, deps);
 }
 
 // ── Leg (b): app control ─────────────────────────────────────────────────────
@@ -394,28 +438,37 @@ function shortcutsLeg(deps: DirectSetupDeps): SetupStep {
 
 // ── The ceremony ─────────────────────────────────────────────────────────────
 
-/** What each leg puts on screen, for the upfront banner. */
-const PROMPT_LABELS: Record<SetupLeg, string> = {
-  "read-access": "the Full Disk Access switch (or a folder-access dialog)",
-  "app-control": "the app-control dialog for Things",
-  shortcuts: "one install sheet per missing shortcut",
-};
+/**
+ * What each leg puts on screen, for the upfront banner. Named flatly, in the
+ * order the ceremony raises them — one clause each, no parenthetical asides.
+ */
+function promptLabel(leg: SetupLeg, hostName: string): string {
+  switch (leg) {
+    case "read-access":
+      return `data access for ${hostName}`;
+    case "app-control":
+      return "app control of Things";
+    case "shortcuts":
+      return "one install sheet per missing shortcut";
+  }
+}
+
+/** "a", "a and b", "a, b, and c" — the banner reads as a sentence. */
+function listPhrase(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+}
 
 /**
  * What the human is about to see, in the words macOS will actually use — the
  * wizard prints these one leg ahead of the dialog (Article V, mode-aware). In
  * strict mode they are never printed; the upfront banner's count stands alone.
- * `{host}` is filled with the detected host app's display name.
+ * `{host}` is filled with the detected host app's display name. The read leg is
+ * absent because it is a CHOICE rather than an announcement — see
+ * {@link readAccessChoice}.
  */
-const PROMPT_EXPLAINERS: Record<SetupLeg, string[]> = {
-  "read-access": [
-    "Next: read access to your Things data.",
-    "  System Settings opens at Privacy & Security ▸ Full Disk Access — turn on {host} in",
-    "  that list. It is a switch you flip, not a dialog you answer, so setup waits and",
-    "  watches for it.",
-    '  If you would rather not, wait it out: a dialog then asks whether {host} "would like to',
-    '  access data from other apps" — click Allow, and the access lasts until {host} quits.',
-  ],
+const PROMPT_EXPLAINERS: Record<Exclude<SetupLeg, "read-access">, string[]> = {
   "app-control": [
     "Next: permission to control the Things app.",
     '  A macOS dialog will appear: "{host}" wants access to control "Things" — click Allow.',
@@ -484,8 +537,17 @@ export function surveySetup(deps: DirectSetupDeps = {}): SetupSurvey {
 /**
  * Run the direct-path ceremony. Strict mode: the banner counts what is about
  * to appear, waits are bounded, and an unanswered leg leaves the run nonzero.
+ *
+ * Runs under {@link withDefaultInterrupts} for its whole synchronous span, so
+ * a Ctrl-C at a gate — or during a leg's bounded wait — actually stops it
+ * (./wizard.ts, "Why a ceremony runs with the DEFAULT signal disposition").
+ * Throws {@link CeremonyStopped} when the human stops at a gate.
  */
 export function directSetup(deps: DirectSetupDeps = {}): DirectSetupResult {
+  return withDefaultInterrupts(() => runCeremony(deps));
+}
+
+function runCeremony(deps: DirectSetupDeps): DirectSetupResult {
   const progress = deps.progress ?? ((line: string) => process.stdout.write(`${line}\n`));
   const withProgress: DirectSetupDeps = { ...deps, progress };
   const env = deps.env ?? process.env;
@@ -504,20 +566,26 @@ export function directSetup(deps: DirectSetupDeps = {}): DirectSetupResult {
   progress(
     outstanding.length === 0
       ? "nothing to raise — every permission this machine needs is already on record"
-      : `about to raise ${outstanding.length} dialog${outstanding.length === 1 ? "" : "s"} ` +
-          `(${outstanding.map((leg) => PROMPT_LABELS[leg]).join(", ")}) — someone must be at the screen to answer them`,
+      : `about to raise ${outstanding.length} dialog${outstanding.length === 1 ? "" : "s"} — ` +
+          `${listPhrase(outstanding.map((leg) => promptLabel(leg, hostName)))}. ` +
+          "Someone must be at the screen.",
   );
 
   const wizard = deps.wizard ?? createWizard();
   const willRaise = new Set(outstanding);
   /** Explain a leg's dialog and let the human pace it — wizard mode only. */
-  const brief = (leg: SetupLeg): void => {
+  const brief = (leg: Exclude<SetupLeg, "read-access">): void => {
     if (willRaise.has(leg)) {
       wizard.explain(PROMPT_EXPLAINERS[leg].map((line) => line.replaceAll("{host}", hostName)));
     }
   };
-  brief("read-access");
-  const readStep = readAccessLeg(readBefore, withProgress);
+  // The read leg is the one CHOICE in the ceremony: Enter takes the session
+  // grant, `f` takes Full Disk Access. Strict mode answers "" without asking,
+  // which is the session grant — the only one an absent human can still get.
+  const readChoice = willRaise.has("read-access")
+    ? wizard.choose(readAccessChoice(hostName), [FDA_CHOICE_KEY])
+    : "";
+  const readStep = readAccessLeg(readBefore, readChoice, withProgress);
   brief("app-control");
   const appControlStep = appControlLeg(withProgress);
   brief("shortcuts");

@@ -16,6 +16,7 @@
 import type { Command } from "commander";
 
 import {
+  CeremonyStopped,
   type HelpersInstallResult,
   type HelpersOnboardResult,
   type HelpersStatus,
@@ -267,6 +268,15 @@ export function registerHelpers(program: Command): void {
           { progress },
         );
       } catch (err) {
+        // The human stopped at a gate. Every leg is resumable, so this is a
+        // clean stop with an honest exit code, not a crash.
+        if (err instanceof CeremonyStopped) {
+          process.stderr.write(
+            "\nstopped — rerunning `things helpers setup` resumes exactly here\n",
+          );
+          process.exitCode = ExitCode.Environment;
+          return;
+        }
         process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
         process.exitCode = ExitCode.Environment;
         return;
