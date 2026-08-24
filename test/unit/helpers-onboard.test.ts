@@ -247,7 +247,9 @@ describe("the upfront banner", () => {
     expect(banner).toContain("the reader's folder panel");
     expect(banner).toContain("app control for Things");
     expect(banner).toContain("the Accessibility switch");
-    expect(banner).toContain("someone must be at the screen");
+    expect(banner).toContain("Someone must be at the screen.");
+    // Flat grammar — the dialog names follow a dash, never nested parens.
+    expect(banner).not.toContain("(");
     // It is the FIRST thing said — nothing may go on screen before the warning.
     expect(progress.indexOf(banner)).toBe(0);
   });
@@ -260,7 +262,9 @@ describe("the upfront banner", () => {
       }),
     );
     expect(result.outstanding).toEqual(["automation-things"]);
-    expect(progress[0]).toContain("about to raise 1 macOS consent dialog (app control for Things)");
+    expect(progress[0]).toContain(
+      "about to raise 1 macOS consent dialog — app control for Things.",
+    );
   });
 
   it("does not count a DENIED leg — its dialog is spent and will not reappear", () => {

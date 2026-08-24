@@ -1252,8 +1252,8 @@ function runOnboardCeremony(
     progress(
       outstanding.length === 0
         ? "nothing to raise — every permission the helpers need is already on record"
-        : `about to raise ${outstanding.length} macOS consent dialog${outstanding.length === 1 ? "" : "s"} ` +
-            `(${outstanding.map((leg) => PROMPT_LABELS[leg]).join(", ")}) — someone must be at the screen to answer them`,
+        : `about to raise ${outstanding.length} macOS consent dialog${outstanding.length === 1 ? "" : "s"} — ` +
+            `${outstanding.map((leg) => PROMPT_LABELS[leg]).join(", ")}. Someone must be at the screen.`,
     );
     const willRaise = new Set(outstanding);
     /** Explain a leg's dialog and let the human pace it — wizard mode only. */
