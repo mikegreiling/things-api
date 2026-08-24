@@ -132,22 +132,33 @@ describe("glyph styling (color on)", () => {
     expect(styled).not.toContain("‹");
   });
 
-  it("delta 2: a repeating project template circle is BLUE (still a project)", async () => {
+  it("3.23: a repeating project template circle is the ordinary BLUE open circle — the ↻ left the glyph", async () => {
     const { projectCircle } = await glyphs();
     const circle = projectCircle(
       project({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } }),
     );
     expect(circle).toContain(BLUE);
     expect(circle).not.toContain(DIM);
-    expect(circle).toContain("(↻)");
+    expect(circle).toContain("( )");
+    expect(circle).not.toContain("↻");
   });
 
-  it("delta 3: a repeating to-do template box is PLAIN — no dim, no color", async () => {
+  it("3.23: a repeating to-do template box is a PLAIN empty box — no dim, no color, no ↻", async () => {
     const { todoBox } = await glyphs();
     const box = todoBox(
       todo({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } }),
     );
-    expect(box).toBe("[↻]");
+    expect(box).toBe("[ ]");
+  });
+
+  it("the template mark is BLUE and the instance mark is DIM — the repeat pair's two channels", async () => {
+    const { repeatTemplateMark, repeatInstanceMark } = await glyphs();
+    expect(repeatTemplateMark()).toContain(BLUE);
+    expect(repeatTemplateMark()).not.toContain(DIM);
+    expect(stripSgr(repeatTemplateMark())).toBe("↻");
+    expect(repeatInstanceMark()).toContain(DIM);
+    expect(repeatInstanceMark()).not.toContain(BLUE);
+    expect(stripSgr(repeatInstanceMark())).toBe("↻");
   });
 
   it("delta 4: a someday project circle is DIM, not blue (muted like a someday to-do)", async () => {
@@ -260,6 +271,76 @@ describe("formatItem styling (color on)", () => {
   });
 });
 
+/**
+ * Things 3.23's repeating-row forms. The GUI moved the ↻ OUT of the checkbox:
+ * a TEMPLATE keeps a normal box/circle and wears a BLUE ↻ ahead of everything
+ * else on the row, and an INSTANCE — previously indistinguishable from a plain
+ * to-do — wears a MUTED ↻ at the head of the post-title icon cluster.
+ */
+describe("the repeat pair on a row (color on)", () => {
+  it("template TO-DO row: `[ ] ↻ Title` — normal box, then a BLUE ↻ before the chip and title", async () => {
+    const { formatItem } = await render();
+    const line = formatItem(
+      todo({
+        title: "Water plants",
+        repeating: {
+          isTemplate: true,
+          isInstance: false,
+          templateUuid: null,
+          nextOccurrence: "2026-07-08",
+        },
+      }),
+      8,
+      { now: new Date("2026-07-05T12:00:00Z") },
+    );
+    // Shape (color-stripped): box, ↻, date chip, title — in that order.
+    expect(stripSgr(line)).toBe("todo0001  [ ] ↻ ‹Jul 8› Water plants");
+    // The ↻ is BLUE, and it is not seated inside the box.
+    expect(line).toContain(`[ ] ${BLUE}↻`);
+  });
+
+  it("template PROJECT row: `( ) ↻ Title` — the ordinary blue circle plus the blue mark", async () => {
+    const { formatItem } = await render();
+    const line = formatItem(
+      project({
+        title: "Weekly review",
+        repeating: { isTemplate: true, isInstance: false, templateUuid: null },
+      }),
+      8,
+      { now: new Date("2026-07-05T12:00:00Z") },
+    );
+    // No projected next occurrence → the state chip stands in for the date.
+    expect(stripSgr(line)).toBe("proj0001  ( ) ↻ ‹waiting› Weekly review ‹0›");
+    expect(line).toContain(`${BLUE}( )`);
+    expect(line).toContain(`${BLUE}↻`);
+  });
+
+  it("INSTANCE row: the muted ↻ heads the post-title cluster, ahead of ≡", async () => {
+    const { formatItem } = await render();
+    const line = formatItem(
+      todo({
+        title: "Water plants",
+        notes: "n",
+        repeating: { isTemplate: false, isInstance: true, templateUuid: "tmpl0001" },
+      }),
+      8,
+      { now: new Date("2026-07-05T12:00:00Z") },
+    );
+    expect(stripSgr(line)).toBe("todo0001  [ ] Water plants ↻ ≡");
+    expect(line).toContain(`${DIM}↻`);
+    expect(line).not.toContain(`${BLUE}↻`);
+  });
+
+  it("a NON-repeating row is byte-identical to before the repeat pair landed", async () => {
+    const { formatItem } = await render();
+    const line = formatItem(todo({ title: "Water plants", notes: "n" }), 8, {
+      now: new Date("2026-07-05T12:00:00Z"),
+    });
+    expect(stripSgr(line)).toBe("todo0001  [ ] Water plants ≡");
+    expect(line).not.toContain("↻");
+  });
+});
+
 describe("template-container marker (↻ prefix on the muted container)", () => {
   it("list/search rows prefix ↻ inside the container label when the container project is a template", async () => {
     const { formatItem } = await render();
@@ -292,14 +373,11 @@ describe("template-container marker (↻ prefix on the muted container)", () => 
     expect(stripSgr(line)).toContain("(↻ Weekly review)");
   });
 
-  it("reuses the exact repeat glyph of the (↻) template circle — no invented glyph", async () => {
-    const { REPEAT_MARK, projectCircle } = await glyphs();
+  it("reuses the exact repeat glyph of the template/instance marks — no invented glyph", async () => {
+    const { REPEAT_MARK, repeatTemplateMark, repeatInstanceMark } = await glyphs();
     expect(REPEAT_MARK).toBe("↻");
-    expect(
-      projectCircle(
-        project({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } }),
-      ),
-    ).toContain(REPEAT_MARK);
+    expect(stripSgr(repeatTemplateMark())).toBe(REPEAT_MARK);
+    expect(stripSgr(repeatInstanceMark())).toBe(REPEAT_MARK);
   });
 
   it("show detail: the to-do project line renders ↻ before a template project title", async () => {

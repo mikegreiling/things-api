@@ -3,7 +3,8 @@
  * iconography. Shape carries state so plain output (piped, NO_COLOR) stays
  * unambiguous; color, dim, and strike are enhancements on top. Alignment-
  * critical columns stay pure ASCII (`[ ]` / `( )`); the marks inside are
- * narrow-safe Unicode. The pie quarters and ★/⏾/◆ are ambiguous-width
+ * narrow-safe Unicode, and the repeat ↻ now rides OUTSIDE the box entirely
+ * (Things 3.23 parity). The pie quarters and ★/⏾/◆ are ambiguous-width
  * codepoints — fine on macOS font stacks, the only place Things runs.
  * Every glyph lives here so a cross-terminal rendering audit
  * (docs/roadmap.md) can retune the language in one file.
@@ -71,14 +72,14 @@ export function loggedDate(stopped: Date, todayIso: string, zone?: string): stri
 export function todoBox(item: Todo): string {
   if (item.status === "completed") return blue("[✓]");
   if (item.status === "canceled") return blue("[×]");
-  // A repeating TEMPLATE is the rule itself, not a checkable instance — the
-  // GUI shows only the ↻ glyph where a checkbox would be. We keep the
-  // brackets (still a to-do) but seat ↻ INSIDE them so the row reads as
-  // "the recurring one" at a glance, distinct from its spawned instances
-  // (which are ordinary [ ] rows). Never someday, though the DB stores it so.
-  // The box stays PLAIN — the GUI's repeat pseudo-checkbox is white, and the ↻
-  // inside already marks the rule row (no muting).
-  if (item.repeating.isTemplate) return "[↻]";
+  // A repeating TEMPLATE keeps a NORMAL empty box. It used to seat ↻ INSIDE
+  // the brackets (`[↻]`), arguing GUI parity — but that argued parity with the
+  // OLD GUI. Things 3.23 moved the mark OUT of the checkbox: a template row now
+  // shows an ordinary empty checkbox followed by a BLUE ↻ ahead of the title
+  // (rendered by formatItem's meta run, repeatTemplateMark). The box branch
+  // survives only to defeat the someday fall-through below: templates are
+  // stored start=someday in the DB, and a `[~]` would misread the rule row.
+  if (item.repeating.isTemplate) return "[ ]";
   if (item.derived.start === "someday" && item.startDate === null) return dim("[~]");
   return "[ ]";
 }
@@ -92,10 +93,13 @@ export function todoBox(item: Todo): string {
 export function projectCircle(item: Project): string {
   if (item.status === "completed") return blue("(✓)");
   if (item.status === "canceled") return blue("(×)");
-  // Repeating project template: ↻ inside the circle. A template is still a
-  // project, so its circle keeps the blue accent — the GUI shows a solid blue
-  // circle with the arrow, not a muted glyph.
-  if (item.repeating.isTemplate) return blue("(↻)");
+  // Repeating project template: the ordinary OPEN project circle. It used to
+  // seat ↻ inside the circle (`(↻)`) for parity with the pre-3.23 GUI; 3.23
+  // moved the mark out of the glyph and in front of the title, blue
+  // (repeatTemplateMark, emitted by formatItem's meta run), so the circle is
+  // just a project circle again. This branch survives only to defeat the
+  // someday fall-through below (templates are stored start=someday).
+  if (item.repeating.isTemplate) return blue("( )");
   // Someday projects are muted like someday to-dos — the GUI greys a someday
   // project the same way. Its type is still carried by the round bracket and
   // the bold title (projectTitleAccent), so the circle spends dim, not blue.
@@ -123,11 +127,31 @@ export function projectTitleAccent(title: string): string {
 }
 
 /**
- * The bare repeat glyph — the same ↻ (U+21BB) seated inside the `[↻]`/`(↻)`
- * template checkboxes above. Shared so the container-label mark can never
- * drift from the checkbox family.
+ * The bare repeat glyph — the one ↻ (U+21BB) every repeat surface spends: the
+ * blue template mark, the muted instance mark, the container label, and the
+ * `── ↻ Repeating ──` rail. Shared so no repeat surface can drift from another.
  */
 export const REPEAT_MARK = "↻";
+
+/**
+ * The repeating-TEMPLATE mark: a BLUE ↻ that rides in front of the title on a
+ * template's list row, immediately after an ordinary (empty) box or circle —
+ * `[ ] ↻ Water plants ‹Jul 8›`. This mirrors Things 3.23, which moved the glyph
+ * OUT of the checkbox (where we used to seat it as `[↻]`/`(↻)`), colored it
+ * blue, and placed it ahead of everything else on the row. Blue is the same
+ * channel the project circle and the resolved ✓/× marks spend — here it says
+ * "this row is the RULE, not an occurrence", the loudest fact about it.
+ */
+export const repeatTemplateMark = (): string => blue(REPEAT_MARK);
+
+/**
+ * The repeating-INSTANCE mark: a MUTED ↻ in the post-title icon cluster
+ * (alongside ◷ ≡ ≔), on a row spawned from a template — `[ ] Water plants ↻`.
+ * Dim because it is secondary metadata: an occurrence is an ordinary checkable
+ * to-do whose only deviation is its provenance. GUI parity — 3.23 marks the
+ * occurrence right after the title, before the notes/tag pills.
+ */
+export const repeatInstanceMark = (): string => dim(REPEAT_MARK);
 
 /**
  * A container label's inner text, prefixed with the ↻ template mark when that
@@ -356,8 +380,8 @@ export const LEGEND: readonly LegendEntry[] = [
   { glyph: blue("[×]"), meaning: "to-do, canceled (title struck through)", group: "To-dos" },
   { glyph: dim("[~]"), meaning: "to-do, someday (undated)", group: "To-dos" },
   {
-    glyph: "[↻]",
-    meaning: "repeating to-do — the rule itself (instances are ordinary [ ])",
+    glyph: `[ ] ${repeatTemplateMark()}`,
+    meaning: "repeating to-do — the rule itself, not an occurrence",
     group: "To-dos",
   },
   // Projects — round where to-dos are square; open rows render blue.
@@ -366,7 +390,7 @@ export const LEGEND: readonly LegendEntry[] = [
   { glyph: blue("(×)"), meaning: "project, canceled", group: "Projects" },
   { glyph: dim("(~)"), meaning: "project, someday (undated)", group: "Projects" },
   {
-    glyph: blue("(↻)"),
+    glyph: `${blue("( )")} ${repeatTemplateMark()}`,
     meaning: "repeating project — the recurring rule itself",
     group: "Projects",
   },
@@ -391,6 +415,11 @@ export const LEGEND: readonly LegendEntry[] = [
   { glyph: dim(NOTES_MARK), meaning: "has notes", group: "Markers & chips" },
   { glyph: dim(REMINDER_MARK), meaning: "has a reminder time", group: "Markers & chips" },
   { glyph: dim(CHECKLIST_MARK), meaning: "has a checklist", group: "Markers & chips" },
+  {
+    glyph: repeatInstanceMark(),
+    meaning: "an occurrence spawned from a repeating series",
+    group: "Markers & chips",
+  },
   { glyph: areaMark(), meaning: "area", group: "Markers & chips" },
   {
     glyph: dim("‹Jul 31›"),

@@ -31,6 +31,7 @@ import {
   deadlineToken,
   CHECKLIST_MARK,
   NOTES_MARK,
+  REPEAT_MARK,
   REMINDER_MARK,
 } from "../../src/cli/glyphs.ts";
 import type { Project } from "../../src/model/entities.ts";
@@ -274,7 +275,10 @@ describe("the two derived floors — FULL_FIT_FLOOR / COMPACT_FIT_FLOOR", () => 
     untrashedLeafActionsCount: 999,
     openUntrashedLeafActionsCount: 999,
   } as Project);
-  const tail = [countChipWorst, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
+  // The repeat ↻ is budgeted ONCE for both slots: a row is either a TEMPLATE
+  // (blue ↻ leading the meta run) or an INSTANCE (muted ↻ heading this tail),
+  // and each costs the same cell + separating space.
+  const tail = [countChipWorst, REPEAT_MARK, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
   // Shared furniture: everything but the deadline token (and its leading space).
   const furniture =
     UUID_DISPLAY_MIN +
