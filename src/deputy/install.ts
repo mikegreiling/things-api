@@ -319,7 +319,7 @@ export function installHelpers(
     }
   } else {
     warnings.push(
-      "the bundle was built without things-reader (no Apple-issued signing identity?) — file reads run direct. Build with an Apple-chain identity, reinstall, then run `things helpers grant`.",
+      "the bundle was built without things-reader (no Apple-issued signing identity?) — file reads run direct. Build with an Apple-chain identity, reinstall, then run `things helpers setup`.",
     );
   }
   return {
@@ -333,37 +333,54 @@ export function installHelpers(
   };
 }
 
-export interface HelpersUninstallResult {
-  removed: string[];
-}
+/**
+ * The LaunchServices registration tool. `tccutil` addresses grants by BUNDLE
+ * IDENTIFIER and resolves that identifier through LaunchServices, so on a
+ * machine where the bundle is already gone it refuses with -10814 and the
+ * dormant grant rows stay put. Handing LaunchServices the PACKAGED bundle
+ * (`lsregister -f -R "<bundle>"`) makes both identities — the helper and the
+ * reader nested inside it — resolvable again, after which the resets succeed.
+ * Measured on a live host, 2026-08-24.
+ */
+const LSREGISTER =
+  "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
-/** Stop both halves and remove LaunchAgents + the installed bundle (state — tokens, logs, the reader's grant — is kept). */
-export function uninstallHelpers(env: NodeJS.ProcessEnv = process.env): HelpersUninstallResult {
-  const removed: string[] = [];
-  launchctl(["bootout", launchTarget()]);
-  launchctl(["bootout", readerLaunchTarget()]);
-  for (const path of [deputyPlistPath(), readerPlistPath()]) {
-    if (existsSync(path)) {
-      rmSync(path);
-      removed.push(path);
-    }
-  }
-  const installDir = helpersInstallDir(env);
-  if (existsSync(installDir)) {
-    rmSync(installDir, { recursive: true });
-    removed.push(installDir);
-  }
-  return { removed };
-}
-
-export interface HelpersResetResult {
-  /** Files/directories that existed and were removed (uninstall legs + state). */
-  removed: string[];
+export interface HelpersRevocation {
   /** One row per macOS permission-store reset attempted. */
   tccResets: { target: string; ok: boolean; detail: string }[];
-  warnings: string[];
+  /**
+   * What made the identifiers resolvable for `tccutil`: the bundle this
+   * machine had installed, the packaged bundle registered on the spot, or
+   * nothing at all (the grants cannot be addressed from here).
+   */
+  resolvedVia: "installed" | "packaged" | "none";
+  /** The packaged bundle handed to LaunchServices, when that path was taken. */
+  registeredBundle: string | null;
   /** The one leg no tool can perform — surfaced, never silently skipped. */
   shortcutsNote: string;
+}
+
+export interface HelpersUninstallResult {
+  /** Files/directories that existed and were removed. */
+  removed: string[];
+  /** Null unless revocation was asked for. */
+  revocation: HelpersRevocation | null;
+  warnings: string[];
+}
+
+export interface HelpersUninstallOptions {
+  /**
+   * Also revoke both identities' macOS permission grants and delete their
+   * local state (the reader's bookmark container, the deputy's tokens/logs).
+   */
+  revoke?: boolean;
+}
+
+export interface HelpersUninstallDeps {
+  /** External tool runner (test seam — a real `tccutil` revokes live grants). */
+  runTool?: (bin: string, args: string[]) => { ok: boolean; output: string };
+  /** Where a packaged bundle lives for the LaunchServices fallback. */
+  packagedBundlePath?: () => string | null;
 }
 
 function runToolDefault(bin: string, args: string[]): { ok: boolean; output: string } {
@@ -381,32 +398,45 @@ function runToolDefault(bin: string, args: string[]): { ok: boolean; output: str
 }
 
 /**
- * Return the machine to the never-onboarded state: uninstall the helpers,
- * revoke their macOS permission grants (`tccutil reset All` per bundle
- * identity — Automation, Accessibility, and any other class keyed to them),
- * and delete their local state — the deputy's tokens/logs and the reader's
- * container, which holds the security-scoped bookmark (the read grant is a
- * bookmark FILE, not a TCC row, so revocation is deletion).
+ * Revoke both helper identities' TCC grants (`tccutil reset All` per bundle
+ * identity — Automation, Accessibility, and every other class keyed to them).
  *
- * Every leg is independent and IDEMPOTENT: an already-uninstalled helper, an
- * empty permission store, and absent state directories are all fine — each
- * leg does whatever is still outstanding and reports honestly, so `reset`
- * works from any partial state and a second run is an all-no-op. The bundled
- * `things-proxy-*` shortcuts are the one thing no tool can remove (the
- * `shortcuts` CLI has no delete); that leg is a reported manual step.
+ * Called BEFORE anything is torn down, because `tccutil` resolves the
+ * identifier through LaunchServices and refuses with -10814
+ * (kLSApplicationNotFoundErr) once no app on disk carries it. When the
+ * installed bundle is already gone, the packaged one is registered first
+ * ({@link LSREGISTER}) and left registered — the file legitimately exists, so
+ * un-registering it would be a lie about the machine. With no bundle anywhere
+ * the resets still run (LaunchServices may hold an older registration) and a
+ * -10814 is reported as the honest limit it is.
  */
-export function resetHelpers(
-  env: NodeJS.ProcessEnv = process.env,
-  runTool: (bin: string, args: string[]) => { ok: boolean; output: string } = runToolDefault,
-): HelpersResetResult {
-  const warnings: string[] = [];
-  const tccResets: HelpersResetResult["tccResets"] = [];
-  // Revoke BEFORE uninstalling: `tccutil reset All <id>` resolves the id
-  // through LaunchServices first and refuses with -10814
-  // (kLSApplicationNotFoundErr) once no app carries it — so the grants must
-  // be revoked while the installed bundle still exists. After an uninstall
-  // (or on a machine that never had one) -10814 means "nothing addressable":
-  // the idempotent no-op, reported as such, never a warning.
+function revokeGrants(
+  env: NodeJS.ProcessEnv,
+  deps: HelpersUninstallDeps,
+  warnings: string[],
+): HelpersRevocation {
+  const runTool = deps.runTool ?? runToolDefault;
+  const packagedBundlePath = deps.packagedBundlePath ?? helpersDefaultBuildPath;
+  let resolvedVia: HelpersRevocation["resolvedVia"] = "installed";
+  let registeredBundle: string | null = null;
+  if (!existsSync(deputyInstalledBinaryPath(env))) {
+    const packaged = packagedBundlePath();
+    if (packaged === null) {
+      resolvedVia = "none";
+    } else {
+      const res = runTool(LSREGISTER, ["-f", "-R", packaged]);
+      if (res.ok) {
+        resolvedVia = "packaged";
+        registeredBundle = packaged;
+      } else {
+        resolvedVia = "none";
+        warnings.push(
+          `could not register ${packaged} with LaunchServices: ${res.output.trim() || "unknown"}`,
+        );
+      }
+    }
+  }
+  const tccResets: HelpersRevocation["tccResets"] = [];
   for (const target of [HELPERS_BUNDLE_ID, READER_LAUNCHD_LABEL]) {
     const res = runTool("/usr/bin/tccutil", ["reset", "All", target]);
     const noApp = !res.ok && /No such bundle identifier|-10814/.test(res.output);
@@ -416,33 +446,78 @@ export function resetHelpers(
       detail: res.ok
         ? res.output.trim() || "reset"
         : noApp
-          ? "no app registered under this identifier — nothing to revoke"
+          ? resolvedVia === "none"
+            ? "no app carries this identifier and none is packaged here — reinstall the helpers, or clear the grants in System Settings ▸ Privacy & Security"
+            : "no app registered under this identifier — nothing to revoke"
           : res.output.trim() || "failed",
     });
     if (!res.ok && !noApp) {
       warnings.push(`tccutil reset All ${target} failed: ${res.output.trim() || "unknown"}`);
     }
   }
-  const removed = [...uninstallHelpers(env).removed];
-  for (const dir of [readerContainerDir(env), deputyStateDir(env)]) {
-    if (existsSync(dir)) {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-        removed.push(dir);
-      } catch (err) {
-        warnings.push(
-          `could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-  }
   return {
-    removed,
     tccResets,
-    warnings,
+    resolvedVia,
+    registeredBundle,
     shortcutsNote:
       "the bundled things-proxy-* shortcuts cannot be removed by any tool — delete them by hand in Shortcuts.app if a truly fresh machine is wanted (`things setup` re-imports them)",
   };
+}
+
+/**
+ * Stop both halves and remove their LaunchAgents + the installed bundle.
+ *
+ * By default the macOS grants and the local state (tokens, logs, the reader's
+ * bookmark) are KEPT: the TCC rows are keyed to the two signing identities and
+ * simply go dormant, so a later reinstall picks them straight back up with no
+ * second ceremony. `revoke` turns this into the ceremony's full inverse —
+ * grants revoked first (see {@link revokeGrants}), then the uninstall, then the
+ * reader's container and the deputy's state dir deleted (the read grant is a
+ * bookmark FILE, not a TCC row, so revoking it means deleting it).
+ *
+ * Every leg is independent and IDEMPOTENT: an already-uninstalled helper, an
+ * empty permission store, and absent directories are all fine — each leg does
+ * whatever is still outstanding, so this works from any partial state and a
+ * second run is an all-no-op.
+ */
+export function uninstallHelpers(
+  options: HelpersUninstallOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
+  deps: HelpersUninstallDeps = {},
+): HelpersUninstallResult {
+  const warnings: string[] = [];
+  const revoke = options.revoke === true;
+  // Revocation runs while the installed bundle (if any) still resolves.
+  const revocation = revoke ? revokeGrants(env, deps, warnings) : null;
+  const removed: string[] = [];
+  launchctl(["bootout", launchTarget()]);
+  launchctl(["bootout", readerLaunchTarget()]);
+  for (const path of [deputyPlistPath(), readerPlistPath()]) {
+    if (existsSync(path)) {
+      rmSync(path);
+      removed.push(path);
+    }
+  }
+  const installDir = helpersInstallDir(env);
+  if (existsSync(installDir)) {
+    rmSync(installDir, { recursive: true });
+    removed.push(installDir);
+  }
+  if (revoke) {
+    for (const dir of [readerContainerDir(env), deputyStateDir(env)]) {
+      if (existsSync(dir)) {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+          removed.push(dir);
+        } catch (err) {
+          warnings.push(
+            `could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    }
+  }
+  return { removed, revocation, warnings };
 }
 
 /** Restart the launchd-managed helpers (picks up a rebuilt installed bundle). */
@@ -450,7 +525,7 @@ export function restartHelpers(): void {
   const res = launchctl(["kickstart", "-k", launchTarget()]);
   if (!res.ok) {
     throw new Error(
-      `launchctl kickstart failed (${res.output.trim() || "unknown"}) — are the helpers installed? Run: things helpers install`,
+      `launchctl kickstart failed (${res.output.trim() || "unknown"}) — are the helpers installed? Run: things helpers setup`,
     );
   }
   // Reader restart is best-effort: it may legitimately not be installed.
@@ -474,7 +549,7 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
   if (!existsSync(appPath)) {
     return {
       granted: false,
-      detail: "things-reader is not installed — run `things helpers install` first",
+      detail: "things-reader is not installed — run `things helpers setup` first",
     };
   }
   const thingsContainer = join(homedir(), THINGS_GROUP_CONTAINER);
@@ -513,10 +588,10 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
           return {
             granted: false,
             detail:
-              "the grant landed, but the Things database was not found inside the granted folder — rerun `things helpers grant` and grant the Things data folder",
+              "the grant landed, but the Things database was not found inside the granted folder — rerun `things helpers setup` and grant the Things data folder",
           };
         }
-        detail = "the panel closed but no grant landed (canceled?) — rerun `things helpers grant`";
+        detail = "the panel closed but no grant landed (canceled?) — rerun `things helpers setup`";
       } catch {
         detail = "the reader socket is not answering — `things helpers status`";
       } finally {
@@ -543,6 +618,12 @@ const AX_WAIT_TIMEOUT_MS = 120_000;
 const AX_POLL_INTERVAL_MS = 2000;
 /** The deputy kills its child at timeoutMs; the client deadline adds grace. */
 const CLIENT_GRACE_MS = 5000;
+/**
+ * How long the ceremony waits for the deputy's socket. `setup` installs first,
+ * which boots the launchd jobs out and back in, so the socket is legitimately
+ * absent for a moment when the ceremony opens its channel.
+ */
+const DEPUTY_SOCKET_WAIT_MS = 15_000;
 
 const AX_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
@@ -574,6 +655,11 @@ export interface OnboardStep {
 
 export interface HelpersOnboardResult {
   steps: OnboardStep[];
+  /**
+   * The legs that were going to put something on screen, surveyed prompt-free
+   * BEFORE the first one ran. Empty means the ceremony raised nothing.
+   */
+  outstanding: OnboardLeg[];
   /** Any leg refused. */
   denied: boolean;
   /** Any leg still waiting on a human. */
@@ -604,15 +690,20 @@ export interface OnboardDeps {
   automationTimeoutMs?: number;
   axTimeoutMs?: number;
   axIntervalMs?: number;
+  /** How long to wait for the deputy's socket to appear (a just-installed helper is still coming up). */
+  deputyWaitMs?: number;
 }
 
 /** A live sync bridge to the deputy socket, independent of the routing config. */
-function openDeputyChannel(env: NodeJS.ProcessEnv): OnboardChannel {
+function openDeputyChannel(env: NodeJS.ProcessEnv, waitMs: number): OnboardChannel {
   const socketPath = deputySocketPath(env);
   const tokenPath = deputyTokenPath(env);
-  if (!existsSync(socketPath) || !existsSync(tokenPath)) {
+  const up = (): boolean => existsSync(socketPath) && existsSync(tokenPath);
+  const deadline = Date.now() + waitMs;
+  while (!up() && Date.now() < deadline) syncSleepMs(250);
+  if (!up()) {
     throw new Error(
-      `the deputy is not running (no socket at ${socketPath}) — run \`things helpers install\` first`,
+      `the deputy is not running (no socket at ${socketPath}) — \`things helpers status\` to inspect`,
     );
   }
   const token = readFileSync(tokenPath, "utf8").trim();
@@ -658,6 +749,19 @@ function firstLine(text: string): string {
 }
 
 /**
+ * Both ways out of a denial, always named together. macOS will not show the
+ * Automation dialog again once it has been refused, so the choices are the
+ * System Settings switch or re-arming the dialog by clearing the recorded
+ * refusal. The ceremony NEVER clears a denial itself — that is the user's call.
+ */
+function deniedRemediation(settingsName: string): string {
+  return (
+    `turn on Things API Helper under System Settings ▸ Privacy & Security ▸ Automation ▸ ${settingsName}, ` +
+    `or re-arm the dialog with \`tccutil reset AppleEvents ${HELPERS_BUNDLE_ID}\`, then rerun \`things helpers setup\``
+  );
+}
+
+/**
  * One Automation leg: skipped when the deputy already reports the target
  * granted, otherwise a benign AppleEvent sent THROUGH the deputy — the request
  * blocks while the consent dialog is up, so answering it right there is what
@@ -694,7 +798,7 @@ function automationLeg(
       ...base,
       state: "denied",
       alreadyGranted: false,
-      detail: `turn on Things API Helper under System Settings ▸ Privacy & Security ▸ Automation ▸ ${spec.settingsName}, then rerun`,
+      detail: deniedRemediation(spec.settingsName),
     };
   }
   progress(`${spec.label}: asking now — answer the dialog if one appears`);
@@ -738,7 +842,7 @@ function automationLeg(
       ...base,
       state: "denied",
       alreadyGranted: false,
-      detail: `turn on Things API Helper under System Settings ▸ Privacy & Security ▸ Automation ▸ ${spec.settingsName}, then rerun`,
+      detail: deniedRemediation(spec.settingsName),
     };
   }
   const why = firstLine(res.stderr) || `exit ${res.exitCode}`;
@@ -846,13 +950,29 @@ function shortcutsLeg(channel: OnboardChannel, progress: (line: string) => void)
   };
 }
 
+/**
+ * Where the reader's read grant stands, read WITHOUT opening anything: the
+ * ceremony surveys this before it raises its first dialog, so the upfront
+ * banner can size the sitting honestly.
+ */
+type ReaderStanding = "granted" | "needs-panel" | "not-installed";
+
+function readerStanding(
+  env: NodeJS.ProcessEnv,
+  readerProbe: () => { granted: boolean; locates: boolean } | null,
+): ReaderStanding {
+  if (!existsSync(readerInstalledAppPath(env))) return "not-installed";
+  const probe = readerProbe();
+  return probe !== null && probe.granted && probe.locates ? "granted" : "needs-panel";
+}
+
 /** The reader's durable read grant — skipped when a database already resolves inside it. */
 function readerLeg(
-  env: NodeJS.ProcessEnv,
-  deps: Required<Pick<OnboardDeps, "progress" | "readerProbe" | "grant">>,
+  standing: ReaderStanding,
+  deps: Required<Pick<OnboardDeps, "progress" | "grant">>,
 ): OnboardStep {
   const base = { leg: "reader-read-grant" as const, label: "reader read grant" };
-  if (!existsSync(readerInstalledAppPath(env))) {
+  if (standing === "not-installed") {
     deps.progress("reader read grant: the reader is not part of the installed bundle");
     return {
       ...base,
@@ -862,8 +982,7 @@ function readerLeg(
         "the bundle was built without things-reader (no Apple-issued signing identity) — database reads run direct",
     };
   }
-  const probe = deps.readerProbe();
-  if (probe !== null && probe.granted && probe.locates) {
+  if (standing === "granted") {
     deps.progress("reader read grant: already granted");
     return { ...base, state: "granted", alreadyGranted: true, detail: "already granted" };
   }
@@ -880,11 +999,18 @@ function readerLeg(
 function closingLine(steps: OnboardStep[], mode: HelpersMode): string {
   const denied = steps.filter((s) => s.state === "denied");
   if (denied.length > 0) {
-    return `${denied.map((s) => s.label).join(" and ")} ${denied.length === 1 ? "is" : "are"} denied — grant it in System Settings ▸ Privacy & Security, then rerun \`things helpers grant\`.`;
+    return (
+      `setup did not finish — ${denied.map((s) => s.label).join(" and ")} ${denied.length === 1 ? "is" : "are"} denied. ` +
+      `Turn Things API Helper on under System Settings ▸ Privacy & Security ▸ Automation, or re-arm the dialog with ` +
+      `\`tccutil reset AppleEvents ${HELPERS_BUNDLE_ID}\`, then rerun \`things helpers setup\`.`
+    );
   }
   const pending = steps.filter((s) => s.state === "pending");
   if (pending.length > 0) {
-    return `${pending.map((s) => s.label).join(", ")} still needs you — rerun \`things helpers grant\` when it is done; everything already granted is skipped.`;
+    return (
+      `setup did not finish — ${pending.map((s) => s.label).join(", ")} still needs you. ` +
+      `Rerun \`things helpers setup\` to resume exactly there; everything already granted is skipped.`
+    );
   }
   const shortcutsMissing = steps.some(
     (s) => s.leg === "shortcuts" && s.state === "skipped-not-installed",
@@ -898,8 +1024,39 @@ function closingLine(steps: OnboardStep[], mode: HelpersMode): string {
     : base;
 }
 
+/** What each leg puts on screen, for the upfront banner. */
+const PROMPT_LABELS: Record<OnboardLeg, string> = {
+  "reader-read-grant": "the reader's folder panel",
+  "automation-things": "app control for Things",
+  "automation-system-events": "app control for System Events",
+  accessibility: "the Accessibility switch",
+  // The census asks the deputy, never the user.
+  shortcuts: "",
+};
+
 /**
- * The full onboarding ceremony behind `things helpers grant`: fire every
+ * Which legs are about to put something on screen, surveyed prompt-free from
+ * the deputy's handshake and the reader's bookmark state. A leg macOS already
+ * records as `denied` raises nothing (the dialog is spent), so it is not
+ * counted here even though it will be reported as a failure.
+ */
+function willRaiseAutomationDialog(state: string | undefined): boolean {
+  return state !== "granted" && state !== "denied";
+}
+
+function outstandingPrompts(hello: DeputyHello, reader: ReaderStanding): OnboardLeg[] {
+  const outstanding: OnboardLeg[] = [];
+  if (reader === "needs-panel") outstanding.push("reader-read-grant");
+  if (willRaiseAutomationDialog(hello.automation?.things)) outstanding.push("automation-things");
+  if (willRaiseAutomationDialog(hello.automation?.systemEvents)) {
+    outstanding.push("automation-system-events");
+  }
+  if (hello.axTrusted !== true) outstanding.push("accessibility");
+  return outstanding;
+}
+
+/**
+ * The full onboarding ceremony behind `things helpers setup`: fire every
  * consent macOS will ever ask for while a human is sitting there, then report
  * where each one landed. Every leg is IDEMPOTENT — an already-granted leg is
  * detected prompt-free (the deputy's own `hello` carries its TCC standing) and
@@ -920,10 +1077,12 @@ export function onboardHelpers(
       process.stdout.write(`${line}\n`);
     });
   if (deps.channel === undefined && !existsSync(deputyInstalledBinaryPath(env))) {
-    throw new Error("the helpers are not installed — run `things helpers install` first");
+    throw new Error("the helpers are not installed — run `things helpers setup` first");
   }
-  const channel = deps.channel ?? openDeputyChannel(env);
+  const channel =
+    deps.channel ?? openDeputyChannel(env, deps.deputyWaitMs ?? DEPUTY_SOCKET_WAIT_MS);
   const steps: OnboardStep[] = [];
+  let outstanding: OnboardLeg[] = [];
   try {
     let hello: DeputyHello;
     try {
@@ -936,13 +1095,22 @@ export function onboardHelpers(
     }
     if (hello.deputyVersion !== EXPECTED_HELPERS_VERSION) {
       progress(
-        `note: the installed helpers are v${hello.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} — rebuild with \`bash scripts/build-helpers.sh\` and rerun \`things helpers install\` for the full ceremony`,
+        `note: the installed helpers are v${hello.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} — rebuild with \`bash scripts/build-helpers.sh\` and rerun \`things helpers setup\` for the full ceremony`,
       );
     }
+    // Size the sitting BEFORE raising anything, so whoever started this knows
+    // whether they have to stay at the screen.
+    const reader = readerStanding(env, deps.readerProbe ?? (() => readerProbeDefault(env)));
+    outstanding = outstandingPrompts(hello, reader);
+    progress(
+      outstanding.length === 0
+        ? "nothing to raise — every permission the helpers need is already on record"
+        : `about to raise ${outstanding.length} macOS consent dialog${outstanding.length === 1 ? "" : "s"} ` +
+            `(${outstanding.map((leg) => PROMPT_LABELS[leg]).join(", ")}) — someone must be at the screen to answer them`,
+    );
     steps.push(
-      readerLeg(env, {
+      readerLeg(reader, {
         progress,
-        readerProbe: deps.readerProbe ?? (() => readerProbeDefault(env)),
         grant: deps.grant ?? (() => grantReader(env)),
       }),
     );
@@ -1003,6 +1171,7 @@ export function onboardHelpers(
   }
   return {
     steps,
+    outstanding,
     denied: steps.some((s) => s.state === "denied"),
     pending: steps.some((s) => s.state === "pending"),
     closing: closingLine(steps, mode),
@@ -1119,7 +1288,7 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
         running = true;
         hello = res as unknown as DeputyHello;
         granted = (res as { granted?: boolean }).granted === true;
-        detail = granted ? "running, granted" : "running, NOT granted (things helpers grant)";
+        detail = granted ? "running, granted" : "running, NOT granted (things helpers setup)";
       } else {
         detail = `handshake refused: ${JSON.stringify(res["error"])}`;
       }

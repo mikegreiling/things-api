@@ -1,12 +1,16 @@
 /**
- * The `things helpers grant` onboarding ceremony, driven against a stubbed
- * deputy channel. The properties that matter are behavioral, not cosmetic:
+ * The onboarding ceremony behind `things helpers setup`, driven against a
+ * stubbed deputy channel. The properties that matter are behavioral, not
+ * cosmetic:
  *
  *  - IDEMPOTENCE — a fully granted machine raises NOTHING. Every already-done
  *    leg is recognized from the deputy's prompt-free handshake and skipped, so
  *    rerunning the ceremony is a safe all-green no-op.
- *  - HUMAN PACE — an unanswered dialog or an unflipped switch is `pending`,
- *    never a failure; only an actual refusal is `denied`.
+ *  - AN HONEST UPFRONT COUNT — before the first dialog goes up, the ceremony
+ *    says how many are coming, sized from the prompt-free state.
+ *  - HUMAN PACE, BUT VISIBLE — an unanswered dialog or an unflipped switch is
+ *    `pending`, never a crash; the run is still an UNFINISHED setup, which is
+ *    what the caller's nonzero exit is built on (test/cli/helpers-cli.test.ts).
  *  - OLD HELPERS — a deputy predating the TCC fields in `hello` must not be
  *    guessed about: absent means unknown, the legs are attempted, and the
  *    version-drift upgrade note is surfaced.
@@ -115,6 +119,7 @@ function run(channel: OnboardChannel, deps: Partial<OnboardDeps> = {}): HelpersO
     axTimeoutMs: 20,
     axIntervalMs: 5,
     automationTimeoutMs: 1000,
+    deputyWaitMs: 0,
     ...deps,
   });
 }
@@ -148,7 +153,7 @@ afterEach(() => {
 describe("onboarding preflight", () => {
   it("refuses when the helpers are not installed and names the install command", () => {
     expect(() => onboardHelpers("auto", process.env, { progress: () => {} })).toThrow(
-      /not installed — run `things helpers install`/,
+      /not installed — run `things helpers setup`/,
     );
   });
 
@@ -160,9 +165,9 @@ describe("onboarding preflight", () => {
       join(stateDir, "deputy/bin/Things API Helper.app/Contents/MacOS/things-deputy"),
       "#!/bin/sh\n",
     );
-    expect(() => onboardHelpers("auto", process.env, { progress: () => {} })).toThrow(
-      /not running \(no socket/,
-    );
+    expect(() =>
+      onboardHelpers("auto", process.env, { progress: () => {}, deputyWaitMs: 0 }),
+    ).toThrow(/not running \(no socket/);
   });
 });
 
@@ -203,6 +208,60 @@ describe("an already-onboarded machine", () => {
       },
     );
     expect(panelOpened).toBe(false);
+  });
+});
+
+describe("the upfront banner", () => {
+  it("counts and names every dialog before raising the first one", () => {
+    installReader();
+    const result = run(
+      stubChannel({
+        hello: { axTrusted: false, automation: { things: "unknown", systemEvents: "granted" } },
+      }),
+      { readerProbe: () => ({ granted: false, locates: false }) },
+    );
+    expect(result.outstanding).toEqual(["reader-read-grant", "automation-things", "accessibility"]);
+    const banner = progress[0] ?? "";
+    expect(banner).toContain("about to raise 3 macOS consent dialogs");
+    expect(banner).toContain("the reader's folder panel");
+    expect(banner).toContain("app control for Things");
+    expect(banner).toContain("the Accessibility switch");
+    expect(banner).toContain("someone must be at the screen");
+    // It is the FIRST thing said — nothing may go on screen before the warning.
+    expect(progress.indexOf(banner)).toBe(0);
+  });
+
+  it("says so, singular, when only one dialog is coming", () => {
+    installReader();
+    const result = run(
+      stubChannel({
+        hello: { axTrusted: true, automation: { things: "unknown", systemEvents: "granted" } },
+      }),
+    );
+    expect(result.outstanding).toEqual(["automation-things"]);
+    expect(progress[0]).toContain("about to raise 1 macOS consent dialog (app control for Things)");
+  });
+
+  it("does not count a DENIED leg — its dialog is spent and will not reappear", () => {
+    installReader();
+    const result = run(
+      stubChannel({
+        hello: { axTrusted: true, automation: { things: "denied", systemEvents: "granted" } },
+      }),
+    );
+    expect(result.outstanding).toEqual([]);
+    expect(progress[0]).toContain("nothing to raise");
+  });
+
+  it("says nothing is coming on a fully onboarded machine", () => {
+    installReader();
+    const result = run(
+      stubChannel({
+        hello: { axTrusted: true, automation: { things: "granted", systemEvents: "granted" } },
+      }),
+    );
+    expect(result.outstanding).toEqual([]);
+    expect(progress[0]).toContain("nothing to raise — every permission the helpers need");
   });
 });
 
@@ -276,8 +335,13 @@ describe("automation legs", () => {
     expect(stateOf(result, "automation-things")).toBe("denied");
     expect(result.denied).toBe(true);
     const step = result.steps.find((s) => s.leg === "automation-things");
+    // BOTH ways out, always named together — the Settings switch and re-arming
+    // the dialog. The ceremony never clears a denial itself.
     expect(step?.detail).toContain("Privacy & Security ▸ Automation ▸ Things3");
+    expect(step?.detail).toContain("tccutil reset AppleEvents com.pixelcog.things-api-helper");
     expect(result.closing).toContain("System Settings");
+    expect(result.closing).toContain("tccutil reset AppleEvents com.pixelcog.things-api-helper");
+    expect(result.closing).toContain("setup did not finish");
   });
 
   it("leaves an unanswered dialog pending, not failed", () => {
@@ -291,7 +355,10 @@ describe("automation legs", () => {
     expect(stateOf(result, "automation-things")).toBe("pending");
     expect(result.denied).toBe(false);
     expect(result.pending).toBe(true);
-    expect(result.closing).toContain("rerun `things helpers grant`");
+    // Human pace, but an UNFINISHED setup: the closing says so, and names
+    // where rerunning picks up.
+    expect(result.closing).toContain("setup did not finish");
+    expect(result.closing).toContain("Rerun `things helpers setup` to resume exactly there");
   });
 
   it("does not re-ask a target the handshake already reports denied", () => {
@@ -393,7 +460,7 @@ describe("helpers older than the ceremony", () => {
       }),
     );
     expect(progress.join("\n")).toContain("this package expects v");
-    expect(progress.join("\n")).toContain("things helpers install");
+    expect(progress.join("\n")).toContain("things helpers setup");
     // Absent ⇒ unknown ⇒ ask: both automation legs were attempted.
     expect(requests.filter((r) => r["verb"] === "osascript")).toHaveLength(2);
     expect(stateOf(result, "accessibility")).toBe("pending");
@@ -411,6 +478,7 @@ describe("routing that is switched off", () => {
       progress: () => {},
       readerProbe: () => ({ granted: true, locates: true }),
       grant: () => ({ granted: true, detail: "granted" }),
+      deputyWaitMs: 0,
     });
     expect(result.closing).toContain("helpers-enabled auto");
   });

@@ -12,7 +12,7 @@
 import Foundation
 
 /// How long a shutting-down deputy waits for requests already in flight. An
-/// upgrade (`things helpers install` / `restart`) boots the old process out
+/// upgrade (`things helpers setup` / `restart`) boots the old process out
 /// mid-flight; without a drain the in-flight request dies with it. launchd's
 /// own bootout wait, and the CLI's `launchctl` timeout, both clear this bound.
 let DRAIN_TIMEOUT_SECONDS: TimeInterval = 10
@@ -277,7 +277,7 @@ final class Server {
       // File verbs live exclusively on the sandboxed things-reader.
       result = errorResponse(
         id: id, code: "unsupported-verb",
-        message: "the deputy serves automation verbs only — file access rides things-reader (things helpers grant)")
+        message: "the deputy serves automation verbs only — file access rides things-reader (things helpers setup)")
     default:
       result = errorResponse(id: id, code: "bad-request", message: "unknown verb \(verb)")
     }

@@ -354,7 +354,7 @@ final class ReaderServer {
         nil,
         errorResponse(
           id: id, code: "not-granted",
-          message: "no security-scoped grant yet — run `things helpers grant` and select the Things data folder")
+          message: "no security-scoped grant yet — run `things helpers setup` and select the Things data folder")
       )
     }
     return (root, nil)

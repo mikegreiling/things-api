@@ -55,7 +55,16 @@ interface MockOverrides {
   sqlRows?: Record<string, unknown>[];
   osaResult?: Record<string, unknown>;
   token?: string;
+  /**
+   * hello's TCC standing. Defaults to fully granted so every non-gate cell
+   * exercises the transport rather than the onboarding gate; pass `null` to
+   * mock a deputy OLDER than the fields (they are simply absent).
+   */
+  automation?: { things: string; systemEvents: string } | null;
+  axTrusted?: boolean;
 }
+
+const GRANTED = { things: "granted", systemEvents: "granted" };
 
 let stateDir: string;
 let workers: Worker[] = [];
@@ -82,6 +91,8 @@ async function startMock(overrides: MockOverrides = {}): Promise<void> {
             : overrides.dbPath,
       sqlRows: overrides.sqlRows ?? [],
       osaResult: overrides.osaResult ?? { exitCode: 0, stdout: "ok\n", stderr: "" },
+      ...(overrides.automation !== null && { automation: overrides.automation ?? GRANTED }),
+      ...(overrides.axTrusted !== undefined && { axTrusted: overrides.axTrusted }),
     },
   });
   workers.push(worker);
@@ -312,6 +323,95 @@ describe("activation matrix (helpers-enabled tri-state)", () => {
   });
 });
 
+/**
+ * The onboarding gate: under `auto`, an installed-and-healthy deputy is NOT
+ * enough. Routing writes through a deputy with no app-control grant would only
+ * move the consent dialog onto the helper, where nobody is watching for it —
+ * so `auto` stays dormant until the grant is on record. `true` is an explicit
+ * instruction and routes regardless.
+ */
+describe("the auto onboarding gate", () => {
+  it("auto + healthy + GRANTED: active and silent", async () => {
+    await startMock({ automation: GRANTED });
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().active).toBe(true);
+    expect(noticesFrom(stderrSpy)).toEqual([]);
+    stderrSpy.mockRestore();
+  });
+
+  it("auto + healthy but NO app-control grant: dormant and LOUD", async () => {
+    await startMock({ automation: { things: "unknown", systemEvents: "granted" } });
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(routing.reason).toBe("onboarding incomplete (automation → Things: unknown)");
+    expect(noticesFrom(stderrSpy)[0]).toContain("things helpers setup");
+    stderrSpy.mockRestore();
+  });
+
+  it("auto + a DENIED app-control grant: dormant, not routed on hope", async () => {
+    await startMock({ automation: { things: "denied", systemEvents: "granted" } });
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().reason).toContain("automation → Things: denied");
+    stderrSpy.mockRestore();
+  });
+
+  it("Accessibility and System Events are NOT requisite — only Things gates writes", async () => {
+    await startMock({
+      automation: { things: "granted", systemEvents: "denied" },
+      axTrusted: false,
+    });
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().active).toBe(true);
+    stderrSpy.mockRestore();
+  });
+
+  it("an OLD deputy that cannot report its standing fails CLOSED under auto", async () => {
+    await startMock({ automation: null });
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = deputyRouting();
+    expect(routing.active).toBe(false);
+    expect(routing.reason).toContain("onboarding not provable");
+    // The remedy is the rebuild that gives it the handshake fields.
+    expect(noticesFrom(stderrSpy)[0]).toContain("build-helpers.sh");
+    stderrSpy.mockRestore();
+  });
+
+  it("mode true routes an unonboarded deputy anyway — an explicit instruction is obeyed", async () => {
+    await startMock({ automation: { things: "unknown", systemEvents: "unknown" } });
+    process.env["THINGS_API_HELPERS"] = "true";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().active).toBe(true);
+    stderrSpy.mockRestore();
+  });
+
+  it("mode true routes an OLD deputy too — the gate is auto's, not the protocol's", async () => {
+    await startMock({ automation: null });
+    process.env["THINGS_API_HELPERS"] = "true";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(deputyRouting().active).toBe(true);
+    stderrSpy.mockRestore();
+  });
+
+  it("READS are gated on the reader's own grant, not the deputy's — the halves are independent", async () => {
+    // Deputy unonboarded, reader granted: reads route, writes stay dormant.
+    await startMock({ automation: { things: "unknown", systemEvents: "unknown" } });
+    await startMockReader({ granted: true });
+    process.env["THINGS_API_HELPERS"] = "auto";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const routing = helpersRouting();
+    expect(routing.files).toBe(true);
+    expect(routing.automation).toBe(false);
+    expect(routing.deputyReason).toContain("onboarding incomplete");
+    stderrSpy.mockRestore();
+  });
+});
+
 describe("db routing rules", () => {
   it("routes only the default container database", async () => {
     await startMockReader({ granted: true });
@@ -393,7 +493,7 @@ describe("helpersRouting (what the mode resolved to — doctor's input)", () => 
     const routing = helpersRouting();
     expect(routing.automation).toBe(true);
     expect(routing.files).toBe(false);
-    expect(routing.readerReason).toContain("things helpers grant");
+    expect(routing.readerReason).toContain("things helpers setup");
     stderrSpy.mockRestore();
   });
 

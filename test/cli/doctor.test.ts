@@ -455,7 +455,7 @@ describe("doctor — helpers section", () => {
     expect(helpers.versionSkew).toBe(true);
     expect(helpers.expectedVersion).toBe(EXPECTED_HELPERS_VERSION);
     expect(helpers.remedy).toContain("build-helpers.sh");
-    expect(helpers.remedy).toContain("things helpers install");
+    expect(helpers.remedy).toContain("things helpers setup");
   });
 
   it("detects a hung socket (present, no handshake) and asks for a restart", () => {
@@ -480,11 +480,11 @@ describe("doctor — helpers section", () => {
       status: status({ reader: { ...half(), installed: true, granted: false } }),
       routing: routing({ files: false, readerReason: "reader running but NOT granted" }),
     });
-    expect(helpers.remedy).toContain("things helpers grant");
+    expect(helpers.remedy).toContain("things helpers setup");
     expect(helpers.detail).toContain("database reads");
   });
 
-  it("under auto, an un-onboarded machine reads as normal — with an install pointer", () => {
+  it("under auto, an un-onboarded machine reads as normal — with a setup pointer", () => {
     const helpers = helpersOf({
       status: status({
         bundleInstalled: false,
@@ -501,7 +501,7 @@ describe("doctor — helpers section", () => {
     });
     expect(helpers.versionSkew).toBe(false);
     expect(helpers.detail).toContain("normal state");
-    expect(helpers.remedy).toContain("things helpers install");
+    expect(helpers.remedy).toContain("things helpers setup");
   });
 
   it("mode false reports fully direct and asks for nothing", () => {
@@ -574,7 +574,7 @@ describe("doctor CLI — helpers section render", () => {
     expect(out).toContain("mode:        auto");
     expect(out).toContain("routing:     automation DIRECT, database reads DIRECT");
     expect(out).toContain("bundle:      not installed");
-    expect(out).toContain("next:        `things helpers install`");
+    expect(out).toContain("next:        `things helpers setup`");
   });
 
   it("--json carries the section in the envelope", async () => {

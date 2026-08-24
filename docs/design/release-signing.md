@@ -1,6 +1,6 @@
 # Release signing — the one-time maintainer setup
 
-The release workflow (`.github/workflows/release.yml`, job `build-helpers`) signs and notarizes `Things API Helper.app` on a macOS runner and stages it into the npm tarball at `deputy/prebuilt/`, so `things helpers install` works from a plain `npm install` with no Xcode, no certificate, and no build step on the consumer's machine. Design of record: [agent-daemon.md](agent-daemon.md) §3 (Distribution).
+The release workflow (`.github/workflows/release.yml`, job `build-helpers`) signs and notarizes `Things API Helper.app` on a macOS runner and stages it into the npm tarball at `deputy/prebuilt/`, so `things helpers setup` works from a plain `npm install` with no Xcode, no certificate, and no build step on the consumer's machine. Design of record: [agent-daemon.md](agent-daemon.md) §3 (Distribution).
 
 This document is the click-path for the five repository secrets that job reads. **Nothing here is ever committed** — the repository holds the workflow and this runbook, never a certificate, a key, or a passphrase.
 

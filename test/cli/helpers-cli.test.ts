@@ -151,7 +151,54 @@ describe("things helpers status", () => {
     const out = stdout.join("");
     expect(out).toContain("bundle: installed (v9.9.9)");
     expect(out).toContain("things helpers restart");
-    expect(out).toContain("routing: auto — the installed helpers are used while healthy");
+    // A bundle that cannot answer cannot prove its grants either: dormant.
+    expect(out).toContain("routing: auto — dormant: onboarding incomplete");
+    expect(out).toContain("the deputy is not answering");
+  });
+});
+
+describe("helpers status — the auto routing gate", () => {
+  /** Pretend a bundle is installed, so `auto` is past the absence case. */
+  function markInstalled(): void {
+    const bundle = join(stateDir, "deputy/bin/Things API Helper.app/Contents/MacOS");
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(join(bundle, "things-deputy"), "#!/bin/sh\n");
+  }
+
+  it("says DORMANT while the app-control grant for Things is missing", async () => {
+    markInstalled();
+    await startMockDeputy({
+      axTrusted: false,
+      automation: { things: "unknown", systemEvents: "granted" },
+    });
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    expect(out).toContain("routing: auto — dormant: onboarding incomplete");
+    expect(out).toContain("automation → Things (unknown)");
+    expect(out).toContain("things helpers setup");
+  });
+
+  it("says ROUTING once the requisite grants are on record", async () => {
+    markInstalled();
+    await startMockDeputy({
+      axTrusted: false,
+      automation: { things: "granted", systemEvents: "not-running" },
+    });
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    // Accessibility and System Events are NOT requisite — the UI vector is
+    // gated separately, so their absence must not read as dormant routing.
+    expect(out).toContain("routing: auto — routing (onboarded)");
+    expect(out).not.toContain("dormant");
+  });
+
+  it("stays dormant for helpers too old to report their permission standing", async () => {
+    markInstalled();
+    await startMockDeputy();
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    expect(out).toContain("routing: auto — dormant: onboarding incomplete");
+    expect(out).toContain("predate the permission handshake");
   });
 });
 
@@ -175,30 +222,47 @@ describe("global --helpers/--no-helpers", () => {
   });
 });
 
-describe("helpers reset", () => {
-  // Only the refusal gates are exercised through the CLI: a confirmed reset
-  // runs the REAL `tccutil`, which would revoke the developer machine's live
-  // helper grants. The confirmed path is unit-covered with an injected runner
-  // (test/unit/helpers-reset.test.ts).
+describe("the helpers subcommand surface", () => {
+  it("is exactly status, restart, setup, uninstall", () => {
+    const helpers = buildProgram()
+      .commands.find((c) => c.name() === "helpers")
+      ?.commands.map((c) => c.name())
+      .toSorted();
+    expect(helpers).toEqual(["restart", "setup", "status", "uninstall"]);
+  });
+});
+
+describe("helpers uninstall --revoke", () => {
+  // Only the refusal gates are exercised through the CLI: a confirmed revoke
+  // runs the REAL `tccutil` and `lsregister`, which would revoke this
+  // machine's live helper grants. The confirmed path is unit-covered with an
+  // injected runner (test/unit/helpers-uninstall.test.ts).
   it("refuses without --yes when stdin is not a terminal", async () => {
-    await run(["helpers", "reset"]);
+    await run(["helpers", "uninstall", "--revoke"]);
     expect(stderr.join("")).toContain("--yes");
     expect(process.exitCode).toBe(2);
   });
 
-  it("refuses --json without --yes (no interactive prompt under --json)", async () => {
-    await run(["helpers", "reset", "--json"]);
+  it("refuses --json --revoke without --yes (no interactive prompt under --json)", async () => {
+    await run(["helpers", "uninstall", "--revoke", "--json"]);
     expect(stderr.join("")).toContain("--yes");
     expect(stdout.join("")).toBe("");
     expect(process.exitCode).toBe(2);
   });
 });
 
-describe("helpers install", () => {
+describe("helpers setup", () => {
   it("refuses cleanly when no bundle has been built", async () => {
-    await run(["helpers", "install", "--bundle", join(stateDir, "missing-bundle.app")]);
+    await run(["helpers", "setup", "--bundle", join(stateDir, "missing-bundle.app")]);
     expect(stderr.join("")).toContain("not found");
     expect(process.exitCode).toBe(7);
+  });
+
+  it("names the ceremony's outcome in its own --help, so the nonzero exit is not a surprise", () => {
+    const setup = buildProgram()
+      .commands.find((c) => c.name() === "helpers")
+      ?.commands.find((c) => c.name() === "setup");
+    expect(setup?.description()).toContain("nonzero while any permission is still outstanding");
   });
 });
 
@@ -212,7 +276,7 @@ describe("helpers status — the deputy's TCC standing", () => {
     const out = stdout.join("");
     expect(out).toContain("automation: Things granted, System Events not-running");
     expect(out).toContain("accessibility: not granted");
-    expect(out).toContain("next: `things helpers grant`");
+    expect(out).toContain("next: `things helpers setup`");
   });
 
   it("omits both rows for a deputy that predates them", async () => {
@@ -238,10 +302,7 @@ describe("helpers status — the deputy's TCC standing", () => {
   });
 });
 
-describe("helpers grant", () => {
-  it("refuses on a machine with nothing installed and names the install command", async () => {
-    await run(["helpers", "grant"]);
-    expect(stderr.join("")).toContain("things helpers install");
-    expect(process.exitCode).toBe(7);
-  });
-});
+// `helpers setup` is never run without --bundle here: the default resolves the
+// bundle packaged with this checkout, and a real install would bootstrap
+// launchd agents on the machine running the suite. Its refusal path is above;
+// the ceremony itself is unit-covered (test/unit/helpers-onboard.test.ts).
