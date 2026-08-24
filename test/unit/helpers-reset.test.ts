@@ -78,6 +78,34 @@ describe("resetHelpers", () => {
     expect(again.warnings).toEqual([]);
   });
 
+  it("revokes while the install still exists — tccutil needs LaunchServices to resolve the id", () => {
+    const deputyDir = join(stateDir, "deputy");
+    mkdirSync(join(deputyDir, "bin"), { recursive: true });
+    const seenDuringRevoke: boolean[] = [];
+    resetHelpers(process.env, (bin, args) => {
+      calls.push({ bin, args });
+      seenDuringRevoke.push(existsSync(join(deputyDir, "bin")));
+      return { ok: true, output: "Successfully reset All" };
+    });
+    // Both revocations ran BEFORE the uninstall/state legs tore anything down.
+    expect(seenDuringRevoke).toEqual([true, true]);
+    expect(existsSync(deputyDir)).toBe(false);
+  });
+
+  it("-10814 (no app registered) is the idempotent no-op, not a warning", () => {
+    const result = resetHelpers(process.env, (bin, args) => {
+      calls.push({ bin, args });
+      return {
+        ok: false,
+        output:
+          'tccutil: No such bundle identifier "com.pixelcog.things-reader": The operation couldn’t be completed. (OSStatus error -10814.)',
+      };
+    });
+    expect(result.tccResets.map((t) => t.ok)).toEqual([true, true]);
+    expect(result.tccResets[0]?.detail).toContain("nothing to revoke");
+    expect(result.warnings).toEqual([]);
+  });
+
   it("a failing tccutil surfaces as a warning, and the other legs still run", () => {
     const deputyDir = join(stateDir, "deputy");
     mkdirSync(deputyDir, { recursive: true });

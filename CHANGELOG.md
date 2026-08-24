@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- New: `things helpers reset` — return a machine to the never-onboarded state (uninstall + revoke both helper identities' macOS permission grants via `tccutil` + delete the reader's bookmark container and the deputy's state). Idempotent from any partial state: an already-uninstalled helper still gets its grants revoked, and a rerun is a no-op. Interactive confirmation or `--yes`; the bundled shortcuts remain a reported manual step (no CLI can delete a shortcut).
+- New: `things helpers reset` — return a machine to the never-onboarded state (uninstall + revoke both helper identities' macOS permission grants via `tccutil` + delete the reader's bookmark container and the deputy's state). Idempotent from any partial state, and revocation runs before the uninstall (`tccutil` resolves identifiers through LaunchServices, so grants must be revoked while the bundle still exists; `-10814` afterwards is reported as the no-op it is). Interactive confirmation or `--yes`; the bundled shortcuts remain a reported manual step (no CLI can delete a shortcut).
 
 - Fixed: the onboarding ceremony's Automation → Things leg probed with `version`, which AppleScript answers locally without dispatching an Apple event — no consent dialog was raised and the leg reported a grant it never obtained (the first real write then prompted). The probe is now a genuine event (`count of areas`) and a successful probe is confirmed against a fresh `AEDeterminePermission` read before the leg reports `granted`.
 

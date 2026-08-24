@@ -400,19 +400,30 @@ export function resetHelpers(
   runTool: (bin: string, args: string[]) => { ok: boolean; output: string } = runToolDefault,
 ): HelpersResetResult {
   const warnings: string[] = [];
-  const removed = [...uninstallHelpers(env).removed];
   const tccResets: HelpersResetResult["tccResets"] = [];
+  // Revoke BEFORE uninstalling: `tccutil reset All <id>` resolves the id
+  // through LaunchServices first and refuses with -10814
+  // (kLSApplicationNotFoundErr) once no app carries it — so the grants must
+  // be revoked while the installed bundle still exists. After an uninstall
+  // (or on a machine that never had one) -10814 means "nothing addressable":
+  // the idempotent no-op, reported as such, never a warning.
   for (const target of [HELPERS_BUNDLE_ID, READER_LAUNCHD_LABEL]) {
     const res = runTool("/usr/bin/tccutil", ["reset", "All", target]);
+    const noApp = !res.ok && /No such bundle identifier|-10814/.test(res.output);
     tccResets.push({
       target,
-      ok: res.ok,
-      detail: res.output.trim() || (res.ok ? "reset" : "failed"),
+      ok: res.ok || noApp,
+      detail: res.ok
+        ? res.output.trim() || "reset"
+        : noApp
+          ? "no app registered under this identifier — nothing to revoke"
+          : res.output.trim() || "failed",
     });
-    if (!res.ok) {
+    if (!res.ok && !noApp) {
       warnings.push(`tccutil reset All ${target} failed: ${res.output.trim() || "unknown"}`);
     }
   }
+  const removed = [...uninstallHelpers(env).removed];
   for (const dir of [readerContainerDir(env), deputyStateDir(env)]) {
     if (existsSync(dir)) {
       try {
