@@ -1,24 +1,30 @@
 /**
- * Live certification of the REAL sandboxed reader (deputy/reader). Gated like
+ * Live certification of the REAL sandboxed reader (deputy/reader), gated like
  * the broker suite (darwin + THINGS_DEPUTY_LIVE=1 + swiftc) PLUS a signing
- * identity — amfid kills sandboxed code without a real certificate chain — and
- * skipped when a production reader already answers on this machine (spawning a
- * second instance would steal its socket).
+ * identity — amfid kills sandboxed code without a real certificate chain.
  *
- * Asserts the sandbox-visible contract only: handshake (role/granted), the
- * fail-closed not-granted refusal, and verb gating. The GRANTED read path is
- * VM-certified end-to-end by SANDBOX1 (docs/lab/sandbox1-scoped-reader.md) —
- * it needs a one-time human panel, which no CI or unattended host can click.
+ * WHAT THIS SUITE CAN STILL ASSERT, and why it is less than it was. Since
+ * helpers 1.3.0 the reader does not create its own rendezvous: launchd binds
+ * the socket (the LaunchAgent's `Sockets` key) at a path outside the sandbox
+ * container and hands over the listening fd at activation, and the access token
+ * arrives in an environment variable the same plist carries. There is
+ * deliberately NO fallback bind and no self-minted token — that is the point of
+ * the design, and an ALPHA package adds no second code path to keep a test
+ * convenient. A suite therefore cannot stand the reader up on its own, so what
+ * is certified here is the REFUSAL contract: a `--serve` outside its LaunchAgent
+ * names what is missing and exits nonzero rather than half-starting.
+ *
+ * The serving contract — handshake, verb gating, the fail-closed not-granted
+ * refusal — is certified where it can actually be exercised: end-to-end under
+ * launchd by the live migration a `things helpers setup` performs, and in the VM
+ * by SANDBOX1 (docs/lab/sandbox1-scoped-reader.md), which also covers the
+ * granted read path (it needs a one-time human panel no CI host can click).
  */
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-import { DeputySyncBridge } from "../../src/deputy/bridge.ts";
-import { readerSocketPath, readerTokenPath } from "../../src/deputy/protocol.ts";
-import { readerContainerAccessible } from "../../src/host-access.ts";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const appBinary = join(
@@ -38,77 +44,48 @@ function hasSigningIdentity(): boolean {
   }
 }
 
-// The reader's home is fixed by its bundle id — no env override reaches the
-// sandbox. A production reader already serving there must not be disturbed.
-// The stat is behind the same host-access guard the shipped probes use: the
-// container belongs to another app, so looking without durable file access is
-// the "access data from other apps" dialog, and a test run must never raise one.
-const containerReachable = readerContainerAccessible({});
-const productionReaderPresent = containerReachable && existsSync(readerSocketPath({}));
-
 const runnable =
   process.platform === "darwin" &&
   process.env["THINGS_DEPUTY_LIVE"] === "1" &&
-  containerReachable &&
-  !productionReaderPresent &&
   hasSigningIdentity();
 
 describe.skipIf(!runnable)("things-reader (live sandboxed bundle)", () => {
-  let child: ChildProcess;
-  let bridge: DeputySyncBridge;
-  let token: string;
-
-  beforeAll(async () => {
+  beforeAll(() => {
     if (!existsSync(appBinary)) {
       execFileSync("bash", ["scripts/build-helpers.sh"], { cwd: repoRoot, stdio: "ignore" });
     }
-    child = spawn(appBinary, ["--serve"], { stdio: "ignore" });
-    const socket = readerSocketPath({});
-    const tokenFile = readerTokenPath({});
-    const deadline = Date.now() + 10_000;
-    while (!existsSync(socket) || !existsSync(tokenFile)) {
-      if (Date.now() > deadline) throw new Error("reader did not come up within 10s");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    token = execFileSync("cat", [tokenFile], { encoding: "utf8" }).trim();
-    bridge = new DeputySyncBridge(socket);
-  }, 120_000);
+  }, 300_000);
 
-  afterAll(() => {
-    bridge?.close();
-    child?.kill("SIGTERM");
-    setTimeout(() => child?.kill("SIGKILL"), 1000).unref();
-  });
-
-  function request(fields: Record<string, unknown>): Record<string, unknown> {
-    return bridge.request({ v: 1, token, ...fields }, 10_000);
+  /** Run the reader to completion. Every cell here expects a fast exit. */
+  function serve(env: NodeJS.ProcessEnv): { status: number | null; stderr: string } {
+    const res = spawnSync(appBinary, ["--serve"], {
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, ...env },
+    });
+    return { status: res.status, stderr: `${res.stdout ?? ""}${res.stderr ?? ""}` };
   }
 
-  it("handshakes as a reader with an explicit grant state", () => {
-    const res = request({ verb: "hello" });
-    expect(res["ok"]).toBe(true);
-    expect(res["role"]).toBe("reader");
-    expect(typeof res["granted"]).toBe("boolean");
+  it("reports its version without needing launchd at all", () => {
+    const res = spawnSync(appBinary, ["--version"], { encoding: "utf8", timeout: 20_000 });
+    expect(res.status).toBe(0);
+    expect(res.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it("without a grant, file verbs refuse with the ceremony pointer (never a prompt)", () => {
-    const hello = request({ verb: "hello" });
-    if (hello["granted"] === true) return; // a granted dev machine: covered by SANDBOX1 cells
-    const res = request({ verb: "locate" });
-    expect(res["ok"]).toBe(false);
-    expect((res["error"] as { code: string }).code).toBe("not-granted");
-    expect((res["error"] as { message: string }).message).toContain("things helpers grant");
+  it("refuses to serve without the token its LaunchAgent injects", () => {
+    const { status, stderr } = serve({ THINGS_READER_TOKEN: "" });
+    expect(status).not.toBe(0);
+    expect(stderr).toContain("THINGS_READER_TOKEN is not set");
+    expect(stderr).toContain("things helpers setup");
   });
 
-  it("automation verbs are structurally absent", () => {
-    const res = request({ verb: "osascript", script: "tell app", timeoutMs: 1000 });
-    expect(res["ok"]).toBe(false);
-    expect((res["error"] as { code: string }).code).toBe("unsupported-verb");
-  });
-
-  it("rejects a bad token", () => {
-    const res = bridge.request({ v: 1, token: "0".repeat(64), verb: "hello" }, 10_000);
-    expect(res["ok"]).toBe(false);
-    expect((res["error"] as { code: string }).code).toBe("bad-token");
+  it("refuses to serve without a launchd-activated socket — it never binds its own", () => {
+    // The failure mode this pins: a reader that quietly fell back to binding
+    // inside its container would look healthy and put the rendezvous straight
+    // back where 1.3.0 took it out of.
+    const { status, stderr } = serve({ THINGS_READER_TOKEN: "0".repeat(64) });
+    expect(status).not.toBe(0);
+    expect(stderr).toContain("no launchd-activated socket");
+    expect(stderr).toContain("things helpers setup");
   });
 });

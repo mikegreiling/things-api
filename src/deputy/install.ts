@@ -13,19 +13,24 @@
  * bookmark grant and must never change.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadConfig, saveConfigKey, type HelpersMode } from "../config.ts";
 import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
-import {
-  READER_UNREACHABLE_REASON,
-  readerContainerAccessible,
-  readRendezvousToken,
-  rendezvousExists,
-} from "../host-access.ts";
+import { readRendezvousToken, rendezvousExists } from "../host-access.ts";
 import { createWizard, withDefaultInterrupts, type Wizard } from "../wizard.ts";
 import { EXPECTED_PROXIES } from "../write/availability.ts";
 import { DeputySyncBridge } from "./bridge.ts";
@@ -45,10 +50,13 @@ import {
   EXPECTED_HELPERS_VERSION,
   helpersInstallDir,
   helpersInstalledBundlePath,
-  readerContainerDir,
   readerInstalledAppPath,
+  readerRendezvousDir,
+  readerSandboxContainerDir,
   readerSocketPath,
+  READER_SOCKET_KEY,
   readerTokenPath,
+  READER_TOKEN_ENV,
 } from "./protocol.ts";
 
 export function deputyPlistPath(): string {
@@ -115,7 +123,31 @@ function readerExecPath(appPath: string): string {
   return join(appPath, "Contents/MacOS/things-reader");
 }
 
-function renderReaderPlist(appPath: string): string {
+/**
+ * 0600 as a plist `<integer>`. Property lists have no octal literal, and
+ * launchd reads `SockPathMode` as the decimal number it finds — so the mode
+ * must be written base-10 (0o600 === 384) or the socket comes out world-
+ * readable. Derived, never typed as a magic constant.
+ */
+const SOCK_PATH_MODE_0600 = 0o600;
+
+/**
+ * The reader's LaunchAgent. Two keys carry the whole host-universal rendezvous:
+ *
+ * - **`Sockets`** — launchd creates, binds, listens on and chmods the socket at
+ *   `socketPath`, which is OUR state directory, and hands the sandboxed reader
+ *   the already-listening fd at activation (`launch_activate_socket`). The
+ *   reader cannot bind outside its container, so launchd binding on its behalf
+ *   is the only way the rendezvous escapes it — and with the socket outside
+ *   every container, a client reaching it crosses no consent class.
+ * - **`EnvironmentVariables`** — the access token, minted by the installer and
+ *   written to a sibling file for clients. Delivering it through the plist is
+ *   what lets the reader keep its expected token out of the container too.
+ *
+ * The plist therefore CARRIES A SECRET and is written 0600 — the same
+ * same-user trust class as the token file itself.
+ */
+export function renderReaderPlist(appPath: string, socketPath: string, token: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -131,6 +163,28 @@ function renderReaderPlist(appPath: string): string {
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <!-- launchd owns the listening socket, at a path OUTSIDE the reader's App
+       Sandbox container: it binds and listens, then hands the reader the fd.
+       SockPathMode is decimal (${SOCK_PATH_MODE_0600} === 0${SOCK_PATH_MODE_0600.toString(8)}). -->
+  <key>Sockets</key>
+  <dict>
+    <key>${READER_SOCKET_KEY}</key>
+    <dict>
+      <key>SockPathName</key>
+      <string>${socketPath}</string>
+      <key>SockPathMode</key>
+      <integer>${SOCK_PATH_MODE_0600}</integer>
+      <key>SockFamily</key>
+      <string>Unix</string>
+    </dict>
+  </dict>
+  <!-- The access token the reader expects, minted by install. This file is
+       written 0600 because of it. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>${READER_TOKEN_ENV}</key>
+    <string>${token}</string>
+  </dict>
   <!-- Background Task Management groups the login item under the helper
        bundle's display name ("Things API Helper") instead of the signing
        certificate's personal name. -->
@@ -141,6 +195,38 @@ function renderReaderPlist(appPath: string): string {
 </dict>
 </plist>
 `;
+}
+
+/**
+ * Mint the reader's access token and lay down the client half of the
+ * rendezvous: `<state>/reader`, 0700, holding a 0600 token file. Returns the
+ * token so the same value can be injected into the LaunchAgent.
+ *
+ * The installer mints it — not the reader — because the reader can only write
+ * inside its container, which is the placement this whole arrangement exists
+ * to leave. A fresh token per install is deliberate: install owns the pair
+ * wholesale, and rotating the secret costs nothing when both ends are rewritten
+ * in the same breath.
+ */
+export function mintReaderRendezvous(env: NodeJS.ProcessEnv): string {
+  const dir = readerRendezvousDir(env);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const token = randomBytes(32).toString("hex");
+  const tokenPath = readerTokenPath(env);
+  writeFileSync(tokenPath, token, { mode: 0o600 });
+  // writeFileSync's mode applies on CREATE only — an existing file keeps
+  // whatever it had, so the chmod is the one that actually holds the line.
+  chmodSync(tokenPath, 0o600);
+  // launchd binds the socket itself and refuses when something already sits at
+  // the path (a plain file left by an older layout, or a socket from a job it
+  // no longer tracks). Clearing it is safe: we booted the reader out above.
+  try {
+    unlinkSync(readerSocketPath(env));
+  } catch {
+    // ENOENT is the ordinary case.
+  }
+  return token;
 }
 
 function launchTarget(): string {
@@ -235,25 +321,8 @@ export interface HelpersInstallResult {
   warnings: string[];
 }
 
-/**
- * May this call touch the reader's rendezvous? Outside a ceremony the answer
- * is the host-access guard: the socket and token sit in the reader's App
- * Sandbox container, and a stat from a host without durable file access is the
- * "access data from other apps" consent class — a modal Article I forbids
- * outside `things setup` / `things helpers setup`. INSIDE a ceremony the touch
- * is allowed (a consent context, with a human present), which is what
- * `ceremony: true` asserts at the call site.
- */
-function mayTouchRendezvous(env: NodeJS.ProcessEnv, ceremony: boolean): boolean {
-  return ceremony || readerContainerAccessible({ env });
-}
-
-/**
- * One handshake against the reader's socket; null when it cannot complete —
- * including when this host may not look (see {@link mayTouchRendezvous}).
- */
-function readerHelloProbe(env: NodeJS.ProcessEnv, ceremony = false): ReaderHello | null {
-  if (!mayTouchRendezvous(env, ceremony)) return null;
+/** One handshake against the reader's socket; null when it cannot complete. */
+function readerHelloProbe(env: NodeJS.ProcessEnv): ReaderHello | null {
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
   if (!rendezvousExists(socketPath) || !rendezvousExists(tokenPath)) return null;
@@ -324,8 +393,16 @@ export function installHelpers(
 
   let readerGranted: boolean | null = null;
   if (readerInBuild) {
+    // The rendezvous is minted BEFORE the plist is written: the plist carries
+    // the same token, so the two must be laid down from one value.
+    const readerToken = mintReaderRendezvous(env);
     const readerPlist = readerPlistPath();
-    writeFileSync(readerPlist, renderReaderPlist(readerInstalledAppPath(env)));
+    writeFileSync(
+      readerPlist,
+      renderReaderPlist(readerInstalledAppPath(env), readerSocketPath(env), readerToken),
+      { mode: 0o600 },
+    );
+    chmodSync(readerPlist, 0o600);
     const readerBoot = launchctl(["bootstrap", `gui/${process.getuid?.() ?? 501}`, readerPlist]);
     if (!readerBoot.ok) {
       warnings.push(`reader launchctl bootstrap failed: ${readerBoot.output.trim()}`);
@@ -334,7 +411,7 @@ export function installHelpers(
       // hedge — the reader knows, so ask it (bounded: it just booted).
       const deadline = Date.now() + 4000;
       while (Date.now() < deadline) {
-        const hello = readerHelloProbe(env, true);
+        const hello = readerHelloProbe(env);
         if (hello !== null) {
           readerGranted = hello.granted === true;
           break;
@@ -529,7 +606,13 @@ export function uninstallHelpers(
     removed.push(installDir);
   }
   if (revoke) {
-    for (const dir of [readerContainerDir(env), deputyStateDir(env)]) {
+    // The reader's container holds the bookmark that IS the read grant; the
+    // rendezvous holds the access token; the deputy's state dir holds its own.
+    for (const dir of [
+      readerSandboxContainerDir(env),
+      readerRendezvousDir(env),
+      deputyStateDir(env),
+    ]) {
       if (existsSync(dir)) {
         try {
           rmSync(dir, { recursive: true, force: true });
@@ -593,9 +676,6 @@ export function grantReader(env: NodeJS.ProcessEnv = process.env): {
     };
   }
   // The serving reader re-checks its bookmark per request — no restart needed.
-  // This poll DOES cross into the reader's sandbox container, which a ceremony
-  // may do (a human is here, and consent is the point); the reads are still
-  // EPERM-safe so a refusal reports honestly instead of crashing the ceremony.
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
   const deadline = Date.now() + 15_000;
@@ -806,15 +886,8 @@ function openDeputyChannel(env: NodeJS.ProcessEnv, waitMs: number): OnboardChann
   };
 }
 
-/**
- * Reader handshake + a `locate` inside the granted scope, on one connection.
- * The ceremony's own survey, so it may cross into the reader's container.
- */
-function readerProbeDefault(
-  env: NodeJS.ProcessEnv,
-  ceremony = true,
-): { granted: boolean; locates: boolean } | null {
-  if (!mayTouchRendezvous(env, ceremony)) return null;
+/** Reader handshake + a `locate` inside the granted scope, on one connection. */
+function readerProbeDefault(env: NodeJS.ProcessEnv): { granted: boolean; locates: boolean } | null {
   const socketPath = readerSocketPath(env);
   const tokenPath = readerTokenPath(env);
   if (!rendezvousExists(socketPath) || !rendezvousExists(tokenPath)) return null;
@@ -1416,14 +1489,6 @@ export interface DeputyHalfStatus {
 export interface ReaderHalfStatus extends DeputyHalfStatus {
   installed: boolean;
   granted: boolean;
-  /**
-   * This host cannot verify or reach the reader without durable file access:
-   * its rendezvous lives inside the reader's App Sandbox container, and
-   * touching another app's container is the consent class Article I keeps
-   * inside ceremonies (src/host-access.ts). Nothing was asked, so `running`,
-   * `granted` and `hello` are simply unknown — never claimed as false facts.
-   */
-  unreachable: boolean;
 }
 
 export interface HelpersStatus {
@@ -1496,29 +1561,13 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
   let running = false;
   let granted = false;
   let hello: DeputyHello | null = null;
-  let detail = "not running (no socket)";
-  // `helpers status` is an ordinary command, not a ceremony: if this host
-  // cannot reach the reader's container prompt-free, it reports that and stops
-  // — it does NOT stat the rendezvous to find out (that stat is the dialog).
-  if (!readerContainerAccessible({ env })) {
-    return {
-      installed,
-      plistInstalled: existsSync(readerPlistPath()),
-      loaded,
-      running: false,
-      granted: false,
-      unreachable: true,
-      socketPath,
-      hungSocket: false,
-      hello: null,
-      signing: installed ? deputySigningInfo(readerExecPath(appPath)) : null,
-      detail: READER_UNREACHABLE_REASON,
-    };
-  }
+  // The rendezvous is `<state>/reader`, ours and outside every sandbox
+  // container, so `helpers status` answers this identically from any host app.
+  let detail = "not registered with launchd (no rendezvous)";
   const socketPresent = rendezvousExists(socketPath) && rendezvousExists(tokenPath);
   const token = socketPresent ? readRendezvousToken(tokenPath) : null;
   if (socketPresent && token === null) {
-    detail = `${READER_UNREACHABLE_REASON} (its access token could not be read)`;
+    detail = `the reader's access token could not be read (${tokenPath}) — \`things helpers setup\` mints a fresh one`;
   }
   if (token !== null) {
     const bridge = new DeputySyncBridge(socketPath);
@@ -1544,7 +1593,6 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
     loaded,
     running,
     granted,
-    unreachable: socketPresent && token === null,
     socketPath,
     hungSocket: socketPresent && token !== null && !running,
     hello,

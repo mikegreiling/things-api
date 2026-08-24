@@ -18,11 +18,33 @@
  *
  * Ships as a minimal .app bundle (secinit refuses bare executables) signed
  * with a real certificate chain (amfid refuses ad-hoc on sandboxed code).
- * State (bookmark, token, socket, log) lives in the sandbox container home.
+ *
+ * ── The rendezvous lives OUTSIDE this container (helpers 1.3.0) ─────────────
+ *
+ * A sandboxed process can only bind a socket inside its own container home, so
+ * for as long as this process bound its own socket, every CLIENT stat/open of
+ * that socket was a cross-app container access — the
+ * kTCCServiceSystemPolicyAppData consent class, silent under a Full-Disk-Access
+ * host and a modal from anywhere else. That made reader routing per-host, which
+ * is the opposite of what the helper pair exists for.
+ *
+ * So this process no longer creates its rendezvous at all:
+ *
+ *   • the SOCKET is declared in the LaunchAgent's `Sockets` key at a path in the
+ *     user's own state directory. launchd creates, binds, listens and chmods it
+ *     there — outside every container — and hands over the already-listening fd
+ *     at activation, which `launch_activate_socket` collects below. There is no
+ *     fallback bind: without an activated fd this process exits, loudly;
+ *   • the TOKEN it expects arrives in THINGS_READER_TOKEN, injected into the
+ *     same plist by the installer, which writes the matching file for clients.
+ *
+ * What stays in the container is what was always right to keep there: the
+ * security-scoped BOOKMARK (the read grant itself, reader-internal, never read
+ * by a client) and the audit log.
  *
  * Modes:
  *   --grant <startDir>   present the NSOpenPanel ceremony, save the bookmark
- *   --serve              serve the socket (launchd mode; default)
+ *   --serve              serve the launchd-activated socket (default)
  *   --version            print the version
  */
 import AppKit
@@ -34,15 +56,61 @@ let READER_PROTOCOL_VERSION = 1
 let MAX_LINE_BYTES = 8 * 1024 * 1024
 let MAX_FILE_READ_BYTES = 64 * 1024 * 1024
 
+/// The `Sockets` entry name in the LaunchAgent (src/deputy/protocol.ts).
+let READER_SOCKET_KEY = "Listener"
+/// The env var the LaunchAgent carries the expected access token in.
+let READER_TOKEN_ENV = "THINGS_READER_TOKEN"
+
 // Sandboxed home == the container Data dir — the durable private store.
 let home = NSHomeDirectory()
 let bookmarkFile = home + "/things-reader.bookmark"
-let socketPath = home + "/reader.sock"
-let tokenFile = home + "/token"
 let logFile = home + "/reader.log"
+// Pre-1.3.0 the socket and token lived here. Only this process can delete them
+// (they are inside its container), so it does — see cleanUpLegacyRendezvous().
+let legacySocketPath = home + "/reader.sock"
+let legacyTokenFile = home + "/token"
 
 func stderrLine(_ message: String) {
   FileHandle.standardError.write(Data("things-reader: \(message)\n".utf8))
+}
+
+/**
+ * libSystem's launchd socket check-in: fills a malloc'd array with the fds
+ * launchd bound for the named `Sockets` entry. Declared here rather than
+ * imported because launch.h's modern half is not surfaced to Swift.
+ *
+ *   int launch_activate_socket(const char *name, int **fds, size_t *cnt);
+ */
+@_silgen_name("launch_activate_socket")
+func launch_activate_socket(
+  _ name: UnsafePointer<CChar>,
+  _ fds: UnsafeMutablePointer<UnsafeMutablePointer<Int32>?>,
+  _ cnt: UnsafeMutablePointer<Int>
+) -> Int32
+
+/// The single listening fd launchd bound for us, or nil with the errno-ish
+/// reason. The fd array is malloc'd by libSystem and must be freed.
+func activatedListener() -> (fd: Int32?, reason: String) {
+  var fds: UnsafeMutablePointer<Int32>?
+  var count = 0
+  let err = READER_SOCKET_KEY.withCString { launch_activate_socket($0, &fds, &count) }
+  guard err == 0 else { return (nil, "launch_activate_socket returned \(err)") }
+  guard let fds else { return (nil, "launch_activate_socket returned no fd array") }
+  defer { free(fds) }
+  guard count == 1 else { return (nil, "launchd handed over \(count) sockets, expected 1") }
+  return (fds[0], "")
+}
+
+/**
+ * Delete the pre-1.3.0 in-container rendezvous. Those files are dead the moment
+ * this build runs — nothing binds or reads them any more — and this process is
+ * the ONLY one that can remove them, since they sit in its sandbox container
+ * and a client touching that path is the very consent class 1.3.0 escaped.
+ * Idempotent; a fresh install finds nothing.
+ */
+func cleanUpLegacyRendezvous() {
+  unlink(legacySocketPath)
+  unlink(legacyTokenFile)
 }
 
 // --- grant ceremony ---
@@ -126,19 +194,6 @@ let scope = Scope()
 
 // --- server (file verbs only) ---
 
-func loadOrCreateToken() -> String {
-  if let data = FileManager.default.contents(atPath: tokenFile) {
-    let tok = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-    if !tok.isEmpty { return tok }
-  }
-  var bytes = [UInt8](repeating: 0, count: 32)
-  for i in 0..<bytes.count { bytes[i] = UInt8.random(in: 0...255) }
-  let tok = bytes.map { String(format: "%02x", $0) }.joined()
-  FileManager.default.createFile(
-    atPath: tokenFile, contents: Data(tok.utf8), attributes: [.posixPermissions: 0o600])
-  return tok
-}
-
 /// How long a shutting-down reader waits for requests already in flight (the
 /// deputy's DRAIN_TIMEOUT_SECONDS; the two halves are booted out together).
 let READER_DRAIN_TIMEOUT_SECONDS: TimeInterval = 10
@@ -173,28 +228,13 @@ final class ReaderServer {
     cacheLock.unlock()
   }
 
-  func run() {
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-    guard fd >= 0 else { fatalDie("socket() errno \(errno)") }
+  /**
+   * Serve the socket launchd bound for us. There is no socket()/bind()/listen()
+   * here and no unlink: launchd created the socket at a path outside this
+   * container, and this process only ever accepts on the fd it was handed.
+   */
+  func run(listener fd: Int32) {
     listenFd = fd
-    unlink(socketPath)
-    var addr = sockaddr_un()
-    addr.sun_family = sa_family_t(AF_UNIX)
-    let capacity = MemoryLayout.size(ofValue: addr.sun_path)
-    guard socketPath.utf8.count < capacity else { fatalDie("socket path too long: \(socketPath)") }
-    _ = withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-      socketPath.withCString { cstr in
-        strncpy(UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self), cstr, capacity - 1)
-      }
-    }
-    let bound = withUnsafePointer(to: &addr) { ptr in
-      ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-        bind(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
-      }
-    }
-    guard bound == 0 else { fatalDie("bind(\(socketPath)) errno \(errno)") }
-    chmod(socketPath, 0o600)
-    guard listen(fd, 16) == 0 else { fatalDie("listen() errno \(errno)") }
     audit(["event": "started", "pid": Int(getpid()), "version": DEPUTY_VERSION])
     while true {
       let conn = accept(fd, nil, nil)
@@ -214,18 +254,15 @@ final class ReaderServer {
     }
   }
 
-  private func fatalDie(_ message: String) -> Never {
-    stderrLine(message)
-    exit(1)
-  }
-
   /**
-   * Graceful drain, then teardown (mirrors the deputy): remove the socket path
-   * so no new client can find us, close the listener, wait out the in-flight
-   * requests within a bound, flush the log. SIGKILL is still the hard stop.
+   * Graceful drain, then teardown. Mirrors the deputy's semantics with ONE
+   * difference: the socket path is launchd's, not ours, so it is never
+   * unlinked — removing it would strip the rendezvous from a job launchd still
+   * owns. Closing the listening fd is the deterministic accept-wake here
+   * (a close wakes a blocked accept on Darwin), after which in-flight requests
+   * finish within the bound and the log is flushed. SIGKILL is the hard stop.
    */
   func drainAndShutdown(timeout: TimeInterval = READER_DRAIN_TIMEOUT_SECONDS) {
-    unlink(socketPath)
     if listenFd >= 0 {
       Darwin.shutdown(listenFd, SHUT_RDWR)
       close(listenFd)
@@ -303,7 +340,7 @@ final class ReaderServer {
       return errorResponse(id: id, code: "unsupported-protocol", message: "reader speaks protocol \(READER_PROTOCOL_VERSION)")
     }
     guard let reqToken = obj["token"] as? String, reqToken == token else {
-      return errorResponse(id: id, code: "bad-token", message: "request token does not match the reader token file")
+      return errorResponse(id: id, code: "bad-token", message: "request token does not match the reader's access token")
     }
     guard let verb = obj["verb"] as? String else {
       return errorResponse(id: id, code: "bad-request", message: "missing verb")
@@ -467,7 +504,26 @@ case "--grant":
   }
   runGrant(startDir: arguments[2])
 case "--serve":
-  let server = ReaderServer(token: loadOrCreateToken())
+  // No fallbacks, deliberately: both the token and the listening socket come
+  // from the LaunchAgent, so a --serve outside it is a misconfiguration to
+  // surface, never a second code path to keep working. EX_CONFIG (78).
+  guard let token = ProcessInfo.processInfo.environment[READER_TOKEN_ENV], !token.isEmpty else {
+    stderrLine(
+      "\(READER_TOKEN_ENV) is not set — the access token is injected by the reader's LaunchAgent; run `things helpers setup`")
+    exit(78)
+  }
+  let listener = activatedListener()
+  guard let listenerFd = listener.fd else {
+    stderrLine(
+      "no launchd-activated socket (\(listener.reason)) — the reader serves only under its LaunchAgent, which owns the socket; run `things helpers setup`")
+    exit(78)
+  }
+  // 1.3.0 migration, and only on a real boot — the refusals above must stay
+  // side-effect-free, so nothing is deleted until launchd has actually
+  // activated us. Idempotent, so paying it every boot costs two failed
+  // unlink(2)s.
+  cleanUpLegacyRendezvous()
+  let server = ReaderServer(token: token)
   signal(SIGPIPE, SIG_IGN)
   signal(SIGTERM, SIG_IGN)
   signal(SIGINT, SIG_IGN)
@@ -476,14 +532,14 @@ case "--serve":
   for source in [termSource, intSource] {
     source.setEventHandler {
       // Graceful drain: stop accepting, finish in-flight reads within a bound,
-      // then remove the socket and exit cleanly (an upgrade boots both halves
-      // out mid-flight).
+      // then exit cleanly (an upgrade boots both halves out mid-flight). The
+      // socket itself is launchd's and outlives us.
       server.drainAndShutdown()
       exit(0)
     }
     source.resume()
   }
-  Thread.detachNewThread { server.run() }
+  Thread.detachNewThread { server.run(listener: listenerFd) }
   dispatchMain()
 default:
   stderrLine("usage: things-reader --serve | --grant <dir> | --version")

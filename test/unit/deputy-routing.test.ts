@@ -20,8 +20,11 @@ import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-
 import {
   deputyInstalledBinaryPath,
   deputySocketPath,
+  deputyStateDir,
   deputyTokenPath,
   readerInstalledAppPath,
+  readerRendezvousDir,
+  readerSandboxContainerDir,
   readerSocketPath,
   readerTokenPath,
   reviveRow,
@@ -478,26 +481,58 @@ describe("reader transport (file verbs)", () => {
   });
 
   it("the THINGS_API_READER_DIR override keeps mock readers working with no FDA at all", async () => {
-    // The override IS the guard's first yes: a caller-named directory is not
-    // an App Sandbox container, so no cross-app consent class is in play. This
-    // cell is what keeps every mock reader (unit suites, the guest lab bundle)
-    // running on a host with no grants whatsoever.
     process.env["HOME"] = join(stateDir, "no-grants-home");
     await startMockReader({ granted: true });
-    expect(readerRouting()).toMatchObject({ active: true, granted: true, unreachable: false });
+    expect(readerRouting()).toMatchObject({ active: true, granted: true });
     expect(deputyFilesActive()).toBe(true);
   });
 });
 
 /**
- * The reader's rendezvous lives INSIDE its App Sandbox container, so a client
- * `stat`/`open` on it is a cross-app container access — the "access data from
- * other apps" consent class. On a host that holds no durable file access that
- * access raises a modal outside any ceremony (Article I), and a denial then
- * turns the token read into a raw EPERM. Neither may happen: the guard answers
- * first, and every rendezvous read is EPERM-safe.
+ * Where the rendezvous IS. `<state>/reader` — our own directory, a sibling of
+ * `<state>/deputy` and outside every App Sandbox container. That placement is
+ * the whole fix: launchd binds the socket there on the sandboxed reader's
+ * behalf, so no client ever crosses a container boundary to find it.
  */
-describe("the reader rendezvous is host-gated (permissions doctrine, Article I)", () => {
+describe("rendezvous path defaults", () => {
+  it("defaults to <state>/reader, with the socket and token beside each other", () => {
+    const env = { THINGS_API_STATE_DIR: "/var/state/things-api" };
+    expect(readerRendezvousDir(env)).toBe("/var/state/things-api/reader");
+    expect(readerSocketPath(env)).toBe("/var/state/things-api/reader/reader.sock");
+    expect(readerTokenPath(env)).toBe("/var/state/things-api/reader/token");
+    // A sibling of the deputy's state, never inside it: install owns
+    // `<state>/deputy/bin` wholesale and deletes it on every run.
+    expect(readerRendezvousDir(env)).not.toContain(deputyStateDir(env));
+  });
+
+  it("no default path leads into a sandbox container", () => {
+    const env = { THINGS_API_STATE_DIR: "/var/state/things-api" };
+    expect(readerSocketPath(env)).not.toContain("Library/Containers");
+    expect(readerTokenPath(env)).not.toContain("Library/Containers");
+    // The BOOKMARK is the one thing that stays in the container, by design —
+    // and the OS picks that path from the bundle id, not from our state dir.
+    expect(readerSandboxContainerDir(env)).toContain(
+      "Library/Containers/com.pixelcog.things-reader/Data",
+    );
+  });
+
+  it("THINGS_API_READER_DIR relocates every reader-side path together", () => {
+    const env = { THINGS_API_STATE_DIR: "/var/state/things-api", THINGS_API_READER_DIR: "/tmp/mk" };
+    expect(readerRendezvousDir(env)).toBe("/tmp/mk");
+    expect(readerSocketPath(env)).toBe("/tmp/mk/reader.sock");
+    expect(readerTokenPath(env)).toBe("/tmp/mk/token");
+    expect(readerSandboxContainerDir(env)).toBe("/tmp/mk");
+  });
+});
+
+/**
+ * Reader routing is HOST-UNIVERSAL: the rendezvous is `<state>/reader`, ours
+ * and outside every App Sandbox container, so a client finds and reaches the
+ * reader with no Full Disk Access, no witnessed app-data grant, and nothing to
+ * prove before looking. These cells are the regression against ever putting a
+ * host gate back in front of a reader probe.
+ */
+describe("reader routing needs no grant of its own (permissions doctrine, Article I)", () => {
   /** No override, no FDA (an empty HOME has no TCC.db), no witnessed grant. */
   function ungrantedHost(): string {
     const home = join(stateDir, "home");
@@ -507,48 +542,50 @@ describe("the reader rendezvous is host-gated (permissions doctrine, Article I)"
     return home;
   }
 
-  it("an unreachable rendezvous is reported as such — and is never even statted", () => {
-    // A populated rendezvous is placed at the REAL container path, and the
-    // guard must still refuse to look: any fs call that reached it would end
-    // in a handshake failure, which reads differently from `unreachable`.
+  it("a grant-less host reads the rendezvous and routes on what it finds", async () => {
+    // The override is gone, so the rendezvous resolves to `<state>/reader` —
+    // and the mock lives exactly there, because that is where the real one
+    // does now. A host with no grants of any kind routes to it.
     ungrantedHost();
-    mkdirSync(dirname(readerSocketPath(process.env)), { recursive: true });
-    writeFileSync(readerSocketPath(process.env), "");
-    writeFileSync(readerTokenPath(process.env), TOKEN);
+    await startMockReader({ granted: true });
+    expect(readerRouting()).toMatchObject({ active: true, granted: true });
+    expect(deputyFilesActive()).toBe(true);
+    expect(deputyRoutesDb(undefined)).toBe(true);
+  });
+
+  it("an absent rendezvous on a grant-less host is 'not installed', not 'unreachable'", () => {
+    ungrantedHost();
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(readerRouting()).toMatchObject({
       active: false,
       granted: false,
-      unreachable: true,
-      reason: "this host cannot verify or reach the reader without durable file access",
+      reason: "reader not installed",
     });
     expect(deputyFilesActive()).toBe(false);
-    expect(deputyRoutesDb(undefined)).toBe(false);
     stderrSpy.mockRestore();
   });
 
-  it("helpersExpected answers from our own state dir, never from the container", () => {
+  it("helpersExpected answers from our own state dir, on any host", () => {
     ungrantedHost();
-    // Nothing installed under `auto`: the answer is a plain no, reached
-    // without a single look at the rendezvous.
+    // Nothing installed under `auto`: an ordinary un-onboarded machine.
     process.env["THINGS_API_HELPERS"] = "auto";
     expect(helpersExpected()).toBe(false);
-    // The installed bundle lives in OUR state dir, which is always readable.
     mkdirSync(dirname(readerInstalledAppPath(process.env)), { recursive: true });
     writeFileSync(readerInstalledAppPath(process.env), "app");
     expect(helpersExpected()).toBe(true);
   });
 
   it("an unreadable access token is a reported state, never a thrown EPERM", async () => {
-    // The guard passes (an overridden dir), but macOS still refuses the read —
-    // exactly what a denied app-data prompt leaves behind. `helpers status`
+    // The rendezvous is ours, so this is no longer a TCC denial — but a file
+    // that will not open must still be a state we REPORT. `helpers status`
     // used to die here with a raw EPERM out of readFileSync.
     await startMockReader({ granted: true });
     resetDeputyRoutingForTests();
     chmodSync(readerTokenPath(process.env), 0o000);
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(() => readerRouting()).not.toThrow();
-    expect(readerRouting()).toMatchObject({ active: false, unreachable: true });
+    expect(readerRouting()).toMatchObject({ active: false });
+    expect(readerRouting().reason).toContain("access token could not be read");
     chmodSync(readerTokenPath(process.env), 0o600);
     stderrSpy.mockRestore();
   });

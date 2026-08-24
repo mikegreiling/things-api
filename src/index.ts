@@ -383,7 +383,6 @@ export {
   hostDisplayName,
   readAllowed,
   readCapability,
-  readerContainerAccessible,
   ReadCapabilityError,
   resetCapabilityForTests,
   tccDbPath,
@@ -408,7 +407,6 @@ export type {
   WriteCapability,
   WriteCapabilityMode,
 } from "./capability.ts";
-export { READER_UNREACHABLE_REASON, readerUnreachableRemedy } from "./host-access.ts";
 export type { HostAccessDeps } from "./host-access.ts";
 export {
   clearSessionGrant,
