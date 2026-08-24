@@ -18,8 +18,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { HelpersMode } from "../config.ts";
+import { loadConfig, saveConfigKey, type HelpersMode } from "../config.ts";
 import { THINGS_GROUP_CONTAINER } from "../db/locate.ts";
+import { createWizard, type Wizard } from "../wizard.ts";
 import { EXPECTED_PROXIES } from "../write/availability.ts";
 import { DeputySyncBridge } from "./bridge.ts";
 import {
@@ -636,6 +637,25 @@ export type OnboardLeg =
   | "shortcuts";
 
 /**
+ * Which TIER a leg belongs to (docs/design/permissions-doctrine.md, Article V).
+ * The BASE tier gathers read + write capability, which is what every consumer
+ * of this package needs. The GUI tier adds the two grants that let the helpers
+ * drive the Things WINDOW — Accessibility and Automation → System Events — and
+ * is only gathered when it was asked for, because those two are the widest
+ * grants the pair ever holds and most households never need them.
+ */
+export type OnboardTier = "base" | "gui";
+
+/** Which tier each leg belongs to. */
+const LEG_TIER: Record<OnboardLeg, OnboardTier> = {
+  "reader-read-grant": "base",
+  "automation-things": "base",
+  "automation-system-events": "gui",
+  accessibility: "gui",
+  shortcuts: "base",
+};
+
+/**
  * Where a leg stands after the ceremony. `pending` is a HUMAN-pace outcome (a
  * dialog left unanswered, a toggle not yet flipped) and is not a failure —
  * rerunning resumes exactly where it stopped. Only `denied` means macOS (or
@@ -647,6 +667,8 @@ export interface OnboardStep {
   leg: OnboardLeg;
   /** The row label in the closing report. */
   label: string;
+  /** The tier this leg belongs to — `gui` legs run only when that tier is in. */
+  tier: OnboardTier;
   state: OnboardState;
   /** True when the leg was already satisfied, detected without raising anything. */
   alreadyGranted: boolean;
@@ -654,6 +676,16 @@ export interface OnboardStep {
 }
 
 export interface HelpersOnboardResult {
+  /** The tier this run gathered: `base`, or `gui` (base plus the GUI legs). */
+  tier: OnboardTier;
+  /**
+   * How the GUI tier came to be included: the `--gui` flag, the `ui-enabled`
+   * config key already being on, the wizard's interactive question, or not at
+   * all. Reported so the ceremony's own output can say why it did what it did.
+   */
+  guiRequestedBy: "flag" | "config" | "wizard" | null;
+  /** True when this run turned `ui-enabled` on as part of a successful GUI tier. */
+  uiEnabledSet: boolean;
   steps: OnboardStep[];
   /**
    * The legs that were going to put something on screen, surveyed prompt-free
@@ -692,6 +724,30 @@ export interface OnboardDeps {
   axIntervalMs?: number;
   /** How long to wait for the deputy's socket to appear (a just-installed helper is still coming up). */
   deputyWaitMs?: number;
+  /**
+   * The Article V wizard. Default: built from TTY-ness (../wizard.ts). At a TTY
+   * it explains each dialog before the leg raises it and asks the tier question;
+   * off a TTY every method is inert and the ceremony behaves exactly as it did
+   * before the wizard existed.
+   */
+  wizard?: Wizard;
+  /** Is `ui-enabled` already on? Default: the stored config. */
+  uiEnabled?: () => boolean;
+  /** Turn `ui-enabled` on after a successful GUI tier. Default: the config file. */
+  setUiEnabled?: (value: boolean) => void;
+}
+
+/** What `onboardHelpers` is being asked to gather. */
+export interface OnboardOptions {
+  /** The configured routing mode, for the closing line. */
+  mode: HelpersMode;
+  /**
+   * Gather the GUI tier as well (`things helpers setup --gui`). When omitted,
+   * the tier is still included if `ui-enabled` is already on (a machine that
+   * has opted into GUI-driving is asking for the grants by definition), or if
+   * the wizard's interactive question is answered yes.
+   */
+  gui?: boolean;
 }
 
 /** A live sync bridge to the deputy socket, independent of the routing config. */
@@ -787,7 +843,7 @@ function automationLeg(
   timeoutMs: number,
   progress: (line: string) => void,
 ): OnboardStep {
-  const base = { leg: spec.leg, label: spec.label };
+  const base = { leg: spec.leg, label: spec.label, tier: LEG_TIER[spec.leg] };
   if (known === "granted") {
     progress(`${spec.label}: already granted`);
     return { ...base, state: "granted", alreadyGranted: true, detail: "already granted" };
@@ -863,7 +919,7 @@ function accessibilityLeg(
     intervalMs: number;
   },
 ): OnboardStep {
-  const base = { leg: "accessibility" as const, label: "accessibility" };
+  const base = { leg: "accessibility" as const, label: "accessibility", tier: "gui" as const };
   if (axTrusted === true) {
     deps.progress("accessibility: already granted");
     return { ...base, state: "granted", alreadyGranted: true, detail: "already granted" };
@@ -908,7 +964,7 @@ function accessibilityLeg(
 
 /** The bundled proxy shortcuts, counted through the deputy's `shortcuts list`. */
 function shortcutsLeg(channel: OnboardChannel, progress: (line: string) => void): OnboardStep {
-  const base = { leg: "shortcuts" as const, label: "shortcuts" };
+  const base = { leg: "shortcuts" as const, label: "shortcuts", tier: "base" as const };
   let installed: Set<string>;
   try {
     const res = channel.request(
@@ -971,7 +1027,11 @@ function readerLeg(
   standing: ReaderStanding,
   deps: Required<Pick<OnboardDeps, "progress" | "grant">>,
 ): OnboardStep {
-  const base = { leg: "reader-read-grant" as const, label: "reader read grant" };
+  const base = {
+    leg: "reader-read-grant" as const,
+    label: "reader read grant",
+    tier: "base" as const,
+  };
   if (standing === "not-installed") {
     deps.progress("reader read grant: the reader is not part of the installed bundle");
     return {
@@ -996,7 +1056,16 @@ function readerLeg(
   return { ...base, state: "pending", alreadyGranted: false, detail: result.detail };
 }
 
-function closingLine(steps: OnboardStep[], mode: HelpersMode): string {
+/**
+ * The hint the BASE tier closes with (Article V, tiered). A machine that never
+ * asked for GUI-driving should still learn that the capability exists and what
+ * it buys, exactly once, at the moment it has just finished setting up.
+ */
+const GUI_TIER_HINT =
+  "GUI-driving is not set up — some features drive the app window (repeat-rule edits, area " +
+  "reorder); run `things helpers setup --gui` to enable.";
+
+function closingLine(steps: OnboardStep[], mode: HelpersMode, tier: OnboardTier): string {
   const denied = steps.filter((s) => s.state === "denied");
   if (denied.length > 0) {
     return (
@@ -1015,13 +1084,18 @@ function closingLine(steps: OnboardStep[], mode: HelpersMode): string {
   const shortcutsMissing = steps.some(
     (s) => s.leg === "shortcuts" && s.state === "skipped-not-installed",
   );
+  const guiHint = tier === "base" ? ` ${GUI_TIER_HINT}` : "";
   if (mode === "false") {
-    return "everything asked for is granted, but routing is off — `things config set helpers-enabled auto` to send reads and writes through the helpers.";
+    return (
+      "everything asked for is granted, but routing is off — `things config set helpers-enabled auto` " +
+      `to send reads and writes through the helpers.${guiHint}`
+    );
   }
   const base = "you're done — writes and reads route through the helpers with no further prompts.";
-  return shortcutsMissing
-    ? `${base} The bundled shortcuts are still missing; run \`things setup\` if you want that path too.`
-    : base;
+  const shortcuts = shortcutsMissing
+    ? " The bundled shortcuts are still missing; run `things setup` if you want that path too."
+    : "";
+  return `${base}${shortcuts}${guiHint}`;
 }
 
 /** What each leg puts on screen, for the upfront banner. */
@@ -1035,6 +1109,38 @@ const PROMPT_LABELS: Record<OnboardLeg, string> = {
 };
 
 /**
+ * What the human is about to see, in the words macOS will actually use. The
+ * wizard prints these one leg ahead of the dialog (Article V, mode-aware); in
+ * strict mode they are never printed and the upfront banner's count stands
+ * alone.
+ */
+const PROMPT_EXPLAINERS: Record<OnboardLeg, string[]> = {
+  "reader-read-grant": [
+    "Next: read access to your Things data.",
+    "  A file panel opens, already inside the Things data folder — click Grant Access.",
+    "  Nothing else in that panel needs changing; do not navigate elsewhere.",
+  ],
+  "automation-things": [
+    "Next: permission for the helper to control Things.",
+    '  A macOS dialog will appear: "Things API Helper" wants access to control "Things" —',
+    "  click Allow. Things opens if it was closed; that is expected.",
+  ],
+  "automation-system-events": [
+    "Next: permission for the helper to control System Events (the GUI-driving tier).",
+    '  A macOS dialog will appear: "Things API Helper" wants access to control',
+    '  "System Events" — click Allow. System Events is the macOS component that reads and',
+    "  presses the Things window's own controls.",
+  ],
+  accessibility: [
+    "Next: the Accessibility switch (the GUI-driving tier).",
+    "  System Settings opens at Privacy & Security ▸ Accessibility — turn on",
+    '  "Things API Helper" in that list. This one is a switch you flip, not a dialog you',
+    "  answer, so setup waits and watches for it.",
+  ],
+  shortcuts: [],
+};
+
+/**
  * Which legs are about to put something on screen, surveyed prompt-free from
  * the deputy's handshake and the reader's bookmark state. A leg macOS already
  * records as `denied` raises nothing (the dialog is spent), so it is not
@@ -1044,16 +1150,27 @@ function willRaiseAutomationDialog(state: string | undefined): boolean {
   return state !== "granted" && state !== "denied";
 }
 
-function outstandingPrompts(hello: DeputyHello, reader: ReaderStanding): OnboardLeg[] {
+function outstandingPrompts(
+  hello: DeputyHello,
+  reader: ReaderStanding,
+  tier: OnboardTier,
+): OnboardLeg[] {
   const outstanding: OnboardLeg[] = [];
   if (reader === "needs-panel") outstanding.push("reader-read-grant");
   if (willRaiseAutomationDialog(hello.automation?.things)) outstanding.push("automation-things");
-  if (willRaiseAutomationDialog(hello.automation?.systemEvents)) {
-    outstanding.push("automation-system-events");
+  if (tier === "gui") {
+    if (willRaiseAutomationDialog(hello.automation?.systemEvents)) {
+      outstanding.push("automation-system-events");
+    }
+    if (hello.axTrusted !== true) outstanding.push("accessibility");
   }
-  if (hello.axTrusted !== true) outstanding.push("accessibility");
   return outstanding;
 }
+
+/** The interactive tier question, asked only when nothing else decided it. */
+const GUI_TIER_QUESTION =
+  "Some Things features have no programmatic surface and are driven through the app's own " +
+  "window (editing repeat rules, reordering areas). Enable GUI-driving permissions?";
 
 /**
  * The full onboarding ceremony behind `things helpers setup`: fire every
@@ -1067,18 +1184,35 @@ function outstandingPrompts(hello: DeputyHello, reader: ReaderStanding): Onboard
  * every other outcome is reported per leg. See docs/design/helpers-onboarding.md.
  */
 export function onboardHelpers(
-  mode: HelpersMode,
+  options: OnboardOptions,
   env: NodeJS.ProcessEnv = process.env,
   deps: OnboardDeps = {},
 ): HelpersOnboardResult {
+  const mode = options.mode;
   const progress =
     deps.progress ??
     ((line: string) => {
       process.stdout.write(`${line}\n`);
     });
+  const wizard = deps.wizard ?? createWizard();
   if (deps.channel === undefined && !existsSync(deputyInstalledBinaryPath(env))) {
     throw new Error("the helpers are not installed — run `things helpers setup` first");
   }
+  // Which tier, decided BEFORE anything is raised so the banner can size the
+  // sitting honestly. The flag wins; `ui-enabled` already on implies the tier
+  // without it (a machine that opted into GUI-driving is asking for the grants
+  // by definition); otherwise a TTY sitting is asked and a strict run is not.
+  const uiEnabled = (deps.uiEnabled ?? (() => loadConfig(env).ui.enabled))();
+  let guiRequestedBy: HelpersOnboardResult["guiRequestedBy"] = null;
+  if (options.gui === true) {
+    guiRequestedBy = "flag";
+  } else if (uiEnabled) {
+    guiRequestedBy = "config";
+    progress("ui.enabled is on — including GUI-driving permissions.");
+  } else if (wizard.ask(GUI_TIER_QUESTION, false)) {
+    guiRequestedBy = "wizard";
+  }
+  const tier: OnboardTier = guiRequestedBy === null ? "base" : "gui";
   const channel =
     deps.channel ?? openDeputyChannel(env, deps.deputyWaitMs ?? DEPUTY_SOCKET_WAIT_MS);
   const steps: OnboardStep[] = [];
@@ -1101,13 +1235,19 @@ export function onboardHelpers(
     // Size the sitting BEFORE raising anything, so whoever started this knows
     // whether they have to stay at the screen.
     const reader = readerStanding(env, deps.readerProbe ?? (() => readerProbeDefault(env)));
-    outstanding = outstandingPrompts(hello, reader);
+    outstanding = outstandingPrompts(hello, reader, tier);
     progress(
       outstanding.length === 0
         ? "nothing to raise — every permission the helpers need is already on record"
         : `about to raise ${outstanding.length} macOS consent dialog${outstanding.length === 1 ? "" : "s"} ` +
             `(${outstanding.map((leg) => PROMPT_LABELS[leg]).join(", ")}) — someone must be at the screen to answer them`,
     );
+    const willRaise = new Set(outstanding);
+    /** Explain a leg's dialog and let the human pace it — wizard mode only. */
+    const brief = (leg: OnboardLeg): void => {
+      if (willRaise.has(leg)) wizard.explain(PROMPT_EXPLAINERS[leg]);
+    };
+    brief("reader-read-grant");
     steps.push(
       readerLeg(reader, {
         progress,
@@ -1123,6 +1263,7 @@ export function onboardHelpers(
         return undefined;
       }
     };
+    brief("automation-things");
     steps.push(
       automationLeg(
         channel,
@@ -1140,41 +1281,63 @@ export function onboardHelpers(
         progress,
       ),
     );
-    steps.push(
-      automationLeg(
-        channel,
-        {
-          leg: "automation-system-events",
-          label: "automation → System Events",
-          script: 'tell application "System Events" to name of first process',
-          settingsName: "System Events",
-        },
-        hello.automation?.systemEvents,
-        refreshAutomation("systemEvents"),
-        automationTimeoutMs,
-        progress,
-      ),
-    );
-    steps.push(
-      accessibilityLeg(channel, hello.axTrusted, {
-        progress,
-        openUrl: deps.openUrl ?? openUrlBestEffort,
-        sleep: deps.sleep ?? syncSleepMs,
-        now: deps.now ?? Date.now,
-        timeoutMs: deps.axTimeoutMs ?? AX_WAIT_TIMEOUT_MS,
-        intervalMs: deps.axIntervalMs ?? AX_POLL_INTERVAL_MS,
-      }),
-    );
+    // The GUI tier. Skipped entirely under the base tier — Accessibility and
+    // System Events are the two widest grants the pair ever holds, so they are
+    // gathered only when GUI-driving was actually asked for (Article V).
+    if (tier === "gui") {
+      brief("automation-system-events");
+      steps.push(
+        automationLeg(
+          channel,
+          {
+            leg: "automation-system-events",
+            label: "automation → System Events",
+            script: 'tell application "System Events" to name of first process',
+            settingsName: "System Events",
+          },
+          hello.automation?.systemEvents,
+          refreshAutomation("systemEvents"),
+          automationTimeoutMs,
+          progress,
+        ),
+      );
+      brief("accessibility");
+      steps.push(
+        accessibilityLeg(channel, hello.axTrusted, {
+          progress,
+          openUrl: deps.openUrl ?? openUrlBestEffort,
+          sleep: deps.sleep ?? syncSleepMs,
+          now: deps.now ?? Date.now,
+          timeoutMs: deps.axTimeoutMs ?? AX_WAIT_TIMEOUT_MS,
+          intervalMs: deps.axIntervalMs ?? AX_POLL_INTERVAL_MS,
+        }),
+      );
+    }
     steps.push(shortcutsLeg(channel, progress));
   } finally {
     channel.close();
   }
+  // A GUI tier that actually landed turns the config key on, so the capability
+  // the user just granted is the capability the engine will use. Only on full
+  // success: switching the key on over a half-granted tier would produce
+  // exactly the "enabled but refuses" state Article IV exists to prevent.
+  const guiGranted =
+    tier === "gui" && steps.every((s) => s.tier !== "gui" || s.state === "granted");
+  let uiEnabledSet = false;
+  if (guiGranted && !uiEnabled) {
+    (deps.setUiEnabled ?? ((value: boolean) => saveConfigKey("uiEnabled", value, env)))(true);
+    uiEnabledSet = true;
+    progress("GUI-driving turned on in config (`ui-enabled` is now true).");
+  }
   return {
+    tier,
+    guiRequestedBy,
+    uiEnabledSet,
     steps,
     outstanding,
     denied: steps.some((s) => s.state === "denied"),
     pending: steps.some((s) => s.state === "pending"),
-    closing: closingLine(steps, mode),
+    closing: closingLine(steps, mode, tier),
   };
 }
 

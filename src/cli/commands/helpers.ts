@@ -147,7 +147,9 @@ function renderOnboard(result: HelpersOnboardResult): string {
   const width = Math.max(...result.steps.map((step: OnboardStep) => step.label.length));
   const rows = result.steps.map(
     (step: OnboardStep) =>
-      `  ${step.label.padEnd(width)}  ${step.state}${step.state === "granted" ? "" : ` — ${step.detail}`}`,
+      `  ${step.label.padEnd(width)}  ${step.state}${step.tier === "gui" ? " (gui)" : ""}${
+        step.state === "granted" ? "" : ` — ${step.detail}`
+      }`,
   );
   return `\n${rows.join("\n")}\n\n${result.closing}\n`;
 }
@@ -215,18 +217,26 @@ export function registerHelpers(program: Command): void {
       "Install (or update) the helper bundle and settle every macOS permission it needs, " +
         "in one sitting: the bundle is copied to its stable location and registered with " +
         "launchd, then a folder panel grants durable read access to the Things data folder, " +
-        "the two app-control prompts (Things and System Events) are raised, the " +
-        "Accessibility switch is offered, and the bundled shortcuts are counted. Steps " +
-        "already satisfied are detected and skipped, so rerunning is safe and asks nothing. " +
-        "Interactive: run this at the machine, not from an unattended session. Exits " +
-        "nonzero while any permission is still outstanding.",
+        "the app-control prompt for Things is raised, and the bundled shortcuts are counted. " +
+        "Add --gui to also gather the permissions that let the helper drive the Things " +
+        "window (app control for System Events and the Accessibility switch), which turns " +
+        "on `ui-enabled` when they all land; with `ui-enabled` already on those steps are " +
+        "included without the flag. Steps already satisfied are detected and skipped, so " +
+        "rerunning is safe and asks nothing. At a terminal it explains each dialog before " +
+        "raising it and waits for you; run it at the machine, not from an unattended " +
+        "session. Exits nonzero while any permission is still outstanding.",
     )
     .option(
       "--bundle <path>",
       "path to a built Things API Helper.app (default: the bundle shipped with this package)",
     )
+    .option(
+      "--gui",
+      "also gather the permissions that drive the Things window (Accessibility and app control " +
+        "for System Events), and turn on `ui-enabled` when they land",
+    )
     .option("--json", "emit versioned JSON envelope on stdout")
-    .action((opts: { bundle?: string; json?: boolean }) => {
+    .action((opts: { bundle?: string; gui?: boolean; json?: boolean }) => {
       const started = Date.now();
       // Under --json stdout belongs to the envelope alone; the human still
       // needs the instructions, so progress goes to stderr instead.
@@ -248,7 +258,14 @@ export function registerHelpers(program: Command): void {
       }
       let ceremony: HelpersOnboardResult;
       try {
-        ceremony = onboardHelpers(loadConfig().helpersMode, process.env, { progress });
+        ceremony = onboardHelpers(
+          {
+            mode: loadConfig().helpersMode,
+            ...(opts.gui === true && { gui: true }),
+          },
+          process.env,
+          { progress },
+        );
       } catch (err) {
         process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
         process.exitCode = ExitCode.Environment;

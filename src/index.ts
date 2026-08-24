@@ -256,8 +256,10 @@ export type {
   OnboardChannel,
   OnboardDeps,
   OnboardLeg,
+  OnboardOptions,
   OnboardState,
   OnboardStep,
+  OnboardTier,
   ReaderHalfStatus,
 } from "./deputy/install.ts";
 export {
@@ -384,6 +386,11 @@ export {
   ReadCapabilityError,
   resetCapabilityForTests,
   tccDbPath,
+  uiAllowed,
+  uiCapability,
+  UiCapabilityError,
+  UI_DIRECT_ESCAPE_ENV,
+  writeAllowed,
   writeCapability,
   WriteCapabilityError,
   THINGS_BUNDLE_ID,
@@ -395,6 +402,8 @@ export type {
   HostApp,
   ReadCapability,
   ReadCapabilityMode,
+  UiCapability,
+  UiCapabilityMode,
   WriteCapability,
   WriteCapabilityMode,
 } from "./capability.ts";
@@ -406,6 +415,8 @@ export {
 } from "./session-grant.ts";
 export type { SessionGrantDeps, SessionGrantMarker, SessionGrantVerdict } from "./session-grant.ts";
 export { directSetup, surveySetup } from "./direct-setup.ts";
+export { createWizard } from "./wizard.ts";
+export type { Wizard, WizardDeps } from "./wizard.ts";
 export type {
   DirectSetupDeps,
   DirectSetupResult,

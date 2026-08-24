@@ -37,6 +37,113 @@ function capabilityLines(capability: DiagnoseReport["capability"]): string[] {
   return lines;
 }
 
+/**
+ * The `── Permissions ──` section: one row per vector, and for each the STATE,
+ * the PROVENANCE (which identity actually holds the grant — the question the
+ * three summary rows above cannot answer), and the remediation when it is
+ * missing (docs/design/permissions-doctrine.md, Article II).
+ *
+ * Every value here comes from the prompt-free verdict `diagnose` already took.
+ * Doctor was an Article I violation once — it opened the container to find out
+ * whether it could — and this section must never regress that: it renders, it
+ * does not probe.
+ */
+function permissionLines(report: DiagnoseReport): string[] {
+  const { read, write, ui } = report.capability;
+  const hostLabel =
+    read.host.bundleId !== null ? `${read.host.name} (${read.host.bundleId})` : read.host.name;
+  const readProvenance = (): string => {
+    switch (read.mode) {
+      case "helpers":
+        return "reader bookmark (things-reader)";
+      case "direct-fda":
+        return `host Full Disk Access (${hostLabel})`;
+      case "session-grant":
+        return `session marker (${hostLabel}, until it quits)`;
+      case "explicit-db":
+        return "none needed (an explicit --db path)";
+      default:
+        return "none";
+    }
+  };
+  const writeProvenance = (): string => {
+    switch (write.mode) {
+      case "deputy":
+        return "deputy TCC Automation (Things API Helper)";
+      case "direct-granted":
+        return `host TCC Automation (${hostLabel})`;
+      default:
+        return "none";
+    }
+  };
+  const uiProvenance = (): string => {
+    switch (ui.mode) {
+      case "helpers":
+        return "deputy TCC Accessibility + System Events (Things API Helper)";
+      case "direct-escape":
+        return "the lab's direct escape (not consumer surface)";
+      default:
+        return "none — helpers only (Article IV)";
+    }
+  };
+  const rows: { vector: string; state: string; provenance: string; next: string[] }[] = [
+    {
+      vector: "read",
+      state: read.mode,
+      provenance: readProvenance(),
+      next: read.remediation,
+    },
+    {
+      vector: "applescript",
+      state: write.mode,
+      provenance: writeProvenance(),
+      next: write.remediation,
+    },
+    {
+      vector: "url-scheme",
+      state:
+        report.availability.urlScheme.enabled === true
+          ? "enabled"
+          : report.availability.urlScheme.enabled === false
+            ? "disabled"
+            : "unknown",
+      // No TCC class at all: `open -g things:///…` is a LaunchServices dispatch.
+      provenance: "none needed — the app's own 'Enable Things URLs' setting",
+      next:
+        report.availability.urlScheme.enabled === true
+          ? []
+          : ["turn on Things ▸ Settings ▸ General ▸ Enable Things URLs"],
+    },
+    {
+      vector: "shortcuts",
+      state:
+        report.availability.shortcuts.missing.length === 0
+          ? "installed"
+          : `${report.availability.shortcuts.present.length}/${
+              report.availability.shortcuts.present.length +
+              report.availability.shortcuts.missing.length
+            } installed`,
+      provenance: "none needed — each shortcut's own Always Allow",
+      next:
+        report.availability.shortcuts.missing.length === 0
+          ? []
+          : ["run `things setup` to install the missing proxy shortcuts"],
+    },
+    { vector: "ui", state: ui.mode, provenance: uiProvenance(), next: ui.remediation },
+  ];
+  const vectorWidth = Math.max(...rows.map((r) => r.vector.length));
+  const stateWidth = Math.max(...rows.map((r) => r.state.length));
+  const lines = ["── Permissions (per vector) ──", `host app:    ${hostLabel}`];
+  for (const row of rows) {
+    lines.push(
+      `  ${row.vector.padEnd(vectorWidth)}  ${row.state.padEnd(stateWidth)}  ${row.provenance}`,
+    );
+    for (const next of row.next)
+      lines.push(`${" ".repeat(vectorWidth + stateWidth + 6)}next: ${next}`);
+  }
+  return lines;
+}
+
 function environmentLine(env: DiagnoseReport["environment"]): string {
   if (env.lastVerifiedWrite === null) {
     return "no verified write recorded yet (the tuple is recorded on the first successful write)";
@@ -255,6 +362,7 @@ export function registerDoctor(program: Command): void {
                 ]
               : []),
             ...syncHealthLines(report.syncHealth),
+            ...permissionLines(report),
             ...helpersLines(report.helpers),
             ...uiVectorLines(report.ui),
           ];

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createThingsMcpServer } from "../../src/mcp/server.ts";
+import { createThingsMcpServer, type BakedCapability } from "../../src/mcp/server.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
 
@@ -36,10 +36,22 @@ afterEach(async () => {
   fixture.close();
 });
 
+/** Injected so no cell here depends on the developer's own macOS grants. */
+const GRANTED: BakedCapability = (() => {
+  const host = { bundleId: "test.host", name: "the test host" };
+  return {
+    read: { mode: "helpers", detail: "reads are served by the reader", remediation: [], host },
+    write: { mode: "deputy", detail: "the deputy holds app control", remediation: [], host },
+    ui: { mode: "helpers", detail: "the helpers hold GUI-driving", remediation: [], host },
+  };
+})();
+
 async function instructionsUnder(scope?: string): Promise<string> {
   const server = createThingsMcpServer({
     dbPath: fixture.path,
     ...(scope !== undefined && { scope }),
+    capability: GRANTED,
+    onStartupWarning: () => {},
     openOptions: { now: () => NOW },
   });
   client = new Client({ name: "test-client", version: "0.0.0" });

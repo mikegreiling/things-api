@@ -1748,8 +1748,9 @@ function disabledMatrix(): VectorMatrix {
       validation: "validated",
       notes:
         "the Accessibility GUI vector is off on this machine — enable it with `things config " +
-        "set ui-enabled true`, then grant Accessibility to this process (see docs/setup.md). " +
-        "It drives the local Things GUI and is intended for a dedicated always-on Mac.",
+        "set ui-enabled true`, then run `things helpers setup --gui`, which grants GUI-driving " +
+        "to the helper pair (the only identity it is granted to). It drives the local Things " +
+        "GUI and is intended for a dedicated always-on Mac.",
     };
   }
   return matrix;
@@ -1780,11 +1781,15 @@ export function createUiVector(
   const reachCache = createReachabilityCache();
   return {
     id: "ui",
+    // Article IV: the pipeline's GUI gate keys on this declaration, never on
+    // the id — see WriteVector.drivesGui.
+    drivesGui: true,
     matrix: enabled ? enabledMatrix() : disabledMatrix(),
     async execute(invocation: CompiledInvocation): Promise<ExecuteResult> {
       if (!enabled) {
         return refusal(
-          "the ui vector is disabled (`things config set ui-enabled true` to enable it).",
+          "the ui vector is disabled (`things config set ui-enabled true` to enable it, then " +
+            "`things helpers setup --gui`).",
         );
       }
       if (invocation.recipe === undefined) {

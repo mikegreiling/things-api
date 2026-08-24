@@ -56,6 +56,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { loadConfig } from "./config.ts";
 import { deputyRouting, deputyRoutesDb, helpersExpected } from "./deputy/routing.ts";
 import { sessionGrantValid, type SessionGrantDeps } from "./session-grant.ts";
 
@@ -92,6 +93,19 @@ export type ReadCapabilityMode =
   /** Nothing can open the container — the caller must run a setup ceremony. */
   | "none";
 
+/** How GUI-driving may be delivered, if at all (Article IV). */
+export type UiCapabilityMode =
+  /** The helper pair holds Accessibility + Automation→System Events. */
+  | "helpers"
+  /** The lab's documented in-guest escape (see {@link UI_DIRECT_ESCAPE_ENV}). */
+  | "direct-escape"
+  /** GUI-driving is switched off in config — nothing has been asked for yet. */
+  | "config-disabled"
+  /** No deputy answers, so there is no identity that could hold the grants. */
+  | "helpers-missing"
+  /** The deputy answers but the `--gui` tier is incomplete. */
+  | "tier-incomplete";
+
 /** How app automation may be delivered, if at all. */
 export type WriteCapabilityMode =
   /** The deputy is onboarded; Apple Events are sent under the helper identity. */
@@ -118,10 +132,21 @@ export interface Capability<Mode> {
 
 export type ReadCapability = Capability<ReadCapabilityMode>;
 export type WriteCapability = Capability<WriteCapabilityMode>;
+export type UiCapability = Capability<UiCapabilityMode>;
 
 /** True when this verdict permits opening the live container. */
 export function readAllowed(capability: ReadCapability): boolean {
   return capability.mode !== "none" && capability.mode !== "helpers-unavailable";
+}
+
+/** True when this verdict permits driving the Things window. */
+export function uiAllowed(capability: UiCapability): boolean {
+  return capability.mode === "helpers" || capability.mode === "direct-escape";
+}
+
+/** True when app automation may be dispatched. */
+export function writeAllowed(capability: WriteCapability): boolean {
+  return capability.mode === "deputy" || capability.mode === "direct-granted";
 }
 
 /**
@@ -143,6 +168,17 @@ export interface CapabilityDeps extends SessionGrantDeps {
   helpersReason?: () => string | null;
   /** The deputy's `automation.things` standing, from its handshake. */
   deputyAutomation?: () => string | undefined;
+  /**
+   * The deputy's GUI-driving standing, from the same handshake: whether it is
+   * Accessibility-trusted and where its Automation→System Events grant stands.
+   * `null` means no deputy answered at all.
+   */
+  deputyGuiStanding?: () => {
+    axTrusted: boolean | undefined;
+    systemEvents: string | undefined;
+  } | null;
+  /** Is GUI-driving switched on in config (`ui-enabled`)? */
+  uiEnabled?: () => boolean;
   /**
    * Read one Automation row out of TCC.db. Returns the raw `auth_value`, or
    * null when there is no row / the file cannot be read.
@@ -521,6 +557,119 @@ export class WriteCapabilityError extends Error {
   constructor(capability: WriteCapability) {
     super(`Things cannot be driven: ${capability.detail}. ${capability.remediation.join("; ")}.`);
     this.name = "WriteCapabilityError";
+    this.remediation = capability.remediation;
+    this.capability = capability;
+  }
+}
+
+// ── UI capability (Article IV) ───────────────────────────────────────────────
+
+/**
+ * The LAB's escape hatch, and deliberately not consumer surface. The VM lab and
+ * the guest e2e bundle drive the UI vector DIRECT — the in-guest Accessibility
+ * grant is held by the runner's own processes (the AXVM1 layer), there is no
+ * helper bundle in a disposable clone, and there is nobody to answer a dialog
+ * either. Setting this to `1` restores direct UI-vector availability for that
+ * one situation. It is documented in docs/lab/harness.md and exported by the
+ * lab's guest environment; nothing consumer-facing mentions it, and it does not
+ * bypass `ui.enabled` — a lab clone still sets that key explicitly.
+ */
+export const UI_DIRECT_ESCAPE_ENV = "THINGS_API_UI_DIRECT";
+
+/** The command that gathers the GUI-driving tier, named in every UI refusal. */
+const GUI_SETUP_COMMAND = "run `things helpers setup --gui` to grant GUI-driving to the helpers";
+
+function deputyGuiStandingDefault(
+  env: NodeJS.ProcessEnv,
+): { axTrusted: boolean | undefined; systemEvents: string | undefined } | null {
+  const hello = deputyRouting(env).hello;
+  if (hello === undefined || hello === null) return null;
+  return { axTrusted: hello.axTrusted, systemEvents: hello.automation?.systemEvents };
+}
+
+/**
+ * May this process drive the Things WINDOW, and on whose authority?
+ *
+ * Article IV admits exactly one provenance: the helper pair. Accessibility on a
+ * general-purpose host app (a terminal, an agent harness, an MCP host) has a
+ * blast radius far beyond Things, churns with every host update, and has no
+ * sane story at all over ssh — so direct AX is unsupported, and a refusal here
+ * names the config knob and `things helpers setup --gui` rather than raising an
+ * Accessibility prompt against whatever happens to be running us.
+ *
+ * Every answer is prompt-free: the config key is a file read, and the deputy's
+ * `hello` carries `AXIsProcessTrusted()` plus its own `AEDeterminePermission`
+ * verdict for System Events.
+ */
+export function uiCapability(deps: CapabilityDeps = {}): UiCapability {
+  const env = deps.env ?? process.env;
+  const host = hostApp(deps);
+  const enabled = (deps.uiEnabled ?? (() => loadConfig(env).ui.enabled))();
+  if (!enabled) {
+    return {
+      mode: "config-disabled",
+      detail: "GUI-driving is switched off on this machine (`ui-enabled` is false)",
+      remediation: [
+        "run `things config set ui-enabled true` to opt in",
+        `then ${GUI_SETUP_COMMAND}`,
+      ],
+      host,
+    };
+  }
+  if ((env[UI_DIRECT_ESCAPE_ENV] ?? "") === "1") {
+    return {
+      mode: "direct-escape",
+      detail: `${UI_DIRECT_ESCAPE_ENV}=1 — GUI-driving runs directly under this process (lab escape)`,
+      remediation: [],
+      host,
+    };
+  }
+  const standing = (deps.deputyGuiStanding ?? (() => deputyGuiStandingDefault(env)))();
+  if (standing === null) {
+    return {
+      mode: "helpers-missing",
+      detail:
+        "GUI-driving is granted only to the helpers, and no helper is answering on this machine",
+      remediation: [GUI_SETUP_COMMAND, "or `things helpers status` to see which half is unhealthy"],
+      host,
+    };
+  }
+  const missing: string[] = [];
+  if (standing.axTrusted !== true) {
+    missing.push(
+      standing.axTrusted === undefined
+        ? "Accessibility (these helpers predate the permission handshake — rebuild)"
+        : "Accessibility",
+    );
+  }
+  if (standing.systemEvents !== "granted") {
+    missing.push(`automation → System Events (${standing.systemEvents ?? "unknown"})`);
+  }
+  if (missing.length === 0) {
+    return {
+      mode: "helpers",
+      detail: "the helpers hold Accessibility and app control for System Events",
+      remediation: [],
+      host,
+    };
+  }
+  return {
+    mode: "tier-incomplete",
+    detail: `the helpers are onboarded but the GUI-driving tier is incomplete — missing ${missing.join("; ")}`,
+    remediation: [GUI_SETUP_COMMAND],
+    host,
+  };
+}
+
+/** Thrown when GUI-driving is refused for want of capability (Article IV). */
+export class UiCapabilityError extends Error {
+  readonly remediation: string[];
+  readonly capability: UiCapability;
+  constructor(capability: UiCapability) {
+    super(
+      `the Things window cannot be driven: ${capability.detail}. ${capability.remediation.join("; ")}.`,
+    );
+    this.name = "UiCapabilityError";
     this.remediation = capability.remediation;
     this.capability = capability;
   }

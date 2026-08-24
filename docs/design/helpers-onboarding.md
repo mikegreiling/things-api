@@ -18,7 +18,7 @@ Four subcommands, and no fifth (ratified 2026-08-24). `install`, `grant`, and `r
 |---|---|
 | `things helpers status` | prompt-free report: both halves' liveness, launchd registration, installed version, signing, the reader's grant, the deputy's TCC standing, and what routing resolved to on this machine. Read-only. |
 | `things helpers restart` | `launchctl kickstart -k` both halves (picks up a rebuilt installed bundle). |
-| `things helpers setup` | install-or-update the bundle, then run the whole ceremony below. Idempotent end to end; `--bundle <path>` names a bundle explicitly. **Exits nonzero while anything is outstanding** (§Exit semantics). |
+| `things helpers setup [--gui]` | install-or-update the bundle, then run the ceremony below. Idempotent end to end; `--bundle <path>` names a bundle explicitly; `--gui` adds the GUI-driving tier (§Tiers). **Exits nonzero while anything is outstanding** (§Exit semantics). |
 | `things helpers uninstall [--revoke]` | stop both halves and remove their launchd registrations and the bundle. `--revoke` additionally revokes both identities' macOS grants and deletes their local state (§Uninstall and revocation). |
 
 `setup` is one command because install and the ceremony are one intention. The install leg is a wholesale copy every time — install owns `<state>/deputy/bin/` outright — so "install" and "update" are the same operation, and on an already-current, already-granted machine the whole command is an all-skip no-op that raises nothing.
@@ -66,6 +66,44 @@ Both ride the deputy's `hello` response (`axTrusted`, `automation.{things,system
 | 4 | accessibility | `hello.axTrusted === true` | deputy `prime-ax` verb, then the Settings deep-link, then poll `hello.axTrusted` every 2s for 120s | `granted` · `pending` (not toggled yet) |
 | 5 | shortcuts | — | `shortcuts list` through the deputy, compared against the six bundled `things-proxy-*` names | `granted` (all present) · `skipped-not-installed` (names the missing ones) |
 
+Legs 3 and 4 are the **GUI tier** and run only when it was asked for — see §Tiers below. The banner counts only the legs the selected tier will actually run.
+
+## Tiers — the base sitting, and the GUI one (Article V)
+
+Legs 3 and 4 are the **GUI tier**, and they run only when GUI-driving was asked for. They are the two widest grants the pair ever holds — Accessibility lets the helper read and press any app's UI, and Automation → System Events is the delivery mechanism for it — and most households never drive the Things window at all. Gathering them by default would mean asking every user for the biggest grant in the set to enable a capability they are not using, which is precisely the "ask for everything up front" instinct the least-privilege half of Article III exists to resist.
+
+| tier | legs | how it is selected |
+|---|---|---|
+| **base** (default) | 1 reader read grant · 2 automation → Things · 5 shortcuts | nothing asked for |
+| **gui** | base plus 3 automation → System Events · 4 accessibility | `--gui`, OR `ui-enabled` already true, OR a yes to the wizard's question |
+
+Three ways in, one meaning. The flag is the non-interactive spelling (`--yes`-style tier selection is the flag, and nothing else — there is no env sniffing anywhere). **`ui-enabled` already true implies the tier without the flag** (Mike's ruling): a machine that has opted into GUI-driving is asking for the grants by definition, and the ceremony says so rather than doing it silently — *"ui.enabled is on — including GUI-driving permissions."* At a TTY with neither signal, the wizard asks:
+
+> Some Things features have no programmatic surface and are driven through the app's own window (editing repeat rules, reordering areas). Enable GUI-driving permissions? [y/N]
+
+**A completed GUI tier turns `ui-enabled` on** and says so (*"GUI-driving turned on in config (`ui-enabled` is now true)"*) — the capability you just granted is the capability the engine will use. Only on FULL success: switching the key on over a half-granted tier would manufacture exactly the "enabled but refuses" state Article IV exists to prevent.
+
+**A base-tier success hints at the tier, once:**
+
+> GUI-driving is not set up — some features drive the app window (repeat-rule edits, area reorder); run `things helpers setup --gui` to enable.
+
+Under `--json` every step carries its `tier`, and the result carries `tier`, `guiRequestedBy` (`flag` | `config` | `wizard` | `null`) and `uiEnabledSet`.
+
+## Wizard mode — at a TTY, the ceremony explains itself (Article V)
+
+When stdin *and* stderr are terminals, both ceremonies run as a guided sitting through one shared module (`src/wizard.ts`). Before each leg that is actually going to raise something — the upfront survey already knows which — it prints one plain-language explainer in the words macOS will use, and waits for Enter:
+
+```
+Next: permission for the helper to control Things.
+  A macOS dialog will appear: "Things API Helper" wants access to control "Things" —
+  click Allow. Things opens if it was closed; that is expected.
+  press Enter when you are ready (Ctrl-C to stop — rerunning resumes here)
+```
+
+The reader's leg is described as what it actually is (*a file panel opens, already inside the Things data folder — click Grant Access*), and Accessibility as what it actually is (*a switch you flip in System Settings, not a dialog you answer, so setup waits and watches for it*). A leg that will be skipped is never explained.
+
+Off a TTY it is **strict mode, unchanged**: no explainers, no gates, the upfront banner's count stands alone, waits stay bounded, and an unanswered leg fails the run. TTY-ness is the only signal, it is consulted **inside these two ceremonies only**, and there is no env-based agent detection anywhere in the package — Article I makes it unnecessary, because no ordinary command can raise a dialog for an agent to hang on.
+
 Leg 5 deliberately does **not** run `things setup` — that opens an import screen per shortcut, which is a different kind of interruption and the user's call. It reports and points. It also does not run a proxy end-to-end: the input/output-path plumbing buys nothing the census does not already prove.
 
 ## Idempotency — the property that makes rerunning safe
@@ -109,7 +147,7 @@ A dormant machine is never silent about it. The routing layer spends its one std
 
 ## Where the copy lives
 
-The per-step progress lines and the closing report are **runtime output**, not description copy, so they may name mechanisms as operational fact ([surface-copy.md](surface-copy.md) §Scope). Under `--json` the progress lines move to stderr and stdout carries the `helpers-setup` envelope alone: `install` (the install result) and `ceremony` (`steps[]` — leg, label, state, `alreadyGranted`, detail — plus `outstanding[]`, `denied`, `pending`, `closing`). `uninstall --json` carries a `helpers-uninstall` envelope: `removed[]`, `warnings[]`, and `revocation` (null unless `--revoke`).
+The per-step progress lines and the closing report are **runtime output**, not description copy, so they may name mechanisms as operational fact ([surface-copy.md](surface-copy.md) §Scope). Under `--json` the progress lines move to stderr and stdout carries the `helpers-setup` envelope alone: `install` (the install result) and `ceremony` (`steps[]` — leg, label, **tier**, state, `alreadyGranted`, detail — plus `outstanding[]`, `tier`, `guiRequestedBy`, `uiEnabledSet`, `denied`, `pending`, `closing`). The wizard's explainers and questions always go to stderr, so `--json` stdout stays the envelope alone in wizard mode too. `uninstall --json` carries a `helpers-uninstall` envelope: `removed[]`, `warnings[]`, and `revocation` (null unless `--revoke`).
 
 ## Uninstall and revocation (`things helpers uninstall [--revoke]`)
 

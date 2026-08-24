@@ -301,6 +301,30 @@ describe("doctor CLI — orphaned-intent advisory line", () => {
     expect(out).toContain("review your recent changes in Things");
   });
 
+  /**
+   * Doctor's provenance table (docs/design/permissions-doctrine.md, Article II).
+   * Doctor is what someone runs when access is broken, so this section must
+   * answer WHOSE grant each vector rides on — and it must render without a
+   * single probe that could prompt (doctor was an Article I violation once).
+   */
+  it("renders the per-vector provenance table, naming who holds each grant", async () => {
+    const out = await runDoctorCli();
+    expect(out).toContain("── Permissions (per vector) ──");
+    for (const vector of ["read", "applescript", "url-scheme", "shortcuts", "ui"]) {
+      expect(out).toMatch(new RegExp(`^\\s+${vector}\\s`, "m"));
+    }
+    // THINGS_DB is set here, so reads are Article VI's explicit-path case: the
+    // table must say so rather than implying a TCC grant is in play.
+    expect(out).toContain("none needed (an explicit --db path)");
+    // The two consent-free vectors state what their real gate is.
+    expect(out).toContain("the app's own 'Enable Things URLs' setting");
+    expect(out).toContain("each shortcut's own Always Allow");
+    // GUI-driving is off in this scratch config, and the row says whose grant
+    // it would be — never "grant Accessibility to this terminal".
+    expect(out).toContain("helpers only (Article IV)");
+    expect(out).toContain("things helpers setup --gui");
+  });
+
   it("omits the advisory entirely when the trail is clean", async () => {
     mkdirSync(join(stateDir, "audit"), { recursive: true });
     writeFileSync(

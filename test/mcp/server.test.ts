@@ -14,7 +14,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
-import { createThingsMcpServer } from "../../src/mcp/server.ts";
+import { createThingsMcpServer, type BakedCapability } from "../../src/mcp/server.ts";
 import { OPERATION_KINDS } from "../../src/write/operations.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { VectorId, VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
@@ -36,6 +36,8 @@ let fixture: FixtureDb;
 let stateDir: string;
 let client: Client;
 let close: () => Promise<void>;
+/** The one startup line the server writes when something is missing. */
+let startupWarnings: string[];
 
 const DEFAULT_OPS = ["todo.add", "todo.update", "todo.complete"];
 
@@ -77,9 +79,24 @@ function tierVector(op: string, disruption: number): WriteVector {
   };
 }
 
+/**
+ * The startup capability verdict every cell runs under (permissions doctrine,
+ * Article II). ALWAYS injected: the real survey reads the developer's own macOS
+ * grants, so a cell that omitted it would pass on a granted workstation and
+ * fail on CI — the exact host-state-in-tests mistake Wave A already made once.
+ */
+function grantedCapability(): BakedCapability {
+  const host = { bundleId: "test.host", name: "the test host" };
+  return {
+    read: { mode: "helpers", detail: "reads are served by the reader", remediation: [], host },
+    write: { mode: "deputy", detail: "the deputy holds app control", remediation: [], host },
+    ui: { mode: "helpers", detail: "the helpers hold GUI-driving", remediation: [], host },
+  };
+}
+
 async function connect(
   vectors: WriteVector[],
-  opts: { maxDisruption?: 0 | 1 | 2 | 3 } = {},
+  opts: { maxDisruption?: 0 | 1 | 2 | 3; capability?: BakedCapability } = {},
 ): Promise<void> {
   const env = {
     ...process.env,
@@ -90,6 +107,8 @@ async function connect(
   const server = createThingsMcpServer({
     dbPath: fixture.path,
     ...(opts.maxDisruption !== undefined && { maxDisruption: opts.maxDisruption }),
+    capability: opts.capability ?? grantedCapability(),
+    onStartupWarning: (line) => startupWarnings.push(line),
     openOptions: {
       env,
       vectors,
@@ -121,6 +140,8 @@ async function connectClock(
   };
   const server = createThingsMcpServer({
     dbPath: fixture.path,
+    capability: grantedCapability(),
+    onStartupWarning: (line) => startupWarnings.push(line),
     openOptions: {
       env,
       vectors,
@@ -246,6 +267,7 @@ function warningsOf(result: unknown): string[] | undefined {
 beforeEach(() => {
   fixture = buildFixtureDb();
   stateDir = mkdtempSync(join(tmpdir(), "things-api-mcp-test-"));
+  startupWarnings = [];
 });
 afterEach(async () => {
   await close();
@@ -1793,7 +1815,11 @@ describe("things MCP server", () => {
     });
 
     it("degrade gracefully when the database is unreadable", async () => {
-      const server = createThingsMcpServer({ dbPath: join(stateDir, "nope.sqlite") });
+      const server = createThingsMcpServer({
+        dbPath: join(stateDir, "nope.sqlite"),
+        capability: grantedCapability(),
+        onStartupWarning: () => {},
+      });
       const localClient = new Client({ name: "test-client", version: "0.0.0" });
       const [ct, st] = InMemoryTransport.createLinkedPair();
       await Promise.all([server.connect(st), localClient.connect(ct)]);
@@ -3225,5 +3251,131 @@ describe("MCP completion-context (HINTS1)", () => {
       }),
     ) as { context?: unknown };
     expect(result.context).toBeUndefined();
+  });
+});
+
+/**
+ * THE STARTUP BAKE (docs/design/permissions-doctrine.md, Article II). A daemon
+ * surveys its permissions ONCE, before it accepts a tool call, and then holds
+ * that verdict for its whole life — because the grants are its launcher's and
+ * cannot change while it runs. What the cells below pin: the verdict reaches
+ * the instructions, a tool outside the served set refuses IMMEDIATELY with the
+ * restart remediation (rather than trying and raising a dialog), the
+ * diagnostics stay reachable on a machine that can do nothing else, and the one
+ * stderr line is emitted at startup.
+ */
+describe("MCP startup capability baking", () => {
+  const HOST = { bundleId: "test.host", name: "the test host" };
+  const NOTHING: BakedCapability = {
+    read: {
+      mode: "none",
+      detail: "the test host cannot open the Things data folder",
+      remediation: ["run `things helpers setup`"],
+      host: HOST,
+    },
+    write: {
+      mode: "direct-unknown",
+      detail: "macOS has no app-control record for the test host yet",
+      remediation: ["run `things setup`"],
+      host: HOST,
+    },
+    ui: {
+      mode: "config-disabled",
+      detail: "GUI-driving is switched off on this machine (`ui-enabled` is false)",
+      remediation: ["run `things config set ui-enabled true`"],
+      host: HOST,
+    },
+  };
+
+  it("states the available vector set and the frozen-at-startup rule in the instructions", async () => {
+    await connect([]);
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).toContain("Permissions (checked once at server start");
+    expect(instructions).toContain("Available here: read, write, gui-driving.");
+    expect(instructions).toContain("Nothing is missing");
+  });
+
+  it("names what is unavailable and how to fix it, when something is", async () => {
+    await connect([], { capability: NOTHING });
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).toContain("Available here: nothing");
+    expect(instructions).toContain("cannot open the Things data folder");
+    expect(instructions).toContain("no app-control record");
+    expect(instructions).toContain("GUI-driving is switched off");
+    expect(instructions).toContain("stop the server, run the named");
+  });
+
+  it("warns once on stderr at startup, and not at all when everything is present", async () => {
+    await connect([], { capability: NOTHING });
+    expect(startupWarnings).toHaveLength(1);
+    expect(startupWarnings[0]).toContain("reads, changes, GUI-driven operations unavailable");
+    expect(startupWarnings[0]).toContain("restart this server after running setup");
+    await close();
+    startupWarnings = [];
+    await connect([]);
+    expect(startupWarnings).toEqual([]);
+  });
+
+  it("refuses a read tool immediately, with the setup command and the restart rule", async () => {
+    await connect([], { capability: NOTHING });
+    const result = await client.callTool({ name: "read_view", arguments: { view: "today" } });
+    expect(result.isError).toBe(true);
+    const error = textOf(result) as { code: string; message: string; remediation: string };
+    expect(error.code).toBe("environment");
+    expect(error.message).toContain("cannot open the Things data folder");
+    expect(error.remediation).toContain("things helpers setup");
+    expect(error.remediation).toContain("stop this server");
+  });
+
+  it("refuses a write tool naming the READ grant when that is the missing one", async () => {
+    await connect([], { capability: NOTHING });
+    const error = textOf(
+      await client.callTool({ name: "add_todo", arguments: { title: "nope" } }),
+    ) as { message: string };
+    // A write read-verifies, so the honest refusal names the class actually absent.
+    expect(error.message).toContain("verifies the result by reading it back");
+  });
+
+  it("refuses a write tool for the WRITE grant when reads are fine", async () => {
+    const readOnly: BakedCapability = { ...NOTHING, read: { ...NOTHING.read, mode: "helpers" } };
+    await connect([], { capability: readOnly });
+    const error = textOf(
+      await client.callTool({ name: "add_todo", arguments: { title: "nope" } }),
+    ) as { message: string; remediation: string };
+    expect(error.message).toContain("no app-control record");
+    expect(error.remediation).toContain("things setup");
+  });
+
+  it("refuses the GUI-only tools when GUI-driving is absent, and only those", async () => {
+    const noGui: BakedCapability = {
+      ...NOTHING,
+      read: { ...NOTHING.read, mode: "helpers" },
+      write: { ...NOTHING.write, mode: "deputy" },
+    };
+    await connect([], { capability: noGui });
+    const repeat = textOf(
+      await client.callTool({
+        name: "repeat",
+        arguments: { scope: "todo", action: "pause", uuid: "00000000-0000-0000-0000-000000000000" },
+      }),
+    ) as { message: string; remediation: string };
+    expect(repeat.message).toContain("driving the Things window");
+    expect(repeat.remediation).toContain("ui-enabled");
+    // A plain write tool is untouched by a missing GUI grant: it gets as far as
+    // the ordinary write path rather than the baked refusal.
+    const write = textOf(
+      await client.callTool({ name: "add_todo", arguments: { title: "fine" } }),
+    ) as { message?: string };
+    expect(write.message ?? "").not.toContain("driving the Things window");
+  });
+
+  it("keeps the diagnostics answerable on a machine that can do nothing else", async () => {
+    await connect([], { capability: NOTHING });
+    // doctor must answer — it is what someone runs to find out WHY nothing works.
+    const doctor = await client.callTool({ name: "doctor", arguments: {} });
+    // Either a report or diagnose's own environment error — never the baked refusal.
+    expect(JSON.stringify(textOf(doctor))).not.toContain("stop this server");
+    const capabilities = await client.callTool({ name: "capabilities", arguments: {} });
+    expect(capabilities.isError).toBeUndefined();
   });
 });

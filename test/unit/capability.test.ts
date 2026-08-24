@@ -14,6 +14,9 @@ import {
   readCapability,
   ReadCapabilityError,
   resetCapabilityForTests,
+  uiAllowed,
+  uiCapability,
+  UI_DIRECT_ESCAPE_ENV,
   writeCapability,
   type CapabilityDeps,
 } from "../../src/capability.ts";
@@ -272,3 +275,77 @@ function sessionFixture(): string {
   );
   return dir;
 }
+
+/**
+ * THE UI VERDICT (Article IV). GUI-driving has exactly one supported
+ * provenance: the helper pair. Every answer below is prompt-free — a config
+ * read plus the deputy's own handshake — and no cell may consult this host.
+ */
+describe("uiCapability", () => {
+  /** A machine with the config on and a deputy answering whatever is asked. */
+  function guiDeps(over: Partial<CapabilityDeps> = {}): CapabilityDeps {
+    return {
+      ...bareMachine(),
+      uiEnabled: () => true,
+      deputyGuiStanding: () => ({ axTrusted: true, systemEvents: "granted" }),
+      ...over,
+    };
+  }
+
+  it("is off, and says which knob, when ui-enabled is false", () => {
+    const verdict = uiCapability(guiDeps({ uiEnabled: () => false }));
+    expect(verdict.mode).toBe("config-disabled");
+    expect(uiAllowed(verdict)).toBe(false);
+    expect(verdict.remediation.join(" ")).toContain("things config set ui-enabled true");
+    expect(verdict.remediation.join(" ")).toContain("things helpers setup --gui");
+  });
+
+  it("is granted when the deputy holds Accessibility and System Events", () => {
+    const verdict = uiCapability(guiDeps());
+    expect(verdict.mode).toBe("helpers");
+    expect(uiAllowed(verdict)).toBe(true);
+    expect(verdict.remediation).toEqual([]);
+  });
+
+  it("names the missing halves of a half-granted tier", () => {
+    const verdict = uiCapability(
+      guiDeps({ deputyGuiStanding: () => ({ axTrusted: false, systemEvents: "unknown" }) }),
+    );
+    expect(verdict.mode).toBe("tier-incomplete");
+    expect(verdict.detail).toContain("Accessibility");
+    expect(verdict.detail).toContain("automation → System Events (unknown)");
+    expect(verdict.remediation.join(" ")).toContain("things helpers setup --gui");
+  });
+
+  it("says the helpers are absent rather than offering direct Accessibility", () => {
+    const verdict = uiCapability(guiDeps({ deputyGuiStanding: () => null }));
+    expect(verdict.mode).toBe("helpers-missing");
+    expect(uiAllowed(verdict)).toBe(false);
+    // Article IV: direct AX is unsupported, so no remediation may point at it.
+    expect(verdict.remediation.join(" ")).not.toContain("Accessibility");
+  });
+
+  it("treats a pre-handshake helper's absent axTrusted as unknown, never as granted", () => {
+    const verdict = uiCapability(
+      guiDeps({ deputyGuiStanding: () => ({ axTrusted: undefined, systemEvents: "granted" }) }),
+    );
+    expect(verdict.mode).toBe("tier-incomplete");
+    expect(verdict.detail).toContain("rebuild");
+  });
+
+  it("honors the lab's documented escape — and only when ui-enabled is also on", () => {
+    const escape = { [UI_DIRECT_ESCAPE_ENV]: "1" };
+    const granted = uiCapability(
+      guiDeps({
+        env: escape,
+        // The escape must not need a deputy at all: a golden clone has none.
+        deputyGuiStanding: () => null,
+      }),
+    );
+    expect(granted.mode).toBe("direct-escape");
+    expect(uiAllowed(granted)).toBe(true);
+    // It is not a config bypass: `ui-enabled` still gates first.
+    const off = uiCapability(guiDeps({ env: escape, uiEnabled: () => false }));
+    expect(off.mode).toBe("config-disabled");
+  });
+});

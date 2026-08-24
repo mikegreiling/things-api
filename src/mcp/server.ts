@@ -46,6 +46,15 @@ import {
   opResult,
   OPERATION_KINDS,
   openThings,
+  readAllowed,
+  readCapability,
+  uiAllowed,
+  uiCapability,
+  writeAllowed,
+  writeCapability,
+  type ReadCapability,
+  type UiCapability,
+  type WriteCapability,
   PKG_VERSION,
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
@@ -117,6 +126,99 @@ export interface McpServerOptions {
   scope?: string;
   /** Test seam: forwarded to openThings (fake vectors, pinned clock, env). */
   openOptions?: OpenOptions;
+  /**
+   * Test seam: the startup capability survey (docs/design/permissions-doctrine.md,
+   * Article II). Real servers run the prompt-free survey once at startup; tests
+   * substitute a fixed verdict so a cell's outcome never depends on the
+   * developer's own macOS grants.
+   */
+  capability?: BakedCapability;
+  /** Where the one startup warning line goes. Default: stderr. */
+  onStartupWarning?: (line: string) => void;
+}
+
+/**
+ * What this server may do, decided ONCE before the first tool call
+ * (docs/design/permissions-doctrine.md, Article II).
+ *
+ * A daemon is exactly the wrong place to discover a missing grant: nobody is
+ * watching its stderr, a per-call re-survey would let capability change under
+ * an agent mid-conversation, and the grants a daemon holds are its LAUNCHER's,
+ * fixed for the process's whole life — a `things setup` run afterwards changes
+ * nothing until the daemon is restarted. So the verdict is baked: stated in the
+ * server instructions, enforced immediately on tools whose vector class is
+ * absent, and remediated with "kill the server, run setup, restart it".
+ */
+export interface BakedCapability {
+  read: ReadCapability;
+  write: WriteCapability;
+  ui: UiCapability;
+}
+
+/**
+ * The vector class a tool needs. `none` is the diagnostic set — `doctor`,
+ * `capabilities`, `op_result` — which must answer on exactly the broken machine
+ * where someone is trying to find out what is wrong, and which touch no live
+ * library between them.
+ */
+type ToolClass = "none" | "read" | "write" | "ui";
+
+/** Tools that mutate through the app. Everything unlisted is a plain read. */
+const WRITE_TOOLS = new Set([
+  "add_todo",
+  "update",
+  "set_status",
+  "move_todo",
+  "set_tags",
+  "edit_checklist",
+  "delete",
+  "restore_item",
+  "heading",
+  "clear_reminder",
+  "duplicate_item",
+  "clone_item",
+  "add_project",
+  "move_project",
+  "add_area",
+  "add_tag",
+  "log_now",
+  "run_operation",
+  "batch",
+  "reorder",
+  "undo",
+]);
+
+/**
+ * Tools with NO headless spelling at all — every path through them drives the
+ * Things window. A tool that merely *can* reach a GUI op (`heading`'s promote,
+ * `reorder`'s areas) is NOT listed: those have working headless branches, and
+ * the pipeline's own Article IV gate refuses the GUI ones per call.
+ */
+const UI_TOOLS = new Set(["repeat", "convert_to_project"]);
+
+/** The always-available diagnostics. */
+const DIAGNOSTIC_TOOLS = new Set(["doctor", "capabilities", "op_result"]);
+
+function toolClass(name: string): ToolClass {
+  if (DIAGNOSTIC_TOOLS.has(name)) return "none";
+  if (UI_TOOLS.has(name)) return "ui";
+  if (WRITE_TOOLS.has(name)) return "write";
+  return "read";
+}
+
+/** The one remediation every baked refusal ends with. */
+const RESTART_REMEDIATION =
+  "this server surveyed its permissions once at startup and does not re-check them, because a " +
+  "grant made now would attach to whoever launched it: stop this server, run the setup command " +
+  "above at the machine, then start it again.";
+
+/** The vector classes this server can actually serve, for the instructions. */
+function availableClasses(capability: BakedCapability): string[] {
+  const available: string[] = [];
+  if (readAllowed(capability.read)) available.push("read");
+  if (writeAllowed(capability.write)) available.push("write");
+  if (uiAllowed(capability.ui)) available.push("gui-driving");
+  return available;
 }
 
 type ToolResult = {
@@ -581,7 +683,7 @@ const tagLabel = (t: { title: string; parent: string | null }): string =>
  * names without a discovery round-trip. Degrades to conventions-only when
  * the database is not readable.
  */
-function buildInstructions(getClient: () => ThingsClient): string {
+function buildInstructions(getClient: () => ThingsClient, capability: BakedCapability): string {
   const lines = [
     "This server reads and modifies the user's Things 3 data: to-dos, projects, areas, and tags.",
     "",
@@ -611,6 +713,29 @@ function buildInstructions(getClient: () => ThingsClient): string {
     "- For capped reads, pass limit to cap rows or all: true for everything; if both are set, all wins.",
     `- Read results are compact: ${OMIT_EMPTY_NOTE}`,
   ];
+  // What this server may do, decided once at startup and true for its whole
+  // life (permissions doctrine, Article II). Stated up front so an agent plans
+  // around the real surface instead of discovering it one refusal at a time.
+  const available = availableClasses(capability);
+  const missing: string[] = [];
+  if (!readAllowed(capability.read)) missing.push(`reads — ${capability.read.detail}`);
+  if (!writeAllowed(capability.write)) missing.push(`changes — ${capability.write.detail}`);
+  if (!uiAllowed(capability.ui)) missing.push(`GUI-driven operations — ${capability.ui.detail}`);
+  lines.push(
+    "",
+    "Permissions (checked once at server start, fixed for this server's lifetime):",
+    `- Available here: ${available.length > 0 ? available.join(", ") : "nothing — every tool below refuses"}.`,
+    ...(missing.length > 0
+      ? [
+          `- Unavailable here: ${missing.join("; ")}.`,
+          "- Tools needing an unavailable capability refuse immediately rather than trying and " +
+            "raising a macOS permission dialog nobody is present to answer. Remediation for each " +
+            "is in its refusal. These grants attach to whichever process launched this server, so " +
+            "they cannot change while it runs: the fix is always stop the server, run the named " +
+            "setup command at the machine, start it again.",
+        ]
+      : ["- Nothing is missing; no tool will refuse for want of a permission."]),
+  );
   try {
     const c = getClient();
     // Under a container scope the inventory below is already limited to in-scope
@@ -719,10 +844,91 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     return client;
   };
 
+  // THE STARTUP BAKE (permissions doctrine, Article II). One prompt-free survey
+  // before the transport is connected; the verdict then shapes the instructions
+  // and gates the tools, and is never re-taken.
+  const capability: BakedCapability = options.capability ?? {
+    read: readCapability(options.dbPath !== undefined ? { dbPath: options.dbPath } : {}),
+    write: writeCapability(),
+    ui: uiCapability(),
+  };
+  const warn = options.onStartupWarning ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const unavailable = [
+    ...(readAllowed(capability.read) ? [] : ["reads"]),
+    ...(writeAllowed(capability.write) ? [] : ["changes"]),
+    ...(uiAllowed(capability.ui) ? [] : ["GUI-driven operations"]),
+  ];
+  if (unavailable.length > 0) {
+    warn(
+      `things-api MCP: ${unavailable.join(", ")} unavailable on this machine — ` +
+        `${capability.read.detail}; ${capability.write.detail}; ${capability.ui.detail}. ` +
+        "Tools needing them refuse; restart this server after running setup.",
+    );
+  }
+
   const server = new McpServer(
     { name: "things-api", version: PKG_VERSION },
-    { instructions: buildInstructions(getClient) },
+    { instructions: buildInstructions(getClient, capability) },
   );
+
+  /**
+   * The baked refusal for one tool class, or null when the class is served.
+   * Article II in one function: the answer is the STARTUP verdict, quoted, with
+   * the setup command and the restart rule — never a fresh probe, and never a
+   * dispatch that could put a dialog on screen.
+   */
+  const bakedRefusal = (name: string): ToolResult | null => {
+    switch (toolClass(name)) {
+      case "none":
+        return null;
+      case "read":
+        return readAllowed(capability.read)
+          ? null
+          : errorResult({
+              code: "environment",
+              message: `this tool reads the Things database, and ${capability.read.detail}`,
+              remediation: [...capability.read.remediation, RESTART_REMEDIATION].join("; "),
+            });
+      case "write":
+        // A write read-verifies, so it needs both classes; name the one that
+        // is actually missing rather than a generic "cannot write".
+        if (!readAllowed(capability.read)) {
+          return errorResult({
+            code: "environment",
+            message: `this tool changes Things data and verifies the result by reading it back, and ${capability.read.detail}`,
+            remediation: [...capability.read.remediation, RESTART_REMEDIATION].join("; "),
+          });
+        }
+        return writeAllowed(capability.write)
+          ? null
+          : errorResult({
+              code: "environment",
+              message: `this tool changes Things data by driving the app, and ${capability.write.detail}`,
+              remediation: [...capability.write.remediation, RESTART_REMEDIATION].join("; "),
+            });
+      case "ui":
+        return uiAllowed(capability.ui)
+          ? null
+          : errorResult({
+              code: "environment",
+              message: `this tool is delivered by driving the Things window, and ${capability.ui.detail}`,
+              remediation: [...capability.ui.remediation, RESTART_REMEDIATION].join("; "),
+            });
+    }
+  };
+
+  /**
+   * `server.registerTool` with the baked gate in front of every callback. Every
+   * registration below goes through this, so a tool cannot be added without a
+   * class — {@link toolClass} defaults an unlisted name to `read`, the weakest
+   * useful assumption, rather than to ungated.
+   */
+  const registerTool = ((name: string, config: never, cb: never) =>
+    server.registerTool(name, config, ((...args: unknown[]) => {
+      const refusal = bakedRefusal(name);
+      if (refusal !== null) return refusal;
+      return (cb as unknown as (...a: unknown[]) => unknown)(...args);
+    }) as never)) as unknown as McpServer["registerTool"];
 
   // The audit author for every write on this connection, derived once from the
   // client's handshake identity (clientInfo.name). Read per call: clientInfo is
@@ -837,7 +1043,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   // ------------------------------------------------------------------ reads
 
-  server.registerTool(
+  registerTool(
     "read_view",
     {
       description:
@@ -1187,7 +1393,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
   );
 
-  server.registerTool(
+  registerTool(
     "search",
     {
       description:
@@ -1272,7 +1478,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       ),
   );
 
-  server.registerTool(
+  registerTool(
     "changes_since",
     {
       description:
@@ -1311,7 +1517,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }, args.tz),
   );
 
-  server.registerTool(
+  registerTool(
     "get_item",
     {
       description:
@@ -1333,7 +1539,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "get_project",
     {
       description:
@@ -1379,7 +1585,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }, args.tz),
   );
 
-  server.registerTool(
+  registerTool(
     "get_area",
     {
       description:
@@ -1460,7 +1666,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
   );
 
-  server.registerTool(
+  registerTool(
     "list_collections",
     {
       description:
@@ -1534,7 +1740,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   const whenSchema = z.string().optional().describe(WHEN_VALUES);
 
-  server.registerTool(
+  registerTool(
     "add_todo",
     {
       description:
@@ -1607,7 +1813,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "update",
     {
       description:
@@ -1739,7 +1945,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "set_status",
     {
       description:
@@ -1856,7 +2062,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "move_todo",
     {
       description:
@@ -1935,7 +2141,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "set_tags",
     {
       description:
@@ -1973,7 +2179,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "edit_checklist",
     {
       description:
@@ -2081,7 +2287,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   // ------------------------------------------------- to-dos AND projects
 
-  server.registerTool(
+  registerTool(
     "delete",
     {
       description:
@@ -2143,7 +2349,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "restore_item",
     {
       description:
@@ -2171,7 +2377,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   // already-resolved item's timestamps), and set_status (backdate on
   // complete/cancel) — matching the CLI's --created-at/--completed-at flags.
 
-  server.registerTool(
+  registerTool(
     "heading",
     {
       description:
@@ -2368,7 +2574,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "convert_to_project",
     {
       description:
@@ -2397,7 +2603,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       ),
   );
 
-  server.registerTool(
+  registerTool(
     "clear_reminder",
     {
       description:
@@ -2512,7 +2718,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     return fields;
   };
 
-  server.registerTool(
+  registerTool(
     "repeat",
     {
       description:
@@ -2682,7 +2888,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "duplicate_item",
     {
       description:
@@ -2702,7 +2908,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "clone_item",
     {
       description:
@@ -2749,7 +2955,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   // -------------------------------------------------------------- projects
 
-  server.registerTool(
+  registerTool(
     "add_project",
     {
       description:
@@ -2802,7 +3008,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "move_project",
     {
       description:
@@ -2842,7 +3048,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   // ----------------------------------------------------------------- areas
 
-  server.registerTool(
+  registerTool(
     "add_area",
     {
       description: "Create an area, optionally tagged. Tags must exist unless create_tags is set.",
@@ -2869,7 +3075,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   // ------------------------------------------------------------------ tags
 
-  server.registerTool(
+  registerTool(
     "add_tag",
     {
       description: "Create a tag, optionally nested under an existing parent tag.",
@@ -2893,7 +3099,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       ),
   );
 
-  server.registerTool(
+  registerTool(
     "log_now",
     {
       description:
@@ -2909,7 +3115,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   // -------------------------------------------------- generic + discovery
 
-  server.registerTool(
+  registerTool(
     "run_operation",
     {
       description:
@@ -2953,7 +3159,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       ),
   );
 
-  server.registerTool(
+  registerTool(
     "batch",
     {
       description:
@@ -3088,7 +3294,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "reorder",
     {
       description:
@@ -3148,7 +3354,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "undo",
     {
       description:
@@ -3224,7 +3430,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "capabilities",
     {
       description:
@@ -3241,7 +3447,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     async (args) => guard(() => jsonResult(capabilitiesTable(args.op as OperationKind))),
   );
 
-  server.registerTool(
+  registerTool(
     "doctor",
     {
       description:
@@ -3274,7 +3480,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
+  registerTool(
     "op_result",
     {
       description:

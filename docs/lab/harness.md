@@ -27,6 +27,23 @@ The **AXVM1 L3-accessibility layer** (new in v2) grants Accessibility to the ssh
 
 > **A networked clone must have its clock pinned BEFORE Things is ever launched, on EVERY boot** (SYNCX1). Multi-phase sync campaigns stop and restart the same clone repeatedly, and a guest reboot returns the clock to real time — which on golden-v4 is months past the trial wall above. The boot helper pins first and only then launches; a single launch in between burns the clone stickily and there is no recovery.
 
+## The UI-vector lab escape (`THINGS_API_UI_DIRECT=1`)
+
+Since the permissions doctrine's [Article IV](../design/permissions-doctrine.md), a shipped host may drive the Things window **only through the helper pair** — the signed identities that hold Accessibility + Automation → System Events. A golden clone has neither: no helper bundle is installed in it, and there is nobody at the screen to answer a consent dialog. What a clone *does* have is the **AXVM1 layer** — an in-guest Accessibility grant on the runner's own sshd-descended processes ([axvm1-accessibility.md](axvm1-accessibility.md)) — which is exactly the direct driving Article IV forbids on a user's Mac.
+
+`THINGS_API_UI_DIRECT=1` is the documented escape for that one situation, and **not consumer surface**: nothing in the CLI/MCP copy mentions it and no consumer path sets it. It restores direct UI-vector availability and nothing else — in particular it does **not** bypass `ui-enabled`, so a clone still runs `things config set ui-enabled true` as it always did.
+
+Where it is exported:
+
+| Site | What it covers |
+|---|---|
+| `lab/guest/e2e-write-smoke.sh` | the guest e2e bundle — every `things` call the write-layer smoke makes |
+| `lab/scripts/env.sh` (`$LAB_UI_DIRECT`) | the prefix every **bash campaign driver** must put in front of a guest CLI invocation that exercises a ui-vector op: `lab_ssh "$IP" "$LAB_UI_DIRECT $CLI …"` |
+
+A driver that forgets it gets a clean `blocked` (exit 4) naming `things helpers setup --gui`, never a hung dialog — the refusal is the fail-closed outcome, so a forgotten prefix shows up as a red probe rather than a wedged VM.
+
+Unit and simulator suites are unaffected and must NOT use this: they exercise ui-vector logic with fake vectors, which are ungated because the gate keys on the vector's declared `drivesGui` flag rather than on its id (a fake declares nothing and drives nothing).
+
 ## Animation settings — standing config for the NEXT golden mint (PERF2)
 
 Reduce Motion + disabling automatic window animations measurably speed sheet presentation — the Repeat dialog's present+settle roughly HALVES on a golden clone (~532 → ~260ms, PERF2 S6, [perf2-step-latency.md](perf2-step-latency.md)). When the next golden is minted, consider baking these into the image so ui-vector drives (and the certification suite) run faster:
