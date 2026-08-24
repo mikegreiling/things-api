@@ -62,6 +62,9 @@ echo "building things-deputy $VERSION..."
 sed "s/<string>0\.0\.0<\/string>/<string>$VERSION<\/string>/" \
   deputy/helpers-Info.plist > "$APP/Contents/Info.plist"
 swiftc -O deputy/src/*.swift "$BUILD_DIR/Version.swift" -o "$APP/Contents/MacOS/things-deputy"
+# Icon must land before signing — the outer signature seals bundle resources.
+mkdir -p "$APP/Contents/Resources"
+cp deputy/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 if [ "$APPLE_CHAIN" = "1" ]; then
   echo "building things-reader $VERSION..."
@@ -71,6 +74,8 @@ if [ "$APPLE_CHAIN" = "1" ]; then
     deputy/reader/Info.plist > "$READER/Contents/Info.plist"
   swiftc -O deputy/reader/main.swift deputy/src/sqlite.swift "$BUILD_DIR/Version.swift" \
     -o "$READER/Contents/MacOS/things-reader"
+  mkdir -p "$READER/Contents/Resources"
+  cp deputy/AppIcon.icns "$READER/Contents/Resources/AppIcon.icns"
   # Nested-first signing order (never --deep): the reader carries its own
   # sandbox entitlements; the outer signature then seals the whole bundle.
   codesign --force --sign "$IDENTITY" \

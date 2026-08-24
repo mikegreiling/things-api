@@ -16,6 +16,7 @@
   },
   "files": [
     "bin",
+    "deputy/AppIcon.icns",
     "deputy/helpers-Info.plist",
     "deputy/prebuilt",
     "deputy/reader",
