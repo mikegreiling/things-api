@@ -270,6 +270,9 @@ export interface ErrorEnvelope {
      *    part-way: the items already placed, those not yet placed, and the cause.
      *  - `failed` / `completed` — a multi-leg move that failed mid-way: the leg
      *    that failed and the legs already completed before it.
+     *  - `capability` — a permissions-doctrine refusal: the prompt-free verdict
+     *    (mode, provenance detail, host identity, remediation list) that made
+     *    the call refuse before touching the app or the container.
      */
     detail?: {
       expected?: unknown;
@@ -292,6 +295,7 @@ export interface ErrorEnvelope {
       outcome?: "uncertain";
       recheck?: string;
       tracePath?: string;
+      capability?: unknown;
     };
   };
   meta: EnvelopeMeta;
@@ -346,7 +350,7 @@ export type WireOkKind =
   | "capabilities"
   | "config"
   | "legend"
-  | "setup-shortcuts"
+  | "setup"
   | "install-skill";
 
 /**

@@ -208,7 +208,7 @@ async function runBounce(
       observed: leg1.kind === "verify-failed" ? leg1.observed : null,
       detail:
         "bounce leg 1 (when=today) failed — the item was NOT touched; its dated reminder is " +
-        "unchanged. Retry, or clear it via `things setup shortcuts`",
+        "unchanged. Retry, or clear it via `things setup`",
     };
   }
 

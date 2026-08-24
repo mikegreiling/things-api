@@ -10,7 +10,7 @@
  *      remaining LEAF command (a command with no subcommands) so a read accepts
  *      it (and returns byte-identical output — the normal view IS the correct
  *      dry-run of a read) and a future leaf inherits it automatically. Local-
- *      side-effect leaves (config set, install-skill, setup shortcuts, the
+ *      side-effect leaves (config set, install-skill, setup, the
  *      `open` reveals, mcp) get the hidden option too, and their actions read
  *      `opts.dryRun` and honor it (an honest preview, or a loud refusal).
  *

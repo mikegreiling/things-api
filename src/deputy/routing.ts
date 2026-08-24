@@ -427,6 +427,34 @@ export function deputyFilesActive(env: NodeJS.ProcessEnv = process.env): boolean
   return fileTransport(env) !== null;
 }
 
+/**
+ * Does this machine EXPECT the helpers to carry its reads?
+ *
+ * `true` is an explicit instruction, and under `auto` an installed bundle is
+ * the intent signal (src/deputy/agent-daemon.md §3c). The permissions doctrine
+ * hangs its no-fallback rule on this: when the helpers are expected but cannot
+ * serve, a read refuses loudly instead of quietly re-attaching consent to the
+ * terminal — the exact churn the helpers exist to end. A machine with nothing
+ * installed under `auto` is an ordinary direct machine and is NOT expecting
+ * them, so it falls through to the direct grants as it always has.
+ */
+export function helpersExpected(env: NodeJS.ProcessEnv = process.env): boolean {
+  const mode = loadConfig(env).helpersMode;
+  if (mode === "false") return false;
+  if (mode === "true") return true;
+  return halfInstalled(readerInstalledAppPath(env), readerSocketPath(env), readerTokenPath(env));
+}
+
+/** Why the reader is not carrying reads (null when it is). */
+export function readerUnavailableReason(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (deputyFilesActive(env)) return null;
+  const reader = readerRouting(env);
+  if (reader.active && !reader.granted) {
+    return "the reader is running but holds no read grant for the Things data folder";
+  }
+  return reader.reason;
+}
+
 /** Blocking FILE-verb round-trip via the granted reader. */
 export function fileSyncRequest(
   fields: Record<string, unknown>,
@@ -492,22 +520,30 @@ export async function deputyAsyncRequest(
  * is active (the caller then locates locally, exactly as before the helpers
  * existed). The reader's scope is grant-checked, never prompted — a locate
  * through it can refuse but can never stall on a consent dialog.
+ *
+ * A reader that IS serving and then fails to locate THROWS rather than
+ * returning null. Falling back to a direct locate there would silently move
+ * the read — and its consent — back onto the host app, which the permissions
+ * doctrine forbids (Article I; no-fallback rule). The reader's typed
+ * `not-granted` / `not-found` codes travel out on the error so the CLI can
+ * name the remedy.
  */
 export function deputyDbPath(env: NodeJS.ProcessEnv = process.env): string | null {
   const reader = readerRouting(env);
   if (!reader.active || !reader.granted) return null;
   if (reader.hello?.dbPath != null) return reader.hello.dbPath;
   const rs = readerState as ReaderState;
-  if (rs.dbPathMemo !== undefined) return rs.dbPathMemo;
-  try {
-    const res = fileSyncRequest({ verb: "locate" }, 10_000, env);
-    rs.dbPathMemo = typeof res["path"] === "string" ? res["path"] : null;
-  } catch (err) {
-    rs.dbPathMemo = null;
-    const why = err instanceof Error ? err.message : String(err);
-    emitHelpersNotice(`the reader could not resolve the database (${why}) — this read runs DIRECT`);
+  if (rs.dbPathMemo !== undefined && rs.dbPathMemo !== null) return rs.dbPathMemo;
+  const res = fileSyncRequest({ verb: "locate" }, 10_000, env);
+  const path = typeof res["path"] === "string" ? res["path"] : null;
+  if (path === null) {
+    throw new DeputyRequestError(
+      "not-found",
+      "the reader answered the locate but named no database",
+    );
   }
-  return rs.dbPathMemo;
+  rs.dbPathMemo = path;
+  return path;
 }
 
 /**

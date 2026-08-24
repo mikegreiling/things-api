@@ -16,7 +16,7 @@
 import type { Command } from "commander";
 
 import { CLI_VERSION } from "./version.ts";
-import { ExitCode } from "../index.ts";
+import { ExitCode, hostDisplayName } from "../index.ts";
 
 /** One command's index line: its argument sketch and its ≤58-char descriptor. */
 interface IndexEntry {
@@ -108,7 +108,7 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   doctor: { args: "", desc: "check environment health and pending setup" },
   "op-result": { args: "<id>", desc: "recover a write's outcome by its --op-id" },
   capabilities: { args: "", desc: "what each write operation supports" },
-  setup: { args: "<verb>", desc: "one-time setup (install the Shortcuts)" },
+  setup: { args: "", desc: "grant this Mac's permissions, in one sitting" },
   helpers: { args: "<verb>", desc: "manage the helper pair that holds macOS grants" },
   "install-skill": { args: "", desc: "install the agent skill for coding agents" },
   mcp: { args: "", desc: "serve the Model Context Protocol server on stdio" },
@@ -162,7 +162,7 @@ function layoutRow(head: string, desc: string, width: number, col: number): stri
  * contract test can assert its line budget at a fixed width. Returns the body
  * WITHOUT a trailing newline.
  */
-export function renderTopLevelHelp(program: Command, width: number): string {
+export function renderTopLevelHelp(program: Command, width: number, host?: string): string {
   void program;
   const lines: string[] = [];
   lines.push("things — a programmatic interface to Things 3 (Cultured Code).");
@@ -203,6 +203,22 @@ export function renderTopLevelHelp(program: Command, width: number): string {
   );
   lines.push(`${"  -h, --help".padEnd(col)}help for things, or for any <command>`);
   lines.push(`${"  -V, --version".padEnd(col)}print the version (${CLI_VERSION})`);
+  lines.push("");
+
+  // The autodetectable stanza (docs/design/permissions-doctrine.md, Articles
+  // II + III): name the two places a macOS grant can live, and the app this
+  // invocation would attach one to. Every refusal elsewhere points back here.
+  const hostName = host ?? hostDisplayName();
+  lines.push("Permissions");
+  for (const line of wrap(
+    `macOS grants live either with the helper pair (\`things helpers setup\`, kept across ` +
+      `updates) or with ${hostName}, which also needs Full Disk Access under System Settings ` +
+      `▸ Privacy & Security (\`things setup\`). \`things doctor\` reports which you hold.`,
+    width - 2,
+    0,
+  )) {
+    lines.push(`  ${line}`);
+  }
   lines.push("");
 
   lines.push("Run `things <command> --help` for the behavior and options of any command.");
@@ -385,7 +401,7 @@ cancel, move, …) is not a command — it points you at the typed form
 (\`things todo|project|area|tag <verb> …\`), never running the change.
 
 Discover every operation and the flags it needs: \`things capabilities\`.
-A few operations need the bundled Shortcuts: \`things setup shortcuts\`.`,
+A few operations need the bundled Shortcuts: \`things setup\`.`,
 
   move: `MOVE vs REORDER — membership vs arrangement
 

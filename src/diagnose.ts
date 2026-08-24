@@ -21,6 +21,13 @@ import {
   helpersRouting,
   type HelpersRouting,
 } from "./deputy/routing.ts";
+import {
+  readAllowed,
+  readCapability,
+  writeCapability,
+  type ReadCapability,
+  type WriteCapability,
+} from "./capability.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
 import {
@@ -188,6 +195,16 @@ function buildHelpersReport(configMode: HelpersMode, deps: HelpersReportDeps = {
 }
 
 export interface DiagnoseReport {
+  /**
+   * What this process is permitted to do, and on whose authority
+   * (docs/design/permissions-doctrine.md, Article II). Detected prompt-free, so
+   * asking `doctor` never costs a consent dialog — which matters most on
+   * exactly the broken machine where someone runs it.
+   */
+  capability: {
+    read: ReadCapability;
+    write: WriteCapability;
+  };
   db: {
     path: string;
     source: "option" | "env" | "container" | "deputy";
@@ -362,7 +379,7 @@ export interface DiagnoseResult {
 /**
  * Which bundled Apple Shortcuts proxies are installed — a standalone
  * environment accessor that needs no database (the shortcuts probe is a pure
- * host check). The public capability behind `things setup shortcuts`; the full
+ * host check). The public capability behind `things setup`; the full
  * {@link diagnose} report carries the same state under `availability.shortcuts`.
  */
 export function shortcutProxies(deps: AvailabilityDeps = {}): ShortcutsState {
@@ -370,6 +387,26 @@ export function shortcutProxies(deps: AvailabilityDeps = {}): ShortcutsState {
 }
 
 export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): DiagnoseResult {
+  // The capability verdict comes FIRST and prompt-free (permissions doctrine,
+  // Articles I–III). Doctor is the command people run when access is broken, so
+  // it must be able to say "you hold nothing, here is how to fix it" without
+  // itself opening the container and raising the dialog it is diagnosing.
+  const capability = {
+    read: readCapability(dbPath !== undefined ? { dbPath } : {}),
+    write: writeCapability(),
+  };
+  if (!readAllowed(capability.read)) {
+    return {
+      report: null,
+      error: {
+        code: "environment",
+        message: `the Things database cannot be read: ${capability.read.detail}`,
+        remediation: capability.read.remediation.join("; "),
+      },
+      exitCode: ExitCode.Environment,
+      meta: { dbVersion: null, fingerprint: "unknown" },
+    };
+  }
   // Mirror openThings: deputy-brokered database access for the default
   // container db, local open for explicit paths (src/deputy/routing.ts).
   const routedDbPath = deputyRoutesDb(dbPath !== undefined ? { dbPath } : undefined)
@@ -470,6 +507,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
       }
     })();
     const report: DiagnoseReport = {
+      capability,
       db: {
         path: located.path,
         source: located.source,

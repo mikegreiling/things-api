@@ -30,6 +30,7 @@ import {
   withUpcomingBlockTotals,
   ReferenceResolutionError,
   schemaWarnings,
+  ReadCapabilityError,
   ThingsDbNotFoundError,
   ThingsDbOpenError,
   type EnvelopeMeta,
@@ -395,6 +396,35 @@ export function runRead<T>(
     // usage error naming the expected form — never a silent host fallback.
     if (err instanceof ClockError) {
       usageError(opts, err.message);
+      return;
+    }
+    // A capability refusal (docs/design/permissions-doctrine.md, Article II)
+    // is an environment failure that always carries its remediation: the
+    // caller is told what is missing, whose grant it would be, and the exact
+    // command that gathers it.
+    if (err instanceof ReadCapabilityError) {
+      const remediation = err.remediation.join("; ");
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            errorEnvelope(
+              {
+                code: "environment",
+                message: `the Things database cannot be read: ${err.capability.detail}`,
+                likelyCause: "permission-denied",
+                remediation,
+                detail: { capability: err.capability },
+              },
+              meta,
+            ),
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(`error: the Things database cannot be read.\n`);
+        process.stderr.write(`  ${err.capability.detail}\n`);
+        for (const line of err.remediation) process.stderr.write(`  → ${line}\n`);
+      }
+      process.exitCode = ExitCode.Environment;
       return;
     }
     const isEnv = err instanceof ThingsDbNotFoundError || err instanceof ThingsDbOpenError;

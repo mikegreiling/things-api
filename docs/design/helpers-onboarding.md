@@ -2,6 +2,8 @@
 
 **Status: shipped, helpers v1.2.0.** The design of record for the ONE sitting that settles every macOS permission the helper pair will ever need. Companion to [agent-daemon.md](agent-daemon.md) §3b/§3c (the pair itself) and [../lab/sandbox1-scoped-reader.md](../lab/sandbox1-scoped-reader.md) (the reader's scoped-read certification).
 
+**Constitutional context: [permissions-doctrine.md](permissions-doctrine.md).** This ceremony is one of exactly TWO places in the package permitted to raise a macOS consent dialog (Article I); the other is `things setup`, the direct-path ceremony for the host app itself. The doctrine's Article III names the two provenances a grant can attach to — the helpers (here) or the host app — Article IV reserves the UI vector to the helpers, and Article V sets the ceremony rules this document implements (idempotent, resumable, tiered, mode-aware). Everywhere outside these two ceremonies, capability is detected prompt-free and a missing grant is refused with remediation rather than prompted for.
+
 ## The claim it makes
 
 On a host where this ceremony has completed, **first-write consent prompts are extinct**. No `things` command — from a terminal, from an agent harness, from a launchd job — can raise a TCC dialog for the automation or file-read paths, because every event and every read is issued by a helper whose grants are already on record. The consent surface moved from "whichever process ran `things` this week" to two stable signed identities, and this ceremony is where those two identities collect what they need, while a human is sitting there.

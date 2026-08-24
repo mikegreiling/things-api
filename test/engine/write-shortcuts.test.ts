@@ -140,7 +140,7 @@ describe("project.add-heading", () => {
     expect(result.kind).toBe("blocked");
     if (result.kind === "blocked") {
       expect(result.reason).toBe("environment");
-      expect(result.remediation).toContain("things setup shortcuts");
+      expect(result.remediation).toContain("things setup");
     }
     // The vector was never dispatched.
     expect(calls).toHaveLength(0);
