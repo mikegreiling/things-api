@@ -973,6 +973,20 @@ export function isRepeatingTemplate(task: AnyTask | null): boolean {
   return task !== null && task.type !== "heading" && task.repeating.isTemplate;
 }
 
+/**
+ * Every row of one series — the template plus every occurrence it has spawned,
+ * trashed ones included. All of them carry the template's title, so this is the
+ * exclusion set that makes "the row Create Next Copy just minted" unambiguous
+ * (CNC1). Trashed rows stay IN: a create probe must not rediscover an occurrence
+ * the user trashed a moment ago and call it the new one.
+ */
+export function seriesRowUuids(db: DatabaseSync, templateUuid: string): string[] {
+  const rows = db
+    .prepare("SELECT uuid FROM TMTask WHERE uuid = ? OR rt1_repeatingTemplate = ?")
+    .all(templateUuid, templateUuid) as { uuid: string }[];
+  return rows.map((r) => r.uuid);
+}
+
 const NOT_TEMPLATE_ROW = "(rt1_recurrenceRule IS NULL AND repeater IS NULL)";
 
 const TEMPLATE_ROW = "(rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)";

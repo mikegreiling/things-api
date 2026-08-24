@@ -169,6 +169,7 @@ import {
   runCompleteWithDate,
   runUpdateDates,
 } from "./write/resolution-timestamps.ts";
+import { runTemplateExceptionWrite } from "./write/template-mutation.ts";
 import type { ChecklistEdit } from "./write/checklist.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import {
@@ -559,6 +560,21 @@ export interface ThingsClient {
     updateTodo(
       uuid: string,
       patch: Omit<TodoUpdateParams, "uuid"> & ResolutionDates,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
+    /**
+     * Change ONLY the next occurrence of a repeating to-do, leaving the series
+     * itself alone — the app's "make a one-time exception". The occurrence is
+     * created if the series has not spawned it yet, then the patch is applied to
+     * it. Refuses when the requested day is one the series already lands on (the
+     * app would leave two copies there), when the series repeats a fixed time
+     * after each completion (it has no upcoming occurrence until the current one
+     * is done), and for repeating projects. Undo restores the occurrence's own
+     * change but cannot remove the occurrence or rewind the series.
+     */
+    updateTodoOccurrence(
+      uuid: string,
+      patch: Omit<TodoUpdateParams, "uuid">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /**
@@ -1422,6 +1438,13 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       addTodo: (params, o) => run("todo.add", params, o),
       updateTodo: (uuid, patch, o) =>
         runUpdate("todo", uuid, patch as ResolutionDates & Record<string, unknown>, o),
+      updateTodoOccurrence: (uuid, patch, o) =>
+        runTemplateExceptionWrite(
+          writeDeps,
+          resolveTaskUuidPrefix(conn.db, uuid, "to-do", scopeClauses?.task),
+          patch as Record<string, unknown>,
+          o ?? {},
+        ),
       completeTodo: (uuid, resolution, o) =>
         runCompleteWithDate(writeDeps, "todo", uuid, resolution ?? {}, o ?? {}),
       cancelTodo: (uuid, resolution, o) =>

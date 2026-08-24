@@ -267,6 +267,10 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
   },
 
   // ---- ui-vector reversible pairs -----------------------------------------
+  "todo.create-next-copy": {
+    class: "irreversible",
+    note: "materializing the pending occurrence cannot be undone headlessly (CNC1 §7): the minted row would have to be HARD-deleted (trashing it leaves a Trash row the series still counts) and BOTH template cursor columns rewound — rt1_nextInstanceStartDate and rt1_instanceCreationStartDate — neither of which any write surface reaches. The app's own ⌘Z is a complete inverse (REPX3 §4.1) and ours structurally cannot be",
+  },
   "todo.pause-repeat": {
     class: "reversible",
     note: "inverse resumes the repeat (UI2-c): pause sets instance-creation paused, keeping the template and rule; resume clears it",

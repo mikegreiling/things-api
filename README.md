@@ -148,6 +148,6 @@ The catalog is consolidated around a few verb-parameterized tools (a discriminat
 - **Create**: `add_area`, `add_tag`.
 - **Headings & reminders** (Shortcuts-backed where headless-impossible): `heading` (`action` create / rename / archive / unarchive / convert_to_project), `clear_reminder`.
 - **Recurrence via the Accessibility GUI ("ui") vector** (two-key gated — `ui-enabled` config + `dangerously_drive_gui` per call): `repeat` (`scope` todo / project; `action` start / reschedule / pause / resume / create). The `heading` convert_to_project action and the `reorder` areas scope ride the same gated GUI surface.
-- **Generic & discovery**: `run_operation` (the full 56-op catalog), `batch`, `reorder` (item ordering across scopes, plus `scope=areas` for the sidebar area order), `undo`, `capabilities`, `doctor`.
+- **Generic & discovery**: `run_operation` (the full 57-op catalog), `batch`, `reorder` (item ordering across scopes, plus `scope=areas` for the sidebar area order), `undo`, `capabilities`, `doctor`.
 
 Every write tool takes `dry_run`; the GUI-driven variants additionally require `dangerously_drive_gui`; tools carry read-only/destructive annotations; hazard blocks come back as structured tool errors carrying the same remediation text the CLI prints. Tool descriptions follow the consumer-voice contract in [docs/design/surface-copy.md](docs/design/surface-copy.md).

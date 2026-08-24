@@ -15,9 +15,10 @@
 import type { AuditRecord } from "../audit/schema.ts";
 import type { IsoDate } from "../model/dates.ts";
 import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
+import { taskMembershipClause } from "../read/scope.ts";
 import { resolutionDeltaDate } from "./commands.ts";
 import type { OperationKind } from "./operations.ts";
-import { loadTarget, projectChildren } from "./pre-state.ts";
+import { isRepeatingTemplate, loadTarget, projectChildren } from "./pre-state.ts";
 import {
   fingerprintLabel,
   runMutation,
@@ -26,6 +27,7 @@ import {
   type WriteOptions,
 } from "./pipeline.ts";
 import { restoreModDates, type PreserveModifiedFailure } from "./preserve-modified.ts";
+import { runTemplateStatusWrite } from "./template-mutation.ts";
 import { createDbReader, type DeltaSpec } from "./verify/delta.ts";
 
 export type ResolutionKind = "todo" | "project";
@@ -301,6 +303,47 @@ function stopDelta(uuid: string, status: string, stoppedDate: IsoDate): DeltaSpe
   };
 }
 
+/**
+ * A status write aimed at a repeating TO-DO resolves the series' CURRENT
+ * occurrence, not the series (ruling 2026-08-24, docs/lab/cnc1-template-mutations.md).
+ * Unflagged: "check off this repeating to-do" has one sane reading, and the
+ * composite resolves the open materialized occurrence when there is one and
+ * materializes the pending one when there is not. Returns null when the target
+ * is not a repeating to-do template, leaving the ordinary path untouched.
+ *
+ * The status LEG re-enters this module with the occurrence's uuid — an ordinary
+ * row, so it takes the same `--completed-at` / `--children` vocabulary and never
+ * routes again.
+ */
+async function routeRepeatingSeries(
+  deps: WriteDeps,
+  kind: ResolutionKind,
+  op: "todo.complete" | "todo.cancel",
+  ref: string,
+  leg: (occurrenceUuid: string, occurrenceOptions: WriteOptions) => Promise<MutationResult>,
+  options: WriteOptions,
+): Promise<MutationResult | null> {
+  if (kind !== "todo") return null;
+  let uuid: string;
+  try {
+    // SCOPE-AWARE, like the pipeline's own target resolution: under a container
+    // scope an out-of-scope uuid must resolve to "not found" through the SAME
+    // path a nonexistent one does, so routing cannot become an oracle for rows
+    // the caller is not allowed to see.
+    const scope = deps.scope;
+    uuid = resolveTaskUuidPrefix(
+      deps.db,
+      ref,
+      "to-do",
+      scope !== undefined ? taskMembershipClause(scope) : undefined,
+    );
+  } catch {
+    return null; // an unresolvable ref is the ordinary path's error to report
+  }
+  if (!isRepeatingTemplate(loadTarget(deps.db, uuid))) return null;
+  return runTemplateStatusWrite(deps, op, uuid, leg, options);
+}
+
 // ------------------------------------------------------------------ entries
 
 /**
@@ -316,6 +359,16 @@ export async function runCompleteWithDate(
   options: WriteOptions = {},
 ): Promise<MutationResult> {
   const children: CompleteChildren = args.children ?? "require-resolved";
+  const routed = await routeRepeatingSeries(
+    deps,
+    kind,
+    "todo.complete",
+    ref,
+    (occurrenceUuid, occurrenceOptions) =>
+      runCompleteWithDate(deps, kind, occurrenceUuid, args, occurrenceOptions),
+    options,
+  );
+  if (routed !== null) return routed;
   if (args.completedAt === undefined) {
     return exec(deps, completeOp(kind), { uuid: ref, ...childrenParam(kind, children) }, options);
   }
@@ -342,6 +395,16 @@ export async function runCancelWithDate(
   options: WriteOptions = {},
 ): Promise<MutationResult> {
   const children: CancelChildren = args.children ?? "require-resolved";
+  const routed = await routeRepeatingSeries(
+    deps,
+    kind,
+    "todo.cancel",
+    ref,
+    (occurrenceUuid, occurrenceOptions) =>
+      runCancelWithDate(deps, kind, occurrenceUuid, args, occurrenceOptions),
+    options,
+  );
+  if (routed !== null) return routed;
   if (args.completedAt === undefined) {
     return exec(deps, cancelOp(kind), { uuid: ref, ...childrenParam(kind, children) }, options);
   }

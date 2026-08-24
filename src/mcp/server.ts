@@ -1868,6 +1868,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .array(z.string())
           .optional()
           .describe(`area: replace the tag set (full) — ${TAG_REF_FORMAT}`),
+        exception: z
+          .boolean()
+          .optional()
+          .describe(
+            "todo, repeating only: change just the NEXT occurrence and leave the series alone " +
+              "(the occurrence is created if it has not appeared yet). Refused when the series " +
+              "already lands on the requested day, and for a series that repeats a fixed time " +
+              "after each completion. Undo restores the occurrence's own change but cannot " +
+              "remove the occurrence or rewind the series",
+          ),
         parent: z.string().optional().describe("tag: existing tag to nest under"),
         unnest: z.boolean().optional().describe("tag: move the tag to the top level"),
         shortcut: z.string().optional().describe("tag: keyboard shortcut character"),
@@ -1892,6 +1902,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           // surfaces cannot drift on which flags they accept (#491 doctrine).
           const built = buildUpdatePatch(args, MCP_UPDATE_LABELS);
           if (built.kind === "error") return usage(built.message);
+          if (args.exception === true) {
+            if (args.kind !== "todo") return usage("exception applies to kind todo");
+            if (args.created_at !== undefined || args.completed_at !== undefined) {
+              return usage("exception cannot be combined with created_at/completed_at");
+            }
+            return mutationResult(await c.write.updateTodoOccurrence(args.uuid, built.patch, opts));
+          }
           return mutationResult(
             args.kind === "todo"
               ? await c.write.updateTodo(args.uuid, built.patch, opts)

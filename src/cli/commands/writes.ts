@@ -1205,8 +1205,10 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("update <uuid>")
       .description(
-        "Update title/notes/when/reminder/deadline. Schedule and deadline changes are not " +
-          "available for repeating to-dos (title/notes are). --reminder needs --when " +
+        "Update title/notes/when/reminder/deadline. On a REPEATING to-do a schedule or " +
+          "deadline change needs --exception (change only the next occurrence) or " +
+          "`things todo reschedule-repeat` (change the series); title/notes apply to the " +
+          "series as they always have. --reminder needs --when " +
           "today|evening|YYYY-MM-DD; when re-scheduling WITHOUT --reminder an existing " +
           "reminder is auto-preserved. --clear-reminder works while the to-do is scheduled " +
           "for today|evening — a DATED reminder can only be changed, not cleared " +
@@ -1229,6 +1231,10 @@ export function registerWriteCommands(program: Command): void {
       .option(
         "--completed-at <iso>",
         "rewrite the completion timestamp of an already-resolved to-do (a canceled one stays canceled); open to-dos are refused — use complete/cancel",
+      )
+      .option(
+        "--exception",
+        "repeating to-dos only: change just the NEXT occurrence and leave the series alone (creates that occurrence if it has not appeared yet); refused when the series already lands on the requested day",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     if (!(await resolveNotesStdin(opts))) return;
@@ -1237,6 +1243,20 @@ export function registerWriteCommands(program: Command): void {
     const built = buildUpdatePatch(opts, CLI_UPDATE_LABELS);
     if (built.kind === "error") {
       usageError(opts, built.message);
+      return;
+    }
+    if (opts["exception"] === true) {
+      // The occurrence is a to-do of its own once it exists, so the whole update
+      // vocabulary applies to it — except the timestamp rewrites, which are about
+      // a row's history and have no meaning for an occurrence created this second.
+      const stamped = ["createdAt", "completedAt"].filter((k) => opts[k] !== undefined);
+      if (stamped.length > 0) {
+        usageError(opts, "--exception cannot be combined with --created-at/--completed-at");
+        return;
+      }
+      await runWrite(opts, (c) =>
+        c.write.updateTodoOccurrence(uuid, built.patch, writeOptionsFrom(opts)),
+      );
       return;
     }
     await runWrite(opts, (c) => c.write.updateTodo(uuid, built.patch, writeOptionsFrom(opts)));
