@@ -1031,6 +1031,45 @@ The next day spawns exactly one row, so the series is otherwise healthy — the 
 
 **Data note:** no corruption; the rows are independent instances of one template, both `trashed=0`, both live in every view, and ⌘Z immediately after the gesture is a complete inverse (REPX3 §4.1) — but only immediately, and only for the exception, never for the later spawn. Evidence: [lab/repx3-chooser-residuals.md](lab/repx3-chooser-residuals.md) §3.2/§3.1/§3.3; class predecessors [§13](#13-things-323-re-dating-a-repeating-occurrence-onto-its-series-next-slot-double-books-that-day--the-9ff-reconciliation-defect-now-with-no-preserve-trigger-required-repx1-2026-08-22-golden-v4--things-323-build-32300036) and §9ff.
 
+**CNC1 addendum (2026-08-24, Things 3.23, golden-v4):** the defect is reachable by a THIRD sanctioned route with the same numbers. `Items ▸ Repeat ▸ Create Next Copy` followed by re-dating the minted occurrence onto the rule's own next slot produces exactly this outcome — one row on the day before the clock arrives, two after — because the composite's template bookkeeping is byte-identical to `Make Exception`'s (CNC1 §1.2) and the spawn it collides with is, once again, a *different slot's* occurrence with a different uuid. Nothing about the route changes the mechanism; it confirms that the hazard belongs to the app's slot-keyed reconciliation rather than to any one gesture. Evidence: [lab/cnc1-template-mutations.md](lab/cnc1-template-mutations.md) §2.
+
+## 18. Things 3.23: `Create Next Copy` on an AFTER-COMPLETION series duplicates the CURRENT occurrence onto the same day — one menu press, two identical live copies (CNC1, 2026-08-24, golden-v4 / Things 3.23 build 32300036)
+
+`Items ▸ Repeat ▸ Create Next Copy` is 3.23's new "spawn the pending occurrence now" command, and on a fixed-schedule series it is exactly that: it materializes the occurrence the cursor points at and advances the cursor one period ([craft 6a](things-app-craft.md), [lab/rdlg2-323-recipe-cert.md](lab/rdlg2-323-recipe-cert.md) §5.2).
+
+An **after-completion** series has no cursor. Its rule carries no calendar (`tp=1`, `of=[]`) and `rt1_nextInstanceStartDate` is NULL by construction, because the next occurrence is a function of a completion that has not happened yet. The menu item is nonetheless **present and enabled**, and pressing it mints a copy anyway — dated the same day as the occurrence the user already has.
+
+**Reproduce (pure GUI, one gesture):** create a to-do, `Items ▸ Repeat…` → **after completion**, every 2 days → OK. Select the series' template row and press `Items ▸ Repeat ▸ Create Next Copy`. The list immediately shows **two identical live copies of the same to-do on the same day**.
+
+**Probe (CNC1 cell E).** `CNC1-E-AC`: after-completion, interval 2 — `tp=1 fu=256 fa=2 of=[]`, `next = NULL`, `icStart = 2026-07-06`, `icCount = 1`, with its live instance dated 2026-07-05 (the pinned today). The submenu is the ordinary one:
+
+```
+Items ▸ Repeat = Edit Rule… · (sep) · Show Previous Copy · Create Next Copy · (sep) · Pause · Stop
+```
+
+One press:
+
+```
+INSERTED row DVAcW6Ch  startDate = 2026-07-05  status = 0  start = 1
+                       creationDate = 1783253174.82 (gesture wall-clock)
+                       rt1_repeatingTemplate = K2cWkxNe…   rt1_instanceCreationCount = 0
+CHANGED template.rt1_instanceCreationCount : 1 -> 2
+(and NOTHING else on the template — no cursor to advance, no watermark move, umd silent)
+
+series afterwards:
+  4an3Vvm7  2026-07-05  status 0   the original instance
+  K2cWkxNe  (template)
+  DVAcW6Ch  2026-07-05  status 0   the Create Next Copy mint — the SAME DAY
+```
+
+The app stays alive (no crash report, no sheet, no error), so this is a silent duplicate rather than a fault.
+
+**Why it is worse than the §13/§17 class it joins.** Those need a re-date, and §17 additionally needs the clock to reach the collided slot. This one needs **only the menu press**: there is no second gesture, no target date to choose badly, and no waiting. And unlike §17 the two rows are not two different slots' occurrences — the series has no slots at all, so there is not even a notional key to reconcile on.
+
+**Expected:** either disable `Create Next Copy` for a rule with no calendar (the honest answer — "next" is undefined until the current copy is completed), or treat the press as "complete the current occurrence and mint the next", which is what an after-completion user means by it. **Actual:** a bare duplicate, with `rt1_instanceCreationCount` incremented as though a slot had been consumed.
+
+**Automation note:** this is the one rule shape where the CNC-plus-mutate composite is unsafe, so any op built on it must refuse an after-completion template outright. Evidence: [lab/cnc1-template-mutations.md](lab/cnc1-template-mutations.md) §5.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
