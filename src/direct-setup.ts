@@ -34,9 +34,12 @@
  * prompt-free and skipped, so a rerun on a settled machine raises nothing and
  * reports all-green. A leg left outstanding exits nonzero naming what remains.
  *
- * This wave implements STRICT mode only — an upfront banner counting the
- * dialogs, bounded waits, and an unanswered leg failing the run. The TTY wizard
- * of Article V is Wave B.
+ * Mode-aware (Article V): off a TTY this is STRICT mode — an upfront banner
+ * counting the dialogs, bounded waits, and an unanswered leg failing the run.
+ * At a TTY the same legs run as a guided WIZARD: each dialog is explained in
+ * the words macOS will use before it is raised, and the ceremony waits for the
+ * human between legs (./wizard.ts). TTY-ness is the only signal, and it is read
+ * inside this ceremony only.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, openSync, closeSync } from "node:fs";
@@ -55,6 +58,7 @@ import {
 import { loadConfig } from "./config.ts";
 import { locateThingsDb } from "./db/locate.ts";
 import { clearSessionGrant, witnessSessionGrant } from "./session-grant.ts";
+import { createWizard, type Wizard } from "./wizard.ts";
 import { readShortcutProxies, type ShortcutsState } from "./write/availability.ts";
 
 /** Deep link to the Full Disk Access pane. */
@@ -102,6 +106,12 @@ export interface DirectSetupResult {
 
 export interface DirectSetupDeps extends CapabilityDeps {
   progress?: (line: string) => void;
+  /**
+   * The Article V wizard (./wizard.ts). At a TTY it explains each dialog before
+   * the leg raises it and waits for the human; off a TTY every method is inert
+   * and this ceremony behaves exactly as strict mode always has.
+   */
+  wizard?: Wizard;
   openUrl?: (url: string) => void;
   /** Send the real Apple Event that mints an Automation grant. Throws on failure. */
   sendAutomationProbe?: (timeoutMs: number) => void;
@@ -391,6 +401,33 @@ const PROMPT_LABELS: Record<SetupLeg, string> = {
   shortcuts: "one install sheet per missing shortcut",
 };
 
+/**
+ * What the human is about to see, in the words macOS will actually use — the
+ * wizard prints these one leg ahead of the dialog (Article V, mode-aware). In
+ * strict mode they are never printed; the upfront banner's count stands alone.
+ * `{host}` is filled with the detected host app's display name.
+ */
+const PROMPT_EXPLAINERS: Record<SetupLeg, string[]> = {
+  "read-access": [
+    "Next: read access to your Things data.",
+    "  System Settings opens at Privacy & Security ▸ Full Disk Access — turn on {host} in",
+    "  that list. It is a switch you flip, not a dialog you answer, so setup waits and",
+    "  watches for it.",
+    '  If you would rather not, wait it out: a dialog then asks whether {host} "would like to',
+    '  access data from other apps" — click Allow, and the access lasts until {host} quits.',
+  ],
+  "app-control": [
+    "Next: permission to control the Things app.",
+    '  A macOS dialog will appear: "{host}" wants access to control "Things" — click Allow.',
+    "  Things opens if it was closed; that is expected.",
+  ],
+  shortcuts: [
+    "Next: the bundled shortcuts.",
+    '  One Shortcuts install sheet opens per missing shortcut — click "Add Shortcut" on each.',
+    '  The first time each one runs, Shortcuts asks once more; choose "Always Allow".',
+  ],
+};
+
 function closingLine(steps: SetupStep[], uiEnabled: boolean): string {
   const denied = steps.filter((s) => s.state === "denied");
   const pending = steps.filter((s) => s.state === "pending");
@@ -471,11 +508,20 @@ export function directSetup(deps: DirectSetupDeps = {}): DirectSetupResult {
           `(${outstanding.map((leg) => PROMPT_LABELS[leg]).join(", ")}) — someone must be at the screen to answer them`,
   );
 
-  const steps: SetupStep[] = [
-    readAccessLeg(readBefore, withProgress),
-    appControlLeg(withProgress),
-    shortcutsLeg(withProgress),
-  ];
+  const wizard = deps.wizard ?? createWizard();
+  const willRaise = new Set(outstanding);
+  /** Explain a leg's dialog and let the human pace it — wizard mode only. */
+  const brief = (leg: SetupLeg): void => {
+    if (willRaise.has(leg)) {
+      wizard.explain(PROMPT_EXPLAINERS[leg].map((line) => line.replaceAll("{host}", hostName)));
+    }
+  };
+  brief("read-access");
+  const readStep = readAccessLeg(readBefore, withProgress);
+  brief("app-control");
+  const appControlStep = appControlLeg(withProgress);
+  brief("shortcuts");
+  const steps: SetupStep[] = [readStep, appControlStep, shortcutsLeg(withProgress)];
   const uiEnabled = loadConfig(env).ui.enabled;
   if (uiEnabled) {
     progress(

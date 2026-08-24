@@ -25,7 +25,13 @@ import { namedProjectClause, taskMembershipClause, type ResolvedScope } from "..
 import { evaluateScope } from "./scope-guard.ts";
 import { isThingsRunning } from "./automation-probe.ts";
 import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
-import { writeCapability as writeCapabilityDefault, type WriteCapability } from "../capability.ts";
+import {
+  uiAllowed,
+  uiCapability as uiCapabilityDefault,
+  writeCapability as writeCapabilityDefault,
+  type UiCapability,
+  type WriteCapability,
+} from "../capability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
   describeEnvironmentChanges,
@@ -327,6 +333,8 @@ export interface WriteDeps {
   shortcutProxies?: () => ShortcutsState;
   /** Seam: prompt-free app-automation standing, for the write gate (capability.ts). */
   writeCapability?: () => WriteCapability;
+  /** Seam: prompt-free GUI-driving standing, for the Article IV gate (capability.ts). */
+  uiCapability?: () => UiCapability;
   now?: () => Date;
   /** Default consumer IANA zone (client-resolved from THINGS_TZ); normalizes consumer `when` tokens. */
   zone?: string;
@@ -1069,6 +1077,35 @@ export async function runMutation<K extends OperationKind>(
           op,
           reason: "environment",
           detail: `this operation drives the Things app, and ${capability.detail}`,
+          remediation: capability.remediation.join("; "),
+        };
+      }
+    }
+
+    // 5d. THE GUI GATE (docs/design/permissions-doctrine.md, Article IV).
+    // Driving the Things window needs Accessibility + Automation → System
+    // Events, and those are granted to the HELPER PAIR and to nothing else: on
+    // a machine holding neither, the first AX call raises an Accessibility
+    // prompt against whatever host app happens to be running us, which is the
+    // banned outcome. So standing is established prompt-free (the config key
+    // plus the deputy's own handshake) and anything short of it refuses here,
+    // naming exactly what is missing. Keyed on the vector's DECLARATION, never
+    // on its id — a fake substituted under "ui" drives no GUI and must not be
+    // gated on the developer's own TCC state.
+    if (vector.drivesGui === true && vector.simulates !== true) {
+      const capability = (deps.uiCapability ?? (() => uiCapabilityDefault()))();
+      if (!uiAllowed(capability)) {
+        audit({
+          result: blockedCode({ reason: "environment" }),
+          vector: vector.id,
+          disruption: effectiveTier,
+          invocation: invocation.redactedPayload,
+        });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          detail: `this operation drives the Things window, and ${capability.detail}`,
           remediation: capability.remediation.join("; "),
         };
       }

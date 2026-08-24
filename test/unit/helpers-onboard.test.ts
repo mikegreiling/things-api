@@ -21,10 +21,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createWizard,
   type HelpersOnboardResult,
   type OnboardChannel,
   type OnboardDeps,
   type OnboardLeg,
+  type OnboardOptions,
   type OnboardState,
   onboardHelpers,
 } from "../../src/index.ts";
@@ -37,6 +39,8 @@ let opened: string[];
 
 /** Every request the stub saw, so "nothing was raised" is assertable. */
 let requests: Record<string, unknown>[];
+/** How many times the ceremony turned `ui-enabled` on. */
+let uiEnabledWrites: number;
 
 interface StubOptions {
   hello?: Record<string, unknown>;
@@ -108,9 +112,25 @@ function installReader(): void {
   mkdirSync(join(readerInstalledAppPath(process.env), "Contents/MacOS"), { recursive: true });
 }
 
-function run(channel: OnboardChannel, deps: Partial<OnboardDeps> = {}): HelpersOnboardResult {
-  return onboardHelpers("auto", process.env, {
+/** Every leg the ceremony can run — the GUI tier included. */
+function runGui(channel: OnboardChannel, deps: Partial<OnboardDeps> = {}): HelpersOnboardResult {
+  return run(channel, deps, { gui: true });
+}
+
+function run(
+  channel: OnboardChannel,
+  deps: Partial<OnboardDeps> = {},
+  options: Partial<OnboardOptions> = {},
+): HelpersOnboardResult {
+  return onboardHelpers({ mode: "auto", ...options }, process.env, {
     channel,
+    // Strict mode: no TTY gate, and the tier question is never asked — every
+    // cell decides the tier explicitly so none of them depend on the runner.
+    wizard: createWizard({ interactive: false }),
+    uiEnabled: () => false,
+    setUiEnabled: () => {
+      uiEnabledWrites += 1;
+    },
     progress: (line) => progress.push(line),
     openUrl: (url) => opened.push(url),
     sleep: () => {},
@@ -140,6 +160,7 @@ beforeEach(() => {
   progress = [];
   opened = [];
   requests = [];
+  uiEnabledWrites = 0;
 });
 
 afterEach(() => {
@@ -152,7 +173,7 @@ afterEach(() => {
 
 describe("onboarding preflight", () => {
   it("refuses when the helpers are not installed and names the install command", () => {
-    expect(() => onboardHelpers("auto", process.env, { progress: () => {} })).toThrow(
+    expect(() => onboardHelpers({ mode: "auto" }, process.env, { progress: () => {} })).toThrow(
       /not installed — run `things helpers setup`/,
     );
   });
@@ -166,7 +187,7 @@ describe("onboarding preflight", () => {
       "#!/bin/sh\n",
     );
     expect(() =>
-      onboardHelpers("auto", process.env, { progress: () => {}, deputyWaitMs: 0 }),
+      onboardHelpers({ mode: "auto" }, process.env, { progress: () => {}, deputyWaitMs: 0 }),
     ).toThrow(/not running \(no socket/);
   });
 });
@@ -174,7 +195,7 @@ describe("onboarding preflight", () => {
 describe("an already-onboarded machine", () => {
   it("skips every leg, raises nothing, and reports done", () => {
     installReader();
-    const result = run(
+    const result = runGui(
       stubChannel({
         hello: {
           axTrusted: true,
@@ -214,7 +235,7 @@ describe("an already-onboarded machine", () => {
 describe("the upfront banner", () => {
   it("counts and names every dialog before raising the first one", () => {
     installReader();
-    const result = run(
+    const result = runGui(
       stubChannel({
         hello: { axTrusted: false, automation: { things: "unknown", systemEvents: "granted" } },
       }),
@@ -268,7 +289,7 @@ describe("the upfront banner", () => {
 describe("automation legs", () => {
   it("sends a benign event per target and records the grant", () => {
     installReader();
-    const result = run(stubChannel({ hello: { axTrusted: true } }));
+    const result = runGui(stubChannel({ hello: { axTrusted: true } }));
     const scripts = requests.filter((r) => r["verb"] === "osascript").map((r) => r["script"]);
     // Both probes must dispatch a REAL Apple event: `version`/`name`/`id`/
     // `running` are answered locally by the AppleScript runtime — exit 0,
@@ -377,7 +398,7 @@ describe("automation legs", () => {
 
   it("asks a target macOS reports as not-running (the event launches it)", () => {
     installReader();
-    run(
+    runGui(
       stubChannel({
         hello: {
           axTrusted: true,
@@ -393,7 +414,7 @@ describe("automation legs", () => {
 describe("the accessibility leg", () => {
   it("primes the prompt, opens Settings, and lands granted when the switch flips", () => {
     installReader();
-    const result = run(
+    const result = runGui(
       stubChannel({
         hello: { automation: { things: "granted", systemEvents: "granted" } },
         axTrustedAfterCalls: 1,
@@ -406,7 +427,7 @@ describe("the accessibility leg", () => {
 
   it("times out as pending with a patient instruction, never as a failure", () => {
     installReader();
-    const result = run(
+    const result = runGui(
       stubChannel({ hello: { automation: { things: "granted", systemEvents: "granted" } } }),
     );
     expect(stateOf(result, "accessibility")).toBe("pending");
@@ -451,7 +472,7 @@ describe("a reader that is not part of the bundle", () => {
 describe("helpers older than the ceremony", () => {
   it("treats absent TCC fields as unknown, attempts the legs, and flags the upgrade", () => {
     installReader();
-    const result = run(
+    const result = runGui(
       stubChannel({
         hello: { deputyVersion: "1.1.0" },
         primeAx: () => {
@@ -468,10 +489,171 @@ describe("helpers older than the ceremony", () => {
   });
 });
 
+/**
+ * The TIER (docs/design/permissions-doctrine.md, Article V). Accessibility and
+ * Automation → System Events are the two widest grants the pair ever holds, so
+ * the base ceremony must not gather them — and a machine that never asked must
+ * still be told the capability exists.
+ */
+describe("the GUI tier", () => {
+  const READY = {
+    hello: { axTrusted: false, automation: { things: "granted", systemEvents: "unknown" } },
+  } as const;
+
+  it("is absent from the base ceremony — no AX prompt, no System Events event", () => {
+    installReader();
+    const result = run(stubChannel(READY));
+    expect(result.tier).toBe("base");
+    expect(result.guiRequestedBy).toBeNull();
+    expect(result.steps.map((s) => s.leg)).toEqual([
+      "reader-read-grant",
+      "automation-things",
+      "shortcuts",
+    ]);
+    expect(requests.map((r) => r["verb"])).toEqual(["shortcuts"]);
+    expect(opened).toEqual([]);
+    expect(result.outstanding).toEqual([]);
+  });
+
+  it("hints at itself on base-tier success, naming what GUI-driving buys", () => {
+    installReader();
+    const result = run(stubChannel(READY));
+    expect(result.closing).toContain("GUI-driving is not set up");
+    expect(result.closing).toContain("repeat-rule edits, area reorder");
+    expect(result.closing).toContain("things helpers setup --gui");
+  });
+
+  it("runs the two extra legs under --gui and counts them in the banner", () => {
+    installReader();
+    const result = runGui(stubChannel(READY));
+    expect(result.tier).toBe("gui");
+    expect(result.guiRequestedBy).toBe("flag");
+    expect(result.outstanding).toEqual(["automation-system-events", "accessibility"]);
+    expect(result.steps.filter((s) => s.tier === "gui").map((s) => s.leg)).toEqual([
+      "automation-system-events",
+      "accessibility",
+    ]);
+    // A finished tier is not hinted at again.
+    expect(result.closing).not.toContain("GUI-driving is not set up");
+  });
+
+  it("is included WITHOUT the flag when ui.enabled is already on, and says so", () => {
+    installReader();
+    const result = run(stubChannel(READY), { uiEnabled: () => true });
+    expect(result.tier).toBe("gui");
+    expect(result.guiRequestedBy).toBe("config");
+    expect(progress[0]).toContain("ui.enabled is on — including GUI-driving permissions.");
+    // Already on: nothing to write back.
+    expect(result.uiEnabledSet).toBe(false);
+    expect(uiEnabledWrites).toBe(0);
+  });
+
+  it("turns ui-enabled on when every GUI leg lands", () => {
+    installReader();
+    const result = runGui(
+      stubChannel({
+        hello: { axTrusted: true, automation: { things: "granted", systemEvents: "granted" } },
+      }),
+    );
+    expect(result.uiEnabledSet).toBe(true);
+    expect(uiEnabledWrites).toBe(1);
+    expect(progress.join("\n")).toContain("`ui-enabled` is now true");
+  });
+
+  it("does NOT turn ui-enabled on over a half-granted tier", () => {
+    installReader();
+    // Accessibility never flips: the leg times out pending.
+    const result = runGui(
+      stubChannel({ hello: { automation: { things: "granted", systemEvents: "granted" } } }),
+    );
+    expect(stateOf(result, "accessibility")).toBe("pending");
+    expect(result.uiEnabledSet).toBe(false);
+    expect(uiEnabledWrites).toBe(0);
+  });
+
+  it("asks the tier question at a TTY and runs the tier when the answer is yes", () => {
+    installReader();
+    const asked: string[] = [];
+    const result = run(stubChannel(READY), {
+      wizard: {
+        interactive: true,
+        explain: () => {},
+        ask: (question) => {
+          asked.push(question);
+          return true;
+        },
+      },
+    });
+    expect(asked[0]).toContain("driven through the app's own window");
+    expect(result.tier).toBe("gui");
+    expect(result.guiRequestedBy).toBe("wizard");
+  });
+
+  it("never asks off a TTY — strict mode is the base tier unless the flag says otherwise", () => {
+    installReader();
+    let asked = 0;
+    const result = run(stubChannel(READY), {
+      wizard: {
+        interactive: false,
+        explain: () => {},
+        ask: (_q, fallback) => {
+          asked += 1;
+          return fallback;
+        },
+      },
+    });
+    // The wizard is consulted, but a non-interactive one answers with the
+    // fallback (no) without ever putting a question on screen.
+    expect(asked).toBe(1);
+    expect(result.tier).toBe("base");
+  });
+});
+
+/**
+ * The wizard's other half: an explainer BEFORE each dialog, and only for legs
+ * that are actually about to raise one (Article V, mode-aware).
+ */
+describe("the TTY wizard", () => {
+  it("explains each dialog it is about to raise, and nothing it will skip", () => {
+    installReader();
+    const explained: string[] = [];
+    runGui(
+      stubChannel({
+        hello: { axTrusted: true, automation: { things: "unknown", systemEvents: "granted" } },
+      }),
+      {
+        wizard: {
+          interactive: true,
+          explain: (lines) => explained.push(lines.join(" ")),
+          ask: (_q, fallback) => fallback,
+        },
+      },
+    );
+    expect(explained).toHaveLength(1);
+    expect(explained[0]).toContain('"Things API Helper" wants access to control "Things"');
+    expect(explained[0]).toContain("click Allow");
+  });
+
+  it("explains the reader panel as a file panel, not a dialog", () => {
+    installReader();
+    const explained: string[] = [];
+    run(stubChannel({ hello: { axTrusted: true, automation: { things: "granted" } } }), {
+      wizard: {
+        interactive: true,
+        explain: (lines) => explained.push(lines.join(" ")),
+        ask: (_q, fallback) => fallback,
+      },
+      readerProbe: () => ({ granted: false, locates: false }),
+    });
+    expect(explained.join("\n")).toContain("A file panel opens, already inside the Things data");
+    expect(explained.join("\n")).toContain("click Grant Access");
+  });
+});
+
 describe("routing that is switched off", () => {
   it("closes by naming the config switch instead of claiming everything is wired", () => {
     installReader();
-    const result = onboardHelpers("false", process.env, {
+    const result = onboardHelpers({ mode: "false", gui: true }, process.env, {
       channel: stubChannel({
         hello: { axTrusted: true, automation: { things: "granted", systemEvents: "granted" } },
       }),
@@ -479,6 +661,9 @@ describe("routing that is switched off", () => {
       readerProbe: () => ({ granted: true, locates: true }),
       grant: () => ({ granted: true, detail: "granted" }),
       deputyWaitMs: 0,
+      uiEnabled: () => false,
+      setUiEnabled: () => {},
+      wizard: createWizard({ interactive: false }),
     });
     expect(result.closing).toContain("helpers-enabled auto");
   });

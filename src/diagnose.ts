@@ -24,8 +24,10 @@ import {
 import {
   readAllowed,
   readCapability,
+  uiCapability,
   writeCapability,
   type ReadCapability,
+  type UiCapability,
   type WriteCapability,
 } from "./capability.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
@@ -204,6 +206,8 @@ export interface DiagnoseReport {
   capability: {
     read: ReadCapability;
     write: WriteCapability;
+    /** GUI-driving standing — helpers-only by Article IV. */
+    ui: UiCapability;
   };
   db: {
     path: string;
@@ -394,6 +398,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
   const capability = {
     read: readCapability(dbPath !== undefined ? { dbPath } : {}),
     write: writeCapability(),
+    ui: uiCapability(),
   };
   if (!readAllowed(capability.read)) {
     return {

@@ -1,5 +1,6 @@
 /**
- * The write gate (docs/design/permissions-doctrine.md, Articles I + II).
+ * The write gate (Articles I + II) and the GUI gate (Article IV) —
+ * docs/design/permissions-doctrine.md.
  *
  * The AppleScript vector sends a real Apple Event, and on a machine macOS has
  * no consent record for, that event IS the dialog. So the pipeline establishes
@@ -15,7 +16,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
-import type { WriteCapability } from "../../src/capability.ts";
+import type { UiCapability, WriteCapability } from "../../src/capability.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
@@ -209,6 +210,156 @@ describe("app control present dispatches exactly as before", () => {
   it("an onboarded deputy lets the write through", async () => {
     const { result, calls } = await update(
       capability({ mode: "deputy", detail: "the deputy holds app control for Things" }),
+    );
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
+  });
+});
+
+/**
+ * THE GUI GATE (docs/design/permissions-doctrine.md, Article IV). GUI-driving
+ * is granted to the helper pair and to nothing else, so a vector that drives
+ * the Things window must be refused prompt-free on any machine that does not
+ * hold the tier — never allowed to make the first AX call and raise an
+ * Accessibility prompt against whatever host app is running us.
+ */
+function uiVerdict(over: Partial<UiCapability>): UiCapability {
+  return {
+    mode: "helpers",
+    detail: "the helpers hold Accessibility and app control for System Events",
+    remediation: [],
+    host: HOST,
+    ...over,
+  };
+}
+
+/** A fake that DECLARES it drives the GUI (what the real ui vector sets). */
+function fakeGuiVector(uuid: string): { vector: WriteVector; calls: CompiledInvocation[] } {
+  const calls: CompiledInvocation[] = [];
+  return {
+    calls,
+    vector: {
+      // Deliberately NOT the "ui" id: the gate keys on the DECLARATION, and
+      // `todo.delete` has no ui-vector compilation, so this keeps the cell to
+      // one moving part while proving the two are independent.
+      id: "applescript",
+      matrix: MATRIX,
+      drivesGui: true,
+      async execute(invocation): Promise<ExecuteResult> {
+        calls.push(invocation);
+        fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(uuid);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    },
+  };
+}
+
+async function drive(ui: UiCapability): Promise<{
+  result: Awaited<ReturnType<typeof runMutation>>;
+  calls: CompiledInvocation[];
+}> {
+  const uuid = seedTodo(fixture.db, { title: "a synthetic to-do" });
+  const { vector, calls } = fakeGuiVector(uuid);
+  const result = await runMutation(
+    { ...deps(vector, capability({ mode: "direct-granted" })), uiCapability: () => ui },
+    "todo.delete",
+    { uuid },
+  );
+  return { result, calls };
+}
+
+describe("GUI-driving missing blocks BEFORE the Accessibility tree is touched", () => {
+  it("ui.enabled false refuses, naming the config knob AND the helpers tier", async () => {
+    const { result, calls } = await drive(
+      uiVerdict({
+        mode: "config-disabled",
+        detail: "GUI-driving is switched off on this machine (`ui-enabled` is false)",
+        remediation: [
+          "run `things config set ui-enabled true` to opt in",
+          "then run `things helpers setup --gui` to grant GUI-driving to the helpers",
+        ],
+      }),
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.detail).toContain("drives the Things window");
+      expect(result.remediation).toContain("things config set ui-enabled true");
+      expect(result.remediation).toContain("things helpers setup --gui");
+    }
+    expect(calls, "no AX call may be made without the tier").toHaveLength(0);
+  });
+
+  it("ui.enabled true but the tier ungranted names exactly what is missing", async () => {
+    const { result, calls } = await drive(
+      uiVerdict({
+        mode: "tier-incomplete",
+        detail:
+          "the helpers are onboarded but the GUI-driving tier is incomplete — missing " +
+          "Accessibility; automation → System Events (unknown)",
+        remediation: ["run `things helpers setup --gui` to grant GUI-driving to the helpers"],
+      }),
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("Accessibility");
+      expect(result.detail).toContain("automation → System Events");
+      expect(result.remediation).toContain("things helpers setup --gui");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("no helper answering refuses without ever suggesting direct Accessibility", async () => {
+    const { result } = await drive(
+      uiVerdict({
+        mode: "helpers-missing",
+        detail:
+          "GUI-driving is granted only to the helpers, and no helper is answering on this machine",
+        remediation: ["run `things helpers setup --gui` to grant GUI-driving to the helpers"],
+      }),
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      // Article IV: direct AX is unsupported, so it is never offered as a way out.
+      expect(result.remediation).not.toContain("Privacy & Security ▸ Accessibility");
+    }
+  });
+
+  it("an onboarded GUI tier dispatches", async () => {
+    const { result, calls } = await drive(uiVerdict({}));
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("the lab's documented escape dispatches", async () => {
+    const { result, calls } = await drive(
+      uiVerdict({ mode: "direct-escape", detail: "THINGS_API_UI_DIRECT=1" }),
+    );
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a vector that does NOT declare drivesGui is never GUI-gated", async () => {
+    // The same lesson as the AppleScript gate: keying on the id would make the
+    // simulator and every fake-vector cell depend on the developer's own grants.
+    const uuid = seedTodo(fixture.db, { title: "a synthetic to-do" });
+    const calls: CompiledInvocation[] = [];
+    const silentFake: WriteVector = {
+      id: "applescript",
+      matrix: MATRIX,
+      async execute(invocation): Promise<ExecuteResult> {
+        calls.push(invocation);
+        fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(uuid);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const result = await runMutation(
+      {
+        ...deps(silentFake, capability({ mode: "direct-granted" })),
+        uiCapability: () => uiVerdict({ mode: "config-disabled", remediation: ["nope"] }),
+      },
+      "todo.delete",
+      { uuid },
     );
     expect(result.kind).not.toBe("blocked");
     expect(calls).toHaveLength(1);

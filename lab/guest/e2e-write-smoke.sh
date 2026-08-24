@@ -5,6 +5,16 @@
 set -u
 NODE="$1"
 APP="$2/dist/cli/main.js"
+
+# THE LAB'S UI-VECTOR ESCAPE (docs/design/permissions-doctrine.md, Article IV;
+# docs/lab/harness.md §The UI-vector lab escape). Shipped hosts may drive the
+# Things window only through the helper pair, whose signed identities hold
+# Accessibility. A golden clone has no helper bundle and nobody to answer a
+# consent dialog — what it has is the AXVM1 layer, an in-guest Accessibility
+# grant on the runner's own processes. This env var is the documented, non-
+# consumer escape that restores direct UI-vector availability for exactly that
+# situation. It does NOT bypass `ui-enabled`; a lab clone still sets that key.
+export THINGS_API_UI_DIRECT=1
 FAILURES=0
 STEP=0
 

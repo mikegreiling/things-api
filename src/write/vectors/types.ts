@@ -413,4 +413,19 @@ export interface WriteVector {
    * depend on the developer's own grants.
    */
   sendsAppleEvents?: boolean;
+  /**
+   * This vector drives the Things WINDOW through the Accessibility API, so it
+   * is subject to the GUI-driving gate (docs/design/permissions-doctrine.md,
+   * Article IV): Accessibility plus Automation → System Events, granted to the
+   * helper pair and to nothing else. On a machine that holds neither, the drive
+   * would raise an Accessibility prompt against whatever host app is running
+   * us, so the pipeline establishes standing prompt-free and refuses first.
+   *
+   * Set ONLY by {@link import("./ui.ts").createUiVector}. Deliberately not
+   * inferred from {@link id} — engine and simulator tests substitute fakes
+   * under the real ids, and a fake that never touches the AX tree must not be
+   * gated on the host's actual TCC state (the Wave A lesson: an id-keyed gate
+   * imports the developer's own grants into CI).
+   */
+  drivesGui?: boolean;
 }

@@ -109,7 +109,9 @@ function blockedUiDrive(op: PromoteOp): MutationResult {
       "through the Accessibility API (the Repeat… dialog) — it may briefly interact with the UI",
     remediation:
       "pass dangerouslyDriveGui (--dangerously-drive-gui) to proceed; the vector also requires " +
-      "`things config set ui-enabled true` and Accessibility granted to this process (see docs/setup.md)",
+      "`things config set ui-enabled true` and `things helpers setup --gui`, which grants " +
+      "GUI-driving to the helper pair — the only identity it is granted to " +
+      "(docs/design/permissions-doctrine.md, Article IV)",
   };
 }
 

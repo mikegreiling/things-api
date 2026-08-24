@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { directSetup, surveySetup, type DirectSetupDeps } from "../../src/direct-setup.ts";
 import { resetCapabilityForTests } from "../../src/capability.ts";
+import { createWizard } from "../../src/wizard.ts";
 
 /**
  * A ceremony wired entirely to stubs. Defaults describe the hardest machine:
@@ -24,8 +25,13 @@ function ceremony(over: Partial<DirectSetupDeps> = {}): DirectSetupDeps {
     env: {
       __CFBundleIdentifier: "com.mitchellh.ghostty",
       THINGS_API_STATE_DIR: mkdtempSync(join(tmpdir(), "things-setup-")),
+      // A scratch config dir, so the ceremony's `ui-enabled` read cannot pick
+      // up the developer's own stored config and change what the closing says.
+      THINGS_API_CONFIG_DIR: mkdtempSync(join(tmpdir(), "things-setup-cfg-")),
       THINGS_API_HELPERS: "false",
     },
+    // Strict mode unless a cell asks otherwise: no TTY gate, no explainers.
+    wizard: createWizard({ interactive: false }),
     progress: (line) => lines.push(line),
     openUrl: () => {},
     openShortcut: () => {},
@@ -238,5 +244,72 @@ describe("surveySetup is prompt-free by construction", () => {
     );
     expect(survey.outstanding).toContain("read-access");
     expect(survey.host.name).toBe("Ghostty");
+  });
+});
+
+/**
+ * The TTY wizard on the DIRECT ceremony (Article V, mode-aware). Same machinery
+ * as the helpers ceremony: one explainer per dialog that is actually coming,
+ * a gate the human clears at their own pace, and nothing at all off a TTY.
+ */
+/** A wizard that records every explainer instead of printing one. */
+function watcher(): { explained: string[]; wizard: NonNullable<DirectSetupDeps["wizard"]> } {
+  const explained: string[] = [];
+  return {
+    explained,
+    wizard: {
+      interactive: true,
+      explain: (lines: string[]) => explained.push(lines.join(" ")),
+      ask: (_question: string, fallback: boolean) => fallback,
+    },
+  };
+}
+
+describe("the TTY wizard", () => {
+  it("explains each dialog in the words macOS will use, naming the host app", () => {
+    const { explained, wizard } = watcher();
+    directSetup(ceremony({ wizard }));
+    const all = explained.join("\n");
+    expect(all).toContain("Privacy & Security ▸ Full Disk Access");
+    expect(all).toContain('"Ghostty" wants access to control "Things"');
+    expect(all).toContain("click Allow");
+    expect(all).toContain('click "Add Shortcut"');
+    // The host is named, never left as a placeholder.
+    expect(all).not.toContain("{host}");
+  });
+
+  it("explains only the legs that are actually about to raise something", () => {
+    const { explained, wizard } = watcher();
+    directSetup(
+      ceremony({
+        wizard,
+        // Read access and app control are already settled; only shortcuts remain.
+        fdaProbe: () => {},
+        automationAuthValue: () => 2,
+      }),
+    );
+    expect(explained).toHaveLength(1);
+    expect(explained[0]).toContain("the bundled shortcuts");
+  });
+
+  it("says nothing off a TTY — strict mode is unchanged", () => {
+    // The REAL wizard, told there is no terminal: the ceremony still offers it
+    // every leg, and it prints nothing and reads nothing.
+    const said: string[] = [];
+    let reads = 0;
+    directSetup(
+      ceremony({
+        wizard: createWizard({
+          interactive: false,
+          say: (line) => said.push(line),
+          readLine: () => {
+            reads += 1;
+            return "";
+          },
+        }),
+      }),
+    );
+    expect(said).toEqual([]);
+    expect(reads).toBe(0);
   });
 });

@@ -264,6 +264,26 @@ describe("helpers setup", () => {
       ?.commands.find((c) => c.name() === "setup");
     expect(setup?.description()).toContain("nonzero while any permission is still outstanding");
   });
+
+  /**
+   * The tier flag (docs/design/permissions-doctrine.md, Article V). The
+   * ceremony's mechanics are unit-covered against a stub channel
+   * (test/unit/helpers-onboard.test.ts); what the CLI owes is the flag itself
+   * and copy that says what it costs and what it turns on.
+   */
+  it("offers --gui, and its help says what the tier adds and what it turns on", () => {
+    const setup = buildProgram()
+      .commands.find((c) => c.name() === "helpers")
+      ?.commands.find((c) => c.name() === "setup");
+    const gui = setup?.options.find((o) => o.long === "--gui");
+    expect(gui, "the GUI tier must be reachable non-interactively").toBeDefined();
+    expect(gui?.description).toContain("Accessibility");
+    expect(gui?.description).toContain("System Events");
+    expect(gui?.description).toContain("ui-enabled");
+    // The command description must say the tier is opt-in AND auto-included.
+    expect(setup?.description()).toContain("--gui");
+    expect(setup?.description()).toContain("without the flag");
+  });
 });
 
 describe("helpers status — the deputy's TCC standing", () => {

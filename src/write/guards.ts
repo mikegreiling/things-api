@@ -587,8 +587,9 @@ const GUARDS: Record<HazardId, GuardFn> = {
         "display awake. It is gated because it drives the real GUI",
       remediation:
         "pass dangerouslyDriveGui (--dangerously-drive-gui) to proceed; the vector also " +
-        "requires `things config set ui-enabled true` and Accessibility granted to this " +
-        "process (see docs/setup.md)",
+        "requires `things config set ui-enabled true` and `things helpers setup --gui`, " +
+        "which grants GUI-driving to the helper pair — the only identity it is granted to " +
+        "(docs/design/permissions-doctrine.md, Article IV)",
     };
   },
   // Clone refusals (trashed source, repeating-template source/target, a live
