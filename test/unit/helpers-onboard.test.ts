@@ -211,12 +211,50 @@ describe("automation legs", () => {
     installReader();
     const result = run(stubChannel({ hello: { axTrusted: true } }));
     const scripts = requests.filter((r) => r["verb"] === "osascript").map((r) => r["script"]);
+    // Both probes must dispatch a REAL Apple event: `version`/`name`/`id`/
+    // `running` are answered locally by the AppleScript runtime — exit 0,
+    // no dialog, no grant (the v1.2.0 ceremony shipped that false positive).
     expect(scripts).toEqual([
-      'tell application "Things3" to version',
+      'tell application "Things3" to count of areas',
       'tell application "System Events" to name of first process',
     ]);
     expect(stateOf(result, "automation-things")).toBe("granted");
     expect(stateOf(result, "automation-system-events")).toBe("granted");
+  });
+
+  it("re-reads AEDeterminePermission after the probe and reports the flip, not the exit code", () => {
+    installReader();
+    let helloCount = 0;
+    const inner = stubChannel({ hello: { axTrusted: true } });
+    const channel: OnboardChannel = {
+      hello() {
+        helloCount += 1;
+        const base = inner.hello() as unknown as Record<string, unknown>;
+        // Before the probe: unknown. After: granted — the leg must read the flip.
+        return {
+          ...base,
+          automation: { things: helloCount > 1 ? "granted" : "unknown", systemEvents: "granted" },
+        } as never;
+      },
+      request: (fields, timeoutMs) => inner.request(fields, timeoutMs),
+      close: () => inner.close(),
+    };
+    const result = run(channel);
+    expect(stateOf(result, "automation-things")).toBe("granted");
+    expect(requests.filter((r) => r["verb"] === "osascript")).toHaveLength(1);
+  });
+
+  it("marks the leg pending when the probe exits 0 yet macOS still reports no grant", () => {
+    installReader();
+    const result = run(
+      stubChannel({
+        hello: { axTrusted: true, automation: { things: "unknown", systemEvents: "granted" } },
+      }),
+    );
+    expect(stateOf(result, "automation-things")).toBe("pending");
+    const step = result.steps.find((s) => s.leg === "automation-things");
+    expect(step?.detail).toContain("AEDeterminePermission");
+    expect(result.pending).toBe(true);
   });
 
   it("reads -1743 as denied and names the Automation remediation", () => {

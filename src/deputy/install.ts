@@ -573,11 +573,23 @@ function firstLine(text: string): string {
  * blocks while the consent dialog is up, so answering it right there is what
  * completes the leg. The event auto-launches its target, which is intended:
  * macOS has no consent record to hand out while the target is down.
+ *
+ * The probe script MUST dispatch a real Apple event. A handful of
+ * application-object properties (`version`, `name`, `id`, `running`) are
+ * answered locally by the AppleScript runtime from the target's bundle —
+ * no event leaves the process, so no consent dialog is raised and no grant
+ * is minted, while the script still exits 0. That exact false positive
+ * shipped in the first ceremony (probe was `version`; the "granted" leg had
+ * granted nothing), which is also why a 0 exit alone is no longer believed:
+ * the leg re-reads the deputy's own AEDeterminePermission verdict afterwards
+ * and only reports what macOS reports. An old deputy whose hello carries no
+ * automation fields cannot be re-read — there the 0 exit stands, best effort.
  */
 function automationLeg(
   channel: OnboardChannel,
   spec: { leg: OnboardLeg; label: string; script: string; settingsName: string },
   known: string | undefined,
+  recheck: () => string | undefined,
   timeoutMs: number,
   progress: (line: string) => void,
 ): OnboardStep {
@@ -617,8 +629,18 @@ function automationLeg(
     };
   }
   if (res.exitCode === 0) {
-    progress(`${spec.label}: granted`);
-    return { ...base, state: "granted", alreadyGranted: false, detail: "granted" };
+    const after = recheck();
+    if (after === undefined || after === "granted") {
+      progress(`${spec.label}: granted`);
+      return { ...base, state: "granted", alreadyGranted: false, detail: "granted" };
+    }
+    progress(`${spec.label}: the probe ran but macOS reports no grant (${after})`);
+    return {
+      ...base,
+      state: "pending",
+      alreadyGranted: false,
+      detail: `probe succeeded yet AEDeterminePermission reports "${after}" — rerun, or turn on Things API Helper under System Settings ▸ Privacy & Security ▸ Automation ▸ ${spec.settingsName}`,
+    };
   }
   if (res.stderr.includes("-1743")) {
     progress(`${spec.label}: denied`);
@@ -835,16 +857,27 @@ export function onboardHelpers(
       }),
     );
     const automationTimeoutMs = deps.automationTimeoutMs ?? AUTOMATION_PROMPT_TIMEOUT_MS;
+    // Fresh AEDeterminePermission read for one target, off a new hello.
+    const refreshAutomation = (key: "things" | "systemEvents") => (): string | undefined => {
+      try {
+        return channel.hello().automation?.[key];
+      } catch {
+        return undefined;
+      }
+    };
     steps.push(
       automationLeg(
         channel,
         {
           leg: "automation-things",
           label: "automation → Things",
-          script: 'tell application "Things3" to version',
+          // `count of areas` dispatches a REAL Apple event; `version` and its
+          // kin are answered locally and would grant nothing (see automationLeg).
+          script: 'tell application "Things3" to count of areas',
           settingsName: "Things3",
         },
         hello.automation?.things,
+        refreshAutomation("things"),
         automationTimeoutMs,
         progress,
       ),
@@ -859,6 +892,7 @@ export function onboardHelpers(
           settingsName: "System Events",
         },
         hello.automation?.systemEvents,
+        refreshAutomation("systemEvents"),
         automationTimeoutMs,
         progress,
       ),
