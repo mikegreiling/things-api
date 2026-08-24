@@ -104,6 +104,24 @@ const GUARDS: Record<HazardId, GuardFn> = {
     const touchesSchedule =
       op === "todo.update" && (params["when"] !== undefined || params["deadline"] !== undefined);
     if (!touchesSchedule && !REPEAT_SENSITIVE.has(op)) return null;
+    // A scheduling write aimed at a series is ambiguous rather than impossible,
+    // and since the CNC composite landed BOTH readings are reachable — so the
+    // refusal is a two-way STEER, not a dead end (ruling 2026-08-24,
+    // docs/lab/cnc1-template-mutations.md). Status writes never reach here
+    // through the CLI/library surfaces: they route to the composite first
+    // (resolution-timestamps.ts), and this stays their backstop for the raw
+    // op-kind entry points (`things batch`, `write.run`).
+    if (touchesSchedule && pre.target?.type === "to-do") {
+      return {
+        hazard: "H-REPEAT-SCHEDULE",
+        detail:
+          "this is a repeating to-do, so a schedule change is ambiguous — it could mean this " +
+          "one occurrence or the whole series",
+        remediation:
+          "add `--exception` to move only the next occurrence, or use " +
+          "`things todo reschedule-repeat <ref>` to change the series",
+      };
+    }
     return {
       hazard: "H-REPEAT-SCHEDULE",
       detail:

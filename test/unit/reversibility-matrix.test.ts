@@ -1553,6 +1553,16 @@ const CASES: Record<OperationKind, CaseDef> = {
 
   // ---- ui (GUI) vector: reversible pause↔resume pair, the rest irreversible
 
+  "todo.create-next-copy": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible — the mint and BOTH cursor columns are unreachable", () => {
+        const plan = planUndo(auditRecord({ op: "todo.create-next-copy" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("cursor");
+      });
+    },
+  },
   "todo.pause-repeat": {
     class: "reversible",
     register() {

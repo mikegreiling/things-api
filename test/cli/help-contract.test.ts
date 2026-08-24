@@ -394,7 +394,12 @@ describe("write-command help states the contract", () => {
 
   it("todo update: repeating restriction is documented", () => {
     const help = helpFor("todo", "update");
-    expect(help).toContain("not available for repeating to-dos");
+    // The restriction became a two-way STEER when the exception composite landed
+    // (ruling 2026-08-24): a schedule change on a series is ambiguous, not
+    // impossible, so the help must name BOTH readings and the flag that picks one.
+    expect(help).toContain("--exception");
+    expect(help).toContain("only the next occurrence");
+    expect(help).toContain("reschedule-repeat");
   });
 
   it("todo checklist: destructive semantics + exact ack flag", () => {
@@ -809,6 +814,17 @@ describe("ui-vector drive-gui flag completeness lock", () => {
   // means a newly-added ui-vector op that forgets the decorator fails HERE, not
   // silently at a user's terminal. An operation kind's dotted name IS its
   // command path (`todo.make-repeating` → `things todo make-repeating`).
+  //
+  // EXEMPT: ops that are not verbs at all. `todo.create-next-copy` is the
+  // internal first leg of the template-mutation composites (`todo complete` /
+  // `cancel` / `update --exception` on a repeating to-do) — a bare "spawn the
+  // next occurrence now" is not a command we offer, and every honest use of it
+  // mutates the row it creates. Its composites make the drive acknowledgement
+  // themselves (template-mutation.ts explains why), and the capability + the
+  // disruption ceiling still gate them. Adding a name here is a DELIBERATE
+  // decision that the op has no user-facing command; a new top-level GUI verb
+  // must still expose the flag.
+  const COMPOSITE_INTERNAL_OPS = new Set<string>(["todo.create-next-copy"]);
   const program = buildProgram();
   const commandFor = (op: string): Command => {
     let cmd = program as unknown as Command;
@@ -824,12 +840,19 @@ describe("ui-vector drive-gui flag completeness lock", () => {
     return cmd;
   };
 
-  it.each([...UI_DRIVE_OPS])("%s exposes --dangerously-drive-gui", (op) => {
-    const longs = commandFor(op).options.map((o) => o.long);
-    expect(
-      longs,
-      `\`things ${op.split(".").join(" ")}\` must offer --dangerously-drive-gui`,
-    ).toContain("--dangerously-drive-gui");
+  it.each([...UI_DRIVE_OPS].filter((op) => !COMPOSITE_INTERNAL_OPS.has(op)))(
+    "%s exposes --dangerously-drive-gui",
+    (op) => {
+      const longs = commandFor(op).options.map((o) => o.long);
+      expect(
+        longs,
+        `\`things ${op.split(".").join(" ")}\` must offer --dangerously-drive-gui`,
+      ).toContain("--dangerously-drive-gui");
+    },
+  );
+
+  it("every exempt op is a real ui-vector op (the list cannot rot)", () => {
+    for (const op of COMPOSITE_INTERNAL_OPS) expect(UI_DRIVE_OPS).toContain(op);
   });
 });
 

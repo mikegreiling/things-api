@@ -51,6 +51,7 @@ export const OPERATION_KINDS = [
   "todo.reschedule-repeat",
   "todo.pause-repeat",
   "todo.resume-repeat",
+  "todo.create-next-copy",
   "todo.convert-to-project",
   "project.reschedule-repeat",
   "project.pause-repeat",
@@ -78,6 +79,12 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   "todo.reschedule-repeat",
   "todo.pause-repeat",
   "todo.resume-repeat",
+  // CNC1: `Items ▸ Repeat ▸ Create Next Copy` — materialize the pending
+  // occurrence and advance the series. Not a user-facing verb: it is the first
+  // leg of the template-mutation composites (template-mutation.ts), which mutate
+  // the row it mints. Its template delta is byte-identical to the app's own
+  // `Make Exception` (docs/lab/cnc1-template-mutations.md §1).
+  "todo.create-next-copy",
   "todo.convert-to-project",
   "project.promote-heading",
   "project.reschedule-repeat",
@@ -949,6 +956,7 @@ export interface OperationParamsMap {
   "todo.reschedule-repeat": RepeatRuleParams;
   "todo.pause-repeat": UuidParams;
   "todo.resume-repeat": UuidParams;
+  "todo.create-next-copy": UuidParams;
   "todo.convert-to-project": UuidParams;
   "project.reschedule-repeat": RepeatRuleParams;
   "project.pause-repeat": UuidParams;

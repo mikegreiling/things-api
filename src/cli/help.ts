@@ -447,28 +447,23 @@ someday orders bounce; --before/--after co-touches siblings; caps 30; flags=fals
   repeating: `REPEATING — rules for recurring to-dos and projects
 
 Verbs: \`things todo|project make-repeating <ref>\` (turn an existing item into a
-repeater), \`things todo|project add-repeating "<title>"\` (create + make repeating in
-one call), \`… reschedule-repeat <ref>\` (change a rule in place). Every rule takes
+repeater), \`… add-repeating "<title>"\` (create + make repeating in one call),
+\`… reschedule-repeat <ref>\` (change a rule in place). Every rule takes
 \`--frequency <daily|weekly|monthly|yearly>\` and a required \`--interval <n>\`
-(\`--interval 1\` = every unit). Repeating operations drive the app's Repeat dialog, so
-they require \`--dangerously-drive-gui\`, including \`--dry-run\` previews.
+(\`--interval 1\` = every unit). These drive the app's Repeat dialog, so they require
+\`--dangerously-drive-gui\`, \`--dry-run\` previews included.
 
-Driving the dialog can take over a minute on a large database (Things commits the rule
-while syncing), so allow a GENEROUS timeout — 120s or more. If your own timeout stops
-the command first, you get empty output instead of a result; the change may still have
-landed, so re-check with \`things show <ref>\` before retrying, never blindly re-run. If
-the app's own budget is exceeded, the command returns a structured timeout that says
-the outcome is uncertain and names the same re-check.
+Driving the dialog can take over a minute on a large database, so allow a GENEROUS
+timeout — 120s or more. If your own timeout stops the command first you get empty output
+though the change may still have landed: re-check with \`things show <ref>\`, never
+blindly re-run. An app-side timeout returns a structured result naming the same re-check.
 
-make-repeating is RECOVERABLE (promote-via-clone): it copies the item, promotes the
-copy, and moves the ORIGINAL to the Trash — so \`things undo\` reverses it (removes the
-new series and restores the original). It refuses a project holding a nested repeater.
-
-Two modes:
-  fixed (default)      occurrences land on calendar dates.
-  --after-completion   next occurrence lands N units after you complete the current one.
+make-repeating is RECOVERABLE: it copies the item, promotes the copy, and moves the
+ORIGINAL to the Trash, so \`things undo\` reverses it; it refuses a nested repeater.
 
 Shaping the rule (compose with the frequency):
+  --after-completion          the next occurrence lands N units after you COMPLETE the
+                              current one, instead of on a calendar date (the default)
   --weekdays mon,thu,fri      weekly: MULTIPLE days in ONE rule — never make two
                               repeaters for "every Thursday and Friday"
   --on-day <1-31|last>        monthly/yearly: a date anchor
@@ -479,11 +474,16 @@ Shaping the rule (compose with the frequency):
   --ends-after <n> | --ends-on YYYY-MM-DD      stop bounds
   --reminder HH:mm · --deadline · --start-days-earlier <n>
 
-make-repeating returns a \`repeating\` block: \`instanceUuid\` is the visible current
-occurrence (use it to reach the item), \`templateUuid\` the recurring rule (use it as
-the <ref> for \`reschedule-repeat\`), and \`replacedUuid\` the disposable copy; a warning
-names the trashed original. New repeater in ONE call:
-\`things todo add-repeating "<title>" --frequency … --interval 1 --dangerously-drive-gui\`.`,
+ONE occurrence vs the SERIES. A schedule/deadline change on a repeating to-do is
+ambiguous and refused, naming both ways out: \`--exception\` (just the next occurrence,
+created for you if it has not appeared yet) or \`reschedule-repeat\` (the series).
+\`--exception\` is refused when the series already lands on the day you asked for, and
+for --after-completion rules; undo restores the occurrence's change, never the
+occurrence itself. \`complete\`/\`cancel\` on a repeater need no flag — they resolve the
+CURRENT occurrence and report which one, and when the next lands.
+
+make-repeating returns a \`repeating\` block: \`instanceUuid\` the visible current
+occurrence, \`templateUuid\` the rule (the <ref> for \`reschedule-repeat\`).`,
 };
 
 /** The valid topic names, in the order the "unknown topic" hint lists them. */

@@ -359,6 +359,10 @@ const RESOLUTION_COMPOSITE_OPS = new Set<string>([
 ]);
 
 export const IRREVERSIBLE: Partial<Record<string, string>> = {
+  "todo.create-next-copy":
+    "materializing a series' pending occurrence cannot be undone outside the Things app: the " +
+    "occurrence would have to be destroyed outright (trashing it leaves a row the series still " +
+    "counts) and the series' own cursor rewound, and no write surface reaches either",
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
   "trash.empty": "emptying the Trash hard-deletes every row — nothing to restore (A27)",

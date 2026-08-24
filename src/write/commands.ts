@@ -39,6 +39,7 @@ import {
   resolveProject,
   resolveTag,
   sameTitleTaskUuids,
+  seriesRowUuids,
   trashedCount,
   type PreState,
 } from "./pre-state.ts";
@@ -63,6 +64,7 @@ import {
   headingConvertToProjectRecipe,
   moveHeadingToProjectRecipe,
   makeRepeatingRecipe,
+  createNextCopyRecipe,
   pauseRepeatRecipe,
   projectMakeRepeatingRecipe,
   projectPauseRepeatRecipe,
@@ -2138,6 +2140,56 @@ const todoPauseRepeat: CommandSpec<"todo.pause-repeat"> = {
   },
 };
 
+/**
+ * `Items ▸ Repeat ▸ Create Next Copy` (CNC1) — materialize the pending
+ * occurrence and advance the series. The INTERNAL first leg of the
+ * template-mutation composites (template-mutation.ts); it is not a user-facing
+ * verb, because a bare "spawn one now" has no use we have been asked for and
+ * every honest use of it mutates the row it mints.
+ *
+ * Verified as a CREATE: the minted row wears the template's own title, is a
+ * to-do, carries a fresh (gesture wall-clock) creationDate, and is not one of
+ * the rows the series already had — which is exactly the create-probe's
+ * gauntlet, and it hands the composite back the minted uuid it needs. The one
+ * field assertion is the FK: the discovered row must be an instance of THIS
+ * template, so a same-titled row created by anything else in the window cannot
+ * pass. The cursor advance is deliberately NOT asserted here — a create delta
+ * asserts against the created row, and the composite re-reads the template
+ * afterwards anyway to disclose when the next occurrence lands.
+ */
+const todoCreateNextCopy: CommandSpec<"todo.create-next-copy"> = {
+  op: "todo.create-next-copy",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    // The series' existing rows — the template plus every instance it has
+    // already spawned, all of which share its title. They are the create
+    // probe's exclusion set, so "the new row" is unambiguous even on a series
+    // whose occurrences all look alike.
+    pre.sameTitleUuids = seriesRowUuids(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, params, ctx) {
+    const target = pre.target;
+    const title = target !== null && target.type !== "heading" ? target.title : "";
+    return {
+      mode: "create",
+      probe: {
+        title,
+        type: "to-do",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
+      assert: [{ field: "repeating.templateUuid", equals: params.uuid }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(createNextCopyRecipe(params.uuid));
+  },
+};
+
 const todoResumeRepeat: CommandSpec<"todo.resume-repeat"> = {
   op: "todo.resume-repeat",
   hazards: UI_HAZARDS,
@@ -2738,6 +2790,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "todo.make-repeating": todoMakeRepeating,
   "todo.reschedule-repeat": todoRescheduleRepeat,
   "todo.pause-repeat": todoPauseRepeat,
+  "todo.create-next-copy": todoCreateNextCopy,
   "todo.resume-repeat": todoResumeRepeat,
   "todo.convert-to-project": todoConvertToProject,
   "project.reschedule-repeat": projectRescheduleRepeat,

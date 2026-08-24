@@ -135,6 +135,37 @@ export function pauseRepeatRecipe(targetUuid: string): UiRecipe {
   };
 }
 
+/**
+ * `Items ▸ Repeat ▸ Create Next Copy` — Things 3.23's "spawn the pending
+ * occurrence now" command, and the first half of every template mutation we
+ * ship (CNC1, docs/lab/cnc1-template-mutations.md).
+ *
+ * One press materializes the instance the projection cursor points at AND
+ * advances the series, and the template delta is FIELD FOR FIELD what the app's
+ * own `Make Exception` writes (`rt1_instanceCreationCount +1`,
+ * `rt1_instanceCreationStartDate` → consumed slot + 1, `rt1_nextInstanceStartDate`
+ * → the next rule date, `todayIndexReferenceDate` → the cursor, `umd` silent,
+ * rule blob untouched) — measured on a fixed weekly rule against REPX3 §1.2 and
+ * on a daily rule against §2.1. Mutating the minted instance afterwards is
+ * therefore the exception the chooser withholds from automation.
+ *
+ * Template-only, like every verb in this submenu: with an INSTANCE selected the
+ * `Items` menu carries no `Repeat` item at all (REPX1 §5.1), which is what the
+ * eligibility assert catches before the press.
+ */
+export function createNextCopyRecipe(targetUuid: string): UiRecipe {
+  const item = `menu item "Create Next Copy" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`;
+  return {
+    op: "todo.create-next-copy",
+    targetUuid,
+    steps: [
+      ...preamble(targetUuid),
+      assertEligible(targetUuid, item),
+      menuPress("Items ▸ Repeat ▸ Create Next Copy", item, REPEAT_SUBMENU_ANCHOR),
+    ],
+  };
+}
+
 export function resumeRepeatRecipe(targetUuid: string): UiRecipe {
   return {
     op: "todo.resume-repeat",

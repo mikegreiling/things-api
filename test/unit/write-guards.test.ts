@@ -44,6 +44,37 @@ describe("H-REPEAT-SCHEDULE", () => {
     expect(check("todo.complete", { uuid })?.hazard).toBe("H-REPEAT-SCHEDULE");
   });
 
+  it("a to-do's schedule refusal is a TWO-WAY steer, not a dead end (ruling 2026-08-24)", () => {
+    // Both readings of "reschedule this repeating to-do" are reachable now — one
+    // occurrence via the exception composite, the series via reschedule-repeat —
+    // so the refusal names both rather than sending the caller to the app.
+    const uuid = seedTodo(fixture.db, {
+      title: "Template",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    const block = check("todo.update", { uuid, when: "2026-07-15" });
+    expect(block?.hazard).toBe("H-REPEAT-SCHEDULE");
+    expect(block?.detail).toContain("ambiguous");
+    expect(block?.remediation).toContain("--exception");
+    expect(block?.remediation).toContain("reschedule-repeat");
+    // A deadline change is the same ambiguity.
+    expect(check("todo.update", { uuid, deadline: "2026-07-15" })?.remediation).toContain(
+      "--exception",
+    );
+  });
+
+  it("a repeating PROJECT keeps the original refusal — the composite is to-dos only (CNC1 §8)", () => {
+    const uuid = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    const block = check("project.duplicate", { uuid });
+    expect(block?.hazard).toBe("H-REPEAT-SCHEDULE");
+    expect(block?.remediation).not.toContain("--exception");
+  });
+
   it("ALLOWS deleting a repeating template (byte-identical to the GUI's own delete; disclosure + Put Back ride the result, ruling 2026-08-13)", () => {
     // The delete arm of H-REPEAT-SCHEDULE was lifted: trashing a template is the
     // GUI's own Edit ▸ Delete (SERDEL S1), human-recoverable via Trash ▸ Put Back.
