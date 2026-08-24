@@ -175,6 +175,25 @@ describe("global --helpers/--no-helpers", () => {
   });
 });
 
+describe("helpers reset", () => {
+  // Only the refusal gates are exercised through the CLI: a confirmed reset
+  // runs the REAL `tccutil`, which would revoke the developer machine's live
+  // helper grants. The confirmed path is unit-covered with an injected runner
+  // (test/unit/helpers-reset.test.ts).
+  it("refuses without --yes when stdin is not a terminal", async () => {
+    await run(["helpers", "reset"]);
+    expect(stderr.join("")).toContain("--yes");
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("refuses --json without --yes (no interactive prompt under --json)", async () => {
+    await run(["helpers", "reset", "--json"]);
+    expect(stderr.join("")).toContain("--yes");
+    expect(stdout.join("")).toBe("");
+    expect(process.exitCode).toBe(2);
+  });
+});
+
 describe("helpers install", () => {
   it("refuses cleanly when no bundle has been built", async () => {
     await run(["helpers", "install", "--bundle", join(stateDir, "missing-bundle.app")]);
