@@ -128,6 +128,15 @@ Requirements: host GUI session (tart needs an unlocked keychain), `tart` + `sshp
 
 App states: `not-running` · `running-background` (Finder frontmost) · `frontmost` · `modal-open` (modal spawned in setup).
 
+## AX-drive scrutiny (probe law, maintainer-ratified 2026-08-25)
+
+AX-driven surfaces are **undocumented private APIs**: no contract, no deprecation notice, subject to change in any app update. Two incidents set this law — the 3.23 repeat dialog INSERTED its ends-count field ahead of the interval field, so a positional address wrote the wrong field while the self-referential read-back reported OK (HXPC1), and the same dialog rebuilds its control group mid-drive after a frequency switch (BEEP1). Dialogs SHAPE-SHIFT in response to inputs: a checkbox can mint a new control, a pop-up selection can surface a hidden field, slider, or picker.
+
+**Probe/recipe-creation law: re-audit the FULL dialog shape after EVERY input step.** When probing an AX surface or authoring a new recipe, dump the complete control inventory (roles, labels, positions, values) after each individual input — every field filled, checkbox toggled, option selected, date/time chosen — and diff it against the prior dump. A shape change is a FINDING to record in the campaign doc (which input minted/moved/removed which control), never something to silently step over. A recipe is not certifiable until its campaign doc carries the shape trace for every state its steps can reach.
+
+**Production law: deterministic fast-fail wherever cheap.** Operationalized drives need not re-audit the full shape per step, but every write must be guarded by the checks that CAN run deterministically: discriminated addressing (never bare positional field paths), label/identity asserts before writing a control, and a pre-commit audit of every control the recipe set. **Fail direction is always over-caution** (maintainer's words): "better to fail on an anodyne localization string change than to be overly-permissive and accidentally mutate a field you didn't intend to target." A refused drive is a bug report; a mis-landed write is corruption.
+
+
 ## Evidence & verdicts
 
 Every probe yields one evidence record (`docs/design/lab.md` §4.2): resolved commands + transport results, row-level DB delta (`inserted/deleted/changed` — the ground truth; `open` exit 0 proves nothing), disruption `{tier, signals, events}` from the monitor slice between MARKs, crash `{pidDied, ipsFiles}`, and the verdict.
