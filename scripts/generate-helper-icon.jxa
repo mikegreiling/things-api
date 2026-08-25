@@ -1,17 +1,64 @@
 #!/usr/bin/osascript -l JavaScript
 // Renders the Things API Helper app icon master (1024×1024 PNG) with Cocoa.
-// Original artwork drawn in code — a white checkmark over a blue rounded
-// square on the standard macOS icon grid (824pt plate, 100pt margin).
+// Original artwork drawn in code — a white `✓_` over a blue rounded square on
+// the standard macOS icon grid (824pt plate, 100pt margin). The check is a
+// greater-than sign tilted until it reads as a checkmark; the underscore that
+// trails it keeps the pair legible as a shell prompt.
+//
 // Usage: osascript -l JavaScript scripts/generate-helper-icon.jxa <out.png>
+//
+// To refresh deputy/AppIcon.icns from a new master:
+//   osascript -l JavaScript scripts/generate-helper-icon.jxa /tmp/icon.png
+//   mkdir /tmp/AppIcon.iconset
+//   for s in 16 32 128 256 512; do
+//     sips -z $s $s        /tmp/icon.png --out /tmp/AppIcon.iconset/icon_${s}x${s}.png
+//     sips -z $((s*2)) $((s*2)) /tmp/icon.png --out /tmp/AppIcon.iconset/icon_${s}x${s}@2x.png
+//   done
+//   iconutil -c icns /tmp/AppIcon.iconset -o deputy/AppIcon.icns
 ObjC.import("Cocoa");
+
+const SIZE = 1024;
+const RAD = Math.PI / 180;
+
+// A greater-than sign — two arms meeting at a vertex, opening `spread` degrees
+// apart and pointing left — rotated clockwise by `tilt`. Past ~75° of tilt the
+// vertex swings to the bottom and the glyph reads as a checkmark: the arm that
+// was the upper one becomes the long upstroke, the lower one the short entry
+// stroke. Returns a three-point polyline.
+function tiltedGreaterThan(vx, vy, spread, tilt, longLen, shortLen) {
+  const longArm = (180 - spread / 2 - tilt) * RAD;
+  const shortArm = (180 + spread / 2 - tilt) * RAD;
+  return [
+    [vx + longLen * Math.cos(longArm), vy + longLen * Math.sin(longArm)],
+    [vx, vy],
+    [vx + shortLen * Math.cos(shortArm), vy + shortLen * Math.sin(shortArm)],
+  ];
+}
+
+// Translate the strokes so their combined ink box is centred on (cx, cy).
+function centerInk(strokes, cx, cy) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of strokes) {
+    const half = s.width / 2;
+    for (const [x, y] of s.points) {
+      x0 = Math.min(x0, x - half);
+      y0 = Math.min(y0, y - half);
+      x1 = Math.max(x1, x + half);
+      y1 = Math.max(y1, y + half);
+    }
+  }
+  const dx = cx - (x0 + x1) / 2;
+  const dy = cy - (y0 + y1) / 2;
+  for (const s of strokes) s.points = s.points.map(([x, y]) => [x + dx, y + dy]);
+  return strokes;
+}
 
 function run(argv) {
   const out = argv[0];
   if (!out) throw new Error("usage: generate-helper-icon.jxa <out.png>");
-  const size = 1024;
 
   const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(
-    $(), size, size, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0,
+    $(), SIZE, SIZE, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0,
   );
   const ctx = $.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep);
   $.NSGraphicsContext.saveGraphicsState;
@@ -19,41 +66,38 @@ function run(argv) {
 
   // Plate: 824×824 rounded square, Big-Sur-era corner radius.
   const inset = 100;
-  const plate = $.NSMakeRect(inset, inset, size - 2 * inset, size - 2 * inset);
-  const path = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius(plate, 185, 185);
+  const plate = $.NSMakeRect(inset, inset, SIZE - 2 * inset, SIZE - 2 * inset);
+  const platePath = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius(plate, 185, 185);
   const top = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.13, 0.5, 0.92, 1.0);
   const bottom = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.07, 0.32, 0.72, 1.0);
   const grad = $.NSGradient.alloc.initWithStartingColorEndingColor(bottom, top);
-  grad.drawInBezierPathAngle(path, 90);
+  grad.drawInBezierPathAngle(platePath, 90);
 
-  // Checkmark: thick, round-capped, slightly high of center.
-  const check = $.NSBezierPath.bezierPath;
-  check.moveToPoint($.NSMakePoint(310, 515));
-  check.lineToPoint($.NSMakePoint(455, 365));
-  check.lineToPoint($.NSMakePoint(720, 645));
-  check.setLineWidth(92);
-  check.setLineCapStyle($.NSLineCapStyleRound);
-  check.setLineJoinStyle($.NSLineJoinStyleRound);
+  // `✓_`: the tilted greater-than, then a cursor-width underscore sharing its
+  // baseline. One motif, two readings — completed to-do and shell prompt.
+  const weight = 108;
+  const check = tiltedGreaterThan(0, 0, 74, 79, 336, 162);
+  const checkRight = Math.max(...check.map((p) => p[0]));
+  const gap = 70;
+  const underscore = [[checkRight + gap, 0], [checkRight + gap + 168, 0]];
+
+  const strokes = centerInk(
+    [{ points: check, width: weight }, { points: underscore, width: weight }],
+    SIZE / 2,
+    SIZE / 2,
+  );
   $.NSColor.whiteColor.setStroke;
-  check.stroke;
-
-  // A small prompt chevron under the check — this is the API helper, not the app.
-  const chevron = $.NSBezierPath.bezierPath;
-  chevron.moveToPoint($.NSMakePoint(430, 300));
-  chevron.lineToPoint($.NSMakePoint(505, 245));
-  chevron.lineToPoint($.NSMakePoint(430, 190));
-  chevron.setLineWidth(40);
-  chevron.setLineCapStyle($.NSLineCapStyleRound);
-  chevron.setLineJoinStyle($.NSLineJoinStyleRound);
-  $.NSColor.colorWithSRGBRedGreenBlueAlpha(1, 1, 1, 0.85).setStroke;
-  chevron.stroke;
-  const dash = $.NSBezierPath.bezierPath;
-  dash.moveToPoint($.NSMakePoint(545, 190));
-  dash.lineToPoint($.NSMakePoint(645, 190));
-  dash.setLineWidth(40);
-  dash.setLineCapStyle($.NSLineCapStyleRound);
-  $.NSColor.colorWithSRGBRedGreenBlueAlpha(1, 1, 1, 0.85).setStroke;
-  dash.stroke;
+  for (const s of strokes) {
+    const p = $.NSBezierPath.bezierPath;
+    p.moveToPoint($.NSMakePoint(s.points[0][0], s.points[0][1]));
+    for (let i = 1; i < s.points.length; i++) {
+      p.lineToPoint($.NSMakePoint(s.points[i][0], s.points[i][1]));
+    }
+    p.setLineWidth(s.width);
+    p.setLineCapStyle($.NSLineCapStyleRound);
+    p.setLineJoinStyle($.NSLineJoinStyleRound);
+    p.stroke;
+  }
 
   ctx.flushGraphics;
   $.NSGraphicsContext.restoreGraphicsState;
