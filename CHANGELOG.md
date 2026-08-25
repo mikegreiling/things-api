@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.19.0 — 2026-08-25
+
 - The helper bundle's icon is redrawn around a single `✓_`: a greater-than sign tilted until it reads as a checkmark, trailed by an underscore on the same baseline, so one mark is both a completed to-do and a shell prompt. It replaces the large checkmark that had a small `>_` crowded underneath it, overlapping the check and illegible at the sizes that matter — the new motif holds together down to the 16pt rows in System Settings' Automation and Accessibility lists. Rerun `bash scripts/build-helpers.sh && things helpers setup` to pick it up.
 
 - **Fixed — creating a repeating to-do or project no longer creates the item first and then discovers it cannot finish (#512).** These commands work in two steps: they create the item, then make it repeat by driving the Things window. If the window could not be driven, the second step failed and the command cleaned up after itself — correct, but it had already made and unmade something in your library for a reason it could have known before starting. Both checks now happen up front, before anything is created: whether this Mac has GUI-driving set up at all, and whether a Things window is actually reachable on the screen you are looking at. When either answer is no, the command refuses with nothing created and says which one it was.
