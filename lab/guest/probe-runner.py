@@ -14,6 +14,8 @@ Outputs under --out:
   snapshots/<id>-before.json raw keyed rows per table
   snapshots/<id>-after.json
   crash/<name>.ips           copies of new Things crash reports
+  beep-marks.tsv             beep-sentinel marks, one per probe phase
+  beeps.json                 the beep count for the whole run (host gates on it)
 
 Exit code: 0 if every probe executed (verdicts are computed host-side);
 2 on harness-level failure (bad suite, DB unreadable, …).
@@ -39,6 +41,12 @@ THINGS_PROCESS = "Things3"
 # writer's lines get silently overwritten (observed: 13 of 44 marks survived).
 # The host merges the two streams by timestamp at evaluation.
 MARKS_PATH = os.path.expanduser("~/things-lab/run/marks.ndjson")
+# The beep sentinel ships beside this file in the guest harness dir. A macOS
+# alert beep during a suite is a FAILURE STATE (docs/lab/harness.md §The beep
+# sentinel): the guest stamps a mark per probe phase and, at the end of the run,
+# counts the beeps in the whole window with `log show`. The count is written to
+# beeps.json and JUDGED HOST-SIDE, like every other verdict.
+BEEP_SENTINEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "beep-sentinel.sh")
 DIAG_DIR = os.path.expanduser("~/Library/Logs/DiagnosticReports")
 SNAPSHOT_TABLES = [
     "TMTask",
@@ -107,6 +115,33 @@ def snapshot() -> dict:
     finally:
         conn.close()
     return out
+
+
+def beep_env(out_dir: str) -> dict:
+    env = dict(os.environ)
+    env["BEEP_MARKS"] = os.path.join(out_dir, "beep-marks.tsv")
+    return env
+
+
+def beep_sentinel(args: list, out_dir: str) -> int:
+    """Drive the beep sentinel; never let its own failure abort a probe run."""
+    if not os.path.exists(BEEP_SENTINEL):
+        return 0
+    try:
+        r = subprocess.run(
+            ["bash", BEEP_SENTINEL] + args,
+            env=beep_env(out_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=180,
+        )
+    except Exception as e:  # noqa: BLE001 — the sentinel is never the thing that kills a run
+        print(f"   beep-sentinel error: {type(e).__name__}: {e}", flush=True)
+        return 2
+    text = (r.stdout or b"").decode("utf-8", "replace").strip()
+    if text:
+        print(text, flush=True)
+    return r.returncode
 
 
 def emit_mark(probe_id: str, phase: str) -> None:
@@ -362,6 +397,10 @@ def run_probe(probe: dict, resolver: Resolver, out_dir: str) -> dict:
     }
 
     try:
+        # Beep marks bracket every phase, so a beep is attributed to the probe
+        # AND the phase that produced it (setup noise is excluded from the DB
+        # evidence window, but a beep in setup is still a beep).
+        beep_sentinel(["mark", f"{probe_id} setup"], out_dir)
         # Setup runs OUTSIDE the evidence window (its noise is not the probe's).
         setup_record: dict = {"commands": [], "waits": []}
         execute_commands(probe.get("setup", []), resolver, setup_record)
@@ -382,6 +421,7 @@ def run_probe(probe: dict, resolver: Resolver, out_dir: str) -> dict:
 
         record["startedAt"] = now_iso()
         emit_mark(probe_id, "start")
+        beep_sentinel(["mark", f"{probe_id} commands"], out_dir)
 
         execute_commands(probe["commands"], resolver, record)
         time.sleep(float(probe.get("settleSeconds", 2)))
@@ -419,6 +459,7 @@ def run_probe(probe: dict, resolver: Resolver, out_dir: str) -> dict:
         with open(os.path.join(out_dir, record["snapshotAfter"]), "w") as f:
             json.dump(after, f)
 
+        beep_sentinel(["mark", f"{probe_id} cleanup"], out_dir)
         cleanup_record: dict = {"commands": [], "waits": []}
         execute_commands(probe.get("cleanup", []), resolver, cleanup_record)
     except Exception as e:  # harness bug or guest surprise: record, keep going
@@ -471,6 +512,8 @@ def main() -> int:
     os.makedirs(os.path.join(args.out, "snapshots"), exist_ok=True)
     os.makedirs(os.path.join(args.out, "crash"), exist_ok=True)
     open(MARKS_PATH, "w").close()  # drop stale marks from any prior run
+    beep_sentinel(["reset"], args.out)
+    beep_sentinel(["mark", "suite start"], args.out)
 
     resolver = Resolver(context)
     probes = suite["probes"]
@@ -498,6 +541,15 @@ def main() -> int:
             print(f"   {status}", flush=True)
             if record["errors"]:
                 ok = False
+
+    # The beep window closes here and is counted in ONE `log show`. The verdict
+    # is the host's (beeps.json → lab/runner/run.ts), so a beep never masks the
+    # probe records; the guest only measures and attributes.
+    beep_sentinel(
+        ["assert", "--name", str(suite.get("suite", "suite")),
+         "--json", os.path.join(args.out, "beeps.json")],
+        args.out,
+    )
 
     print(f"executed {len(ordered)} probes -> {exec_path}", flush=True)
     if not ok:

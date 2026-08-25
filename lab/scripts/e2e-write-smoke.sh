@@ -41,17 +41,23 @@ lab_scp -r dist "admin@$IP:things-lab/things-api/dist"
 lab_scp -r node_modules/commander "admin@$IP:things-lab/things-api/node_modules/commander"
 lab_scp package.json "admin@$IP:things-lab/things-api/package.json"
 lab_scp lab/guest/e2e-write-smoke.sh "admin@$IP:things-lab/e2e-write-smoke.sh"
-lab_ssh "$IP" 'chmod +x ~/things-lab/bin/node ~/things-lab/e2e-write-smoke.sh'
+# The beep sentinel ships beside the smoke (the smoke resolves it by $0's dir):
+# an alert beep during the write layer is a failure, not a curiosity.
+lab_scp lab/guest/beep-sentinel.sh "admin@$IP:things-lab/beep-sentinel.sh"
+lab_ssh "$IP" 'chmod +x ~/things-lab/bin/node ~/things-lab/e2e-write-smoke.sh ~/things-lab/beep-sentinel.sh'
 
 echo "[e2e] running guest smoke…"
 set +e
-lab_ssh "$IP" 'bash ~/things-lab/e2e-write-smoke.sh ~/things-lab/bin/node ~/things-lab/things-api' \
+# THINGS_LAB_BEEPS_OK=1 (if exported on the host) downgrades the beep gate to
+# accounting-only; the smoke still prints the count.
+lab_ssh "$IP" "THINGS_LAB_BEEPS_OK='${THINGS_LAB_BEEPS_OK:-}' bash ~/things-lab/e2e-write-smoke.sh ~/things-lab/bin/node ~/things-lab/things-api" \
   | tee "$ARTIFACTS/e2e-transcript.log"
 RESULT=${PIPESTATUS[0]}
 set -e
 
 echo "[e2e] collecting audit trail"
 lab_scp -r "admin@$IP:.local/state/things-api/audit" "$ARTIFACTS/audit" || true
+lab_scp "admin@$IP:things-lab/beeps.json" "$ARTIFACTS/beeps.json" 2>/dev/null || true
 
 if [ "$RESULT" -eq 0 ]; then
   echo "[e2e] GREEN — artifacts in $ARTIFACTS"
