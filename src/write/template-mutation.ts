@@ -36,11 +36,21 @@
  *
  *   1. a target date that is a live slot of the same rule DOUBLE-BOOKS that day
  *      (CNC1 §2, inheriting oddities §17 whole);
- *   2. an AFTER-COMPLETION series has no pending occurrence to materialize — the
- *      command duplicates the current one onto the same day (CNC1 §5, oddities
- *      §18);
+ *   2. a series with NO CURSOR has no pending occurrence to materialize, and
+ *      `Create Next Copy` duplicates the current one onto the same day instead
+ *      (CNC1 §5, CNCAC1 §6/§8, oddities §18);
  *   3. repeating PROJECTS are out of scope: the menu that carries the command
  *      does not exist for a project selection (CNC1 §8).
+ *
+ * Refusal 2 used to be keyed on the rule KIND — "after-completion" — and that
+ * was fail-closed guesswork that fired on the wrong state. CNCAC1 measured the
+ * shape it was actually hitting: an after-completion series ANCHORS on its
+ * occurrence being resolved and DERIVES a real cursor from that anchor, so a
+ * series with a completed history renders a projection in Upcoming, the GUI
+ * checks that projection off, and `Create Next Copy` materializes it correctly
+ * with no duplicate — byte-equivalent to the GUI gesture modulo the minted row's
+ * modification stamp. The duplicate belongs to the CURSOR-LESS case alone (a
+ * never-resolved series, or a paused one), which is what this now refuses.
  *
  * Reversibility is HALF and is disclosed at op time: `things undo` restores the
  * occurrence's own change perfectly, and can neither remove the materialized
@@ -73,9 +83,32 @@ const PROJECT_REMEDIATION =
   "change the whole series with `things project reschedule-repeat <ref>`, or change one of its " +
   "to-dos directly";
 
-const AFTER_COMPLETION_REFUSAL =
-  "this series repeats a fixed time AFTER each occurrence is completed, so it has no upcoming " +
-  "occurrence to work on until the current one is done";
+/**
+ * The precondition, stated as what it actually is. A composite can only work on
+ * an occurrence the series has NOT spawned yet, and the app tells us whether
+ * there is one: `rt1_nextInstanceStartDate`. When it is null there is no next
+ * date to bring forward, and `Create Next Copy` does not refuse — it DUPLICATES
+ * the current occurrence onto the same day (CNC1 §5 / CNCAC1 §6, oddities §18).
+ *
+ * This replaces a rule-KIND refusal that fired on the wrong state. It read "an
+ * after-completion series has no upcoming occurrence until the current one is
+ * done" — but CNCAC1 measured that an after-completion series acquires a real
+ * cursor the moment its occurrence is resolved (completed, canceled, OR
+ * trashed), which is precisely when the old branch fired: it refused the one
+ * shape whose projection the app renders in Upcoming and happily checks off.
+ *
+ * With that corrected, the only state that reaches this refusal is a PAUSED
+ * series whose occurrence is already resolved — and there the refusal earns its
+ * keep for a second measured reason. CNC on a paused series does not duplicate;
+ * it quietly materializes the occurrence the pause was suppressing, from the
+ * stale anchor, and clears that anchor while leaving the paused flag set
+ * (CNCAC1 §8). Producing an occurrence from a series the user deliberately
+ * paused is not a reading of "check this off" worth guessing at, so the refusal
+ * names `resume-repeat` instead.
+ */
+const NO_PENDING_REFUSAL =
+  "this repeating to-do has no upcoming occurrence to work on — its schedule names no next date, " +
+  "so there is nothing to bring forward";
 
 /** What the composite learned about the series before it drove anything. */
 interface SeriesState {
@@ -86,6 +119,8 @@ interface SeriesState {
   rule: RepeatRule | null;
   deadlined: boolean;
   afterCompletion: boolean;
+  /** The series is paused, which is WHY it has no cursor — a different remedy. */
+  paused: boolean;
   /** An already-materialized OPEN occurrence of this series, if there is one. */
   openInstance: { uuid: string; startDate: IsoDate | null } | null;
 }
@@ -117,6 +152,7 @@ export function readSeriesState(deps: WriteDeps, uuid: string): SeriesState | nu
     rule,
     deadlined: target.repeating.deadlined === true,
     afterCompletion: rule !== null && rule.type === "after-completion",
+    paused: target.repeating.paused === true,
     openInstance:
       first === undefined
         ? null
@@ -159,6 +195,22 @@ function whenTargetDay(when: string | undefined, todayIso: IsoDate): IsoDate | n
   if (when === "today" || when === "evening") return todayIso;
   if (when === "tomorrow") return addDaysIso(todayIso, 1);
   return /^\d{4}-\d{2}-\d{2}$/.test(when) ? (when as IsoDate) : null;
+}
+
+/**
+ * The refusal for a series with nothing pending, with the remedy that fits WHY
+ * it is empty. A paused series is one command away from having a cursor again;
+ * anything else is the app's own business.
+ */
+function noPendingRefusal(op: OperationKind, state: SeriesState): MutationResult {
+  if (state.paused) {
+    return blocked(
+      op,
+      "this repeating to-do is paused, so it has no upcoming occurrence to work on",
+      "resume it first with `things todo resume-repeat <ref>`",
+    );
+  }
+  return blocked(op, NO_PENDING_REFUSAL, "work on one of its occurrences directly");
 }
 
 /** Human phrasing for "the occurrence dated X" when X may be unknown. */
@@ -260,13 +312,7 @@ export async function runTemplateStatusWrite(
       targetUuid = state.openInstance.uuid;
       occurrenceDate = state.openInstance.startDate;
     } else {
-      if (state.afterCompletion) {
-        return blocked(
-          op,
-          `${AFTER_COMPLETION_REFUSAL}, and it has no unfinished occurrence right now`,
-          "restart the series by completing a copy of it in the Things app",
-        );
-      }
+      if (state.cursor === null) return noPendingRefusal(op, state);
       const mint = await mintPendingOccurrence(deps, op, state.templateUuid, options, txnId);
       if (!mint.ok) return mint.result;
       targetUuid = mint.uuid;
@@ -287,7 +333,10 @@ export async function runTemplateStatusWrite(
         (minted ? " (created just now, because the series had no unfinished copy)" : ""),
       nextDate === null
         ? "the series has no further scheduled occurrence"
-        : `the next occurrence is ${nextDate}`,
+        : state.afterCompletion
+          ? `the next occurrence is ${nextDate} — this series counts from each completion, so ` +
+            "resolving it now restarted the interval from today"
+          : `the next occurrence is ${nextDate}`,
     ];
     if (minted) disclosure.push(IRREVERSIBLE_NOTE);
     return {
@@ -318,14 +367,7 @@ export async function runTemplateExceptionWrite(
     const state = readSeriesState(deps, uuid);
     if (state === null) return blocked(op, "this to-do is no longer a repeating series", "retry");
 
-    if (state.afterCompletion) {
-      return blocked(
-        op,
-        AFTER_COMPLETION_REFUSAL,
-        "change the whole series with `things todo reschedule-repeat <ref>`, or complete the " +
-          "current copy first and change the one that follows it",
-      );
-    }
+    if (state.cursor === null) return noPendingRefusal(op, state);
 
     // The collision refusal (CNC1 §2). A day the rule will still fire on ends up
     // holding two copies of the series, and nothing in the app reconciles them.
@@ -333,8 +375,12 @@ export async function runTemplateExceptionWrite(
       typeof patch["when"] === "string" ? patch["when"] : undefined,
       todayIso,
     );
-    if (targetDay !== null) {
-      if (state.rule === null || state.rule.type !== "fixed" || state.cursor === null) {
+    if (targetDay !== null && !state.afterCompletion) {
+      // An after-completion series is exempt BY CONSTRUCTION, not by assumption:
+      // it has no calendar, so it owns exactly one future date — the cursor this
+      // mint is about to consume — and there is no second slot for the moved
+      // occurrence to collide with (CNCAC1 §7).
+      if (state.rule === null || state.rule.type !== "fixed") {
         return blocked(
           op,
           "this series' schedule cannot be read, so there is no way to tell whether " +

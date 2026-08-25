@@ -1070,6 +1070,40 @@ The app stays alive (no crash report, no sheet, no error), so this is a silent d
 
 **Automation note:** this is the one rule shape where the CNC-plus-mutate composite is unsafe, so any op built on it must refuse an after-completion template outright. Evidence: [lab/cnc1-template-mutations.md](lab/cnc1-template-mutations.md) §5.
 
+**CNCAC1 addendum (2026-08-24, Things 3.23, golden-v4) — the defect is narrower than this entry says, the copy is dated TODAY, and the GUI has its own way in.** Three corrections, all measured:
+
+- **It is a CURSOR-LESS defect, not an after-completion defect.** An after-completion series acquires a real `rt1_nextInstanceStartDate` the moment its current occurrence is resolved — completed, canceled, *or trashed* — and on such a series `Create Next Copy` behaves perfectly: it mints the pending occurrence on the cursor's own day, clears the anchor and cursor (the series is waiting on a completion again), and leaves exactly ONE live occurrence. No duplicate. What this entry measures is the state where the app has no next date to materialize, which for this rule kind means the current occurrence is still unfinished (CNCAC1 §4).
+- **The spurious copy is dated TODAY.** CNC1's fixture had its live occurrence on the pinned today, so "dated today" and "dated the current occurrence" could not be told apart. Re-dating the occurrence to 2026-07-09 and pressing the item on 2026-07-05 lands the copy on **2026-07-05** — it is not a duplicate *of* anything, it is an extra occurrence dated the day of the gesture (CNCAC1 §7.2).
+- **The `Items ▸ Repeat` submenu is not the only entrance, and the other one is worse.** Upcoming files a cursor-less repeating to-do under a trailing **`Repeating To-Dos`** section labelled **`Waiting`** — and that row still carries a checkbox. Clicking it mints an extra row **dated today and born `status = 3`**, anchors the series (`acRef := today`, cursor := today + interval), and **leaves the genuine open occurrence untouched**. One click on the app's own list and the series believes it was completed while the to-do the user still has to do sits open in Today, orphaned from a rule that has moved on (CNCAC1 §7.4).
+
+**Expected**, restated: either disable both affordances while `rt1_nextInstanceStartDate` is NULL — the honest answer, and the app already knows the state well enough to label the row *Waiting* — or treat the gesture as "complete the current occurrence", which is what a user pressing a checkbox on a series with one unfinished copy means.
+
+## 19. Things 3.23: `Create Next Copy` on a PAUSED series defeats the pause and destroys the series' place in its cycle (CNCAC1, 2026-08-24, golden-v4 / Things 3.23 build 32300036)
+
+Pausing a repeating to-do clears its cursor (`rt1_nextInstanceStartDate → NULL`, `rt1_instanceCreationPaused → 1`) and the series stops spawning — the reversible, non-destructive "hold this" primitive. The `Items ▸ Repeat` submenu in that state swaps `Pause` for `Resume` and otherwise keeps every item, **including `Create Next Copy`, present and enabled**:
+
+```
+Items ▸ Repeat = Edit Rule… · (sep) · Show Previous Copy · Create Next Copy · (sep) · Resume · Stop
+```
+
+**Probe (CNCAC1 cell P).** An after-completion series, its seed occurrence completed on 2026-07-05 so the series is anchored (`acRef = 2026-07-05`) with a derived cursor (`next = 2026-07-12`), then paused — which clears the cursor and leaves no open occurrence. One press of `Create Next Copy`:
+
+```
+INSERTED row XWFeVH9Q…  status = 0  start = 2  startDate = 2026-07-12   <- the cursor the PAUSE removed
+                        creationDate = the gesture ; rt1_instanceCreationCount = 0
+CHANGED template.rt1_afterCompletionReferenceDate : 2026-07-05 -> None
+CHANGED template.rt1_instanceCreationCount        : 1 -> 2
+(rt1_instanceCreationPaused stays 1)
+```
+
+Two things are wrong with that. **A paused series produced an occurrence** — the user asked for the series to stop producing them, and one menu item that says nothing about resuming produced one anyway, while the paused flag stays set so the UI still reports the series as paused. And **the anchor is consumed**: the app re-derived the date from `rt1_afterCompletionReferenceDate` and then cleared it, so the series is now paused with neither an anchor nor a cursor — it has forgotten where it was in its cycle, and what `Resume` can reconstruct from that state is unclear (untested, and not obviously anything).
+
+The pause otherwise holds: rolling to 2026-07-12 spawns nothing on this series (`icCount` unmoved, `paused` still 1) while the watermark drifts.
+
+**Expected:** `Create Next Copy` should be disabled on a paused series, or should say that it will resume it. **Actual:** it silently produces an occurrence and discards the series' cycle position.
+
+**Automation note:** the shipped composite refuses a series with no cursor and names `things todo resume-repeat` as the remedy, rather than guessing at what "check this off" means for a series the user deliberately paused. Evidence: [lab/cncac1-after-completion-checkoff.md](lab/cncac1-after-completion-checkoff.md) §8.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

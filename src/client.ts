@@ -567,9 +567,9 @@ export interface ThingsClient {
      * itself alone — the app's "make a one-time exception". The occurrence is
      * created if the series has not spawned it yet, then the patch is applied to
      * it. Refuses when the requested day is one the series already lands on (the
-     * app would leave two copies there), when the series repeats a fixed time
-     * after each completion (it has no upcoming occurrence until the current one
-     * is done), and for repeating projects. Undo restores the occurrence's own
+     * app would leave two copies there), when the series has no upcoming
+     * occurrence at all — a paused one, or one whose current copy is still
+     * unfinished — and for repeating projects. Undo restores the occurrence's own
      * change but cannot remove the occurrence or rewind the series.
      */
     updateTodoOccurrence(

@@ -226,15 +226,26 @@ function addDays(iso: string, days: number): string {
   return t.toISOString().slice(0, 10);
 }
 
-/** A weekly-Sunday series whose pending occurrence is 2026-07-12. */
-function seedSeries(opts: { withOpenInstance?: boolean; ruleXml?: string } = {}): {
+/**
+ * A weekly-Sunday series whose pending occurrence is 2026-07-12.
+ *
+ * `cursor` overrides the derived one. It matters for after-completion rules,
+ * which CNCAC1 measured in BOTH states: NULL while the current occurrence is
+ * still unfinished, and a real derived date the moment it is resolved — the
+ * second being the shape whose projection Upcoming renders and the GUI checks
+ * off, and the one the shipped composite must therefore handle.
+ */
+function seedSeries(
+  opts: { withOpenInstance?: boolean; ruleXml?: string; cursor?: string | null } = {},
+): {
   template: string;
   instance: string | null;
 } {
+  const derived = opts.ruleXml === AFTER_COMPLETION_XML ? null : "2026-07-12";
   const template = seedTodo(fixture.db, {
     title: "Water plants",
     recurrenceRuleXml: opts.ruleXml ?? WEEKLY_SUNDAY_XML,
-    nextInstanceStartDate: opts.ruleXml === AFTER_COMPLETION_XML ? null : "2026-07-12",
+    nextInstanceStartDate: opts.cursor === undefined ? derived : opts.cursor,
     instanceCreationCount: 1,
   });
   const instance =
@@ -324,8 +335,11 @@ describe("complete/cancel on a repeating to-do — the CNC composite", () => {
     expect(warningsOf(result).join(" ")).toContain("the next occurrence is 2026-07-19");
   });
 
-  it("refuses an after-completion series with no unfinished occurrence (CNC1 §5)", async () => {
-    const { template } = seedSeries({ ruleXml: AFTER_COMPLETION_XML });
+  it("refuses a series with NO CURSOR — there is nothing to bring forward (CNCAC1 §6)", async () => {
+    // The refusal is keyed on the missing cursor, not on the rule kind: it is
+    // exactly the state in which `Create Next Copy` duplicates the current
+    // occurrence instead of materializing a pending one (oddities §18).
+    const { template } = seedSeries({ ruleXml: AFTER_COMPLETION_XML, cursor: null });
     const cnc = cncVector(() => template);
     const result = await runCompleteWithDate(
       deps([urlVector().vector, cnc.vector]),
@@ -336,9 +350,60 @@ describe("complete/cancel on a repeating to-do — the CNC composite", () => {
     );
 
     expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("no upcoming occurrence");
     expect(cnc.state.calls, "nothing may be created for a rule with no upcoming occurrence").toBe(
       0,
     );
+  });
+
+  it("an AFTER-COMPLETION series with a derived cursor is resolved, not refused (CNCAC1 §4)", async () => {
+    // The shape the maintainer hit live: the current copy is done, so the app
+    // has anchored the series and derived a real next date, and Upcoming draws
+    // a projection the GUI checks off. CNCAC1 measured CNC + the status write
+    // reproducing that gesture, with no duplicate.
+    const { template } = seedSeries({ ruleXml: AFTER_COMPLETION_XML, cursor: "2026-07-12" });
+    const cnc = cncVector(() => template);
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      {},
+    );
+
+    expect(result.kind).toBe("ok");
+    expect(cnc.state.calls).toBe(1);
+    expect(statusOf(cnc.state.mintedUuids[0] as string)).toBe(3);
+    expect(warningsOf(result).join(" ")).toContain("checked off the 2026-07-12 occurrence");
+    expect(
+      warningsOf(result).join(" "),
+      "an after-completion series restarts its interval from the completion",
+    ).toContain("restarted the interval from today");
+  });
+
+  it("names RESUME as the remedy when the cursor is missing because the series is paused", async () => {
+    const template = seedTodo(fixture.db, {
+      title: "Water plants",
+      recurrenceRuleXml: WEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: null,
+      instanceCreationPaused: true,
+      instanceCreationCount: 1,
+    });
+    const cnc = cncVector(() => template);
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      {},
+    );
+
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("paused");
+      expect(result.remediation).toContain("resume-repeat");
+    }
+    expect(cnc.state.calls).toBe(0);
   });
 
   it("an after-completion series WITH an open occurrence resolves it normally", async () => {
@@ -451,8 +516,8 @@ describe("update --exception on a repeating to-do", () => {
     expect(result.kind).toBe("ok");
   });
 
-  it("refuses an after-completion series outright (CNC1 §5 / oddities §18)", async () => {
-    const { template } = seedSeries({ ruleXml: AFTER_COMPLETION_XML });
+  it("refuses a CURSOR-LESS series outright (CNC1 §5 / CNCAC1 §6 / oddities §18)", async () => {
+    const { template } = seedSeries({ ruleXml: AFTER_COMPLETION_XML, cursor: null });
     const cnc = cncVector(() => template);
     const result = await runTemplateExceptionWrite(
       deps([urlVector().vector, cnc.vector]),
@@ -462,8 +527,26 @@ describe("update --exception on a repeating to-do", () => {
     );
 
     expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") expect(result.remediation).toContain("reschedule-repeat");
+    if (result.kind === "blocked") expect(result.detail).toContain("no upcoming occurrence");
     expect(cnc.state.calls).toBe(0);
+  });
+
+  it("an after-completion series with a cursor takes an exception — no slot can collide", async () => {
+    // CNCAC1 §7: an after-completion rule owns exactly ONE future date, the
+    // cursor this mint consumes, so the live-slot check has nothing to check and
+    // must not degrade into the undecodable-rule refusal.
+    const { template } = seedSeries({ ruleXml: AFTER_COMPLETION_XML, cursor: "2026-07-12" });
+    const cnc = cncVector(() => template);
+    const result = await runTemplateExceptionWrite(
+      deps([urlVector().vector, cnc.vector]),
+      template,
+      { when: "2026-07-15" },
+      {},
+    );
+
+    expect(result.kind).toBe("ok");
+    expect(cnc.state.calls).toBe(1);
+    expect(warningsOf(result).join(" ")).toContain("changed only the 2026-07-12 occurrence");
   });
 
   it("a non-dated schedule value cannot collide, so it is not refused", async () => {
