@@ -431,7 +431,7 @@ export {
   witnessSessionGrant,
 } from "./session-grant.ts";
 export type { SessionGrantDeps, SessionGrantMarker, SessionGrantVerdict } from "./session-grant.ts";
-export { directSetup, surveySetup } from "./direct-setup.ts";
+export { ContainerOpenTimedOut, directSetup, surveySetup } from "./direct-setup.ts";
 export { CeremonyStopped, createWizard, withDefaultInterrupts } from "./wizard.ts";
 export type { Wizard, WizardDeps } from "./wizard.ts";
 export type {

@@ -10,7 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { directSetup, surveySetup, type DirectSetupDeps } from "../../src/direct-setup.ts";
+import {
+  ContainerOpenTimedOut,
+  directSetup,
+  surveySetup,
+  type DirectSetupDeps,
+} from "../../src/direct-setup.ts";
 import { resetCapabilityForTests } from "../../src/capability.ts";
 import { CeremonyStopped, createWizard } from "../../src/wizard.ts";
 
@@ -243,20 +248,51 @@ describe("leg (a) — read access", () => {
     expect(result.steps.find((s) => s.leg === "read-access")?.state).toBe("granted");
   });
 
-  it("stays pending — never claims a grant — when the dialog goes unanswered", () => {
-    const result = directSetup(
-      ceremony({
-        openContainer: () => {
-          throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
-        },
-      }),
-    );
+  it("stays pending — never claims a grant — when the open is refused", () => {
+    const result = directSetup(ceremony());
     const step = result.steps.find((s) => s.leg === "read-access");
     expect(step?.state).toBe("pending");
     // One line, naming the Full Disk Access alternative and the helpers.
     expect(step?.detail).toContain("Full Disk Access");
     expect(step?.detail).toContain("things helpers setup");
     expect(step?.detail.split("\n")).toHaveLength(1);
+    // APDP1 stage B: a refusal is recorded against the host app INSTANCE, and
+    // every later open under it fails silently — only a relaunch is asked again.
+    expect(step?.detail).toContain("quit and reopen Ghostty");
+  });
+
+  // The provoking open runs in a bounded child (APDP1): the grant belongs to the
+  // host app, not to the pid that asked, so the ceremony can give up on it.
+  it("hands the seam a deadline — the default, and whatever the caller injects", () => {
+    const seen: number[] = [];
+    directSetup(ceremony({ openContainer: (ms) => seen.push(ms) }));
+    expect(seen).toEqual([60_000]);
+    directSetup(ceremony({ containerOpenTimeoutMs: 1234, openContainer: (ms) => seen.push(ms) }));
+    expect(seen).toEqual([60_000, 1234]);
+  });
+
+  it("an unanswered dialog is reported as still waiting, not as a refusal", () => {
+    const lines: string[] = [];
+    const deps = ceremony({
+      progress: (line) => lines.push(line),
+      openContainer: (ms) => {
+        throw new ContainerOpenTimedOut(ms);
+      },
+    });
+    const result = directSetup(deps);
+    const step = result.steps.find((s) => s.leg === "read-access");
+    expect(step?.state).toBe("pending");
+    expect(result.denied).toBe(false);
+    // APDP1 stage A: the dialog outlives the child that provoked it, and a late
+    // Allow still lands the grant — so the copy sends the human back to it.
+    expect(step?.detail).toContain("the dialog is still waiting");
+    expect(step?.detail).toContain("rerun `things setup`");
+    expect(step?.detail.split("\n")).toHaveLength(1);
+    expect(lines.some((l) => l.includes("the dialog is still on screen"))).toBe(true);
+    // Nothing may be claimed: no marker survives a wait that decided nothing.
+    expect(existsSync(join(deps.env?.["THINGS_API_STATE_DIR"] ?? "", "session-grant.json"))).toBe(
+      false,
+    );
   });
 });
 

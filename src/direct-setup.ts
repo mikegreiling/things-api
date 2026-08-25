@@ -19,6 +19,17 @@
  *     instead: durable, but it hands the whole disk to a general-purpose host
  *     app, so it is offered, never assumed.
  *
+ *     The provoking open runs in a BOUNDED CHILD process, because macOS parks
+ *     the requesting syscall in the kernel until someone answers the dialog —
+ *     an in-process open would park the ceremony itself for as long as the
+ *     dialog stands. MEASURED (APDP1, docs/lab/apdp1-grant-pinning.md): the
+ *     app-data grant is keyed to the RESPONSIBLE APP INSTANCE, not to the pid
+ *     that opened the file, so what a child provokes belongs to the host app
+ *     and outlives that child — every later process under the same host app
+ *     reads without a dialog. Killing the child at the deadline takes neither
+ *     the dialog nor the grant away: a human who answers Allow afterwards still
+ *     grants the host app, and the next run witnesses it.
+ *
  *     MEASURED: FDA does NOT take effect for a running app. macOS says so in
  *     the Settings sheet itself — "…will not have full disk access until it is
  *     quit", with Later / Quit & Reopen — and the responsible process keeps its
@@ -53,7 +64,7 @@
  * inside this ceremony only.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, openSync, closeSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,6 +92,33 @@ const AUTOMATION_SETTINGS_URL =
 const SHORTCUTS_DIR = fileURLToPath(new URL("../shortcuts", import.meta.url));
 
 const AUTOMATION_TIMEOUT_MS = 60_000;
+/** How long the read leg waits for the app-data dialog before giving up. */
+const CONTAINER_OPEN_TIMEOUT_MS = 60_000;
+
+/**
+ * The bounded child's whole job: one `open(2)` against the container, then
+ * exit. A dynamic import so the same source runs whether node evaluates `-e`
+ * as CommonJS or as an ES module; the failure path writes ONLY the errno
+ * message, because an unhandled rejection would dump a stack trace whose first
+ * line is a node internal rather than the reason.
+ */
+const CONTAINER_OPEN_CHILD =
+  'import("node:fs").then((fs) => fs.closeSync(fs.openSync(process.argv[1], "r")))' +
+  ".catch((e) => { process.stderr.write(String((e && e.message) || e)); process.exit(1); });";
+
+/**
+ * The deadline passed with the app-data dialog still unanswered. Distinct from
+ * a refusal: nothing was decided, the dialog is still on screen, and answering
+ * it later still lands the grant on the host app (APDP1 stage A).
+ */
+export class ContainerOpenTimedOut extends Error {
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number) {
+    super(`the app-data dialog was not answered within ${Math.round(timeoutMs / 1000)}s`);
+    this.name = "ContainerOpenTimedOut";
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 /** The key that picks Full Disk Access over the session grant at the read leg. */
 const FDA_CHOICE_KEY = "f";
@@ -126,8 +164,15 @@ export interface DirectSetupDeps extends CapabilityDeps {
   openUrl?: (url: string) => void;
   /** Send the real Apple Event that mints an Automation grant. Throws on failure. */
   sendAutomationProbe?: (timeoutMs: number) => void;
-  /** Open the container database once, deliberately, to provoke the app-data modal. */
-  openContainer?: () => void;
+  /**
+   * Open the container database once, deliberately, to provoke the app-data
+   * modal, waiting no longer than `timeoutMs` for it to be answered. Throws
+   * {@link ContainerOpenTimedOut} at the deadline and any other error when the
+   * open itself failed.
+   */
+  openContainer?: (timeoutMs: number) => void;
+  /** How long the read leg waits for the app-data dialog (default 60s). */
+  containerOpenTimeoutMs?: number;
   /** Open one shortcut's install sheet. */
   openShortcut?: (file: string) => void;
   /** The installed proxy-shortcut census (availability.ts). */
@@ -143,14 +188,48 @@ function openUrlBestEffort(url: string): void {
   }
 }
 
+/** First line of whatever a failed child wrote to stderr. */
+function firstStderrLine(err: unknown): string {
+  const e = err as { stderr?: unknown };
+  const text =
+    typeof e.stderr === "string"
+      ? e.stderr
+      : Buffer.isBuffer(e.stderr)
+        ? e.stderr.toString("utf8")
+        : err instanceof Error
+          ? err.message
+          : String(err);
+  return text.trim().split("\n")[0] ?? "";
+}
+
 /**
  * The container open the ceremony performs on purpose. This is the ONE place
  * in the package permitted to do it blind — everywhere else the doctrine's
  * Article I corollary forbids it, because the open is what raises the modal.
+ *
+ * It runs in a CHILD process so the wait has a deadline (see the read-access
+ * note at the top of this file): macOS holds the open in the kernel for as long
+ * as the dialog stands, and the grant it lands belongs to the host app rather
+ * than to the pid that asked, so nothing is lost by giving up on the child.
  */
-function openContainerDefault(): void {
-  const fd = openSync(locateThingsDb().path, "r");
-  closeSync(fd);
+function openContainerDefault(timeoutMs: number): void {
+  const path = locateThingsDb().path;
+  try {
+    execFileSync(process.execPath, ["-e", CONTAINER_OPEN_CHILD, path], {
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    });
+  } catch (err) {
+    const e = err as { code?: unknown; killed?: boolean; signal?: string | null };
+    // spawnSync reports a deadline kill as ETIMEDOUT, as `killed`, or as the
+    // kill signal itself, depending on where it noticed — all three mean the
+    // dialog outlived the wait.
+    if (e.code === "ETIMEDOUT" || e.killed === true || e.signal === "SIGKILL") {
+      throw new ContainerOpenTimedOut(timeoutMs);
+    }
+    throw new Error(firstStderrLine(err) || "the container could not be opened", { cause: err });
+  }
 }
 
 function sendAutomationProbeDefault(timeoutMs: number): void {
@@ -213,9 +292,10 @@ function fdaBranch(
 
 /**
  * The default branch: provoke the app-data modal on purpose and record the
- * grant only if the open then actually succeeded. The wait is the modal's own —
- * macOS holds the open until someone answers it, which is the premise of a
- * ceremony.
+ * grant only if the open then actually succeeded. The wait is BOUNDED — the
+ * open runs in a child process the ceremony can give up on, and giving up
+ * costs nothing, because a dialog answered afterwards still grants the host
+ * app (APDP1).
  */
 function sessionGrantBranch(
   base: { leg: "read-access"; label: string },
@@ -229,9 +309,25 @@ function sessionGrantBranch(
   );
   const host = hostApp(deps);
   try {
-    (deps.openContainer ?? openContainerDefault)();
+    (deps.openContainer ?? openContainerDefault)(
+      deps.containerOpenTimeoutMs ?? CONTAINER_OPEN_TIMEOUT_MS,
+    );
   } catch (err) {
     clearSessionGrant(deps.env ?? process.env);
+    if (err instanceof ContainerOpenTimedOut) {
+      // Nothing was decided and the dialog is still up: say so, because the
+      // human's next click still lands the grant on this same host app.
+      progress("read access: no answer yet — the dialog is still on screen");
+      return {
+        ...base,
+        state: "pending",
+        alreadySatisfied: false,
+        detail:
+          `the dialog is still waiting — click Allow and rerun \`things setup\` to confirm it, ` +
+          "choose Full Disk Access at the read step instead, or run `things helpers setup` to " +
+          "let a helper hold the grant",
+      };
+    }
     const why = err instanceof Error ? err.message : String(err);
     progress(`read access: still no access — ${why}`);
     return {
@@ -239,8 +335,9 @@ function sessionGrantBranch(
       state: "pending",
       alreadySatisfied: false,
       detail:
-        "no read access yet — rerun and answer the dialog, choose Full Disk Access at the " +
-        "read step instead, or run `things helpers setup` to let a helper hold the grant",
+        `no read access yet — a refusal stands for as long as this ${hostName} instance runs, ` +
+        `so quit and reopen ${hostName} to be asked again, choose Full Disk Access at the read ` +
+        "step instead, or run `things helpers setup` to let a helper hold the grant",
     };
   }
   const witnessed = witnessSessionGrant(host.bundleId ?? "", deps);
