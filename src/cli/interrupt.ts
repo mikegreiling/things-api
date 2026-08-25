@@ -38,14 +38,21 @@
  * the CORRECT outcome for a read: there is nothing to report (the report builder
  * returns null with no write in flight) and nothing to unwind.
  *
- * KNOWN RESIDUAL: a write invocation is armed from the top of its driver, which
- * includes the synchronous `openThings` — the read gate's `open(2)` on the
- * container, the same call that can block. So a WRITE command stalled there
- * still swallows SIGTERM, where a read no longer does. Narrowing further (arming
- * past the client open, or only once the pipeline's in-flight marker is set)
- * would close it, at the cost of the pre-write window's `signal` trace entry;
- * that trade wants a ruling, since it is the one window where the guard is armed
- * but has nothing to report anyway.
+ * ## The write path arms PAST the client open (residual closed, 2026-08-25)
+ *
+ * A write driver used to arm from its top, which put the synchronous
+ * `openThings` — the read gate's `open(2)` on the container, the same call that
+ * can block — INSIDE the armed span: a write stalled there swallowed SIGTERM
+ * where a read no longer did (measured exit 137 after 10 s against a FIFO
+ * standing in for the TCC-held open). {@link armInterrupt} is now called once
+ * `openThings` has RETURNED — the single seam is `beginWriteInvocation`'s
+ * `openClient` in `commands/writes.ts`, which every driver goes through — so
+ * that same repro dies to the caller's own TERM (124 after 5 s).
+ *
+ * The cost is the pre-write window's `signal` trace entry, ruled EXPENDABLE: it
+ * is a dev-build diagnostic in the one window where the guard is armed but has
+ * nothing to report anyway (no client, so nothing can be in flight, so
+ * {@link interruptReport} returns null). Killability wins.
  */
 import { errorEnvelope, getInflight, trace, tracePath, type InflightWrite } from "../index.ts";
 
@@ -73,8 +80,10 @@ function uninstall(): void {
 }
 
 /**
- * Arm the guard for a write invocation (call at the top of the write driver):
- * registers the handlers for the span of the write and records whether its
+ * Arm the guard for a write invocation — call it once the client open has
+ * RETURNED, never before (that open can block, and a listener across a blocking
+ * span swallows the signal instead of honoring it; see the module note).
+ * Registers the handlers for the span of the write and records whether its
  * stdout is machine-readable. Idempotent within a span.
  */
 export function armInterrupt(json: boolean): void {

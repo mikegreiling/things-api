@@ -152,4 +152,27 @@ describe("arming lifecycle — listeners exist only while a write is in flight",
     expect(main).not.toContain("installServerSignalHandlers");
     expect(main).not.toContain("armInterrupt");
   });
+
+  it("the write drivers arm PAST the client open, through one seam", () => {
+    const writes = readFileSync(
+      new URL("../../src/cli/commands/writes.ts", import.meta.url),
+      "utf8",
+    );
+    // The residual this closes: arming from the top of the driver put the
+    // synchronous `openThings` inside the armed span, so a WRITE stalled in the
+    // container's open(2) swallowed SIGTERM too (measured 137 after 10s against
+    // a FIFO; 124 after 5s once the arm moved past the open).
+    //
+    // (a) Exactly one arm and one open in the whole file, so no driver can grow
+    //     its own pre-open arm...
+    expect(writes.match(/\barmInterrupt\(/g)).toHaveLength(1);
+    expect(writes.match(/\bopenThings\(/g)).toHaveLength(1);
+    // (b) ...and in that one seam the open comes FIRST.
+    const open = writes.indexOf("openThings(");
+    const arm = writes.indexOf("armInterrupt(");
+    expect(open).toBeGreaterThan(-1);
+    expect(arm).toBeGreaterThan(open);
+    // (c) The seam is what the drivers actually call to get their client.
+    expect(writes).toMatch(/client = openClient\(/);
+  });
 });

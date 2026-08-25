@@ -5,6 +5,9 @@
  * `--json` interrupted envelope. These run real writes through the simulator
  * vector with tracing forced on, and assert each driver opened a trace, closed
  * it with an `invocation-end`, armed the guard, and disarmed it on the way out.
+ *
+ * The arm POSITION is part of the contract: it happens past the client open, so
+ * a write stalled in the container's blocking `open(2)` still dies to a signal.
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -131,6 +134,20 @@ describe("write drivers install the trace and arm the interrupt guard", () => {
     expect(process.exitCode).toBe(2);
     expectTracedAndGuarded();
     expect(traceEvents().at(-1)).toMatchObject({ phase: "invocation-end", exitCode: 2 });
+  });
+
+  it("a driver whose client open FAILS never arms — the guard sits PAST the open", async () => {
+    // The arm seam is `beginWriteInvocation`'s `openClient`, which arms only
+    // once `openThings` has RETURNED: the container's open(2) is synchronous and
+    // can block indefinitely behind a TCC dialog, and a listener across that
+    // span swallows SIGTERM instead of honoring it (measured 137 after 10s).
+    // An open that throws is the observable proxy — nothing was armed for it.
+    await run(["todo", "add", "Unopenable", "--db", join(stateDir, "absent.sqlite"), "--json"]);
+    expect(process.exitCode).not.toBe(0);
+    expect(vi.mocked(armInterrupt)).not.toHaveBeenCalled();
+    // The teardown still runs, so the trace is closed and the disarm is a no-op.
+    expect(vi.mocked(disarmInterrupt)).toHaveBeenCalledTimes(1);
+    expect(traceEvents().at(-1)).toMatchObject({ phase: "invocation-end" });
   });
 
   it("leaves no signal listener behind — the span really is the write's", async () => {
