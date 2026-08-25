@@ -1,0 +1,115 @@
+#!/usr/bin/osascript -l JavaScript
+// Renders the GitHub social-preview card (1280×640 PNG) for this repo: the
+// `✓_` mark over the project name and one line of description, on a dark plate
+// that reads the same under GitHub's light and dark themes.
+//
+// The mark itself is never redrawn here — it is composited from a PNG rendered
+// by scripts/generate-helper-icon.jxa, so the card and the app icon can never
+// drift apart.
+//
+// Usage:
+//   osascript -l JavaScript scripts/generate-helper-icon.jxa /tmp/icon.png 1024
+//   osascript -l JavaScript scripts/generate-social-preview.jxa /tmp/icon.png assets/things-api-social-preview-1280x640.png
+//
+// GitHub has no API for the social preview — the maintainer uploads the result
+// by hand under Settings ▸ General ▸ Social preview.
+ObjC.import("Cocoa");
+
+const W = 1280;
+const H = 640;
+
+// The icon master carries ~9.8% transparent margin on every side (the macOS
+// icon grid), so the box is drawn larger than the plate you see.
+const ICON_BOX = 340;
+const NAME = "things-api";
+const TAGLINE = "A typed TypeScript library + CLI for Things 3";
+
+// AppKit's attribute-name globals are not always bridged into JXA; their
+// values are these literals.
+function attrKey(name, literal) {
+  return $[name] === undefined ? $(literal) : $[name];
+}
+
+function attributes(font, color) {
+  const dict = $.NSMutableDictionary.dictionary;
+  dict.setObjectForKey(font, attrKey("NSFontAttributeName", "NSFont"));
+  dict.setObjectForKey(color, attrKey("NSForegroundColorAttributeName", "NSColor"));
+  return dict;
+}
+
+function run(argv) {
+  const icon = argv[0];
+  const out = argv[1];
+  if (!icon || !out) {
+    throw new Error("usage: generate-social-preview.jxa <icon.png> <out.png>");
+  }
+
+  const image = $.NSImage.alloc.initWithContentsOfFile(icon);
+  if (!image.isValid) throw new Error("could not read icon " + icon);
+
+  const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(
+    $(), W, H, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0,
+  );
+  const ctx = $.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep);
+  $.NSGraphicsContext.saveGraphicsState;
+  $.NSGraphicsContext.setCurrentContext(ctx);
+
+  // Ground: the plate blue taken down to a near-black navy, so the mark keeps
+  // its contrast and the card sits well against either GitHub theme.
+  $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.043, 0.075, 0.133, 1.0).setFill;
+  $.NSBezierPath.fillRect($.NSMakeRect(0, 0, W, H));
+
+  const nameAttrs = attributes(
+    $.NSFont.systemFontOfSizeWeight(88, 0.3),
+    $.NSColor.colorWithSRGBRedGreenBlueAlpha(1, 1, 1, 1),
+  );
+  const taglineAttrs = attributes(
+    $.NSFont.systemFontOfSizeWeight(34, 0.0),
+    $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.68, 0.76, 0.88, 1.0),
+  );
+
+  const name = $.NSString.alloc.initWithUTF8String(NAME);
+  const tagline = $.NSString.alloc.initWithUTF8String(TAGLINE);
+  const nameSize = name.sizeWithAttributes(nameAttrs);
+  const taglineSize = tagline.sizeWithAttributes(taglineAttrs);
+
+  // One centred column: mark, name, tagline. The column is balanced on the
+  // plate you can see, not on the icon's box, or the card sits low.
+  const plate = ICON_BOX * (824 / 1024);
+  const bleed = (ICON_BOX - plate) / 2;
+  const gapAfterIcon = 16;
+  const gapAfterName = 6;
+  const total = plate + gapAfterIcon + nameSize.height + gapAfterName + taglineSize.height;
+  let top = (H - total) / 2; // distance from the top edge
+
+  image.drawInRectFromRectOperationFraction(
+    $.NSMakeRect((W - ICON_BOX) / 2, H - (top - bleed) - ICON_BOX, ICON_BOX, ICON_BOX),
+    $.NSMakeRect(0, 0, 0, 0),
+    $.NSCompositingOperationSourceOver,
+    1.0,
+  );
+  top += plate + gapAfterIcon;
+
+  name.drawInRectWithAttributes(
+    $.NSMakeRect((W - nameSize.width) / 2, H - top - nameSize.height, nameSize.width, nameSize.height),
+    nameAttrs,
+  );
+  top += nameSize.height + gapAfterName;
+
+  tagline.drawInRectWithAttributes(
+    $.NSMakeRect(
+      (W - taglineSize.width) / 2,
+      H - top - taglineSize.height,
+      taglineSize.width,
+      taglineSize.height,
+    ),
+    taglineAttrs,
+  );
+
+  ctx.flushGraphics;
+  $.NSGraphicsContext.restoreGraphicsState;
+
+  const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $());
+  if (!png.writeToFileAtomically($(out), true)) throw new Error("could not write " + out);
+  return "wrote " + out;
+}

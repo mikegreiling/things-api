@@ -19,6 +19,8 @@
 
   The second cause only showed up when a command changed the frequency — weekly to daily, say — on an existing series. Changing it rebuilds that whole row of the dialog, and the next step was typing into a box that was in the middle of being replaced. That step now waits for the dialog to stop changing before it touches anything, by watching the dialog itself rather than pausing for a guessed length of time. It comes with a second benefit: which box is which depends on where they sit, so choosing from a settled layout instead of a moving one is also the more reliable way to tell the interval from the ends-after count.
 
+- The project page now carries the mark. The `✓_` icon sits above the README title, and a matching 1280×640 card ships in `assets/` for GitHub's social preview. Both are rendered from the artwork the helper bundle's icon is drawn from — `scripts/generate-helper-icon.jxa` gained an optional output size (the default 1024 master is byte-identical), and `scripts/generate-social-preview.jxa` composites that render onto the card — so the page and the app icon cannot drift apart.
+
 ## 0.19.0 — 2026-08-25
 
 - The helper bundle's icon is redrawn around a single `✓_`: a greater-than sign tilted until it reads as a checkmark, trailed by an underscore on the same baseline, so one mark is both a completed to-do and a shell prompt. It replaces the large checkmark that had a small `>_` crowded underneath it, overlapping the check and illegible at the sizes that matter — the new motif holds together down to the 16pt rows in System Settings' Automation and Accessibility lists. Rerun `bash scripts/build-helpers.sh && things helpers setup` to pick it up.
