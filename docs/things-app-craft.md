@@ -125,7 +125,7 @@ B's row was the **later arriver** (it stayed offline until after A had pushed) a
 
 ## 5. Ordering craft
 
-The private `_private_experimental_ reorder` command and the `when=`/`deadline=` bounce family are, on the container surfaces, more principled than "experimental" suggests. (The *aggregate* specifiers — `list "Anytime"`, `list "Upcoming"`, `area` — carry the destructive side effects catalogued in oddities §9c/§9f/§9g; those are the bugs. This section is only the parts that are clean.)
+The private `_private_experimental_ reorder` command and the `when=`/`deadline=` bounce family are, on the container surfaces, more principled than "experimental" suggests. (The *aggregate* specifiers — `list "Anytime"`, `list "Upcoming"`, `area` — carry the destructive side effects catalogued in oddities §9c/§9f/§9g; those are the bugs. This section is only the parts that are clean.) §5c is the GUI-side ordering primitive that outclasses all of them — and whose only flaw is that nothing tells the user it exists (oddities §20).
 
 ### 5a. `list "Tomorrow"` is a clean one-call, exact-order, minimum-write day sorter
 
@@ -134,6 +134,25 @@ The private `_private_experimental_ reorder` command and the `when=`/`deadline=`
 ### 5b. The container-specifier reorder is deterministic and state-preserving, with a coherent anchor-stack protocol
 
 On a *container* specifier (`reorder to dos in project id …` / `area …`) the command is deterministic and faithful — it re-ranks `index` (or `todayIndex`, date-preservingly) into the exact requested order and preserves the container FK. Its front-insert geometry is internally consistent enough to build exact-order protocols on: the `when=` bounce **front-inserts** a loose/area-direct member at the group `index` minimum and **back-inserts** a container child at the group end, both fully deterministic and both preserving `start`, the container FK, `reminderTime`, and `deadline` — so a reverse-order (front-insert) or forward-order (back-insert) leg sequence lands any target order exactly. `list "Someday"` even carries a distinct but coherent **anchor-stack** model (the call's original top item never moves; to-dos stack ascending, someday projects descending), which is unusual but self-consistent across the two-call protocol. The determinism is the craft — it is precisely what the aggregate specifiers lack. Evidence: [reference/novel-paths.md](reference/novel-paths.md) #1 (the private reorder + anchor-stack), #37 (SOMEBNC front/back-insert split), #48 (DAYBNC); [lab/reordgaps-results.md](lab/reordgaps-results.md) (SOMEBNC / BOUNCE2-h); oddities §9h (the containment-dependent re-entry direction, recorded there as an *inconsistency* note — clean and deterministic, just not uniform).
+
+### 5c. The keyboard reorder writes ONE row — a sparse-index insertion that renumbers nothing and carries the subtree for free
+
+With a heading row selected, `⌘↑`/`⌘↓` move it one slot and `⌘⌥↑`/`⌘⌥↓` move it to the top/bottom of the project's heading list. What makes it the cleanest ordering primitive we have measured anywhere — headless or GUI — is what the write consists of: **the moved row's `index` and nothing else.**
+
+```
+title  uuid8     idx        (after one ⌘↑ on K3, third of five)
+K1     2d9pRAci  -497
+K3     F8qma36g  -357   <- the only row rewritten (was -81)
+K2     HnJhsJkd  -235
+K4     LVC1TPST  -39
+K5     3P9vmFQf  0
+```
+
+The app does not re-sequence the list; it picks a value in the gap between the two rows it is landing between and writes that. `index` is a sparse signed space precisely so that this is always possible, and the design pays off three times over. **No sibling heading is renumbered, and neither is any loose to-do in the project** — contrast the `when=` bounce, which achieves its placement by rewriting every row it did *not* move (BOUNCE2 §9h), and the private container reorder, which restates the whole order. **The moved heading's children are not touched at all** — byte-identical `index` values and a NULL project FK across the move, following the heading through its intact FK exactly as the cross-project move does (HEADXPROJ) — so reordering a section never disturbs the order *inside* it. And because one step is one row, each step is independently verifiable and independently reversible: the inverse chord is an exact inverse, which the bounce protocol conspicuously is not (its recovery leg front-inserts too, so an aborted bounce perturbs the order further rather than restoring it).
+
+The boundary behaviour is equally deliberate. A chord with nowhere to go is **declined — zero delta and one alert beep**, not a wrap, not a silent no-op, and not a nudge into the neighbouring bucket. Validated 1:1: ten `⌘↑` chords fired at a bottom-selected heading produced four moves and exactly six beeps. A heading driven past the project's loose block captures nothing (the loose to-do's heading FK stays NULL), so the gesture cannot accidentally change membership. The one place a chord *does* change membership is a headed **child** driven past its bucket edge, which crosses into the adjacent heading with its `index` preserved — and that is the right answer too, since it is precisely what dragging the row does; it is a hazard for a *driver* (which must fence its chords at the bucket edge), not a defect in the app.
+
+The bounded credit: this is the mechanism, not the affordance. Nothing in the app advertises the chords — no menu item, no context-menu item, no AX action, no key equivalent anywhere in the menu bar — which is the [oddities §20](things-app-oddities.md) report item. The engineering underneath is excellent and the way in is a secret. Evidence: [lab/headord1-heading-order.md](lab/headord1-heading-order.md) §1/§2 (HEADORD1, 2026-08-25; cells 1e / 1g1–1g4 / 1i2 / 1i3, null-controlled). Things 3.23, golden-v4.
 
 ## 6. Repeat craft in the 3.23 dialog
 
