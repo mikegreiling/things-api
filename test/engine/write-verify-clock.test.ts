@@ -15,7 +15,6 @@
  * guaranteeing the injected clock is ahead of the wall clock whenever the suite
  * runs. Before the fix the FUTURE case fails; after it, both verify.
  */
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -27,6 +26,7 @@ import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 // Far enough ahead that the injected clock is ALWAYS in the future relative to
 // the wall clock the suite runs under — this is exactly the condition the bug
@@ -88,8 +88,8 @@ beforeEach(() => {
   savedConfig = process.env["THINGS_API_CONFIG_DIR"];
   process.env["THINGS_SIM_WRITES"] = "1";
   process.env["THINGS_DB"] = fixture.path;
-  process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "vclock-state-"));
-  process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "vclock-config-"));
+  process.env["THINGS_API_STATE_DIR"] = makeTempDir("vclock-state");
+  process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("vclock-config");
 });
 afterEach(() => {
   fixture.close();

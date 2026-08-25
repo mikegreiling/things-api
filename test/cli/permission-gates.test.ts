@@ -8,8 +8,6 @@
  * container access, which is exactly the property under test — and no cell can
  * reach the host's real Things library or its consent state.
  */
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -20,6 +18,7 @@ import { resetCapabilityForTests } from "../../src/capability.ts";
 import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedTodo } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 function runCli(argv: string[]): { stdout: string; stderr: string; exitCode: number } {
   const out: string[] = [];
@@ -60,7 +59,7 @@ const OVERRIDDEN = ["HOME", "THINGS_API_STATE_DIR", "THINGS_API_HELPERS", "THING
 
 beforeEach(() => {
   for (const key of OVERRIDDEN) saved[key] = process.env[key];
-  const sandbox = mkdtempSync(join(tmpdir(), "things-gate-"));
+  const sandbox = makeTempDir("things-gate");
   // No TCC.db under this HOME, so the Full Disk Access check fails; no marker
   // under this state dir, so no witnessed session grant; helpers forced off.
   process.env["HOME"] = sandbox;

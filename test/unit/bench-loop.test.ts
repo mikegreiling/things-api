@@ -5,8 +5,7 @@
  * directly. Covers: allowlist rejection, gate revert, accept/revert tie-breaks,
  * the gui needs-mike path, and the state-file append.
  */
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -71,6 +70,7 @@ import type {
   RefinerOutput,
 } from "../../bench/refiner.ts";
 import type { RunRecord } from "../../bench/types.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 // --- fixtures --------------------------------------------------------------
 
@@ -783,7 +783,7 @@ describe("appendLoopState", () => {
   }
 
   it("creates the file then appends, preserving prior entries", () => {
-    const dir = mkdtempSync(join(tmpdir(), "loop-state-"));
+    const dir = makeTempDir("loop-state");
     const path = join(dir, "loop-state.json");
 
     appendLoopState(path, toStateEntry(makeResult({ iteration: 1 }), "2026-07-17T00:00:00Z"));
@@ -1021,7 +1021,7 @@ describe("extractLessons", () => {
 
 describe("appendLedger idempotence", () => {
   it("creates the arm file, appends once, and never duplicates across re-runs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ledger-"));
+    const dir = makeTempDir("ledger");
     const path = join(dir, "cli.md");
     const batch1 = [
       buildLedgerEntry(iterationResult({ iteration: 1 }), {

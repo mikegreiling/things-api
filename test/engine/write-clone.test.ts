@@ -6,7 +6,6 @@
  * checklist checked-state, terminal state with the exact stopDate, structure),
  * (c) the source is untouched, and (d) the refusal taxonomy.
  */
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -27,6 +26,7 @@ import {
   seedProject,
   seedTodo,
 } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const TODAY = "2026-07-05";
@@ -100,8 +100,8 @@ beforeEach(() => {
   savedConfig = process.env["THINGS_API_CONFIG_DIR"];
   process.env["THINGS_SIM_WRITES"] = "1";
   process.env["THINGS_DB"] = fixture.path;
-  process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "clone-state-"));
-  process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "clone-config-"));
+  process.env["THINGS_API_STATE_DIR"] = makeTempDir("clone-state");
+  process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("clone-config");
   vector = createSimulatorVector(fixture.path, { now: () => NOW });
 });
 function restoreEnv(k: string, v: string | undefined): void {

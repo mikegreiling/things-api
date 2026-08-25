@@ -285,13 +285,13 @@ describe("writeCapability", () => {
 
 // ── fixture helper ───────────────────────────────────────────────────────────
 
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 /** A state dir holding a marker for pid 4242 of Ghostty. */
 function sessionFixture(): string {
-  const dir = mkdtempSync(join(tmpdir(), "things-session-"));
+  const dir = makeTempDir("things-session");
   writeFileSync(
     join(dir, "session-grant.json"),
     JSON.stringify({

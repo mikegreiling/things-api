@@ -11,8 +11,7 @@
  *       nothing) or refuse loudly (mcp), never a silent no-op.
  * The existing write dry-run plans live in test/cli/write-cli.test.ts (untouched).
  */
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +22,7 @@ import { declaresDryRun, stripInertDryRun } from "../../src/cli/dry-run.ts";
 import { resolveInvocation } from "../../src/cli/resolve-invocation.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 /**
  * Normalize the one non-deterministic field (`meta.elapsedMs`, a wall-clock
@@ -167,7 +167,7 @@ describe("local-side-effect commands honor --dry-run", () => {
   const envBackup: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    const stateDir = mkdtempSync(join(tmpdir(), "things-api-universal-dryrun-"));
+    const stateDir = makeTempDir("things-api-universal-dryrun");
     configDir = join(stateDir, "config");
     for (const k of ["THINGS_API_STATE_DIR", "THINGS_API_CONFIG_DIR", "THINGS_API_ACTOR"])
       envBackup[k] = process.env[k];

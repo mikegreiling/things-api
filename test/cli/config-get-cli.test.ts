@@ -3,12 +3,12 @@
  * Config is read from the scratch config dir + env only (no DB), so these run
  * anywhere.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildProgram } from "../../src/cli/main.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 let configDir: string;
 let stdout: string[];
@@ -30,7 +30,7 @@ const ENV_KEYS = [
 ];
 
 beforeEach(() => {
-  const stateDir = mkdtempSync(join(tmpdir(), "things-api-config-get-"));
+  const stateDir = makeTempDir("things-api-config-get");
   configDir = join(stateDir, "config");
   for (const key of ENV_KEYS) envBackup[key] = process.env[key];
   // Clear every THINGS_API_* override so defaults are deterministic.
