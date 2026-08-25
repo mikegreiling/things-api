@@ -12,15 +12,15 @@
  * `add --completed-at/--created-at` is single-leg (json import) and needs NO
  * orchestrator — it folds into `todo.add` / `project.add` directly.
  */
-import type { AuditRecord } from "../audit/schema.ts";
 import type { IsoDate } from "../model/dates.ts";
 import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
 import { taskMembershipClause } from "../read/scope.ts";
 import { resolutionDeltaDate } from "./commands.ts";
 import type { OperationKind } from "./operations.ts";
 import { isRepeatingTemplate, loadTarget, projectChildren } from "./pre-state.ts";
+import { replayIfApplied } from "./opid.ts";
 import {
-  fingerprintLabel,
+  appendCompositeSummary,
   runMutation,
   type MutationResult,
   type WriteDeps,
@@ -108,43 +108,20 @@ function dryRunComposite(
   };
 }
 
-function appendSummary(
-  deps: WriteDeps,
-  args: { startedAt: Date; op: OperationKind; uuid: string; txnId: string; invocation: string },
-): string {
-  const fp = deps.fingerprint();
-  const record: AuditRecord = {
-    v: 1,
-    ts: args.startedAt.toISOString(),
-    actor: deps.config.actor,
-    host: deps.config.host,
-    op: args.op,
-    uuid: args.uuid,
-    vector: "applescript",
-    disruption: 0,
-    invocation: args.invocation,
-    requested: {},
-    txn: { id: args.txnId, role: "summary" },
-    pre: null,
-    observed: { uuid: args.uuid },
-    result: "ok",
-    verify: null,
-    durationMs: (deps.now?.() ?? new Date()).getTime() - args.startedAt.getTime(),
-    env: {
-      pkg: deps.pkgVersion ?? "0.0.1",
-      dbVersion: fp.observation.databaseVersion,
-      fingerprint: fingerprintLabel(fp, deps.config),
-    },
-  };
-  deps.audit.append(record);
-  return args.txnId;
-}
-
 /**
  * Execute a leg sequence: each leg one at a time (the mutation lock + verify
  * must never race), stopping on the first non-ok result and reporting the exact
  * recovery state. On success, append a txn SUMMARY and return an ok result whose
  * undoToken targets the summary (replayed leg-by-leg in reverse).
+ *
+ * NESTED case: when the caller has already grouped this call into a transaction
+ * (`--completed-at` aimed at a REPEATING to-do — the template composite runs the
+ * flip-dance as its status leg), this sequence JOINS that transaction instead of
+ * opening one of its own. Its legs carry the outer txn id and it writes no
+ * second summary, so the outer summary stays the single undoable unit and its
+ * leg lookup finds every flip. Two nested summaries would leave the outer one
+ * looking leg-less — i.e. not undoable — which is precisely the state the outer
+ * result promises against.
  */
 async function runComposite(
   deps: WriteDeps,
@@ -166,7 +143,8 @@ async function runComposite(
       : null;
 
   const startedAt = deps.now?.() ?? new Date();
-  const txnId = newTxnId(startedAt);
+  const inheritedTxn = options.txn?.role === "leg" ? options.txn.id : null;
+  const txnId = inheritedTxn ?? newTxnId(startedAt);
   const disclosure = legs.map((l, i) => `${i + 1}. ${l.describe}`).join(" → ");
   let last: MutationResult | null = null;
   for (let i = 0; i < legs.length; i++) {
@@ -189,13 +167,19 @@ async function runComposite(
       };
     }
   }
-  appendSummary(deps, {
-    startedAt,
-    op: summaryOp,
-    uuid,
-    txnId,
-    invocation: `${summaryOp} (${legs.length}-leg): ${disclosure}`,
-  });
+  if (inheritedTxn === null) {
+    appendCompositeSummary(deps, {
+      startedAt,
+      op: summaryOp,
+      uuid,
+      txnId,
+      invocation: `${summaryOp} (${legs.length}-leg): ${disclosure}`,
+      // The summary is the ONE record this composite's idempotency key belongs
+      // on (the legs run with the key stripped), so a resubmission matches the
+      // whole sequence rather than one flip of it.
+      options,
+    });
+  }
   const ok = last as Extract<MutationResult, { kind: "ok" }>;
 
   // Restore the captured umd once, after the last leg (best-effort, per row).
@@ -350,6 +334,14 @@ async function routeRepeatingSeries(
  * `complete [--completed-at]` for both kinds (plan §2). No timestamp → a single
  * plain `complete` (unchanged). With a timestamp → reach completed (if not
  * already), then AS-backdate the completed row.
+ *
+ * This is a CONSUMER entry point that never reaches the client's single-op
+ * `run`, so the `opId` lookback runs here — for all three shapes it dispatches
+ * (the plain write, the backdating flip-dance, and the repeating-series
+ * composite). It matters most for the last: every re-run of a status write aimed
+ * at a series is a NEW action that materializes the next occurrence, so a retry
+ * without a key mints a duplicate. The leg re-enters this function with the
+ * occurrence's uuid and the key stripped, so it never checks twice.
  */
 export async function runCompleteWithDate(
   deps: WriteDeps,
@@ -358,6 +350,8 @@ export async function runCompleteWithDate(
   args: { completedAt?: string; children?: CompleteChildren },
   options: WriteOptions = {},
 ): Promise<MutationResult> {
+  const replay = replayIfApplied(deps, options);
+  if (replay !== null) return replay;
   const children: CompleteChildren = args.children ?? "require-resolved";
   const routed = await routeRepeatingSeries(
     deps,
@@ -386,6 +380,9 @@ export async function runCompleteWithDate(
  * plain `cancel`. With a timestamp → end canceled with the backdated stopDate:
  * reach completed (unless already), AS-backdate, then flip back to canceled (the
  * flip-dance). Refuses a project whose transit would strand open children.
+ *
+ * Carries the same entry-point `opId` lookback as `runCompleteWithDate`, for the
+ * same reason (a cancel aimed at a series mints too).
  */
 export async function runCancelWithDate(
   deps: WriteDeps,
@@ -394,6 +391,8 @@ export async function runCancelWithDate(
   args: { completedAt?: string; children?: CancelChildren },
   options: WriteOptions = {},
 ): Promise<MutationResult> {
+  const replay = replayIfApplied(deps, options);
+  if (replay !== null) return replay;
   const children: CancelChildren = args.children ?? "require-resolved";
   const routed = await routeRepeatingSeries(
     deps,

@@ -145,7 +145,12 @@ export type {
 export { APPLESCRIPT_MATRIX } from "./write/vectors/applescript.ts";
 export { URL_SCHEME_MATRIX } from "./write/vectors/url-scheme.ts";
 export { dbCarriesBenchMarker, simFenceActive } from "./write/vectors/simulator.ts";
-export type { DeltaSpec, FieldAssertion, RepeatingDiscovery } from "./write/verify/delta.ts";
+export type {
+  DeltaSpec,
+  FieldAssertion,
+  OccurrenceResolution,
+  RepeatingDiscovery,
+} from "./write/verify/delta.ts";
 export type { AuditRecord } from "./audit/schema.ts";
 export type { DisruptionTier, HelpersMode, Profile, ThingsApiConfig } from "./config.ts";
 export { HELPERS_MODES, parseHelpersMode } from "./config.ts";

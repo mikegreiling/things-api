@@ -8,6 +8,7 @@
  * the tally), so every routing decision, refusal and disclosure is exercised
  * without an `open` / osascript / System Events call ever firing.
  */
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -61,13 +62,25 @@ const AFTER_COMPLETION_XML = `<?xml version="1.0" encoding="UTF-8"?>
 
 let fixture: FixtureDb;
 let auditRecords: AuditRecord[];
+let auditDir: string;
 let lockSeq = 0;
 
 beforeEach(() => {
   fixture = buildFixtureDb();
   auditRecords = [];
+  // A REAL trail directory: the `opId` lookback reads the change history off
+  // disk, so the in-memory array alone cannot exercise it.
+  auditDir = mkdtempSync(join(tmpdir(), "things-api-cnc-audit-"));
 });
-afterEach(() => fixture.close());
+afterEach(() => {
+  fixture.close();
+  rmSync(auditDir, { recursive: true, force: true });
+});
+
+/** Append a record to the on-disk trail the way the real writer does. */
+function writeTrail(record: AuditRecord): void {
+  appendFileSync(join(auditDir, "2026-07.jsonl"), `${JSON.stringify(record)}\n`);
+}
 
 function config(): ThingsApiConfig {
   return {
@@ -92,7 +105,13 @@ function deps(vectors: WriteVector[]): WriteDeps {
     db: fixture.db,
     vectors,
     config: config(),
-    audit: { append: (r) => auditRecords.push(r) },
+    audit: {
+      append: (r) => {
+        auditRecords.push(r);
+        writeTrail(r);
+      },
+    },
+    auditDirPath: auditDir,
     fingerprint: (): FingerprintStatus => ({
       kind: "ok",
       observation: { databaseVersion: 27, tables: [], fingerprint: "sha256:test" },
@@ -602,5 +621,254 @@ describe("update --exception on a repeating to-do", () => {
       expect(result.detail).toContain("created but not changed");
       expect(result.detail).toContain(cnc.state.mintedUuids[0] as string);
     }
+  });
+});
+
+// --------------------------------------------- what the result NAMES (#578)
+
+/** The composite's single summary record, or undefined when it wrote none. */
+function summaryRecord(): AuditRecord | undefined {
+  return auditRecords.find((r) => r.txn?.role === "summary");
+}
+function legRecords(): AuditRecord[] {
+  return auditRecords.filter((r) => r.txn?.role === "leg");
+}
+function occurrenceOf(r: MutationResult) {
+  return r.kind === "ok" ? r.occurrence : undefined;
+}
+
+describe("the composite names the occurrence it wrote", () => {
+  it("resolving an already-open occurrence reports it as NOT minted", async () => {
+    const { template, instance } = seedSeries({ withOpenInstance: true });
+    const cnc = cncVector(() => template);
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      {},
+    );
+
+    expect(occurrenceOf(result)).toEqual({
+      templateUuid: template,
+      occurrenceUuid: instance,
+      minted: false,
+      date: "2026-07-05",
+    });
+    expect(result.kind === "ok" && result.uuid, "the result uuid IS the occurrence").toBe(instance);
+  });
+
+  it("a materialized occurrence is reported as minted, with the slot it consumed", async () => {
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      {},
+    );
+
+    expect(occurrenceOf(result)).toEqual({
+      templateUuid: template,
+      occurrenceUuid: cnc.state.mintedUuids[0],
+      minted: true,
+      date: "2026-07-12",
+    });
+  });
+
+  it("an exception names both uuids too (it always mints)", async () => {
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    const result = await runTemplateExceptionWrite(
+      deps([urlVector().vector, cnc.vector]),
+      template,
+      { when: "2026-07-15" },
+      {},
+    );
+
+    expect(occurrenceOf(result)).toEqual({
+      templateUuid: template,
+      occurrenceUuid: cnc.state.mintedUuids[0],
+      minted: true,
+      date: "2026-07-12",
+    });
+  });
+
+  it("records ONE summary keyed by the op-id, carrying the occurrence — the legs carry neither", async () => {
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      { opId: "check-off-1" },
+    );
+
+    const summary = summaryRecord();
+    expect(summary, "a composite must leave one record standing for the whole verb").toBeDefined();
+    expect(summary?.opId).toBe("check-off-1");
+    expect(summary?.occurrence).toEqual(occurrenceOf(result));
+    expect(summary?.uuid, "the summary is addressed to the occurrence").toBe(
+      cnc.state.mintedUuids[0],
+    );
+    expect(auditRecords.filter((r) => r.txn?.role === "summary")).toHaveLength(1);
+    expect(
+      legRecords().map((r) => r.opId),
+      "the key identifies the composite, never a leg",
+    ).toEqual(legRecords().map(() => undefined));
+    expect(
+      result.kind === "ok" && result.undoToken,
+      "the summary is what `things undo` reaches",
+    ).toBe(summary?.txn?.id);
+  });
+});
+
+describe("a backdated status write on a series stays ONE undoable unit", () => {
+  it("--completed-at nests its flip legs into the composite's transaction", async () => {
+    // The status leg re-enters the resolution orchestrator, which is itself a
+    // composite. Left alone it would open a second transaction and write a
+    // second summary, and the OUTER summary — the one `undo` targets — would
+    // find no legs of its own and report itself irreversible.
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    // The backdate leg is an AppleScript write; the fake applies what it was
+    // measured to do (the completed row keeps the backdated stop date).
+    const noonEpoch = Math.floor(new Date(2026, 6, 1, 12, 0, 0).getTime() / 1000);
+    const as: WriteVector = {
+      id: "applescript",
+      matrix: { "todo.set-dates": { support: "yes", disruption: 0, validation: "validated" } },
+      async execute() {
+        fixture.db
+          .prepare("UPDATE TMTask SET status = 3, stopDate = ? WHERE uuid = ?")
+          .run(noonEpoch, cnc.state.mintedUuids[0] as string);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, as, cnc.vector]),
+      "todo",
+      template,
+      { completedAt: "2026-07-01" },
+      {},
+    );
+
+    expect(result.kind).toBe("ok");
+    const summaries = auditRecords.filter((r) => r.txn?.role === "summary");
+    expect(summaries, "exactly one record stands for the whole verb").toHaveLength(1);
+    const txnId = summaries[0]?.txn?.id;
+    expect(
+      legRecords().every((r) => r.txn?.id === txnId),
+      "every leg — the mint and both flips — belongs to that one transaction",
+    ).toBe(true);
+    expect(result.kind === "ok" && result.undoToken).toBe(txnId);
+    expect(occurrenceOf(result)?.minted).toBe(true);
+  });
+});
+
+// ------------------------------------------------- retry safety (--op-id)
+
+describe("--op-id makes a retry safe (no second occurrence)", () => {
+  it("a resubmitted key replays the first result and drives NOTHING", async () => {
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    const url = urlVector();
+    const d = deps([url.vector, cnc.vector]);
+    const first = await runCompleteWithDate(d, "todo", template, {}, { opId: "retry-me" });
+    expect(first.kind).toBe("ok");
+    const writesBefore = url.payloads.length;
+    const recordsBefore = auditRecords.length;
+
+    const second = await runCompleteWithDate(d, "todo", template, {}, { opId: "retry-me" });
+
+    expect(second.kind).toBe("ok");
+    expect(second.kind === "ok" && second.alreadyApplied).toBe(true);
+    expect(occurrenceOf(second), "the replay answers with the SAME occurrence").toEqual(
+      occurrenceOf(first),
+    );
+    expect(cnc.state.calls, "no second occurrence may be materialized").toBe(1);
+    expect(url.payloads.length, "nothing may be dispatched on a replay").toBe(writesBefore);
+    expect(auditRecords.length, "a replay records nothing").toBe(recordsBefore);
+  });
+
+  it("a DIFFERENT key is a new action — it takes the following occurrence", async () => {
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    const d = deps([urlVector().vector, cnc.vector]);
+    await runCompleteWithDate(d, "todo", template, {}, { opId: "first-tick" });
+    const second = await runCompleteWithDate(d, "todo", template, {}, { opId: "second-tick" });
+
+    expect(second.kind === "ok" && second.alreadyApplied).toBeUndefined();
+    expect(cnc.state.calls).toBe(2);
+    expect(occurrenceOf(second)?.occurrenceUuid).toBe(cnc.state.mintedUuids[1]);
+    expect(occurrenceOf(second)?.date, "the series moved on").toBe("2026-07-19");
+  });
+
+  it("an exception replays too — the series does not lose a second slot to a retry", async () => {
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    const d = deps([urlVector().vector, cnc.vector]);
+    const first = await runTemplateExceptionWrite(
+      d,
+      template,
+      { when: "2026-07-15" },
+      {
+        opId: "move-next",
+      },
+    );
+    const second = await runTemplateExceptionWrite(
+      d,
+      template,
+      { when: "2026-07-15" },
+      {
+        opId: "move-next",
+      },
+    );
+
+    expect(second.kind === "ok" && second.alreadyApplied).toBe(true);
+    expect(occurrenceOf(second)).toEqual(occurrenceOf(first));
+    expect(cnc.state.calls).toBe(1);
+  });
+
+  it("a TIMED-OUT original is not replayed (phase 1 matches confirmed changes only)", async () => {
+    // The record says the write was dispatched and never confirmed, so what
+    // landed is unknown — replaying it would claim an occurrence exists that may
+    // not. Phase 1 re-runs instead and leaves reconciliation to the caller (who
+    // can read the outcome back with `things op-result`).
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    writeTrail({
+      v: 1,
+      ts: NOW.toISOString(),
+      actor: "mike",
+      host: "test-host",
+      op: "todo.complete",
+      uuid: "ghost-occurrence",
+      vector: "ui",
+      disruption: 3,
+      invocation: "todo.complete",
+      requested: { uuid: template },
+      txn: { id: "txn-ghost", role: "summary" },
+      opId: "timed-out",
+      pre: null,
+      observed: null,
+      result: "verify-failed:timeout",
+      verify: null,
+      durationMs: 1,
+      env: { pkg: "test", dbVersion: 27, fingerprint: "ok" },
+    });
+
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      { opId: "timed-out" },
+    );
+
+    expect(result.kind === "ok" && result.alreadyApplied).toBeUndefined();
+    expect(cnc.state.calls).toBe(1);
+    expect(occurrenceOf(result)?.occurrenceUuid).toBe(cnc.state.mintedUuids[0]);
   });
 });

@@ -460,6 +460,33 @@ function emitPreserveNote(result: {
 }
 
 /**
+ * TTY disclosure for a TEMPLATE-TARGET composite (`complete`/`cancel`/`update
+ * --exception` aimed at a repeating to-do): a dim line naming BOTH uuids — the
+ * occurrence that was written (the result's own uuid) and the series it belongs
+ * to — plus whether that occurrence was created for this call. The human render
+ * would otherwise show one uuid with nothing saying which of the two it is.
+ * Silent for every other op (the field is absent).
+ */
+function emitOccurrenceNote(result: {
+  occurrence?: {
+    templateUuid: string;
+    occurrenceUuid: string;
+    minted: boolean;
+    date: string | null;
+  };
+}): void {
+  const o = result.occurrence;
+  if (o === undefined) return;
+  const dated = o.date === null ? "" : ` dated ${o.date}`;
+  const origin = o.minted ? "created for this change" : "already open";
+  process.stdout.write(
+    dim(
+      `  occurrence ${o.occurrenceUuid}${dated} (${origin}) of repeating to-do ${o.templateUuid}\n`,
+    ),
+  );
+}
+
+/**
  * TTY disclosure for the HINTS1 completion-context on a verified complete/cancel:
  * a dim line naming the OPEN work remaining in the to-do's project and/or Today,
  * so an operator (or an agent reading the human render) sees an emptied container
@@ -526,6 +553,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
             ? "already applied — matched op-id in the change history, not re-run"
             : `vector=${result.vector}, tier=${result.tier}, verified`;
         process.stdout.write(`ok ${result.op}${uuid} (${status})\n`);
+        emitOccurrenceNote(result);
         emitPreserveNote(result);
         emitContextNote(result);
       }
@@ -1234,7 +1262,12 @@ export function registerWriteCommands(program: Command): void {
       )
       .option(
         "--exception",
-        "repeating to-dos only: change just the NEXT occurrence and leave the series alone (creates that occurrence if it has not appeared yet); refused when the series already lands on the requested day",
+        "repeating to-dos only: change just the NEXT occurrence and leave the series alone " +
+          "(creates that occurrence if it has not appeared yet); refused when the series already " +
+          "lands on the requested day. The result names both the occurrence and the series. Each " +
+          "re-run takes another occurrence out of the series, so pass --op-id on a retry: a " +
+          "resubmission with the same key replays the first result instead of creating a second " +
+          "occurrence",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     if (!(await resolveNotesStdin(opts))) return;
@@ -1272,7 +1305,13 @@ export function registerWriteCommands(program: Command): void {
       todo
         .command(`${verb} <uuid>`)
         .description(
-          `${verb[0]?.toUpperCase()}${verb.slice(1)} a to-do. Not available for repeating to-dos. ` +
+          `${verb[0]?.toUpperCase()}${verb.slice(1)} a to-do. On a REPEATING to-do this ${verb}s ` +
+            "the series' current occurrence — the unfinished one if there is one, otherwise the " +
+            "next one, created for the purpose — and leaves the series running; the result names " +
+            "both the occurrence and the series, and says which of the two it created. Each " +
+            `re-run is a new ${verb} that takes the FOLLOWING occurrence, so pass --op-id on a ` +
+            "retry: a resubmission with the same key replays the first result instead of " +
+            "creating a second occurrence. " +
             '--completed-at sets the completion timestamp (also the "Completed on" stamp for a canceled ' +
             `item), ${stampNote} — a multi-leg sequence, disclosed in the result and --dry-run.`,
         )

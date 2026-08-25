@@ -16,6 +16,8 @@
  */
 import { createHash } from "node:crypto";
 
+import type { OccurrenceResolution } from "../write/verify/delta.ts";
+
 export interface AuditRecord {
   v: 1;
   ts: string;
@@ -56,6 +58,15 @@ export interface AuditRecord {
    * bumped) without a separate read. Absent on writes made without the flag.
    */
   preModDates?: Record<string, number | null>;
+  /**
+   * Template-target composite disclosure (ADDITIVE): which occurrence a
+   * `complete`/`cancel`/`update --exception` aimed at a repeating series
+   * actually wrote, and whether the composite minted it. Recorded on the
+   * composite's SUMMARY record only — the one record its `opId` keys — so an
+   * idempotency replay can hand the caller the same two uuids the original
+   * call returned without re-reading the database.
+   */
+  occurrence?: OccurrenceResolution;
   /** Normalized requested delta (params as given, post-normalization). */
   requested: Record<string, unknown>;
   /** Asserted-field subset of the pre-state (null when target didn't exist). */

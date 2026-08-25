@@ -35,6 +35,7 @@ import { join } from "node:path";
 import type { AuditRecord } from "./audit/schema.ts";
 import { auditDir as defaultAuditDir, traceDir as defaultTraceDir } from "./paths.ts";
 import { readAuditRecords } from "./write/undo.ts";
+import type { OccurrenceResolution } from "./write/verify/delta.ts";
 
 export interface OpResultOptions {
   /** Directory holding the audit JSONL files; defaults to the state dir. Test seam. */
@@ -61,6 +62,14 @@ export interface OpResultData {
   result: AuditRecord["result"] | null;
   /** The recorded target uuid (null for an as-yet-undiscovered create, or UNKNOWN). */
   uuid: string | null;
+  /**
+   * Template-target composite disclosure: which occurrence a `complete`/`cancel`/
+   * `update --exception` aimed at a repeating to-do wrote, and whether it minted
+   * it — the same pair the original result carried. Present only for those ops
+   * (they are the ones whose recovery answer needs two uuids: the series you
+   * named, and the row that actually moved).
+   */
+  occurrence?: OccurrenceResolution;
   /** The post-verify observation the final record captured; null when absent. */
   observed: Record<string, unknown> | null;
   /** The verify attempt/elapsed the final record captured; null when absent. */
@@ -174,6 +183,7 @@ export function opResult(opId: string, options: OpResultOptions = {}): OpResultD
       op: rec.op,
       result: rec.result,
       uuid: rec.uuid,
+      ...(rec.occurrence !== undefined && { occurrence: rec.occurrence }),
       observed: rec.observed,
       verify: rec.verify,
       ts: rec.ts,

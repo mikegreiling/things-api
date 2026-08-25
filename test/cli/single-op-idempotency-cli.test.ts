@@ -116,6 +116,26 @@ describe("single-op idempotency (--op-id)", () => {
     expect(stdout.join("")).toContain("already applied");
   });
 
+  it("complete honors --op-id — the resolution entries run the gate themselves", async () => {
+    // complete/cancel never reach the client's single-op entry (their multi-leg
+    // orchestrator owns dispatch), so the key used to be RECORDED and never
+    // honored. It matters most on a repeating to-do, where a re-run materializes
+    // another occurrence; a plain to-do exercises the same gate.
+    await run(["todo", "add", "Tick", "--op-id", "made-tick", "--json"]);
+    const uuid = (envelope()["data"] as Record<string, unknown>)["uuid"] as string;
+    stdout.length = 0;
+    await run(["todo", "complete", uuid, "--op-id", "tick-once", "--json"]);
+    const first = envelope()["data"] as Record<string, unknown>;
+    expect(first["alreadyApplied"]).toBeUndefined();
+
+    stdout.length = 0;
+    await run(["todo", "complete", uuid, "--op-id", "tick-once", "--json"]);
+    const second = envelope()["data"] as Record<string, unknown>;
+    expect(second["alreadyApplied"]).toBe(true);
+    expect(second["uuid"]).toBe(uuid);
+    expect(process.exitCode).toBe(0);
+  });
+
   it("a malformed op-id is a usage error (exit 2)", async () => {
     await run(["todo", "add", "Bad", "--op-id", "not a valid key!", "--json"]);
     const env = envelope();

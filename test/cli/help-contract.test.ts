@@ -349,6 +349,22 @@ describe("--op-id: help matches the runtime capability", () => {
     }
   });
 
+  it("the template-target verbs advertise --op-id AND teach the retry contract", () => {
+    // complete/cancel/update --exception aimed at a repeating to-do CREATE an
+    // occurrence, so a blind retry takes a second one out of the series. The key
+    // is the answer, and the help has to say so where the caller is deciding.
+    for (const path of [
+      ["todo", "complete"],
+      ["todo", "cancel"],
+      ["todo", "update"],
+    ]) {
+      const help = helpFor(...(path as [string, string]));
+      expect(help, path.join(" ")).toContain("--op-id <key>");
+      expect(help, path.join(" ")).toContain("--op-id on a retry");
+      expect(help, path.join(" ")).toContain("second occurrence");
+    }
+  });
+
   it("a single-mutation command still advertises --op-id", () => {
     for (const path of [
       ["todo", "add"],

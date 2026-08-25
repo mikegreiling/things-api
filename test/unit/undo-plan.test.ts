@@ -870,6 +870,46 @@ describe("transactional undo (compound operations)", () => {
     }
   });
 
+  it("a template-target composite summary reopens the occurrence and skips the mint", () => {
+    // #578: before the composite recorded a summary, BOTH its legs were leg-role
+    // and excluded from targeting — `things undo` reached past the whole verb to
+    // whatever came before it, while the result promised otherwise. The summary
+    // is now the unit, and the half that cannot be reversed is named as skipped.
+    const legs = [
+      record({
+        op: "todo.create-next-copy",
+        uuid: "TEMPLATE",
+        txn: { id: "t-cnc", role: "leg" },
+      }),
+      record({
+        op: "todo.complete",
+        uuid: "OCC",
+        txn: { id: "t-cnc", role: "leg" },
+        pre: { status: "open" },
+      }),
+    ];
+    const summary = record({
+      op: "todo.complete",
+      uuid: "OCC",
+      txn: { id: "t-cnc", role: "summary" },
+      occurrence: {
+        templateUuid: "TEMPLATE",
+        occurrenceUuid: "OCC",
+        minted: true,
+        date: "2026-07-12",
+      },
+    });
+    const plan = planUndo(summary, NOW, [...legs, summary]);
+    expect(plan.kind).toBe("invertible");
+    if (plan.kind === "invertible") {
+      expect(plan.steps).toEqual([
+        { op: "todo.reopen", params: { uuid: "OCC" }, options: { guardFields: ["status"] } },
+      ]);
+      expect(plan.notes.join(" ")).toContain("todo.create-next-copy");
+      expect(plan.notes.join(" ")).toContain("not invertible");
+    }
+  });
+
   it("heading.archive cascade capture reopens the children that were open", () => {
     const summary = record({
       op: "project.archive-heading",

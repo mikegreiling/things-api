@@ -12,6 +12,13 @@
  * (as a batch line OR a single `--op-id` invocation) is safe against a double.
  */
 import type { AuditRecord } from "../audit/schema.ts";
+import {
+  replayResultFromRecord,
+  type MutationResult,
+  type WriteDeps,
+  type WriteOptions,
+} from "./pipeline.ts";
+import { readAuditRecords } from "./undo.ts";
 
 /** The idempotency-key charset/length, identical for a batch line and a single-op flag. */
 export const OP_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -45,4 +52,27 @@ export function findAppliedOpId(
     match = r; // records are oldest-first, so the last match is the newest
   }
   return match;
+}
+
+/**
+ * The lookback as a DISPATCH DECISION: the replay result when this write's
+ * `opId` was already applied, or null when it must run. The ONE gate every
+ * single-invocation entry point calls before doing anything — the client's
+ * single-op `run`, and the complete/cancel/exception entries whose composites
+ * own their own dispatch (they never reach `run`, so without this the key would
+ * be recorded and never honored).
+ *
+ * Three conditions, all fail-open (run the write) rather than fail-closed:
+ * no key, a dry run (it mints and records nothing, so there is nothing to
+ * deduplicate against), or no trail to read.
+ */
+export function replayIfApplied(deps: WriteDeps, options: WriteOptions): MutationResult | null {
+  if (options.opId === undefined || options.dryRun === true) return null;
+  if (deps.auditDirPath === undefined) return null;
+  const applied = findAppliedOpId(
+    readAuditRecords(deps.auditDirPath),
+    options.opId,
+    deps.now?.() ?? new Date(),
+  );
+  return applied === undefined ? null : replayResultFromRecord(applied);
 }
