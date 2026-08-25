@@ -1576,3 +1576,197 @@ describe("add-repeating — a mid-drive unreachable window (#512)", () => {
     expect(res.detail).toContain("things todo restore");
   });
 });
+
+// ------------------------------------------- --op-id (one summary, one key)
+
+/** How many live repeating templates the fixture holds. */
+const templateCount = (): number =>
+  (
+    fixture.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM TMTask WHERE rt1_recurrenceRule IS NOT NULL AND trashed = 0",
+      )
+      .get() as { n: number }
+  ).n;
+
+describe("the promote compounds take an --op-id — one summary record, one key", () => {
+  it("todo.make-repeating records the key on its SUMMARY and on no leg", async () => {
+    const src = seedTodo(fixture.db, { title: "Water plants", start: "active" });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      { ...GUI, opId: "promote-once" },
+    );
+    expect(res.kind).toBe("ok");
+
+    const keyed = auditRecords.filter((r) => r.opId === "promote-once");
+    expect(keyed).toHaveLength(1);
+    expect(keyed[0]?.txn?.role).toBe("summary");
+    expect(keyed[0]?.op).toBe("todo.make-repeating");
+    // Every leg belongs to the transaction and carries no key of its own.
+    expect(
+      auditRecords.filter((r) => r.txn?.role === "leg").every((r) => r.opId === undefined),
+    ).toBe(true);
+  });
+
+  it("a resubmission replays the whole promote and makes no second series", async () => {
+    const src = seedTodo(fixture.db, { title: "Water plants", start: "active" });
+    const first = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      { ...GUI, opId: "promote-once" },
+    );
+    if (first.kind !== "ok") throw new Error("expected the first promote to land");
+    flushAudit();
+    const recordsBefore = auditRecords.length;
+
+    const second = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      { ...GUI, opId: "promote-once" },
+    );
+
+    expect(second.kind === "ok" && second.alreadyApplied).toBe(true);
+    if (second.kind !== "ok") throw new Error("unreachable");
+    expect(second.uuid).toBe(first.uuid);
+    // One summary = one undo unit, so the replay hands back the same token.
+    expect(second.undoToken).toBe(first.undoToken);
+    expect(auditRecords.length, "a replay records nothing").toBe(recordsBefore);
+    expect(templateCount(), "exactly one series exists").toBe(1);
+  });
+
+  it("every promote verb honors the key — the flag is symmetric across all four", async () => {
+    const area = seedArea(fixture.db, "Ops");
+    await runMakeRepeatingProject(
+      deps([vector, projectTrashVector()]),
+      {
+        uuid: seedProject(fixture.db, { title: "Quarterly review", area, start: "active" }),
+        frequency: "monthly",
+        interval: 1,
+      },
+      { ...GUI, opId: "p-make" },
+    );
+    await runAddRepeatingTodo(
+      deps(vector),
+      { title: "Daily stretch", when: "someday", frequency: "daily", interval: 1 },
+      { ...GUI, opId: "t-add" },
+    );
+    await runAddRepeatingProject(
+      deps(vector),
+      { title: "Monthly close", frequency: "monthly", interval: 1 },
+      { ...GUI, opId: "p-add" },
+    );
+    for (const op of ["project.make-repeating", "todo.add-repeating", "project.add-repeating"]) {
+      const keyed = auditRecords.filter((r) => r.op === op && r.opId !== undefined);
+      expect(keyed, op).toHaveLength(1);
+      expect(keyed[0]?.txn?.role, op).toBe("summary");
+    }
+  });
+
+  it("without a key an add-repeating re-run makes a SECOND series — the hazard the key answers", async () => {
+    for (let i = 0; i < 2; i++) {
+      await runAddRepeatingTodo(
+        deps(vector),
+        { title: "Daily stretch", when: "someday", frequency: "daily", interval: 1 },
+        GUI,
+      );
+      flushAudit();
+    }
+    expect(templateCount()).toBe(2);
+  });
+});
+
+describe("a promote whose drive never confirmed is reconciled, not re-run", () => {
+  /** A promote leg killed by the GUI watchdog: the honest UNCERTAIN outcome. */
+  function watchdogVector(): WriteVector {
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    return {
+      ...sim,
+      async execute(inv) {
+        if (inv.op === "todo.make-repeating") {
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: "budget blown",
+            watchdog: {
+              budgetMs: 90_000,
+              elapsedMs: 91_000,
+              lastStep: "confirm the Repeat dialog",
+              clear: "dismissed" as const,
+            },
+          };
+        }
+        return sim.execute(inv);
+      },
+    };
+  }
+
+  const UNCONFIRMED = {
+    title: "Unconfirmed habit",
+    when: "someday",
+    frequency: "daily",
+    interval: 1,
+  } as const;
+
+  it("writes an AMBIGUOUS summary carrying the key and the presence check", async () => {
+    const res = await runAddRepeatingTodo(deps(watchdogVector()), UNCONFIRMED, {
+      ...GUI,
+      verifyTimeoutMs: 100,
+      opId: "maybe-made",
+    });
+    expect(res.kind).toBe("verify-failed");
+    expect(res.kind === "verify-failed" && res.reason).toBe("timeout");
+
+    const summary = auditRecords.find((r) => r.opId === "maybe-made");
+    expect(summary?.txn?.role).toBe("summary");
+    expect(summary?.result).toBe("verify-failed:timeout");
+    expect(summary?.expected).toMatchObject({
+      mode: "create",
+      probe: { title: "Unconfirmed habit", type: "to-do" },
+      assert: [{ field: "repeating.isTemplate", equals: true }],
+    });
+  });
+
+  it("the series exists after all → the retry replays instead of making a second one", async () => {
+    await runAddRepeatingTodo(deps(watchdogVector()), UNCONFIRMED, {
+      ...GUI,
+      verifyTimeoutMs: 100,
+      opId: "maybe-made",
+    });
+    // The drive HAD landed, late: a template of that title now exists.
+    const template = seedTodo(fixture.db, {
+      title: "Unconfirmed habit",
+      creationDate: Math.floor(NOW.getTime() / 1000) + 1,
+      recurrenceRuleXml: templateRuleXml({ frequency: "daily", interval: 1 }),
+    });
+    flushAudit();
+
+    const retry = await runAddRepeatingTodo(deps(vector), UNCONFIRMED, {
+      ...GUI,
+      opId: "maybe-made",
+    });
+
+    expect(retry.kind === "ok" && retry.alreadyApplied).toBe(true);
+    expect(retry.kind === "ok" && retry.uuid, "the uuid comes from the re-read").toBe(template);
+    expect(templateCount(), "no second series").toBe(1);
+  });
+
+  it("the series is absent → the retry runs the promote for real", async () => {
+    await runAddRepeatingTodo(deps(watchdogVector()), UNCONFIRMED, {
+      ...GUI,
+      verifyTimeoutMs: 100,
+      opId: "maybe-made",
+    });
+    expect(templateCount(), "the stalled attempt left no series").toBe(0);
+    flushAudit();
+
+    const retry = await runAddRepeatingTodo(deps(vector), UNCONFIRMED, {
+      ...GUI,
+      opId: "maybe-made",
+    });
+
+    expect(retry.kind).toBe("ok");
+    expect(retry.kind === "ok" && retry.alreadyApplied).toBeUndefined();
+    expect(templateCount()).toBe(1);
+  });
+});

@@ -607,9 +607,11 @@ const preserveModifiedShape = {
 /**
  * The per-call idempotency key for a single write tool — the analogue of a batch
  * line's op_id. A resubmission carrying the same key is recognized as already
- * applied (a prior verified change with that key) and is not re-run. Spread into
- * the single-mutation write tools (not the variadic move/reorder tools, whose
- * idempotency is the batch-shaped per-line op_id).
+ * applied (a prior change recorded under that key) and is not re-run. Spread
+ * into every write tool whose call records ONE result — the single mutations,
+ * and the multi-step verbs that record one summary (the repeating-series tool,
+ * the template-target status/exception writes) — but not the variadic
+ * move/reorder tools, whose idempotency is the batch-shaped per-line op_id.
  */
 const opIdShape = {
   op_id: z
@@ -2761,7 +2763,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "pause/resume: stop or restart its new occurrences, keeping the rule. action add: create " +
         "an item and make it repeating in one call — it is created first and PERSISTS even if the " +
         "promote refuses (give a title; for a project give an area to place it or omit it to " +
-        "create in Someday); undo removes the created series. Returns the new template's uuid.",
+        "create in Someday); undo removes the created series. Returns the new template's uuid. " +
+        "Every start/add re-run makes ANOTHER series, so pass op_id when retrying: a resubmission " +
+        "with the same key replays the first result instead of making a second series.",
       inputSchema: {
         scope: z.enum(["todo", "project"]),
         action: z.enum(["start", "reschedule", "pause", "resume", "add"]),
@@ -2810,6 +2814,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         ...driveGuiShape,
         ...dryRunShape,
         ...preserveModifiedShape,
+        ...opIdShape,
       },
       annotations: DESTRUCTIVE,
     },

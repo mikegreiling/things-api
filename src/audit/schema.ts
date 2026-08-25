@@ -16,7 +16,7 @@
  */
 import { createHash } from "node:crypto";
 
-import type { OccurrenceResolution } from "../write/verify/delta.ts";
+import type { DeltaSpec, OccurrenceResolution } from "../write/verify/delta.ts";
 
 export interface AuditRecord {
   v: 1;
@@ -67,6 +67,18 @@ export interface AuditRecord {
    * call returned without re-reading the database.
    */
   occurrence?: OccurrenceResolution;
+  /**
+   * AMBIGUOUS-OUTCOME reconciliation key (ADDITIVE): the expected-state
+   * assertion this attempt was verifying, recorded on `verify-failed:timeout`
+   * records only — the one result class where the change may or may not have
+   * landed. A resubmission carrying the same `opId` re-evaluates THIS assertion
+   * against current state to decide whether the timed-out change is there
+   * (replay it as already-applied) or absent (execute normally), so the presence
+   * test is the attempt's OWN oracle rather than a per-operation guess
+   * (`src/write/opid.ts`). Absent on every other record — and an absent one is a
+   * refusal to guess, never an assumption either way.
+   */
+  expected?: DeltaSpec;
   /** Normalized requested delta (params as given, post-normalization). */
   requested: Record<string, unknown>;
   /** Asserted-field subset of the pre-state (null when target didn't exist). */

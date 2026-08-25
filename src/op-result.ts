@@ -119,7 +119,9 @@ function foundNote(result: AuditRecord["result"], uuid: string | null): string {
       return (
         "the operation ran but read-after-write verification TIMED OUT — the change may or may not " +
         `have landed. Re-read the target (\`things show ${target}\`) and the trace before doing ` +
-        "anything else; NEVER blind-retry a GUI drive"
+        "anything else; NEVER blind-retry a GUI drive. Resubmitting the SAME command with the SAME " +
+        "op-id is safe: it re-reads state to decide whether that change is there, replaying it " +
+        "rather than repeating it (and refusing outright when the record cannot settle the question)"
       );
     case "verify-failed:mismatch":
       return (
