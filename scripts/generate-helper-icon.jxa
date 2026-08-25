@@ -5,7 +5,12 @@
 // greater-than sign tilted until it reads as a checkmark; the underscore that
 // trails it keeps the pair legible as a shell prompt.
 //
-// Usage: osascript -l JavaScript scripts/generate-helper-icon.jxa <out.png>
+// Usage: osascript -l JavaScript scripts/generate-helper-icon.jxa <out.png> [size]
+//
+// `size` renders the same artwork at another square edge (default 1024): the
+// drawing stays in 1024pt coordinates and the context is scaled, so a 160px
+// render is the master, not a resample. The icns pipeline below still starts
+// from the 1024 master.
 //
 // To refresh deputy/AppIcon.icns from a new master:
 //   osascript -l JavaScript scripts/generate-helper-icon.jxa /tmp/icon.png
@@ -55,14 +60,23 @@ function centerInk(strokes, cx, cy) {
 
 function run(argv) {
   const out = argv[0];
-  if (!out) throw new Error("usage: generate-helper-icon.jxa <out.png>");
+  if (!out) throw new Error("usage: generate-helper-icon.jxa <out.png> [size]");
+  const edge = argv[1] ? Number(argv[1]) : SIZE;
+  if (!Number.isFinite(edge) || edge < 1) throw new Error("size must be a positive number");
 
   const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(
-    $(), SIZE, SIZE, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0,
+    $(), edge, edge, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0,
   );
   const ctx = $.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep);
   $.NSGraphicsContext.saveGraphicsState;
   $.NSGraphicsContext.setCurrentContext(ctx);
+
+  // Draw in 1024pt coordinates whatever the output edge is.
+  if (edge !== SIZE) {
+    const xf = $.NSAffineTransform.transform;
+    xf.scaleBy(edge / SIZE);
+    xf.concat;
+  }
 
   // Plate: 824×824 rounded square, Big-Sur-era corner radius.
   const inset = 100;

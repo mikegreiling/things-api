@@ -1,3 +1,5 @@
+<img src="assets/things-api-icon-160x160.png" alt="" width="80" height="80">
+
 # things-api
 
 A typed TypeScript library + CLI (`things`) for programmatic interaction with [Things 3](https://culturedcode.com/things/) by Cultured Code.
