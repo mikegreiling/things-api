@@ -141,7 +141,7 @@ export function readerSandboxContainerDir(env: NodeJS.ProcessEnv = process.env):
 export const READER_TOKEN_ENV = "THINGS_READER_TOKEN";
 
 /** The `Sockets` key entry name launchd hands the reader at activation. */
-export const READER_SOCKET_KEY = "Listener";
+export const READER_SOCKET_ENV = "THINGS_READER_SOCKET";
 
 /** Reader handshake: DeputyHello plus the grant state. */
 export interface ReaderHello extends DeputyHello {

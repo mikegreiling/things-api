@@ -11,5 +11,35 @@
   <true/>
   <key>com.apple.security.files.bookmarks.app-scope</key>
   <true/>
+  <!-- The ONE path outside the container the reader may touch: its rendezvous
+       directory, where it binds the client-facing socket. launchd Sockets
+       activation is unusable from inside the sandbox (error 159, measured
+       2026-08-24), so the reader binds the socket itself under this exception.
+       Scoped to a single dot-directory subtree; notarization accepts
+       temporary-exceptions on Developer ID builds. -->
+  <!-- MEASURED 2026-08-24: with the file exception alone, plain file writes in
+       the rendezvous dir SUCCEED while bind(2) is denied EPERM — unix-socket
+       binding is the sandbox's network-bind operation class, path-filtered to
+       the container, and network.server does not extend it. The raw-SBPL
+       temporary exception below is the one public lever that does. -->
+  <!-- Unix-socket bind is the sandbox's network-bind operation class, path-
+       filtered to the container — MEASURED 2026-08-24: with the file exception
+       alone, file writes in the rendezvous dir succeed while bind(2) is EPERM,
+       and `network.server` does not extend it. This raw-SBPL exception is the
+       one public lever that does. Grammar is picky (also measured): a
+       `(subpath ...)` filter compiles; a regex filter and the bare
+       `(allow network-bind network-listen)` form both make sandbox
+       initialization TRAP at spawn (SIGTRAP, and launchd bootstrap fails 5).
+       "/Users" because entitlements are baked at signing and must serve any
+       user's home; the reader's practical reach stays scoped by the file
+       exception above (it can only create the socket where it can write). -->
+  <key>com.apple.security.temporary-exception.sbpl</key>
+  <array>
+    <string>(allow network-bind (subpath "/Users"))</string>
+  </array>
+  <key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+  <array>
+    <string>/.local/state/things-api/reader/</string>
+  </array>
 </dict>
 </plist>

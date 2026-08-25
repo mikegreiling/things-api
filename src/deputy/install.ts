@@ -54,7 +54,7 @@ import {
   readerRendezvousDir,
   readerSandboxContainerDir,
   readerSocketPath,
-  READER_SOCKET_KEY,
+  READER_SOCKET_ENV,
   readerTokenPath,
   READER_TOKEN_ENV,
 } from "./protocol.ts";
@@ -124,14 +124,6 @@ function readerExecPath(appPath: string): string {
 }
 
 /**
- * 0600 as a plist `<integer>`. Property lists have no octal literal, and
- * launchd reads `SockPathMode` as the decimal number it finds — so the mode
- * must be written base-10 (0o600 === 384) or the socket comes out world-
- * readable. Derived, never typed as a magic constant.
- */
-const SOCK_PATH_MODE_0600 = 0o600;
-
-/**
  * The reader's LaunchAgent. Two keys carry the whole host-universal rendezvous:
  *
  * - **`Sockets`** — launchd creates, binds, listens on and chmods the socket at
@@ -163,25 +155,18 @@ export function renderReaderPlist(appPath: string, socketPath: string, token: st
   <true/>
   <key>KeepAlive</key>
   <true/>
-  <!-- launchd owns the listening socket, at a path OUTSIDE the reader's App
-       Sandbox container: it binds and listens, then hands the reader the fd.
-       SockPathMode is decimal (${SOCK_PATH_MODE_0600} === 0${SOCK_PATH_MODE_0600.toString(8)}). -->
-  <key>Sockets</key>
-  <dict>
-    <key>${READER_SOCKET_KEY}</key>
-    <dict>
-      <key>SockPathName</key>
-      <string>${socketPath}</string>
-      <key>SockPathMode</key>
-      <integer>${SOCK_PATH_MODE_0600}</integer>
-      <key>SockFamily</key>
-      <string>Unix</string>
-    </dict>
-  </dict>
-  <!-- The access token the reader expects, minted by install. This file is
-       written 0600 because of it. -->
+  <key>StandardErrorPath</key>
+  <string>${dirname(socketPath)}/reader.stderr.log</string>
+  <!-- The rendezvous path and access token, minted/chosen by install. The
+       reader BINDS the socket itself at this host-neutral path — its sandbox
+       entitlement covers exactly this directory. launchd Sockets activation
+       is NOT usable: launch_activate_socket fails with 159 "Sandbox
+       restriction" inside the App Sandbox (measured 2026-08-24). This file is
+       written 0600 because of the token. -->
   <key>EnvironmentVariables</key>
   <dict>
+    <key>${READER_SOCKET_ENV}</key>
+    <string>${socketPath}</string>
     <key>${READER_TOKEN_ENV}</key>
     <string>${token}</string>
   </dict>

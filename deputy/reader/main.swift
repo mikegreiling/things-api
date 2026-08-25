@@ -28,13 +28,15 @@
  * host and a modal from anywhere else. That made reader routing per-host, which
  * is the opposite of what the helper pair exists for.
  *
- * So this process no longer creates its rendezvous at all:
+ * So the rendezvous lives OUTSIDE the container, in the user's own state dir:
  *
- *   • the SOCKET is declared in the LaunchAgent's `Sockets` key at a path in the
- *     user's own state directory. launchd creates, binds, listens and chmods it
- *     there — outside every container — and hands over the already-listening fd
- *     at activation, which `launch_activate_socket` collects below. There is no
- *     fallback bind: without an activated fd this process exits, loudly;
+ *   • the SOCKET is bound by THIS process at the host-neutral path injected via
+ *     THINGS_READER_SOCKET — the sandbox permits it through a
+ *     home-relative-path temporary-exception entitlement scoped to that one
+ *     directory. (launchd `Sockets` activation was tried first and FAILS from
+ *     inside the App Sandbox with error 159 "Sandbox restriction", measured
+ *     2026-08-24 — do not re-attempt it.) No fallback paths: without the env
+ *     this process exits, loudly;
  *   • the TOKEN it expects arrives in THINGS_READER_TOKEN, injected into the
  *     same plist by the installer, which writes the matching file for clients.
  *
@@ -44,7 +46,7 @@
  *
  * Modes:
  *   --grant <startDir>   present the NSOpenPanel ceremony, save the bookmark
- *   --serve              serve the launchd-activated socket (default)
+ *   --serve              bind and serve the rendezvous socket (default)
  *   --version            print the version
  */
 import AppKit
@@ -56,8 +58,6 @@ let READER_PROTOCOL_VERSION = 1
 let MAX_LINE_BYTES = 8 * 1024 * 1024
 let MAX_FILE_READ_BYTES = 64 * 1024 * 1024
 
-/// The `Sockets` entry name in the LaunchAgent (src/deputy/protocol.ts).
-let READER_SOCKET_KEY = "Listener"
 /// The env var the LaunchAgent carries the expected access token in.
 let READER_TOKEN_ENV = "THINGS_READER_TOKEN"
 
@@ -75,31 +75,18 @@ func stderrLine(_ message: String) {
 }
 
 /**
- * libSystem's launchd socket check-in: fills a malloc'd array with the fds
- * launchd bound for the named `Sockets` entry. Declared here rather than
- * imported because launch.h's modern half is not surfaced to Swift.
- *
- *   int launch_activate_socket(const char *name, int **fds, size_t *cnt);
+ * The rendezvous socket path, injected by the installer into the LaunchAgent.
+ * launchd socket activation is NOT usable here — MEASURED 2026-08-24 on this
+ * exact bundle: `launch_activate_socket` fails with 159 ("Sandbox restriction")
+ * from inside the App Sandbox, so the reader binds the socket ITSELF at a
+ * host-neutral path its entitlements grant
+ * (the home-relative-path file exception for the rendezvous dir, plus the
+ * raw-SBPL `(allow network-bind (subpath "/Users"))` — unix bind is the
+ * sandbox's network-bind class, which file exceptions alone do not grant;
+ * see entitlements.plist for the measured grammar). Clients reach the socket
+ * with no TCC class.
  */
-@_silgen_name("launch_activate_socket")
-func launch_activate_socket(
-  _ name: UnsafePointer<CChar>,
-  _ fds: UnsafeMutablePointer<UnsafeMutablePointer<Int32>?>,
-  _ cnt: UnsafeMutablePointer<Int>
-) -> Int32
-
-/// The single listening fd launchd bound for us, or nil with the errno-ish
-/// reason. The fd array is malloc'd by libSystem and must be freed.
-func activatedListener() -> (fd: Int32?, reason: String) {
-  var fds: UnsafeMutablePointer<Int32>?
-  var count = 0
-  let err = READER_SOCKET_KEY.withCString { launch_activate_socket($0, &fds, &count) }
-  guard err == 0 else { return (nil, "launch_activate_socket returned \(err)") }
-  guard let fds else { return (nil, "launch_activate_socket returned no fd array") }
-  defer { free(fds) }
-  guard count == 1 else { return (nil, "launchd handed over \(count) sockets, expected 1") }
-  return (fds[0], "")
-}
+let READER_SOCKET_ENV = "THINGS_READER_SOCKET"
 
 /**
  * Delete the pre-1.3.0 in-container rendezvous. Those files are dead the moment
@@ -228,13 +215,59 @@ final class ReaderServer {
     cacheLock.unlock()
   }
 
+  private var socketPath: String = ""
+
   /**
-   * Serve the socket launchd bound for us. There is no socket()/bind()/listen()
-   * here and no unlink: launchd created the socket at a path outside this
-   * container, and this process only ever accepts on the fd it was handed.
+   * Bind and serve the rendezvous socket at the host-neutral path the
+   * installer injected. The sandbox permits the bind through the reader's
+   * home-relative-path entitlement; launchd activation is unusable from
+   * inside the sandbox (error 159, measured — see the header).
    */
-  func run(listener fd: Int32) {
+  func run(socketPath path: String) {
+    socketPath = path
+    // Boot diagnostic: discriminate a file-rule failure (entitlement form/path
+    // wrong) from a bind-rule failure (operation class) when the bind below
+    // fails. Removed file, one line, only on failure.
+    let probePath = (path as NSString).deletingLastPathComponent + "/.write-probe"
+    if FileManager.default.createFile(atPath: probePath, contents: Data("x".utf8)) {
+      unlink(probePath)
+    } else {
+      stderrLine("write-probe FAILED in rendezvous dir — the file entitlement is not covering it")
+    }
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+      stderrLine("socket() errno \(errno)")
+      exit(78)
+    }
     listenFd = fd
+    unlink(path)
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+    guard path.utf8.count < capacity else {
+      stderrLine("socket path too long: \(path)")
+      exit(78)
+    }
+    _ = withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+      path.withCString { cstr in
+        strncpy(UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self), cstr, capacity - 1)
+      }
+    }
+    let bound = withUnsafePointer(to: &addr) { ptr in
+      ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+        bind(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+      }
+    }
+    guard bound == 0 else {
+      stderrLine(
+        "bind(\(path)) errno \(errno) — the reader's sandbox entitlement must cover this path; run `things helpers setup`")
+      exit(78)
+    }
+    chmod(path, 0o600)
+    guard listen(fd, 16) == 0 else {
+      stderrLine("listen() errno \(errno)")
+      exit(78)
+    }
     audit(["event": "started", "pid": Int(getpid()), "version": DEPUTY_VERSION])
     while true {
       let conn = accept(fd, nil, nil)
@@ -255,14 +288,13 @@ final class ReaderServer {
   }
 
   /**
-   * Graceful drain, then teardown. Mirrors the deputy's semantics with ONE
-   * difference: the socket path is launchd's, not ours, so it is never
-   * unlinked — removing it would strip the rendezvous from a job launchd still
-   * owns. Closing the listening fd is the deterministic accept-wake here
-   * (a close wakes a blocked accept on Darwin), after which in-flight requests
-   * finish within the bound and the log is flushed. SIGKILL is the hard stop.
+   * Graceful drain, then teardown — the deputy's semantics: unlink the socket
+   * FIRST (the deterministic accept-wake, and it stops new clients dialing a
+   * dying process), finish in-flight requests within the bound, flush the log.
+   * SIGKILL is the hard stop.
    */
   func drainAndShutdown(timeout: TimeInterval = READER_DRAIN_TIMEOUT_SECONDS) {
+    if !socketPath.isEmpty { unlink(socketPath) }
     if listenFd >= 0 {
       Darwin.shutdown(listenFd, SHUT_RDWR)
       close(listenFd)
@@ -512,10 +544,11 @@ case "--serve":
       "\(READER_TOKEN_ENV) is not set — the access token is injected by the reader's LaunchAgent; run `things helpers setup`")
     exit(78)
   }
-  let listener = activatedListener()
-  guard let listenerFd = listener.fd else {
+  guard let socketPath = ProcessInfo.processInfo.environment[READER_SOCKET_ENV],
+    !socketPath.isEmpty
+  else {
     stderrLine(
-      "no launchd-activated socket (\(listener.reason)) — the reader serves only under its LaunchAgent, which owns the socket; run `things helpers setup`")
+      "\(READER_SOCKET_ENV) is not set — the rendezvous path is injected by the reader's LaunchAgent; run `things helpers setup`")
     exit(78)
   }
   // 1.3.0 migration, and only on a real boot — the refusals above must stay
@@ -539,7 +572,7 @@ case "--serve":
     }
     source.resume()
   }
-  Thread.detachNewThread { server.run(listener: listenerFd) }
+  Thread.detachNewThread { server.run(socketPath: socketPath) }
   dispatchMain()
 default:
   stderrLine("usage: things-reader --serve | --grant <dir> | --version")

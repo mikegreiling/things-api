@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mintReaderRendezvous, renderReaderPlist } from "../../src/deputy/install.ts";
 import {
   READER_LAUNCHD_LABEL,
-  READER_SOCKET_KEY,
+  READER_SOCKET_ENV,
   READER_TOKEN_ENV,
   readerRendezvousDir,
   readerSocketPath,
@@ -43,23 +43,17 @@ const plist = (): string =>
   renderReaderPlist("/opt/helper/things-reader.app", "/var/state/reader/reader.sock", "t0ken");
 
 describe("the reader's LaunchAgent", () => {
-  it("hands launchd the socket, at a path outside every sandbox container", () => {
+  it("hands the reader its rendezvous path via env — the reader binds it itself", () => {
+    // launchd `Sockets` activation is NOT usable: launch_activate_socket fails
+    // with 159 "Sandbox restriction" inside the App Sandbox (measured
+    // 2026-08-24). The reader binds at this path under its home-relative-path
+    // entitlement instead — so the plist must carry the path, not a Sockets key.
     const xml = plist();
-    expect(xml).toContain("<key>Sockets</key>");
-    expect(xml).toContain(`<key>${READER_SOCKET_KEY}</key>`);
-    expect(xml).toContain("<key>SockPathName</key>");
+    expect(xml).not.toContain("<key>Sockets</key>");
+    expect(xml).toContain(`<key>${READER_SOCKET_ENV}</key>`);
     expect(xml).toContain("<string>/var/state/reader/reader.sock</string>");
-    expect(xml).toContain("<key>SockFamily</key>");
-    expect(xml).toContain("<string>Unix</string>");
+    expect(xml).toContain("<key>StandardErrorPath</key>");
     expect(xml).not.toContain("Library/Containers");
-  });
-
-  it("writes SockPathMode in DECIMAL — a plist has no octal literal", () => {
-    // 0600 spelled `<integer>600</integer>` is 0o1130: group- and
-    // world-readable, and the socket would silently be open to every process
-    // on the machine. launchd reads the number base-10, so 384 it is.
-    expect(plist()).toContain("<key>SockPathMode</key>\n      <integer>384</integer>");
-    expect(plist()).not.toContain("<integer>600</integer>");
   });
 
   it("carries the access token in the environment, so the reader needs no token file", () => {
