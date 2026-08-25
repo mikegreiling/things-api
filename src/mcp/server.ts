@@ -2424,7 +2424,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "move_heading_to_project: relocate ONE heading (with its to-dos) to a DIFFERENT project " +
         "(project + heading + to_project) — the cross-project move, distinct from move_heading's " +
         "within-project reorder; GUI-only (requires dangerously_drive_gui), fails closed on a " +
-        "source-heading or destination-project title collision, and has no undo (move it back). " +
+        "source-heading or destination-project title collision and on a completed or canceled " +
+        "destination project (reopen it first), and has no undo (move it back). " +
         "dissolve_heading: remove a heading but KEEP its to-dos as direct project children (NOT " +
         "trashed — the opposite of a delete cascade); GUI-only (requires dangerously_drive_gui), " +
         "fails closed on a title collision, no undo.",

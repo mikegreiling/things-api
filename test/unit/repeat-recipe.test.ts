@@ -74,7 +74,12 @@ describe("repeat dialog recipe — dual-form addressing", () => {
 
   it("base rule drives exactly wait -> frequency -> interval -> OK", () => {
     const steps = dialogSteps({});
-    expect(steps.map((s) => s.primitive)).toEqual(["wait", "select-popup", "set-value", "press"]);
+    expect(steps.map((s) => s.primitive)).toEqual([
+      "wait",
+      "select-popup",
+      "set-group-number",
+      "press",
+    ]);
     expect(labels(steps)).toEqual([
       "the Repeat dialog",
       "frequency = weekly",
@@ -158,7 +163,26 @@ describe("repeat dialog recipe — per-control drive", () => {
   it("ends after N: an ends pop-up + a count field", () => {
     const steps = dialogSteps({ ends: { kind: "after", count: 7 } });
     expect(steps.find((s) => s.value === "after")?.primitive).toBe("select-popup");
-    expect(steps.find((s) => s.value === "7")?.primitive).toBe("set-value");
+    expect(steps.find((s) => s.value === "7")?.primitive).toBe("set-group-number");
+  });
+
+  it("the interval and the ends count are addressed as DIFFERENT fields (HXPC1 §A)", () => {
+    // Both used to be `text field 1 of group 1`, which is the same control at
+    // different moments: selecting the "after" bound inserts the count ahead of
+    // the interval, so a PRE-POPULATED reschedule wrote the interval into the
+    // count. Each now names the row it belongs to, and the driver resolves it.
+    const steps = dialogSteps({ ends: { kind: "after", count: 5 } }, "weekly", 3);
+    const numbers = steps.filter((s) => s.primitive === "set-group-number");
+    expect(numbers).toHaveLength(2);
+    expect(numbers.map((s) => [s.numberTarget, s.value])).toEqual([
+      ["interval", "3"],
+      ["ends-count", "5"],
+    ]);
+    // Both address the cadence GROUP; neither pins a text-field index.
+    for (const s of numbers) {
+      expect(s.pathCandidates?.every((p) => p.startsWith("group 1 of "))).toBe(true);
+      expect(s.pathCandidates?.some((p) => p.includes("text field"))).toBe(false);
+    }
   });
 
   it("ends on date: an ends pop-up + a set-datetime date picker (AXDateTimeArea, not a text field)", () => {

@@ -24,6 +24,7 @@ import {
 } from "../../src/write/recurrence-rule-blob.ts";
 import {
   makeRepeatingRecipe,
+  moveHeadingToProjectRecipe,
   pauseRepeatRecipe,
   rescheduleRepeatRecipe,
 } from "../../src/write/vectors/ui-recipes.ts";
@@ -949,8 +950,26 @@ describe("ui driver — mouse-hybrid click-element (NATIVE1 primitive)", () => {
     const vector = createUiVector(config(true), run);
     const res = await vector.execute(invocation(clickRecipe()));
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain("did not resolve");
+    // The resolver's own message is what the report carries (HXPC1) — the
+    // picker-row and heading-button resolvers refuse with a diagnosis naming what
+    // the surface offered instead, and losing it to a generic sentence was the
+    // whole reason the blind Return went unnoticed.
+    expect(res.stderr).toContain("boom");
+    expect(res.stderr).toContain("no click was sent");
     // The decisive guarantee: no click was ever posted at a guessed point.
+    expect(commands.some((c) => c.primitive === "click-point")).toBe(false);
+  });
+
+  it("falls back to its own wording when the frame read fails with no message", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "resolve-frame") return { ok: false, stdout: "", stderr: "" };
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(clickRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("did not resolve");
     expect(commands.some((c) => c.primitive === "click-point")).toBe(false);
   });
 
@@ -1051,6 +1070,66 @@ describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
     );
     expect(assertIdx).toBeGreaterThanOrEqual(0);
     expect(pressIdx).toBeGreaterThan(assertIdx);
+  });
+});
+
+// HXPC1: the Move… picker's commit. The picker publishes no highlight on any
+// row, so there is nothing to read back from a Return — and its trailing
+// `New Project "<typed>"` row CREATES a project when committed, which is what a
+// blind Return took whenever the destination was absent from the picker (a
+// completed or canceled project is). The commit is therefore a CLICK on the row
+// whose title matches exactly, resolved through the same fail-closed
+// resolve-frame → click-point ladder as every other mouse-hybrid step.
+const moveRecipe = (): UiRecipe => moveHeadingToProjectRecipe("SRC-1", "Phase 1", "Dest");
+
+describe("ui driver — the Move… picker commit is addressed, never a blind Return (HXPC1)", () => {
+  it("types the destination, resolves the matching ROW, and clicks it — no Return is ever sent", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) return ok("1 1 1");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "resolve-frame") return ok("400 150 230 18");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(moveRecipe()));
+    expect(res.exitCode).toBe(0);
+    // The filter text rides one keystroke (spaces intact), and the commit clicks
+    // the row centre (400+230/2, 150+18/2) = (515, 159).
+    const typed = commands.find((c) => c.primitive === "type-text");
+    expect(typed?.script).toContain('keystroke "Dest"');
+    const clicks = commands.filter((c) => c.primitive === "click-point");
+    expect(clicks.length).toBe(3); // More button, Move…, the destination row
+    expect(clicks[2]?.script).toContain("515");
+    expect(clicks[2]?.script).toContain("159");
+    // The decisive guarantee: no Return, so the New-Project row is unreachable.
+    expect(commands.some((c) => c.script?.includes("key code 36"))).toBe(false);
+  });
+
+  it("aborts with the resolver's own reason — and NO click — when the destination row is absent", async () => {
+    const offered =
+      'the Move… picker offers no project named "Dest" — it offered: [Something Else]';
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) return ok("1 1 1");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "resolve-frame") {
+        // The two popover targets resolve; the picker row refuses.
+        const isPickerRow = c.script?.includes("MovePopUpDialog-") === true;
+        return isPickerRow
+          ? { ok: false, stdout: "", stderr: `0:0: execution error: ${offered} (-1728)` }
+          : ok("100 200 26 22");
+      }
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(moveRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain(offered);
+    expect(res.stderr).toContain("no click was sent");
+    // Two clicks opened the picker; the third — the commit — never fired.
+    expect(commands.filter((c) => c.primitive === "click-point").length).toBe(2);
+    expect(commands.some((c) => c.script?.includes("key code 36"))).toBe(false);
   });
 });
 

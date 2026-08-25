@@ -513,6 +513,7 @@ export type HeadingMoveToProjectRefusal =
   | "empty-heading-title"
   | "no-dest"
   | "dest-ambiguous"
+  | "dest-not-open"
   | "same-project";
 
 export type HeadingMoveToProjectTaxonomy =
@@ -601,9 +602,38 @@ export function classifyHeadingMoveToProject(
         "a heading WITHIN its project",
     };
   }
-  // Destination picker-collision: the picker searches BY TITLE, so a shared dest
-  // title would filter to >1 project and Return would pick the wrong one — fail
-  // closed even though the destination itself resolved (possibly by uuid).
+  // The Move… picker offers OPEN projects only: a completed or canceled one is
+  // absent from it entirely, and the picker's trailing `New Project "<typed>"`
+  // row then becomes the only offer for that name. That is how the pre-fix drive
+  // CREATED a second project of the destination's name and moved the heading into
+  // it (measured on Things 3.23 — docs/lab/hxpc1-picker-assert.md §B4). The drive
+  // now refuses at the picker rather than committing that row, but a destination
+  // resolved by uuid can be non-open (title resolution already excludes those),
+  // so say so up front instead of after the app has been driven.
+  const destStatus = db
+    .prepare("SELECT status FROM TMTask WHERE uuid = ?")
+    .get(dest.resolved.uuid) as { status: number } | undefined;
+  if (destStatus !== undefined && destStatus.status !== 0) {
+    return {
+      kind: "refuse",
+      refusal: "dest-not-open",
+      detail:
+        `the destination project "${dest.resolved.title}" is ` +
+        `${destStatus.status === 3 ? "completed" : "canceled"} — the Move… picker the drive uses ` +
+        "lists open projects only, so there is no row to move the heading into; reopen the " +
+        "destination project first",
+    };
+  }
+  // Destination title TWINS: the drive commits the picker row whose title equals
+  // the destination's exactly, so two projects sharing that title give two
+  // identical rows and no way to tell which one the caller meant — fail closed
+  // even though the destination itself resolved (possibly by uuid). Deliberately
+  // NOT widened to PREFIX collisions: an exact-title row is a different row from
+  // one that merely starts with the same text, so "Synthetic Work" is committed
+  // unambiguously with "Synthetic Work Stuff" sitting right beside it in the
+  // filtered list (measured — HXPC1 §B3/§C3), and refusing that would decline an
+  // operation the app expresses perfectly well. The drive's own row resolution is
+  // the backstop: it refuses on anything other than exactly one matching row.
   const destTitle = dest.resolved.title;
   const destTwins = db
     .prepare(
@@ -616,8 +646,8 @@ export function classifyHeadingMoveToProject(
       refusal: "dest-ambiguous",
       detail:
         `the destination title "${destTitle}" is shared by ${destTwins.n + 1} projects — the ` +
-        "Move… picker searches by title and would land the heading in the wrong one; rename or " +
-        "merge the duplicates first",
+        "Move… picker lists one row per project and the drive addresses that row by title, so " +
+        "there is no way to pick between them; rename or merge the duplicates first",
     };
   }
   return {
