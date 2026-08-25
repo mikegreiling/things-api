@@ -17,34 +17,90 @@
  * — set by the pipeline only while a write is actually touching the app — so a
  * signal received during a read, or after the write already returned, emits
  * nothing and simply exits.
+ *
+ * ## Why the listeners are SCOPED, not installed at startup
+ *
+ * A registered JS listener replaces the kernel's default disposition with a
+ * libuv watcher that can only run its handler ON the event loop. A span that
+ * never yields — the whole synchronous read path, whose `open(2)` on the Things
+ * container can block indefinitely behind a TCC dialog — therefore SWALLOWS the
+ * signal entirely: queued, never dispatched, and the EINTR'd syscall restarted.
+ * Measured 2026-08-24: the clean-host probes needed SIGKILL to reap an ordinary
+ * command. The ceremonies answered the same hazard from the other side with
+ * {@link withDefaultInterrupts} (#567), which lifts the listeners for their
+ * blocking span.
+ *
+ * So the listeners are armed exactly where they can be honored AND have
+ * something to say: the CLI write drivers, whose osascript dispatch is async
+ * (`osaExec` — "never blocks the event loop"), and the MCP server, which is
+ * event-loop-resident for its whole life. Everywhere else the process keeps the
+ * kernel's default disposition, and a `timeout`'s SIGTERM kills it — which is
+ * the CORRECT outcome for a read: there is nothing to report (the report builder
+ * returns null with no write in flight) and nothing to unwind.
+ *
+ * KNOWN RESIDUAL: a write invocation is armed from the top of its driver, which
+ * includes the synchronous `openThings` — the read gate's `open(2)` on the
+ * container, the same call that can block. So a WRITE command stalled there
+ * still swallows SIGTERM, where a read no longer does. Narrowing further (arming
+ * past the client open, or only once the pipeline's in-flight marker is set)
+ * would close it, at the cost of the pre-write window's `signal` trace entry;
+ * that trade wants a ruling, since it is the one window where the guard is armed
+ * but has nothing to report anyway.
  */
 import { errorEnvelope, getInflight, trace, tracePath, type InflightWrite } from "../index.ts";
+
+/** The signals whose default disposition an armed span replaces. */
+const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 
 /** Whether the current invocation is a `--json` write (so the interrupt result is machine-readable). */
 let armed: { json: boolean } | null = null;
 
-/** Arm the guard for a write invocation (call at the top of the write driver). */
-export function armInterrupt(json: boolean): void {
-  armed = { json };
+/** The listeners currently registered, so disarming removes exactly those. */
+let listeners: { signal: (typeof SIGNALS)[number]; fn: () => void }[] = [];
+
+function install(): void {
+  if (listeners.length > 0) return;
+  listeners = SIGNALS.map((signal) => {
+    const fn = (): void => handle(signal);
+    process.on(signal, fn);
+    return { signal, fn };
+  });
 }
 
-/** Disarm once the write driver has returned (its `finally`). */
-export function disarmInterrupt(): void {
-  armed = null;
+function uninstall(): void {
+  for (const { signal, fn } of listeners) process.removeListener(signal, fn);
+  listeners = [];
 }
-
-let installed = false;
 
 /**
- * Install the SIGTERM/SIGINT handlers ONCE per process. Idempotent — safe to
- * call from `runCli` before dispatch. Exits with the conventional 128 + signum
- * code after emitting.
+ * Arm the guard for a write invocation (call at the top of the write driver):
+ * registers the handlers for the span of the write and records whether its
+ * stdout is machine-readable. Idempotent within a span.
  */
-export function installSignalHandlers(): void {
-  if (installed) return;
-  installed = true;
-  process.once("SIGTERM", () => handle("SIGTERM"));
-  process.once("SIGINT", () => handle("SIGINT"));
+export function armInterrupt(json: boolean): void {
+  armed = { json };
+  install();
+}
+
+/**
+ * Disarm once the write driver has returned (its `finally`): the handlers come
+ * OFF, so the rest of the invocation — rendering, teardown, and any synchronous
+ * read that follows — dies to a signal under the kernel's default disposition
+ * rather than queueing it behind a blocked event loop.
+ */
+export function disarmInterrupt(): void {
+  armed = null;
+  uninstall();
+}
+
+/**
+ * Install the handlers for the LIFETIME of a long-running server (`things mcp`).
+ * Legitimate only there: an event-loop-resident process can always dispatch, and
+ * a supervisor's SIGTERM mid-write still gets the honest stderr line. Never call
+ * this from a one-shot command path — see the module note.
+ */
+export function installServerSignalHandlers(): void {
+  install();
 }
 
 /** The honest interrupt message: names the signal, op, last step, and re-check. */
@@ -94,6 +150,9 @@ export function interruptReport(
 }
 
 function handle(signal: "SIGTERM" | "SIGINT"): void {
+  // Once-semantics AND default disposition restored: a second signal arriving
+  // while this handler runs kills the process outright instead of re-entering.
+  uninstall();
   const inflight = getInflight();
   // (a) Mark the interruption point in the trace (flushed synchronously).
   trace(() => ({

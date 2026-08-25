@@ -133,6 +133,16 @@ describe("write drivers install the trace and arm the interrupt guard", () => {
     expect(traceEvents().at(-1)).toMatchObject({ phase: "invocation-end", exitCode: 2 });
   });
 
+  it("leaves no signal listener behind — the span really is the write's", async () => {
+    const before = [process.listenerCount("SIGTERM"), process.listenerCount("SIGINT")];
+    await run(["todo", "add", "Scoped", "--json"]);
+    expect(process.exitCode).toBe(0);
+    // Armed for the drive, off again the moment the driver returned: whatever
+    // the invocation does next (rendering, teardown, a synchronous read) dies
+    // to a signal under the kernel's disposition instead of queueing it.
+    expect([process.listenerCount("SIGTERM"), process.listenerCount("SIGINT")]).toEqual(before);
+  });
+
   it("writes no trace file at all when tracing is off (the default cost)", async () => {
     process.env["THINGS_API_TRACE"] = "false";
     await run(["todo", "add", "Quiet", "--json"]);

@@ -25,7 +25,7 @@
  * MEASURED 2026-08-24 (macOS 24.6, node under a pty): a ceremony's gates and
  * bounded waits are SYNCHRONOUS — a blocking `read(2)` on /dev/tty, or
  * `Atomics.wait` between polls — so they hold the event loop for their whole
- * duration. The CLI installs `process.once("SIGINT", …)` at startup
+ * duration. The CLI used to install `process.once("SIGINT", …)` at startup
  * (../cli/interrupt.ts), and a registered JS listener replaces the kernel's
  * default disposition with a libuv watcher that can only run a handler ON the
  * event loop. With the loop held, the signal is queued and never dispatched,
@@ -33,6 +33,13 @@
  * ISIG on, so ^C is consumed as a signal and never arrives as a byte — Ctrl-C
  * is swallowed COMPLETELY: no handler, no exit, no input. Reproduced both at a
  * gate and inside a poll; without the listener the same ^C kills node at once.
+ *
+ * The startup install is GONE (the same starvation hit ordinary commands, which
+ * now keep the kernel's disposition and are armed only for the span of a write),
+ * so a ceremony reached from a bare CLI invocation already has nothing to lift.
+ * {@link withDefaultInterrupts} stays as the ceremony's own guarantee: it holds
+ * whatever the process arrives with, and is what makes the promise independent
+ * of who called it.
  *
  * The fix is {@link withDefaultInterrupts}: for the span of the ceremony the JS
  * listeners are lifted, so the kernel terminates the process on ^C exactly as
