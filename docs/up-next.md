@@ -4,6 +4,14 @@ The working queue for the next session(s): **open items only**. An item is DELET
 
 **One-home rule:** every open item lives in exactly ONE of {this file, roadmap.md}. This file holds the short-horizon queue; roadmap holds durable strategy. No item is restated across the two.
 
+## PRE-0.19.0 — the release runway (Mike's pinned order, 2026-08-25; do these first, in this order)
+
+1. **Triage + fix the freshly-filed GitHub bug reports.** Run `gh issue list` FIRST — Mike said reports were "just filed" but at parking time only #512 (2026-08-20, recurring project creation fails when UI row selection times out) was visible; expect new ones to have landed. Fix what belongs in the release; #512 rides along if tractable.
+2. **Helper icon rework.** The `>_` prompt mark under the checkmark is too small and overlaps it. Mike's direction: a clever `✓_` — the greater-than TILTED so it reads as a checkmark, keeping the `_` so the pair still evokes a terminal prompt, drawn larger and clear of the main checkmark (or replacing it as the single central motif — designer's call, show him the render). Regenerate via `scripts/generate-helper-icon.jxa` (#558 pattern: same .icns path, rebuild, reinstall on host so Settings shows it).
+3. **Cut v0.19.0** (the release drill: five-file bump precedent #536/#496, tag, watch all three jobs). The `build-helpers` job's notarization leg is ALSO the pending verification that Apple's notary accepts the reader's new SBPL temporary-exception entitlements (#574) — watch that leg specifically; a rejection there means the self-bind entitlement story needs a fallback and the release halts. Consumer-verify the published tarball (prebuilt bundle = helpers 1.3.0, codesign/staple/spctl) per the v0.18.0 drill.
+
+Everything else stays queued below (Mike, 2026-08-25: "all the rest can remain on up-next").
+
 Sections are blocker-classes: **needs-Mike** (a decision, near-zero effort) · **VM-batchable** (autonomous lab campaigns) · **needs-human** (a short in-person sitting) · **calendar-pinned** (date-driven) · **small code** (unblocked, low effort) · **feature design** (wants an ideation round before code).
 
 ## needs-Mike — decisions blocked on him, near-zero effort
