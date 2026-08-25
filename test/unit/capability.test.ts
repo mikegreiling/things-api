@@ -17,7 +17,9 @@ import {
   uiAllowed,
   uiCapability,
   UI_DIRECT_ESCAPE_ENV,
+  writeAllowed,
   writeCapability,
+  WRITE_DIRECT_ESCAPE_ENV,
   type CapabilityDeps,
 } from "../../src/capability.ts";
 
@@ -280,6 +282,63 @@ describe("writeCapability", () => {
     expect(cap.mode).toBe("direct-unknown");
     expect(cap.detail).toContain("does not descend from an application bundle");
     expect(cap.remediation.join(" ")).toContain("things helpers setup");
+  });
+
+  /**
+   * The lab's write-vector escape (docs/lab/harness.md §The lab escapes). A
+   * guest shell has no bundle id, so the verdict there is UNKNOWABLE rather
+   * than absent — the escape says which, and it may say it nowhere else.
+   */
+  describe("the lab's write-vector escape", () => {
+    const escape = { [WRITE_DIRECT_ESCAPE_ENV]: "1" };
+
+    it("resolves the bundle-id-less unknown, and needs no deputy", () => {
+      const cap = writeCapability(bareMachine({ env: escape, deputyAutomation: () => undefined }));
+      expect(cap.mode).toBe("direct-escape");
+      expect(writeAllowed(cap)).toBe(true);
+      expect(cap.detail).toContain(WRITE_DIRECT_ESCAPE_ENV);
+      expect(cap.remediation).toEqual([]);
+    });
+
+    it("is not consulted at all when the host HAS an identity", () => {
+      // The bound that keeps it out of a real user's way: a host with a bundle
+      // id is answered from its TCC row, escape or no escape — so the escape
+      // can never mask a recorded refusal or invent a grant.
+      const denied = writeCapability(
+        bareMachine({
+          env: { ...escape, __CFBundleIdentifier: "com.mitchellh.ghostty" },
+          automationAuthValue: () => 0,
+        }),
+      );
+      expect(denied.mode).toBe("direct-denied");
+      expect(writeAllowed(denied)).toBe(false);
+      const unknown = writeCapability(
+        bareMachine({
+          env: { ...escape, __CFBundleIdentifier: "com.mitchellh.ghostty" },
+          automationAuthValue: () => null,
+        }),
+      );
+      expect(unknown.mode).toBe("direct-unknown");
+      expect(writeAllowed(unknown)).toBe(false);
+    });
+
+    it("answers to the literal 1 and to nothing else", () => {
+      for (const value of ["", "0", "true", "yes"]) {
+        expect(
+          writeCapability(bareMachine({ env: { [WRITE_DIRECT_ESCAPE_ENV]: value } })).mode,
+        ).toBe("direct-unknown");
+      }
+    });
+
+    it("does not cross vectors — the ui escape leaves the write verdict alone", () => {
+      const cap = writeCapability(bareMachine({ env: { [UI_DIRECT_ESCAPE_ENV]: "1" } }));
+      expect(cap.mode).toBe("direct-unknown");
+    });
+
+    it("an onboarded deputy still wins, so the escape cannot downgrade provenance", () => {
+      const cap = writeCapability(bareMachine({ env: escape, deputyAutomation: () => "granted" }));
+      expect(cap.mode).toBe("deputy");
+    });
   });
 });
 

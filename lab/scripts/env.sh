@@ -1,21 +1,37 @@
 # Shared environment for lab scripts. Source this; do not execute.
 export TART_HOME="${TART_HOME:-/Volumes/Workspace/tart}"
 
-# THE UI-VECTOR LAB ESCAPE (docs/design/permissions-doctrine.md Article IV;
-# docs/lab/harness.md §The UI-vector lab escape).
+# THE LAB ESCAPES (docs/design/permissions-doctrine.md Articles I/II + IV;
+# docs/lab/harness.md §The lab escapes).
 #
-# Shipped hosts may drive the Things window ONLY through the helper pair — the
-# signed identities that hold Accessibility + Automation → System Events. A
-# golden clone has no helper bundle and no human to answer a consent dialog;
-# what it has is the AXVM1 layer, an in-guest Accessibility grant held by the
-# runner's own sshd-descended processes. So every GUEST invocation of the CLI
-# that exercises a ui-vector op must carry this prefix, which restores direct
-# UI-vector availability. It is NOT consumer surface and it does NOT bypass
-# `ui-enabled` — a clone still runs `things config set ui-enabled true`.
+# A shipped host may reach Things only through grants a golden clone cannot
+# have: it has no helper bundle and no human to answer a consent dialog. What it
+# DOES have is the AXVM1 layer — an in-guest Accessibility + Automation grant
+# held by the runner's own sshd-descended processes. Each escape below restores
+# DIRECT availability of one vector for exactly that situation. Neither is
+# consumer surface.
+#
+# $LAB_UI_DIRECT — the ui vector (GUI-driving). Does NOT bypass `ui-enabled`; a
+# clone still runs `things config set ui-enabled true`.
 #
 #   lab_ssh "$IP" "$LAB_UI_DIRECT $CLI todo reschedule-repeat … "
 #
 LAB_UI_DIRECT="THINGS_API_UI_DIRECT=1"
+
+# $LAB_WRITE_DIRECT — the AppleScript vector. An sshd-descended shell has no
+# bundle id, so macOS has no identity to have recorded an Automation grant
+# against and `writeCapability` reads `direct-unknown` in EVERY clone: without
+# this prefix every AppleScript-vector verb, and every composite with an
+# AppleScript leg (`make-repeating`, `add-repeating`), refuses `blocked:
+# environment`. The URL scheme, Shortcuts and reads are unaffected.
+#
+#   lab_ssh "$IP" "$LAB_WRITE_DIRECT $CLI todo delete … "
+#
+LAB_WRITE_DIRECT="THINGS_API_WRITE_DIRECT=1"
+
+# $LAB_DIRECT — both, for a driver that exercises composites (a URL/AppleScript
+# leg plus a dialog drive) and does not want to reason about which is which.
+LAB_DIRECT="$LAB_UI_DIRECT $LAB_WRITE_DIRECT"
 
 LAB_BASE_IMAGE="ghcr.io/cirruslabs/macos-sequoia-vanilla:latest"
 LAB_SSH_USER="admin"

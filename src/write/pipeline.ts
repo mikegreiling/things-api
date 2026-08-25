@@ -28,6 +28,7 @@ import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "
 import {
   uiAllowed,
   uiCapability as uiCapabilityDefault,
+  writeAllowed,
   writeCapability as writeCapabilityDefault,
   type UiCapability,
   type WriteCapability,
@@ -1121,7 +1122,7 @@ export async function runMutation<K extends OperationKind>(
     // standing is NOT resolved by trying: that is what `things setup` is for.
     if (vector.sendsAppleEvents === true && vector.simulates !== true) {
       const capability = (deps.writeCapability ?? (() => writeCapabilityDefault()))();
-      if (capability.mode === "direct-denied" || capability.mode === "direct-unknown") {
+      if (!writeAllowed(capability)) {
         audit({
           result: blockedCode({ reason: "environment" }),
           vector: vector.id,
