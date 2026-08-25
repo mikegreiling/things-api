@@ -82,6 +82,7 @@ import {
   type PreModDates,
   type RepeatingDiscovery,
 } from "./verify/delta.ts";
+import { COLLATERAL_FIELD_PATHS, describeCollateral } from "./repeat-collateral.ts";
 import { pollUntilVerified, type PollerDeps, type PollOutcome } from "./verify/poller.ts";
 import { setInflight, trace } from "../trace/tracer.ts";
 
@@ -284,8 +285,13 @@ export type MutationResult =
        * because the Things window was not reachable/answering, and the re-verify
        * found nothing landed — the app never got the chance to accept or reject
        * the command, so it must not be reported as a silent no-op.
+       * `collateral` is the UNEXPLAINED-DELTA verdict (CGRD1): the requested
+       * change WAS applied, but a field the caller never named moved with it and
+       * nothing in the rule vocabulary attributes the movement. The write landed,
+       * so a retry is the wrong move — `collateral` names the field and both
+       * values so the caller looks first.
        */
-      reason: "timeout" | "mismatch" | "silent-noop" | "ui-unreachable";
+      reason: "timeout" | "mismatch" | "silent-noop" | "ui-unreachable" | "collateral";
       expected: DeltaSpec;
       observed: Record<string, unknown> | null;
       detail: string;
@@ -538,7 +544,14 @@ function capturePre(
   };
   if (spec.mode === "update" || spec.mode === "state") {
     const extra = spec.mode === "update" ? (spec.capture ?? []) : [];
-    captureFor(spec.uuid, [...spec.assert, ...extra]);
+    // The collateral diff needs the WHOLE watched vocabulary captured pre-op, not
+    // just the asserted subset — an unrequested field is by definition one the
+    // assertions do not name (CGRD1 guard 3).
+    const watched: { field: string }[] =
+      spec.mode === "update" && spec.collateral !== undefined
+        ? COLLATERAL_FIELD_PATHS.map((field) => ({ field }))
+        : [];
+    captureFor(spec.uuid, [...spec.assert, ...extra, ...watched]);
     if (spec.mode === "state" && spec.cascade !== undefined) {
       for (const c of spec.cascade) captureFor(c.uuid, c.assert);
     }
@@ -1628,6 +1641,9 @@ export async function runMutation<K extends OperationKind>(
         expected: delta,
         observed: outcome.observed,
         detail:
+          // The collateral verdict carries its own sentence — which field moved,
+          // from what to what, and why a retry is not the answer (CGRD1).
+          (outcome.collateral !== undefined ? describeCollateral(outcome.collateral) : undefined) ??
           outcome.detail ??
           (outcome.kind === "silent-noop"
             ? "no observable change in the database (the app accepted the command but did nothing)"

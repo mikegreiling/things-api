@@ -150,6 +150,169 @@ const SE = `tell application "System Events" to tell process "Things3"`;
 const SETTLE_READS = 40;
 const SETTLE_POLL_S = 0.1;
 
+/**
+ * Row tolerance (points) for every LABEL-ANCHORED field address here — how far a
+ * control's y may sit from its label's y and still count as the same row.
+ * Measured on Things 3.23 (CGRD1 §A census): `Every`@286 / interval@283,
+ * `Ends:`@375 / count@372, `days earlier`@413 / start-offset@409 — a 3–4pt
+ * baseline offset, so 8 is ~2× the observed worst case and well under the
+ * ~45pt row pitch of the cadence group.
+ */
+const ROW_TOLERANCE = 8;
+
+/**
+ * The shared AppleScript handler prelude for every LABEL-ANCHORED field address
+ * in the Repeat dialog — the HXPC1 discrimination law in ONE place, so the
+ * pre-commit audit re-reads each field through the SAME address the drive wrote
+ * it through (a self-referential read-back is exactly what let #589's wrong-field
+ * write report OK).
+ *
+ * The laws, all measured on Things 3.23 / build 32300036 (CGRD1 §A census, and
+ * HXPC1 §A before it — docs/lab/cgrd1-precommit-audit.md, hxpc1-picker-assert.md):
+ *
+ *  - The cadence group's numeric fields are identified by the LABEL ROW they sit
+ *    on, never by index among the group's text fields. Selecting an "Ends: after"
+ *    bound INSERTS the count AHEAD of the interval, so index 1 is a different
+ *    control at different moments.
+ *  - The interval is matched POSITIVELY, on the `Every` label's row. Every fixed
+ *    frequency (daily/weekly/monthly/yearly) carries that label at y=286 with the
+ *    interval at y=283. An AFTER-COMPLETION cadence group carries NEITHER an
+ *    `Every` nor an `Ends:` label (census: its only static text is "after previous
+ *    item is checked off.") and offers exactly ONE text field — so that shape falls
+ *    to the sole-field rule, which is itself a uniqueness check, not an index.
+ *  - Anything else FAILS CLOSED reporting the whole numeric-field inventory rather
+ *    than typing a number into a field it cannot vouch for. An AX tree is an
+ *    undocumented private surface: an unrecognized shape is a refusal, never a
+ *    best guess.
+ */
+const AX_CADENCE_HANDLERS = `on cgLabelY(g, want)
+  tell application "System Events"
+    set outY to missing value
+    repeat with i from 1 to (count of static texts of g)
+      set sv to ""
+      try
+        set sv to (value of static text i of g) as text
+      end try
+      if sv is want then
+        -- bind the position, THEN index it: System Events refuses indexing a
+        -- position read inline from a specifier (-1700).
+        set labelPos to position of static text i of g
+        set outY to item 2 of labelPos
+      end if
+    end repeat
+    return outY
+  end tell
+end cgLabelY
+
+on cgInventory(g)
+  tell application "System Events"
+    set inv to ""
+    repeat with i from 1 to (count of text fields of g)
+      set fp to position of text field i of g
+      set inv to inv & " #" & i & "(y=" & (item 2 of fp) & ",shows=" & ((value of text field i of g) as text) & ")"
+    end repeat
+    if inv is "" then set inv to " (none)"
+    return inv
+  end tell
+end cgInventory
+
+on cgOnRow(g, y, tol, want)
+  tell application "System Events"
+    set hits to {}
+    repeat with i from 1 to (count of text fields of g)
+      set fp to position of text field i of g
+      set dy to (item 2 of fp) - y
+      if dy < 0 then set dy to -dy
+      set onRow to (dy <= tol)
+      if onRow is want then set end of hits to text field i of g
+    end repeat
+    return hits
+  end tell
+end cgOnRow
+
+on cgSettle(g)
+  -- SETTLE ON THE GROUP'S OWN SHAPE, never on a clock (determinism doctrine).
+  -- A frequency switch REBUILDS the cadence group. Two things go wrong when a
+  -- read starts too early: the row discrimination reads positions from controls
+  -- that are still moving, and keystrokes land on a field being torn down —
+  -- unhandled, so macOS beeps (BEEP1). Poll until two consecutive reads of the
+  -- group's label + field-position signature agree, then proceed.
+  tell application "System Events"
+    set sig to ""
+    set prevSig to "<none>"
+    repeat ${SETTLE_READS} times
+      set prevSig to sig
+      set sig to ""
+      repeat with i from 1 to (count of static texts of g)
+        set sv to ""
+        try
+          set sv to (value of static text i of g) as text
+        end try
+        set sig to sig & "|s:" & sv
+      end repeat
+      repeat with i from 1 to (count of text fields of g)
+        set fp to position of text field i of g
+        set sig to sig & "|f:" & (item 2 of fp)
+      end repeat
+      if sig is prevSig then return true
+      delay ${SETTLE_POLL_S}
+    end repeat
+    error "the Repeat dialog's cadence group is still re-laying out — its shape changed on every read; last seen" & sig
+  end tell
+end cgSettle
+
+on cgField(g, target, tol)
+  tell application "System Events"
+    set endsY to my cgLabelY(g, "Ends:")
+    set everyY to my cgLabelY(g, "Every")
+    set nf to (count of text fields of g)
+    if target is "ends-count" then
+      if endsY is missing value then error "the Repeat dialog's cadence group carries no \\"Ends:\\" label, so the ends-after count field cannot be identified — numeric fields:" & my cgInventory(g)
+      set hits to my cgOnRow(g, endsY, tol, true)
+      if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"Ends:\\" row, expected exactly 1 — numeric fields:" & my cgInventory(g)
+      return item 1 of hits
+    end if
+    if everyY is not missing value then
+      set hits to my cgOnRow(g, everyY, tol, true)
+      if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"Every\\" row, expected exactly 1 — numeric fields:" & my cgInventory(g)
+      return item 1 of hits
+    end if
+    if endsY is not missing value then
+      set hits to my cgOnRow(g, endsY, tol, false)
+      if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) off the \\"Ends:\\" row, expected exactly 1 — numeric fields:" & my cgInventory(g)
+      return item 1 of hits
+    end if
+    if nf is not 1 then error "the Repeat dialog's cadence group carries neither an \\"Every\\" nor an \\"Ends:\\" label and offers " & nf & " numeric field(s), so the interval cannot be identified — numeric fields:" & my cgInventory(g)
+    -- positional-ok: reached ONLY after the line above proved the group holds
+    -- exactly one text field, so this is a uniqueness statement, not an index.
+    -- The after-completion cadence group is that shape (MEASURED, CGRD1 §A: its
+    -- only static text is "after previous item is checked off.", one field).
+    return text field 1 of g
+  end tell
+end cgField
+
+on rfInventory(c)
+  tell application "System Events"
+    set inv to ""
+    repeat with i from 1 to (count of text fields of c)
+      set fp to position of text field i of c
+      set inv to inv & " #" & i & "(y=" & (item 2 of fp) & ",shows=" & ((value of text field i of c) as text) & ")"
+    end repeat
+    if inv is "" then set inv to " (none)"
+    return inv
+  end tell
+end rfInventory
+
+on rfField(c, rowLabel, tol)
+  tell application "System Events"
+    set labelY to my cgLabelY(c, rowLabel)
+    if labelY is missing value then error "the Repeat dialog shows no \\"" & rowLabel & "\\" label, so the field beside it cannot be identified — text fields:" & my rfInventory(c)
+    set hits to my cgOnRow(c, labelY, tol, true)
+    if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"" & rowLabel & "\\" row, expected exactly 1 — text fields:" & my rfInventory(c)
+    return item 1 of hits
+  end tell
+end rfField`;
+
 /** resolve-element: does the element exist right now? Returns "true"/"false". */
 export function axResolveScript(path: string): string {
   return `${SE} to return (exists (${path}))`;
@@ -217,8 +380,9 @@ end tell`;
 }
 /**
  * set-group-number: drive ONE of the Repeat dialog's two numeric fields —
- * the cadence INTERVAL or the ENDS-AFTER COUNT — addressed by the ROW it sits on
- * (HXPC1, docs/lab/hxpc1-picker-assert.md §A).
+ * the cadence INTERVAL or the ENDS-AFTER COUNT — addressed by the LABEL ROW it
+ * sits on (HXPC1, docs/lab/hxpc1-picker-assert.md §A; hardened by CGRD1,
+ * docs/lab/cgrd1-precommit-audit.md §A).
  *
  * Both fields used to be spelled `text field 1 of group 1`, which is the same
  * control at different moments. Measured on Things 3.23 (build 32300036):
@@ -234,104 +398,37 @@ end tell`;
  * drive wrote the requested interval into the count field, the count drive then
  * overwrote it, and the interval silently never changed.
  *
- * The row anchor is the group's `Ends:` static text (y=375 against the count's
- * y=372 — the same row-tolerance discriminator `probe-dialog-shape` uses):
- *   - `ends-count` — the group text field sharing the `Ends:` row;
- *   - `interval`   — the group text field that does NOT share it. An
- *     after-completion rule offers no ends bound at all (its group carries
- *     neither an `Ends:` label nor an Ends pop-up, only the unit pop-up and the
- *     interval), so the "not on that row" rule leaves exactly the one field.
- * Anything other than exactly one match FAILS CLOSED rather than type a number
- * into a field it cannot vouch for. Labels are pinned English, as everywhere
- * else here. The write itself is the {@link axSetValueScript} closed loop —
+ * The addresses are the {@link AX_CADENCE_HANDLERS} laws — POSITIVE label-row
+ * matches wherever the app offers a label to match, a uniqueness check where it
+ * does not, and a fail-closed refusal naming the whole numeric-field inventory
+ * otherwise. The write itself is the {@link axSetValueScript} closed loop —
  * focus, type, Tab-commit, read back, bounded retries — and, like it, sends NO
  * select-all keystroke: the ⌘A that used to open it is the macOS alert beep
  * (BEEP1, docs/lab/beep1-numeric-field-beep.md), and focusing the field already
  * selects its whole content.
+ *
+ * The read-back this loop performs is SELF-REFERENTIAL by construction — it
+ * re-reads the field it addressed, so it can only prove the keystrokes landed
+ * where they were aimed, never that they were aimed at the right control. The
+ * PRE-COMMIT AUDIT ({@link axAuditDialogScript}) is what closes that: it re-reads
+ * every control through these same handlers just before the OK press.
  */
 export function axSetGroupNumberScript(
   groupPath: string,
   target: "interval" | "ends-count",
   value: string,
   attempts = 3,
-  rowTolerance = 8,
+  rowTolerance = ROW_TOLERANCE,
 ): string {
   const v = escapeAppleScript(value);
   const n = Math.max(1, Math.trunc(attempts));
   const tol = Math.max(1, Math.trunc(rowTolerance));
-  const wantOnEndsRow = target === "ends-count";
-  return `${SE}
+  return `${AX_CADENCE_HANDLERS}
+
+${SE}
   set g to (${groupPath})
-  -- SETTLE ON THE GROUP'S OWN SHAPE, never on a clock (determinism doctrine).
-  -- A frequency switch REBUILDS the cadence group, and this primitive is the
-  -- step that follows it. Two things go wrong when it starts too early: the row
-  -- discrimination below reads positions from controls that are still moving,
-  -- and the keystrokes land on a field being torn down — unhandled, so macOS
-  -- beeps (BEEP1: a back-to-back frequency-switch drive beeps once; the same
-  -- drive with the group settled first is silent). Poll until two consecutive
-  -- reads of the group's label + field-position signature agree, then proceed.
-  set sig to ""
-  set prevSig to "<none>"
-  set settled to false
-  repeat ${SETTLE_READS} times
-    set prevSig to sig
-    set sig to ""
-    repeat with i from 1 to (count of static texts of g)
-      set sv to ""
-      try
-        set sv to (value of static text i of g) as text
-      end try
-      set sig to sig & "|s:" & sv
-    end repeat
-    repeat with i from 1 to (count of text fields of g)
-      set fp to position of text field i of g
-      set sig to sig & "|f:" & (item 2 of fp)
-    end repeat
-    if sig is prevSig then
-      set settled to true
-      exit repeat
-    end if
-    delay ${SETTLE_POLL_S}
-  end repeat
-  if settled is false then
-    error "set-group-number: the Repeat dialog's cadence group is still re-laying out — its shape changed on every read; last seen" & sig
-  end if
-  set endsY to missing value
-  repeat with i from 1 to (count of static texts of g)
-    set sv to ""
-    try
-      set sv to (value of static text i of g) as text
-    end try
-    if sv is "Ends:" then
-      -- bind the position, THEN index it: System Events refuses indexing a
-      -- position read inline from a specifier (-1700) — the same two-statement
-      -- shape axProbeDialogShapeScript uses.
-      set labelPos to position of static text i of g
-      set endsY to item 2 of labelPos
-    end if
-  end repeat
-  set hits to {}
-  set inventory to ""
-  repeat with i from 1 to (count of text fields of g)
-    set fieldPos to position of text field i of g
-    set fy to item 2 of fieldPos
-    set onEndsRow to false
-    if endsY is not missing value then
-      set dy to fy - endsY
-      if dy < 0 then set dy to -dy
-      if dy <= ${tol} then set onEndsRow to true
-    end if
-    set rowWord to ""
-    if onEndsRow then set rowWord to ",ends-row"
-    set inventory to inventory & " #" & i & "(y=" & fy & rowWord & ")"
-    if onEndsRow is ${wantOnEndsRow} then set end of hits to text field i of g
-  end repeat
-  if (count of hits) is not 1 then
-    set labelWord to "absent"
-    if endsY is not missing value then set labelWord to "at y=" & endsY
-    error "set-group-number: the Repeat dialog offers " & (count of hits) & " field(s) for the ${target}, expected exactly 1 — Ends: label " & labelWord & ", numeric fields:" & inventory
-  end if
-  set tf to item 1 of hits
+  my cgSettle(g)
+  set tf to my cgField(g, "${target}", ${tol})
   repeat ${n} times
     set focused of tf to true
     delay 0.15
@@ -346,6 +443,300 @@ export function axSetGroupNumberScript(
   end repeat
   error "the ${target} field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
+}
+/**
+ * set-row-field: drive a Repeat-dialog text field addressed by the pinned English
+ * LABEL sharing its row — the same discrimination law as
+ * {@link axSetGroupNumberScript}, applied to a field that lives on the dialog
+ * SHELL rather than in the cadence group.
+ *
+ * Its one caller is the "and start [N] days earlier" offset the "Add deadlines"
+ * checkbox reveals, which shipped as `text field 1` of the shell. That address
+ * was the HXPC1 error class exactly: a value-bearing text field picked by index
+ * out of a STATE-DEPENDENT tree (the field does not exist at all until the
+ * checkbox is ticked), verified only by re-reading the same index it wrote. It
+ * happened to be right on 3.23 — measured, the shell carries 0 direct text fields
+ * with deadlines off and exactly 1 with them on, whether or not reminders are also
+ * on (CGRD1 §B census) — but nothing in the address said so, and an AX tree is an
+ * undocumented private surface that may add a second field in any release.
+ *
+ * The label anchor is `days earlier` (y=413 against the field's y=409, CGRD1 §B).
+ * A missing label, or anything other than exactly one field on its row, FAILS
+ * CLOSED naming the shell's whole text-field inventory. The write is the
+ * {@link axSetValueScript} closed loop.
+ */
+export function axSetRowFieldScript(
+  containerPath: string,
+  rowLabel: string,
+  value: string,
+  attempts = 3,
+  rowTolerance = ROW_TOLERANCE,
+): string {
+  const v = escapeAppleScript(value);
+  const label = escapeAppleScript(rowLabel);
+  const n = Math.max(1, Math.trunc(attempts));
+  const tol = Math.max(1, Math.trunc(rowTolerance));
+  return `${AX_CADENCE_HANDLERS}
+
+${SE}
+  set c to (${containerPath})
+  set tf to my rfField(c, "${label}", ${tol})
+  repeat ${n} times
+    set focused of tf to true
+    delay 0.15
+    keystroke "${v}"
+    delay 0.1
+    key code 48
+    delay 0.2
+    try
+      if ((value of tf) as text) is "${v}" then return "OK"
+    end try
+    delay 0.3
+  end repeat
+  error "the \\"${label}\\" field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
+end tell`;
+}
+
+/**
+ * ONE control the PRE-COMMIT DIALOG AUDIT re-reads, in the form the generator
+ * needs: a resolved element path (the shell / dialog-shape disjunctions are
+ * settled by the driver before the script is built) plus the value(s) the drive
+ * intended for it.
+ */
+export interface AuditScriptControl {
+  /** Human name of the control, as the mismatch report should say it. */
+  label: string;
+  kind: "popup" | "checkbox" | "group-number" | "row-field" | "weekdays" | "occurrence-popup";
+  /** popup / checkbox / occurrence-popup: the resolved element path. */
+  path?: string;
+  /** group-number: which of the cadence group's numeric fields. */
+  numberTarget?: "interval" | "ends-count";
+  /** row-field: the pinned English label sharing the field's row. */
+  rowLabel?: string;
+  /** weekdays: the group pop-up index of the first weekday row (shape-selected). */
+  weekdayBase?: number;
+  /** The accepted observed values — ANY one satisfies (the singular/plural pair). */
+  expected: string[];
+  /** How the intended value should READ in the report ("checked", not "1"). */
+  expectedLabel?: string;
+}
+
+/** The resolved audit the {@link axAuditDialogScript} generator compiles. */
+export interface AuditScriptSpec {
+  /** The resolved dialog shell (attached sheet or detached editor window). */
+  shell: string;
+  /** The resolved cadence group inside that shell. */
+  group: string;
+  controls: AuditScriptControl[];
+}
+
+/** AppleScript list literal of quoted strings. */
+function asList(values: string[]): string {
+  return `{${values.map((v) => `"${escapeAppleScript(v)}"`).join(", ")}}`;
+}
+
+/** The intended value(s) as the mismatch report should read them. */
+function intendedText(control: AuditScriptControl): string {
+  if (control.expectedLabel !== undefined) return control.expectedLabel;
+  return control.expected.map((v) => `\\"${escapeAppleScript(v)}\\"`).join(" or ");
+}
+
+/**
+ * audit-dialog: RE-READ EVERY CONTROL THIS DRIVE SET, through each control's own
+ * discriminated address, and refuse to commit if any one of them does not hold
+ * the value the drive intended.
+ *
+ * This exists because a per-step read-back is SELF-REFERENTIAL. Every setter here
+ * confirms its write by re-reading the element it addressed, so it proves the
+ * keystrokes landed where they were aimed — and nothing else. The #589 wrong-field
+ * write reported OK for exactly that reason: the interval drive typed into the
+ * ends-count field, then read the ends-count field back and found its own number
+ * sitting there. The address was wrong; a read-back through the same address
+ * cannot see that.
+ *
+ * The audit is the outside view. It is assembled from the recipe's OWN step list
+ * (so no control the recipe drives can be left out of the audit by omission) and
+ * runs as the last step before the OK press, comparing the dialog's complete
+ * intended state against what the dialog actually shows: frequency, the
+ * after-completion cadence unit, interval, ends bound and its count, the
+ * deadline/reminder checkboxes, the start-days-earlier offset, the weekday set,
+ * the monthly/yearly anchor pop-ups and the 3.23 first-occurrence pop-up. A
+ * mismatch is an `error` naming EVERY differing control with both values, which
+ * aborts the drive fail-closed BEFORE the commit and runs the standard clean-abort
+ * path — nothing reaches the database.
+ *
+ * Deterministic throughout: the cadence group is settled on its own shape
+ * signature (the BEEP1 two-agreeing-reads gate), never on a sleep, and every field
+ * is found by its label row rather than by index ({@link AX_CADENCE_HANDLERS}).
+ *
+ * The dialog's three `AXDateTimeArea` controls are audited separately — their
+ * values are NSDates no System Events read can reach, so they ride
+ * {@link axAuditDateAreasScript} through the same ObjC bridge that writes them.
+ */
+export function axAuditDialogScript(spec: AuditScriptSpec, rowTolerance = ROW_TOLERANCE): string {
+  const tol = Math.max(1, Math.trunc(rowTolerance));
+  const body = spec.controls
+    .map((c, i) => {
+      const name = escapeAppleScript(c.label);
+      const want = asList(c.expected);
+      const intended = intendedText(c);
+      const miss = `set end of bad to "${name} (intended ${intended}, dialog shows \\"" & v${i} & "\\")"`;
+      switch (c.kind) {
+        case "popup":
+          return `  set v${i} to "(unreadable)"
+  try
+    set v${i} to (value of (${c.path ?? ""})) as text
+  end try
+  if not (my aqAny(v${i}, ${want})) then ${miss}`;
+        case "occurrence-popup":
+          return `  set v${i} to "(unreadable)"
+  try
+    set v${i} to (value of (${c.path ?? ""})) as text
+  end try
+  set d${i} to my aqYMD(v${i})
+  if d${i} is missing value then
+    ${miss}
+  else if not (my aqAny(d${i}, ${want})) then
+    set end of bad to "${name} (intended ${intended}, dialog shows \\"" & v${i} & "\\" = " & d${i} & ")"
+  end if`;
+        case "checkbox":
+          return `  set v${i} to "(unreadable)"
+  try
+    set v${i} to ((value of (${c.path ?? ""})) as integer) as text
+  end try
+  if not (my aqAny(v${i}, ${want})) then set end of bad to "${name} (intended ${intended}, dialog shows " & (my aqTick(v${i})) & ")"`;
+        case "group-number":
+          return `  set v${i} to "(unreadable)"
+  try
+    set v${i} to ((value of (my cgField(g, "${c.numberTarget ?? "interval"}", ${tol}))) as text)
+  end try
+  if not (my aqAny(v${i}, ${want})) then ${miss}`;
+        case "row-field":
+          return `  set v${i} to "(unreadable)"
+  try
+    set v${i} to ((value of (my rfField(sh, "${escapeAppleScript(c.rowLabel ?? "")}", ${tol}))) as text)
+  end try
+  if not (my aqAny(v${i}, ${want})) then ${miss}`;
+        case "weekdays":
+          return `  set got${i} to {}
+  repeat with k from ${Math.max(1, Math.trunc(c.weekdayBase ?? 2))} to (count of pop up buttons of g)
+    set end of got${i} to ((value of pop up button k of g) as text)
+  end repeat
+  set v${i} to my aqJoin(got${i}, ",")
+  set off${i} to false
+  repeat with w in ${want}
+    if not (my aqAny(w as text, got${i})) then set off${i} to true
+  end repeat
+  repeat with w in got${i}
+    if not (my aqAny(w as text, ${want})) then set off${i} to true
+  end repeat
+  if off${i} then ${miss}`;
+      }
+    })
+    .join("\n");
+  return `${AX_CADENCE_HANDLERS}
+
+on aqAny(v, lst)
+  repeat with c in lst
+    if (v as text) is (c as text) then return true
+  end repeat
+  return false
+end aqAny
+
+on aqJoin(lst, sep)
+  set out to ""
+  repeat with x in lst
+    if out is not "" then set out to out & sep
+    set out to out & (x as text)
+  end repeat
+  return out
+end aqJoin
+
+on aqTick(v)
+  if (v as text) is "1" then return "checked"
+  if (v as text) is "0" then return "unchecked"
+  return "\\"" & (v as text) & "\\""
+end aqTick
+
+on aqPad2(n)
+  set s to (n as integer) as text
+  if (length of s) < 2 then set s to "0" & s
+  return s
+end aqPad2
+
+on aqYMD(t)
+  -- Occurrence-pop-up titles are LOCALIZED ("Sun, Jul 12, 2026"), so the match is
+  -- made by PARSING the title to a date and comparing calendar components — never
+  -- by rebuilding the app's display string (the axSelectNextOccurrenceScript law).
+  set s to t as text
+  try
+    set d to date s
+    return ((year of d) as text) & "-" & my aqPad2((month of d) as integer) & "-" & my aqPad2(day of d)
+  end try
+  try
+    set ofs to offset of ", " in s
+    if ofs > 0 then
+      set d to date (text (ofs + 2) thru -1 of s)
+      return ((year of d) as text) & "-" & my aqPad2((month of d) as integer) & "-" & my aqPad2(day of d)
+    end if
+  end try
+  return missing value
+end aqYMD
+
+${SE}
+  set sh to (${spec.shell})
+  set g to (${spec.group})
+  my cgSettle(g)
+  set bad to {}
+${body}
+  if (count of bad) is 0 then return "OK"
+  error "the Repeat dialog does not hold what this drive entered — " & (count of bad) & " control(s) differ: " & my aqJoin(bad, "; ")
+end tell`;
+}
+
+/** ONE date/time area the pre-commit audit re-reads through the ObjC bridge. */
+export interface AuditDateArea {
+  /** Human name of the control, as the mismatch report should say it. */
+  label: string;
+  target: "next" | "ends" | "reminder";
+  /** The spec the drive wrote: `date:YYYY-MM-DD` or `time:HH:mm`. */
+  spec: string;
+}
+
+/**
+ * The pre-commit audit's DATE-AREA leg. The dialog's first-occurrence, ends-on and
+ * reminder controls are `AXDateTimeArea`s whose value is an NSDate — unreachable
+ * from System Events — so they are re-read through the SAME ObjC bridge, the same
+ * shell-scoped walk and the SAME deterministic `pick` discriminator that
+ * {@link axSetDateTimeScript} writes them through. A control the audit cannot find,
+ * or one holding a different date/time, throws naming every area the dialog does
+ * present (y-position + time-of-day), so the drive aborts before the OK press.
+ */
+export function axAuditDateAreasScript(areas: AuditDateArea[]): string {
+  return `${AX_DATE_AREA_PRELUDE}
+function run(){
+  var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
+  if(!apps || apps.count===0) throw new Error('Things not running');
+  var app=$.AXUIElementCreateApplication(apps.objectAtIndex(0).processIdentifier);
+  var wanted=${JSON.stringify(areas)};
+  var cal=$.NSCalendar.currentCalendar;
+  var found=[]; try{ var shell=findShell(app); if(shell) collect(shell,'AXDateTimeArea',16,found); }catch(e){ found=[]; }
+  var bad=[];
+  for(var i=0;i<wanted.length;i++){
+    var w=wanted[i];
+    var dt=pick(found,w.target);
+    if(!dt){ bad.push(w.label+' (intended '+w.spec+', but this dialog state presents no '+w.target+' control among ['+inv(found)+'])'); continue; }
+    if(w.spec.indexOf('date:')===0){
+      var got=ymdStr(dt,cal), want=w.spec.slice(5);
+      if(got!==want) bad.push(w.label+' (intended '+want+', dialog shows '+(got||'(no value)')+')');
+    } else {
+      var gott=hmStr(dt,cal), p=w.spec.slice(5).split(':'), wantt=(+p[0])+':'+('0'+(+p[1])).slice(-2);
+      if(gott!==wantt) bad.push(w.label+' (intended '+wantt+', dialog shows '+(gott||'(no value)')+')');
+    }
+  }
+  if(bad.length) throw new Error('the Repeat dialog does not hold what this drive entered — '+bad.length+' control(s) differ: '+bad.join('; '));
+  return 'OK';
+}`;
 }
 /**
  * ensure-checkbox: converge a dialog checkbox to a target state through a
@@ -940,6 +1331,10 @@ export function axPickerRowFrameScript(pickerPath: string, title: string): strin
   if pickerId does not start with "MovePopUpDialog-" then
     error "the front dialog is not the Move… project picker (window id \\"" & pickerId & "\\") — nothing was committed"
   end if
+  -- positional-ok: the picker window holds exactly one scroll area (MEASURED,
+  -- HXPC1 §B2: "direct text fields=0  scroll areas=1"), and the window's own
+  -- AXIdentifier was checked above, so this is a container handle inside an
+  -- already-identified window — the ROW is addressed by exact title below.
   set sa to scroll area 1 of w
   set saPos to position of sa
   set saSize to size of sa
@@ -996,6 +1391,9 @@ export function axAbortScript(): string {
 export function axCloseReopenActivateScript(): string {
   return `tell application "Things3"
   try
+    -- positional-ok: an APP-LEVEL command to the Things scripting dictionary, not
+    -- an Accessibility element path — "close the front window", whichever it is,
+    -- which is the whole intent of the maneuver (a stuck sheet goes with it).
     close window 1
   end try
   reopen
@@ -1018,6 +1416,8 @@ export function axSheetOpenScript(): string {
   return `${SE}
   set sheetOpen to false
   try
+    -- positional-ok: an EXISTENCE probe over the one attached sheet a window can
+    -- present; no element is read or written through this path.
     if (exists sheet 1 of (first window whose subrole is "AXStandardWindow")) then set sheetOpen to true
   end try
   try
@@ -1220,7 +1620,68 @@ function clickPointCommand(x: number, y: number, label: string): UiCommand {
  * calendar date at midnight). One stable JXA shape.
  */
 export function axSetDateTimeScript(spec: string, target: "next" | "ends" | "reminder"): string {
-  return `ObjC.import('Foundation'); ObjC.import('AppKit'); ObjC.import('ApplicationServices');
+  return `${AX_DATE_AREA_PRELUDE}
+function run(){
+  var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
+  if(!apps || apps.count===0) throw new Error('Things not running');
+  var app=$.AXUIElementCreateApplication(apps.objectAtIndex(0).processIdentifier);
+  var target=${JSON.stringify(target)};
+  var spec=${JSON.stringify(spec)};
+  // Poll for the addressed area WITHIN THE DIALOG SHELL (PERF2): resolve the sheet
+  // / detached editor first, then collect only its subtree — the app-root descent
+  // this replaced cost ~4.4s on the busy host by walking the main window's list
+  // content. collect is wrapped so a stale-element ObjC exception during traversal
+  // cannot bubble as a raw -2700; pick guards the empty set, so dt is null (never a
+  // crash) when the target is absent. When no shell resolves (dialog absent), areas
+  // stays empty and the loop falls through to the SAME named error below.
+  var areas=[]; var dt=null;
+  for(var t=0;t<20 && !dt;t++){ areas=[]; try{ var shell=findShell(app); if(shell) collect(shell,'AXDateTimeArea',16,areas); }catch(e){ areas=[]; } dt=pick(areas,target); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
+  if(!dt) throw new Error('set-datetime '+target+': this Repeat-dialog state presents '+areas.length+' date area(s) ['+inv(areas)+'] but none is the '+target+' control — the requested first occurrence / bound cannot be set in this dialog shape');
+  var cal=$.NSCalendar.currentCalendar;
+  var d;
+  if(spec.indexOf('time:')===0){
+    // Set the time-of-day on the control's own date via the purpose-built
+    // calendar API — component-bag mutation via JXA silently drops the hour,
+    // leaking the current wall-clock hour into the reminder (UIC6).
+    var cur=attr(dt,'AXValue'); if(!cur) throw new Error('set-datetime '+target+': the date/time control has no value to anchor the time on');
+    var hm=spec.slice(5).split(':');
+    d=cal.dateBySettingHourMinuteSecondOfDateOptions(+hm[0], +hm[1], 0, cur, 0);
+  } else if(spec.indexOf('date:')===0){
+    var ymd=spec.slice(5).split('-');
+    var comps=$.NSDateComponents.alloc.init;
+    comps.year=+ymd[0]; comps.month=+ymd[1]; comps.day=+ymd[2]; comps.hour=0; comps.minute=0; comps.second=0;
+    d=cal.dateFromComponents(comps);
+  } else { throw new Error('bad datetime spec: '+spec); }
+  if(!d) throw new Error('could not build date from '+spec);
+  var err=$.AXUIElementSetAttributeValue(dt,$('AXValue'),d);
+  if(err!==0) throw new Error('set-datetime '+target+': the control refused the write (AX err='+err+')');
+  $.NSThread.sleepForTimeInterval(0.2);
+  // READ-BACK: a control can accept the AX write (err 0) yet reject the value —
+  // the macOS error beep — leaving its prior/default value. Fail the step loudly
+  // rather than let a garbled commit verify as ok (YANCH1 #493). Like every
+  // per-step read-back here it is SELF-REFERENTIAL (it re-reads the area it just
+  // picked), so the pre-commit audit re-checks it from the outside.
+  if(spec.indexOf('date:')===0){
+    var got=ymdStr(dt,cal); var want=spec.slice(5);
+    if(got!==want) throw new Error('set-datetime '+target+' rejected: the control committed '+(got||'(no value)')+', not the requested '+want+' — the write did not take');
+  } else {
+    var gott=hmStr(dt,cal); var wanth=spec.slice(5).split(':'); var wantt=(+wanth[0])+':'+('0'+(+wanth[1])).slice(-2);
+    if(gott!==wantt) throw new Error('set-datetime '+target+' rejected: the control committed '+(gott||'(no value)')+', not the requested '+wantt+' — the write did not take');
+  }
+  return 'OK';
+}`;
+}
+
+/**
+ * The shared ObjC-bridge prelude for every `AXDateTimeArea` read or write: the
+ * attribute helpers, the DIALOG-SHELL resolver (so the walk stays inside the
+ * dialog's small subtree — the app-root descent PERF2 removed cost ~4.4s on a busy
+ * host), and the deterministic {@link pick} target discriminator. The write
+ * ({@link axSetDateTimeScript}) and the pre-commit read
+ * ({@link axAuditDateAreasScript}) MUST agree on which area is which, so they
+ * share one definition rather than two that can drift apart.
+ */
+const AX_DATE_AREA_PRELUDE = `ObjC.import('Foundation'); ObjC.import('AppKit'); ObjC.import('ApplicationServices');
 function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]); }
 function rolestr(el){ var v=attr(el,'AXRole'); return v? v.js : ''; }
 function kids(el){ var c=attr(el,'AXChildren'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a; }
@@ -1259,54 +1720,7 @@ function pick(areas,target){
 function inv(areas){ var s=[]; for(var i=0;i<areas.length;i++){ s.push('#'+i+'(y='+Math.round(posY(areas[i]))+',tod='+timeOfDay(areas[i])+')'); } return areas.length? s.join(' ') : '(none)'; }
 function ymdStr(el,cal){ var v=attr(el,'AXValue'); if(!v) return null; var y=cal.componentFromDate($.NSCalendarUnitYear,v), m=cal.componentFromDate($.NSCalendarUnitMonth,v), dd=cal.componentFromDate($.NSCalendarUnitDay,v); return y+'-'+('0'+m).slice(-2)+'-'+('0'+dd).slice(-2); }
 function hmStr(el,cal){ var v=attr(el,'AXValue'); if(!v) return null; var h=cal.componentFromDate($.NSCalendarUnitHour,v), mi=cal.componentFromDate($.NSCalendarUnitMinute,v); return h+':'+('0'+mi).slice(-2); }
-function run(){
-  var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
-  if(!apps || apps.count===0) throw new Error('Things not running');
-  var app=$.AXUIElementCreateApplication(apps.objectAtIndex(0).processIdentifier);
-  var target=${JSON.stringify(target)};
-  var spec=${JSON.stringify(spec)};
-  // Poll for the addressed area WITHIN THE DIALOG SHELL (PERF2): resolve the sheet
-  // / detached editor first, then collect only its subtree — the app-root descent
-  // this replaced cost ~4.4s on the busy host by walking the main window's list
-  // content. collect is wrapped so a stale-element ObjC exception during traversal
-  // cannot bubble as a raw -2700; pick guards the empty set, so dt is null (never a
-  // crash) when the target is absent. When no shell resolves (dialog absent), areas
-  // stays empty and the loop falls through to the SAME named error below.
-  var areas=[]; var dt=null;
-  for(var t=0;t<20 && !dt;t++){ areas=[]; try{ var shell=findShell(app); if(shell) collect(shell,'AXDateTimeArea',16,areas); }catch(e){ areas=[]; } dt=pick(areas,target); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
-  if(!dt) throw new Error('set-datetime '+target+': this Repeat-dialog state presents '+areas.length+' date area(s) ['+inv(areas)+'] but none is the '+target+' control — the requested first occurrence / bound cannot be set in this dialog shape');
-  var cal=$.NSCalendar.currentCalendar;
-  var d;
-  if(spec.indexOf('time:')===0){
-    // Set the time-of-day on the control's own date via the purpose-built
-    // calendar API — component-bag mutation via JXA silently drops the hour,
-    // leaking the current wall-clock hour into the reminder (UIC6).
-    var cur=attr(dt,'AXValue'); if(!cur) throw new Error('set-datetime '+target+': the date/time control has no value to anchor the time on');
-    var hm=spec.slice(5).split(':');
-    d=cal.dateBySettingHourMinuteSecondOfDateOptions(+hm[0], +hm[1], 0, cur, 0);
-  } else if(spec.indexOf('date:')===0){
-    var ymd=spec.slice(5).split('-');
-    var comps=$.NSDateComponents.alloc.init;
-    comps.year=+ymd[0]; comps.month=+ymd[1]; comps.day=+ymd[2]; comps.hour=0; comps.minute=0; comps.second=0;
-    d=cal.dateFromComponents(comps);
-  } else { throw new Error('bad datetime spec: '+spec); }
-  if(!d) throw new Error('could not build date from '+spec);
-  var err=$.AXUIElementSetAttributeValue(dt,$('AXValue'),d);
-  if(err!==0) throw new Error('set-datetime '+target+': the control refused the write (AX err='+err+')');
-  $.NSThread.sleepForTimeInterval(0.2);
-  // READ-BACK: a control can accept the AX write (err 0) yet reject the value —
-  // the macOS error beep — leaving its prior/default value. Fail the step loudly
-  // rather than let a garbled commit verify as ok (YANCH1 #493).
-  if(spec.indexOf('date:')===0){
-    var got=ymdStr(dt,cal); var want=spec.slice(5);
-    if(got!==want) throw new Error('set-datetime '+target+' rejected: the control committed '+(got||'(no value)')+', not the requested '+want+' — the write did not take');
-  } else {
-    var gott=hmStr(dt,cal); var wanth=spec.slice(5).split(':'); var wantt=(+wanth[0])+':'+('0'+(+wanth[1])).slice(-2);
-    if(gott!==wantt) throw new Error('set-datetime '+target+' rejected: the control committed '+(gott||'(no value)')+', not the requested '+wantt+' — the write did not take');
-  }
-  return 'OK';
-}`;
-}
+`;
 
 /**
  * The converge-weekdays step encodes both of its inputs in `value` as
@@ -1479,6 +1893,21 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
           step.numberTarget ?? "interval",
           step.value ?? "",
         ),
+      };
+    case "set-row-field":
+      return {
+        primitive: "set-row-field",
+        label: step.label,
+        script: axSetRowFieldScript(step.path ?? "", step.rowLabel ?? "", step.value ?? ""),
+      };
+    case "audit-dialog":
+      // Compiled by driveDialogAudit, which resolves the live dialog shell and the
+      // measured shape first (a control's path and its weekday base both depend on
+      // them). This shape exists only so the step renders/compiles uniformly.
+      return {
+        primitive: "audit-dialog",
+        label: step.label,
+        script: "",
       };
     case "type-text":
       return {
@@ -1667,6 +2096,134 @@ async function driveClickElement(
     }
   }
   return { ok: true };
+}
+
+/**
+ * Execute the PRE-COMMIT FULL-DIALOG AUDIT step (CGRD1): re-read every control the
+ * drive set — through each control's own discriminated address — and refuse the
+ * commit if any of them does not hold the intended value.
+ *
+ * Three resolutions happen here rather than in the recipe, because only the driver
+ * knows them: WHICH dialog shell is live (attached sheet vs detached editor), which
+ * SHAPE the dialog measured (the +1 group-index fork, and which first-occurrence
+ * control class exists), and therefore which candidate path each control has. A
+ * shell that does not resolve, or a shape-dependent control with no shape probed,
+ * fails closed exactly like every other address here — an unaudited commit is not
+ * an option, because the audit is the only non-self-referential check the drive has.
+ *
+ * The System Events sweep and the ObjC date-area sweep are separate commands
+ * because the dialog's date/time controls hold NSDates that System Events cannot
+ * read; both must pass.
+ */
+async function driveDialogAudit(
+  step: UiStep,
+  run: UiRunner,
+  dialogShape: RepeatDialogShape | null,
+): Promise<{ ok: boolean; why?: string }> {
+  const plan = step.audit;
+  if (plan === undefined) return { ok: false, why: "no audit plan compiled (recipe bug)" };
+  // Which of the two dialog shells is live, in the SAME priority order the drive's
+  // own candidate resolution used — so the audit reads the dialog the drive wrote.
+  let shellIndex = -1;
+  for (let i = 0; i < plan.shells.length; i += 1) {
+    const res = await run(
+      {
+        primitive: "resolve",
+        label: step.label,
+        script: axResolveScript(plan.shells[i] as string),
+      },
+      STEP_TIMEOUT_MS,
+    );
+    if (res.ok && res.stdout.trim() === "true") {
+      shellIndex = i;
+      break;
+    }
+  }
+  if (shellIndex < 0) {
+    return {
+      ok: false,
+      why:
+        "the Repeat dialog could not be re-read before committing (neither the attached sheet " +
+        "nor the detached repeat editor window resolved), so what it holds could not be checked",
+    };
+  }
+  const shell = plan.shells[shellIndex] as string;
+  const group = (plan.groups[shellIndex] ?? plan.groups[0]) as string;
+
+  const scriptControls: AuditScriptControl[] = [];
+  const dateAreas: AuditDateArea[] = [];
+  for (const raw of plan.controls) {
+    if (raw.onlyShape !== undefined || raw.shaped !== undefined) {
+      if (dialogShape === null) return { ok: false, why: SHAPE_UNPROBED };
+      if (raw.onlyShape !== undefined && raw.onlyShape !== dialogShape) continue;
+    }
+    const override = raw.shaped === undefined ? undefined : raw.shaped[dialogShape ?? "next-popup"];
+    if (raw.shaped !== undefined && override === undefined) {
+      return {
+        ok: false,
+        why: `the audit has no check for "${raw.label}" under the "${dialogShape ?? "unmeasured"}" Repeat dialog (recipe bug)`,
+      };
+    }
+    const control = { ...raw, ...override };
+    if (control.kind === "date-area") {
+      dateAreas.push({
+        label: control.label,
+        target: control.dtTarget ?? "next",
+        spec: control.dtSpec ?? "",
+      });
+      continue;
+    }
+    const candidates = control.pathCandidates;
+    scriptControls.push({
+      label: control.label,
+      kind: control.kind,
+      ...(candidates !== undefined && {
+        path: (candidates[shellIndex] ?? candidates[0]) as string,
+      }),
+      ...(control.numberTarget !== undefined && { numberTarget: control.numberTarget }),
+      ...(control.rowLabel !== undefined && { rowLabel: control.rowLabel }),
+      ...(control.weekdayBase !== undefined && { weekdayBase: control.weekdayBase }),
+      expected: control.expected ?? [],
+      ...(control.expectedLabel !== undefined && { expectedLabel: control.expectedLabel }),
+    });
+  }
+
+  if (scriptControls.length > 0) {
+    const res = await run(
+      {
+        primitive: "audit-dialog",
+        label: step.label,
+        script: axAuditDialogScript({ shell, group, controls: scriptControls }),
+      },
+      STEP_TIMEOUT_MS,
+    );
+    if (!res.ok || res.stdout.trim() !== "OK") {
+      return { ok: false, why: auditFailureText(res) };
+    }
+  }
+  if (dateAreas.length > 0) {
+    const res = await run(
+      {
+        primitive: "audit-dialog",
+        label: step.label,
+        lang: "javascript",
+        script: axAuditDateAreasScript(dateAreas),
+      },
+      STEP_TIMEOUT_MS,
+    );
+    if (!res.ok || res.stdout.trim() !== "OK") {
+      return { ok: false, why: auditFailureText(res) };
+    }
+  }
+  return { ok: true };
+}
+
+/** The audit's own refusal text, preferred over the driver's generic guess. */
+function auditFailureText(res: UiRunResult): string {
+  const named = scriptErrorText(res.stderr);
+  if (named !== null) return `${named} — nothing was committed`;
+  if (res.timedOut === true) return "the pre-commit dialog audit timed out; nothing was committed";
+  return "the Repeat dialog could not be re-read before committing; nothing was committed";
 }
 
 async function drive(
@@ -2019,6 +2576,21 @@ async function drive(
           clear,
           res.timedOut === true,
         );
+      }
+      done.push(step.label);
+      continue;
+    }
+    if (step.primitive === "audit-dialog") {
+      // The last thing before the commit: re-read EVERY control this drive set,
+      // through each control's own discriminated address, and abort fail-closed if
+      // any of them disagrees with what was requested (CGRD1). Every per-step
+      // read-back before this point is self-referential — it re-reads the element it
+      // addressed — so a wrong ADDRESS is invisible until here. A mismatch clears
+      // the dialog through the standard clean-abort path, so nothing is committed.
+      const outcome = await driveDialogAudit(step, run, dialogShape);
+      if (!outcome.ok) {
+        const clear = await clearDialog(run);
+        return partial(step.label, outcome.why ?? "the pre-commit dialog audit failed", clear);
       }
       done.push(step.label);
       continue;

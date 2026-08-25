@@ -1041,6 +1041,7 @@ describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
     const vector = createUiVector(config(true), run);
@@ -1058,6 +1059,7 @@ describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
     const vector = createUiVector(config(true), run);
@@ -1172,6 +1174,7 @@ describe("ui driver — session-reachability gate (SESSGATE #480)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
     const vector = createUiVector(config(true), run);

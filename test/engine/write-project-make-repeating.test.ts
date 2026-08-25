@@ -269,6 +269,7 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
       if (c.primitive === "resolve") return ok("true"); // canary + candidate probes
       if (c.primitive === "select-row") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
     const res = await createUiVector(config(), run).execute(invocation(recipe()));
@@ -306,6 +307,7 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
         return ok("true");
       }
       if (c.primitive === "select-row") return ok("OK");
+      if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
     const res = await createUiVector(config(), run).execute(invocation(recipe()));

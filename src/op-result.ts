@@ -132,6 +132,13 @@ function foundNote(result: AuditRecord["result"], uuid: string | null): string {
         "a follow-up re-read found NO change — nothing landed. Make a Things window visible on the " +
         "screen you're viewing, then run the same command again"
       );
+    case "verify-failed:collateral":
+      return (
+        "the requested change landed, but a field nobody asked to change moved with it and " +
+        `nothing explains it — re-read the target (\`things show ${target}\`) and compare it ` +
+        "against the trail record's pre-state before doing anything else; do NOT retry, the " +
+        "requested change is already applied"
+      );
     case "verify-failed:silent-noop":
       return (
         "the operation ran but the app did not move (silent no-op) — the change did NOT land; it is " +

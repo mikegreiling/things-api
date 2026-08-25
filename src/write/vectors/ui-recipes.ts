@@ -17,6 +17,20 @@
  * address a row directly), then optionally ACTIVATES Things (a fallback skipped
  * once certification proves background AXPress works), then drives the menus /
  * dialogs / popovers with the Accessibility API.
+ *
+ * POSITIONAL ADDRESSING IS FENCED (CGRD1). Things' Accessibility tree is an
+ * undocumented private surface that may be re-laid-out in any release, and #589
+ * showed what a structural index costs when it is: the Repeat dialog INSERTS the
+ * ends-count field ahead of the interval when an ends bound is selected, so
+ * `text field 1 of group 1` silently wrote the requested interval into the count,
+ * and the step's own read-back reported OK because it re-read the field it had
+ * addressed. Every `<class> <N>` selector in this file therefore either carries a
+ * `// positional-ok:` comment giving the measured reason it is safe, or it does
+ * not exist — a value-bearing field is addressed by the LABEL ROW it sits on
+ * (`set-group-number` / `set-row-field`), fail-closed on anything but exactly one
+ * match. `test/unit/positional-addressing.test.ts` scans this file, ui.ts and
+ * ui-drag.ts and fails on any new unjustified one. The marker is a claim about
+ * MEASURED structure, not a silencer: it must name what was measured and where.
  */
 import type {
   MonthlyAnchor,
@@ -27,7 +41,7 @@ import type {
   YearlyAnchor,
 } from "../operations.ts";
 import type { SidebarPlacement } from "./ui-drag.ts";
-import type { UiRecipe, UiStep } from "./types.ts";
+import type { DialogAuditControl, UiRecipe, UiStep } from "./types.ts";
 
 /**
  * The rule the Repeat dialog encodes — `frequency` + `interval` plus every
@@ -192,12 +206,20 @@ export function convertToProjectRecipe(
     steps: [
       ...preamble(targetUuid),
       menuPress("Items ▸ Convert to Project…", `menu item "Convert to Project…" of ${ITEMS_MENU}`),
+      // positional-ok: a window presents at most ONE attached sheet at a time, so
+      // `sheet 1` is a uniqueness statement, not an index among peers. It is also
+      // only ever a WAIT target here — the control acted on inside it is
+      // AXIdentifier-addressed below.
       waitFor("the confirmation sheet", `sheet 1 of ${MAIN_WINDOW}`),
       {
         // The alert's primary button carries a stable, locale-proof
         // AXIdentifier "action-button-1" (UIC1); prefer it over the English title.
+        // positional-ok: the `sheet 1` container is the one-sheet-per-window law
+        // above; the BUTTON is discriminated by AXIdentifier, never by position.
         primitive: "press",
         label: 'confirm — press "Convert"',
+        // positional-ok: `sheet 1` is the one attached sheet a window can present;
+        // the BUTTON inside it is AXIdentifier-discriminated, never positional.
         path: `(first button of sheet 1 of ${MAIN_WINDOW} whose value of attribute "AXIdentifier" is "action-button-1")`,
         dynamic: true,
         addressing: "axidentifier",
@@ -246,12 +268,17 @@ export function headingConvertToProjectRecipe(projectUuid: string, ordinal: numb
       // With the heading selected, Convert to Project… is enabled (it exists
       // regardless, so the canary resolves it; the press lands post-selection).
       menuPress("Items ▸ Convert to Project…", `menu item "Convert to Project…" of ${ITEMS_MENU}`),
+      // positional-ok: one attached sheet per window (see convertToProjectRecipe).
       waitFor("the confirmation sheet", `sheet 1 of ${MAIN_WINDOW}`),
       {
         // The alert's primary button carries the locale-proof AXIdentifier
         // "action-button-1" (UIC1); prefer it over the English title.
+        // positional-ok: one attached sheet per window; the button itself is
+        // AXIdentifier-discriminated.
         primitive: "press",
         label: 'confirm — press "Convert"',
+        // positional-ok: `sheet 1` is the one attached sheet a window can present;
+        // the BUTTON inside it is AXIdentifier-discriminated, never positional.
         path: `(first button of sheet 1 of ${MAIN_WINDOW} whose value of attribute "AXIdentifier" is "action-button-1")`,
         dynamic: true,
         addressing: "axidentifier",
@@ -282,9 +309,16 @@ export function headingConvertToProjectRecipe(projectUuid: string, ordinal: numb
 // so `--reminder` is refused upstream in assertRepeatRule; its recipe step is
 // retained but unreachable.
 
-/** The content list's table (row 0 = area/Someday header, then projects/to-dos). Confirmed UIC5. */
+/** The content list's table (row 0 = area/Someday header, then projects/to-dos). Confirmed UIC5.
+ *  positional-ok: a CONTAINER handle only — the main window's list area holds one
+ *  scroll area holding one table (UIC5), and no value is read or written through
+ *  this path. Every step that uses it resolves its target WITHIN the table by
+ *  title readback (select-row), by selection-readback ordinal (select-heading-row)
+ *  or by exact AXDescription (click-element's rowCellDescription walk, HXPC1 §B0). */
 const PROJECT_CONTENT_TABLE = `table 1 of scroll area 1 of ${MAIN_WINDOW}`;
-/** The Repeat editor when Things is frontmost — an attached sheet (interval nested in group 1, UIC1). */
+/** The Repeat editor when Things is frontmost — an attached sheet (interval nested in group 1, UIC1).
+ *  positional-ok: a window presents at most ONE attached sheet at a time, so
+ *  `sheet 1` names the only sheet there can be rather than picking among peers. */
 const REPEAT_SHEET = `sheet 1 of ${MAIN_WINDOW}`;
 /** The Repeat editor when Things is backgrounded — a detached AXUnknown window (UIC4-a). Its
  *  controls sit at the SAME depth as the sheet's (frequency a direct child, interval in group 1) — UIC5-e. */
@@ -299,7 +333,24 @@ function dualForm(inner: string): string[] {
 }
 
 // --- CERTIFIED controls (UIC1/UIC5) --------------------------------------
-/** Frequency pop-up — a direct child of the dialog. */
+//
+// WHY THE POP-UPS BELOW MAY STAY POSITIONAL WHILE THE TEXT FIELDS MAY NOT.
+// A pop-up drive is SELF-DISCRIMINATING: `select-popup` opens the control and
+// clicks a menu item matched by its pinned English NAME, so a mis-addressed
+// pop-up has no such item and the step fails closed ("none of the candidate menu
+// items exist"). A text field accepts any string silently — which is precisely
+// how #589 wrote an interval into the ends-count field. The pop-up label sets are
+// also disjoint across the cadence group (`never`/`after`/`on date` for the ends
+// bound; `day(s)`…`year(s)` for the after-completion unit; weekday names, ordinals
+// and month names for the anchors), so a swapped index cannot land a plausible
+// value. Belt and braces: the PRE-COMMIT AUDIT re-reads every one of them by value
+// before the OK press, so a pop-up that took a wrong-but-existing item is caught
+// before anything is committed.
+/** Frequency pop-up — a direct child of the dialog.
+ *  positional-ok: MEASURED sole direct-child pop-up of the dialog shell in every
+ *  reachable state — the shell carries `popups=1`, every other pop-up living in the
+ *  cadence group (CGRD1 §B census, all four frequencies + after-completion). Its
+ *  menu items are matched by name, and the pre-commit audit re-reads its value. */
 const DIALOG_FREQUENCY = dualForm("pop up button 1");
 /** OK button. */
 const DIALOG_OK = dualForm(`button "OK"`);
@@ -315,19 +366,46 @@ const DIALOG_OK = dualForm(`button "OK"`);
 // driver measures in the open dialog (`probe-dialog-shape`), never to the app
 // version. Titles/`_NS:` ids are never used (both drift). Evidence:
 // docs/lab/uic6-rule-vocabulary.md (≤3.22) and docs/lab/rdlg2-323-recipe-cert.md.
-/** After-completion cadence unit pop-up — the ONLY group pop-up in that mode (both shapes). */
+/** After-completion cadence unit pop-up — the ONLY group pop-up in that mode (both shapes).
+ *  positional-ok: this and DIALOG_ENDS are the SAME spelling because they are the
+ *  same slot in two MUTUALLY EXCLUSIVE dialog states, and the recipe emits exactly
+ *  one of them per drive. Measured (CGRD1 §A census): an after-completion cadence
+ *  group has `popups=1` and no `Ends:` label at all, while every fixed frequency
+ *  puts the ends bound at group pop-up 1. Their menu-item sets are disjoint
+ *  (`day(s)`…`year(s)` vs `never`/`after`/`on date`), so a wrong-state drive fails
+ *  closed on the item name; the pre-commit audit re-reads whichever one ran. */
 const DIALOG_AC_UNIT = dualForm("pop up button 1 of group 1");
-/** "Ends" bound pop-up (`never` · `after` · `on date`) — always pop up button 1 of the group. */
+/** "Ends" bound pop-up (`never` · `after` · `on date`) — always pop up button 1 of the group.
+ *  positional-ok: see DIALOG_AC_UNIT — one slot, two exclusive states, name-matched
+ *  items, audited before the commit. */
 const DIALOG_ENDS = dualForm("pop up button 1 of group 1");
-/** The cadence group itself — the handle the shape probe and the weekday converge address. */
+/** The cadence group itself — the handle the shape probe and the weekday converge address.
+ *  positional-ok: MEASURED sole group of the dialog shell (`groups=1` in every
+ *  state, CGRD1 §B), and a CONTAINER handle only — every primitive that takes it
+ *  (set-group-number, probe-dialog-shape, converge-weekdays, audit-dialog)
+ *  discriminates WITHIN it by label row or control class and fails closed on
+ *  anything but exactly one match. */
 const DIALOG_GROUP = dualForm("group 1");
-/** The 3.23 `Next:` first-occurrence pop-up — group pop-up 2 (this shape only). */
+/** The 3.23 `Next:` first-occurrence pop-up — group pop-up 2 (this shape only).
+ *  positional-ok: reachable ONLY under a MEASURED dialog shape — the recipe's
+ *  probe-dialog-shape step must have returned `next-popup` (a positive match on the
+ *  control class occupying the `Next:` row) before this step runs, and an
+ *  unrecognized shape refuses the drive. The drive then matches a menu item by
+ *  PARSED DATE and reads the pop-up back; the pre-commit audit re-parses it. */
 const DIALOG_NEXT_POPUP = dualForm("pop up button 2 of group 1");
 
-/** A group pop-up addressed at DIFFERENT indices in the two dialog shapes (RDLG2). */
+/** A group pop-up addressed at DIFFERENT indices in the two dialog shapes (RDLG2).
+ *  positional-ok: the index is not a guess but the MEASURED consequence of the
+ *  shape the drive probed — CGRD1 §A counts the cadence group's pop-ups per
+ *  frequency on 3.23 (daily 2 · weekly 3 · monthly 4 · yearly 5, i.e. Ends + Next +
+ *  the per-frequency controls), which is the +1 fork these two index sets encode.
+ *  A step carrying `shaped` with no shape probed fails closed. Every one of these
+ *  is a name-matched pop-up, and all of them are re-read by the pre-commit audit. */
 function shapedPopup(nextPopupIndex: number, legacyIndex: number): NonNullable<UiStep["shaped"]> {
   return {
+    // positional-ok: shape-MEASURED index, per this function's contract above.
     "next-popup": { pathCandidates: dualForm(`pop up button ${nextPopupIndex} of group 1`) },
+    // positional-ok: shape-MEASURED index, per this function's contract above.
     legacy: { pathCandidates: dualForm(`pop up button ${legacyIndex} of group 1`) },
   };
 }
@@ -348,9 +426,21 @@ const DIALOG_YEAR_ORDINAL = shapedPopup(5, 4);
 const WEEKDAY_BASE: Record<"next-popup" | "legacy", number> = { "next-popup": 3, legacy: 2 };
 /** "Add reminders" checkbox (sheet-level, title-pinned). The time is an AXDateTimeArea driven by set-datetime. */
 const DIALOG_ADD_REMINDERS = dualForm(`checkbox "Add reminders"`);
-/** "Add deadlines" checkbox + the "start N days earlier" field it reveals as a DIRECT sheet child (text field 1 of the shell). */
+/** "Add deadlines" checkbox + the "and start [n] days earlier" offset field it reveals. */
 const DIALOG_ADD_DEADLINES = dualForm(`checkbox "Add deadlines"`);
-const DIALOG_START_EARLIER = dualForm("text field 1");
+/**
+ * The pinned English static text whose ROW the start-offset field sits on. The
+ * field shipped as `text field 1` of the dialog shell — a value-bearing numeric
+ * field picked by index out of a tree whose shape depends on the "Add deadlines"
+ * checkbox, verified only by re-reading the same index it wrote. That is the #589
+ * error class, and it happened to be right rather than provably right: measured on
+ * 3.23, the shell carries 0 direct text fields with deadlines OFF and exactly 1
+ * with them ON — `[and start] [ 0 ] [days earlier]`, the field at y=409 against the
+ * label's y=413 — whether or not reminders are also on (CGRD1 §B census). Now the
+ * field is found by that label's row, exactly like the cadence numbers, and
+ * anything but one match on it fails closed with the shell's field inventory.
+ */
+const DIALOG_START_EARLIER_LABEL = "days earlier";
 
 /**
  * After-completion cadence-unit pop-up labels. The options are NOT the frequency
@@ -445,11 +535,19 @@ function selectPopupAny(
     addressing: "title",
   };
 }
-function setField(label: string, pathCandidates: string[], value: string): UiStep {
+/**
+ * Drive a dialog-SHELL text field addressed by the pinned English label sharing
+ * its row — the {@link setGroupNumber} discrimination law, applied outside the
+ * cadence group. Its one caller is the start-days-earlier offset; see
+ * {@link DIALOG_START_EARLIER_LABEL} for why the old `text field 1` spelling had
+ * to go even though it resolved correctly on 3.23.
+ */
+function setRowField(label: string, rowLabel: string, value: string): UiStep {
   return {
-    primitive: "set-value",
+    primitive: "set-row-field",
     label,
-    pathCandidates,
+    pathCandidates: DIALOG_SHELLS,
+    rowLabel,
     value,
     dynamic: true,
     addressing: "title",
@@ -693,9 +791,9 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     // when it was given (>0), else leave it at its pre-populated value.
     if (deadlineTarget && (rule.startDaysEarlier ?? 0) > 0) {
       steps.push(
-        setField(
+        setRowField(
           `start ${rule.startDaysEarlier} days earlier`,
-          DIALOG_START_EARLIER,
+          DIALOG_START_EARLIER_LABEL,
           String(rule.startDaysEarlier),
         ),
       );
@@ -758,8 +856,158 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`, "reminder"));
   }
 
+  const audit = dialogAuditStep(steps);
+  if (audit !== null) steps.push(audit);
   steps.push(pressControl('press "OK"', DIALOG_OK));
   return steps;
+}
+
+/**
+ * Build the PRE-COMMIT FULL-DIALOG AUDIT step from the drive's OWN step list
+ * (CGRD1) — the last thing that runs before the OK press.
+ *
+ * Derivation from the steps, rather than a second hand-written list of controls,
+ * is the point: every setter the recipe emits contributes exactly one audit
+ * control, so a rule field added to `repeatDialogEntry` is audited the moment it
+ * is driven, and a control can never be silently left out. It also means the audit
+ * addresses each control through the SAME candidate paths / shape overrides / row
+ * anchors the drive used, so the two can never disagree about what was touched.
+ *
+ * Why it is needed at all: each setter's own read-back is SELF-REFERENTIAL — it
+ * re-reads the element it addressed, so it proves the keystrokes landed where they
+ * were aimed and nothing more. #589 was a wrong ADDRESS, invisible to that check.
+ * The audit is the outside view; any mismatch aborts the drive fail-closed before
+ * anything is committed.
+ *
+ * Steps that set nothing (waits, the menu press, the shape probe, the OK press)
+ * contribute nothing; a recipe that drove no control at all yields no audit step.
+ */
+function weekdayBaseOfEncoded(value: string): number {
+  const base = Number(value.split("|", 1)[0]);
+  return Number.isFinite(base) && base > 0 ? Math.trunc(base) : 2;
+}
+
+/** The per-shape PATH overrides of a step, in the audit control's shape. */
+function shapedPaths(
+  step: UiStep,
+): Partial<Record<"next-popup" | "legacy", { pathCandidates?: string[] }>> | undefined {
+  if (step.shaped === undefined) return undefined;
+  return {
+    ...(step.shaped["next-popup"]?.pathCandidates !== undefined && {
+      "next-popup": { pathCandidates: step.shaped["next-popup"].pathCandidates },
+    }),
+    ...(step.shaped.legacy?.pathCandidates !== undefined && {
+      legacy: { pathCandidates: step.shaped.legacy.pathCandidates },
+    }),
+  };
+}
+
+function dialogAuditStep(steps: UiStep[]): UiStep | null {
+  const controls: DialogAuditControl[] = [];
+  for (const step of steps) {
+    const base = {
+      label: step.label,
+      ...(step.onlyShape !== undefined && { onlyShape: step.onlyShape }),
+    };
+    switch (step.primitive) {
+      case "select-popup": {
+        const shaped = shapedPaths(step);
+        controls.push({
+          ...base,
+          kind: "popup",
+          ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
+          ...(shaped !== undefined && { shaped }),
+          // valueCandidates carries the singular/plural pair the app pluralizes by
+          // interval; ANY of them satisfies, exactly as the drive accepted any.
+          expected: step.valueCandidates ?? [step.value ?? ""],
+        });
+        break;
+      }
+      case "set-group-number":
+        controls.push({
+          ...base,
+          kind: "group-number",
+          numberTarget: step.numberTarget ?? "interval",
+          expected: [step.value ?? ""],
+        });
+        break;
+      case "set-row-field":
+        controls.push({
+          ...base,
+          kind: "row-field",
+          rowLabel: step.rowLabel ?? "",
+          expected: [step.value ?? ""],
+        });
+        break;
+      case "ensure-checkbox":
+        controls.push({
+          ...base,
+          kind: "checkbox",
+          ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
+          expected: [step.checkboxTarget === true ? "1" : "0"],
+          expectedLabel: step.checkboxTarget === true ? "checked" : "unchecked",
+        });
+        break;
+      case "converge-weekdays": {
+        // The weekday step encodes "<base>|<Weekday>,<Weekday>…" per dialog shape
+        // (the base is the group pop-up index of the first weekday row, which the
+        // +1 fork moves). The audit reads every row pop-up from that base and
+        // compares as a SET: the converge law assigns EVERY row from the target set
+        // cycling, so a surplus row duplicates a target weekday rather than keeping
+        // a stale one, and set equality is the exact property to check.
+        const nextValue = step.shaped?.["next-popup"]?.value;
+        const legacyValue = step.shaped?.legacy?.value;
+        const encoded = nextValue ?? legacyValue;
+        if (encoded === undefined) break;
+        const titles = encoded
+          .slice(encoded.indexOf("|") + 1)
+          .split(",")
+          .filter((t) => t !== "");
+        if (titles.length === 0) break;
+        controls.push({
+          ...base,
+          kind: "weekdays",
+          expected: titles,
+          expectedLabel: titles.join(" + "),
+          shaped: {
+            ...(nextValue !== undefined && {
+              "next-popup": { weekdayBase: weekdayBaseOfEncoded(nextValue) },
+            }),
+            ...(legacyValue !== undefined && {
+              legacy: { weekdayBase: weekdayBaseOfEncoded(legacyValue) },
+            }),
+          },
+        });
+        break;
+      }
+      case "select-next-occurrence":
+        controls.push({
+          ...base,
+          kind: "occurrence-popup",
+          ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
+          expected: [step.value ?? ""],
+        });
+        break;
+      case "set-datetime":
+        controls.push({
+          ...base,
+          kind: "date-area",
+          dtTarget: step.dtTarget ?? "next",
+          dtSpec: step.value ?? "",
+        });
+        break;
+      default:
+        break;
+    }
+  }
+  if (controls.length === 0) return null;
+  return {
+    primitive: "audit-dialog",
+    label: "audit the Repeat dialog against the requested rule (before committing)",
+    audit: { shells: DIALOG_SHELLS, groups: DIALOG_GROUP, controls },
+    dynamic: true,
+    addressing: "title",
+  };
 }
 
 /** The optional extended-vocabulary fields a recipe threads into the dialog. */
@@ -919,9 +1167,17 @@ export function rescheduleRepeatRecipe(
 // paths derived from the UIC2 AX inventory; the certification pass confirms or
 // corrects them exactly as the to-do recipes were corrected in UIC1.
 
-/** The header cell of the project view (row 1 of the content table). */
+/** The header cell of the project view (row 1 of the content table).
+ *  positional-ok: the project view's header IS its first content-table row by
+ *  construction (UIC2/UIC3) — the row the app renders above the item list — and
+ *  this path only ever reaches a CLICK target, never a value. */
 const PROJECT_HEADER_CELL = `UI element 1 of row 1 of table 1 of scroll area 1 of ${MAIN_WINDOW}`;
-/** The always-visible repeat bar of a repeating project (UIC2/UIC3: text area 2). */
+/** The always-visible repeat bar of a repeating project (UIC2/UIC3: text area 2).
+ *  positional-ok: the bar carries no title or description to address it by (UIC2),
+ *  so its index in the header cell is the only handle the app offers. It is not a
+ *  value-bearing field: the step that uses it is a click whose `assertPath` REQUIRES
+ *  the repeat popover to appear afterwards, so a click that lands on the wrong text
+ *  area fails closed (Escape + abort) instead of cascading into blind presses. */
 const PROJECT_REPEAT_BAR = `text area 2 of ${PROJECT_HEADER_CELL}`;
 /**
  * The popover opened by clicking the repeat bar. Confirmed by UIC3 discovery: it
@@ -932,6 +1188,9 @@ const PROJECT_REPEAT_BAR = `text area 2 of ${PROJECT_HEADER_CELL}`;
  * utility window; its items live in the window's scroll area.
  */
 const PROJECT_REPEAT_POPOVER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
+// positional-ok: a CONTAINER handle only — these custom AXUnknown popovers hold
+// exactly one scroll area (MEASURED on the sibling Move… picker, HXPC1 §B2:
+// `scroll areas=1`), and every item inside is addressed by exact AXDescription.
 const PROJECT_REPEAT_POPOVER_ITEMS = `scroll area 1 of ${PROJECT_REPEAT_POPOVER}`;
 
 /** A project view + foreground preamble — the mouse segment needs Things frontmost. */
@@ -1024,6 +1283,8 @@ export function projectRescheduleRepeatRecipe(
       ...projectPreamble(targetUuid),
       openProjectRepeatPopover(),
       popoverItemClick("repeat menu ▸ Change…", "Change…", {
+        // positional-ok: a post-click EXISTENCE assert on the one attached sheet a
+        // window can present; nothing is read or written through this path.
         path: `sheet 1 of ${MAIN_WINDOW}`,
         label: "the Repeat dialog",
       }),
@@ -1073,6 +1334,8 @@ function headingMoreDescription(headingTitle: string): string {
 }
 /** The ellipsis popover — a custom AXUnknown window (same shape as the repeat popover). */
 const HEADING_ELLIPSIS_POPOVER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
+// positional-ok: container handle only — one scroll area per popover (HXPC1 §B2),
+// items addressed by exact AXDescription.
 const HEADING_POPOVER_ITEMS = `scroll area 1 of ${HEADING_ELLIPSIS_POPOVER}`;
 /**
  * The Move… project picker. NOT a sheet of the main window (the shape this

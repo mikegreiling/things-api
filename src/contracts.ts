@@ -208,8 +208,8 @@ export interface OkEnvelope<T> {
  * depends on it (see {@link blockedCode} / {@link verifyFailedCode}):
  *  - `verify-failed:${reason}` — a single mutation executed but read-after-write
  *    verification failed; the suffix is the reason (`timeout` | `mismatch` |
- *    `silent-noop`). The bare `verify-failed` (no suffix) is the multi-leg
- *    move/reorder failure.
+ *    `silent-noop` | `ui-unreachable` | `collateral`). The bare `verify-failed`
+ *    (no suffix) is the multi-leg move/reorder failure.
  *  - `blocked:${suffix}` — a mutation refused before touching the app; the
  *    suffix is the specific hazard id (`H-…`) when one is named, else the block
  *    reason (`drift` | `disruption-tier` | `lock` | `environment` | `clock` |

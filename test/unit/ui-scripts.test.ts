@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   axAssertEligibleScript,
+  axAuditDateAreasScript,
+  axAuditDialogScript,
   axConvergeWeekdaysScript,
   axEnsureCheckboxScript,
   axKeyScript,
@@ -19,6 +21,7 @@ import {
   axSelectRowScript,
   axSetDateTimeScript,
   axSetGroupNumberScript,
+  axSetRowFieldScript,
   axSetValueScript,
   axSheetOpenScript,
   axTypeTextScript,
@@ -369,21 +372,36 @@ describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT field
   const interval = axSetGroupNumberScript("group 1 of sheet 1", "interval", "3");
   const endsCount = axSetGroupNumberScript("group 1 of sheet 1", "ends-count", "5");
 
-  it("anchors on the `Ends:` label's row rather than a text-field index", () => {
+  it("anchors on a LABEL's row rather than a text-field index", () => {
     // Measured on 3.23: with an ends bound shown the cadence group holds TWO text
     // fields and the COUNT takes index 1, displacing the interval to 2 — so the
     // shared `text field 1 of group 1` spelling wrote the requested interval into
     // the count on any PRE-POPULATED (reschedule) dialog.
     for (const s of [interval, endsCount]) {
-      expect(s).toContain('if sv is "Ends:" then');
-      expect(s).toContain("set endsY to item 2 of labelPos");
-      expect(s).not.toContain("text field 1 of g");
+      expect(s).toContain('my cgLabelY(g, "Ends:")');
+      expect(s).toContain("set outY to item 2 of labelPos");
     }
   });
 
-  it("selects the field ON the ends row for the count and OFF it for the interval", () => {
-    expect(endsCount).toContain("if onEndsRow is true then");
-    expect(interval).toContain("if onEndsRow is false then");
+  it("matches the interval POSITIVELY on the `Every` row, not merely off the Ends row", () => {
+    // CGRD1 §A: every fixed frequency carries an `Every` label at y=286 with the
+    // interval at y=283. Preferring that positive match means a group whose shape
+    // we do not recognize refuses rather than falling back on "the other field".
+    for (const s of [interval, endsCount]) {
+      expect(s).toContain('my cgLabelY(g, "Every")');
+      expect(s).toContain('on the \\"Every\\" row');
+    }
+    // The after-completion group carries NEITHER label (its only static text is
+    // "after previous item is checked off.") and offers exactly one field, so that
+    // shape is reached through a UNIQUENESS check, never an index.
+    expect(interval).toContain('carries neither an \\"Every\\" nor an \\"Ends:\\" label');
+    expect(interval).toContain("if nf is not 1 then error");
+  });
+
+  it("the ends-count REQUIRES the `Ends:` label — it is never inferred", () => {
+    expect(endsCount).toContain('carries no \\"Ends:\\" label');
+    expect(endsCount).toContain("my cgOnRow(g, endsY, tol, true)");
+    expect(endsCount).toContain('my cgField(g, "ends-count", 8)');
   });
 
   it("fails closed unless EXACTLY one field matches, reporting the field inventory", () => {
@@ -420,13 +438,171 @@ describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT field
     for (const s of [interval, endsCount]) {
       // the signature is the labels plus the field y-positions, read twice
       expect(s).toContain("set prevSig to sig");
-      expect(s).toContain("if sig is prevSig then");
-      expect(s).toContain("set settled to true");
-      expect(s).toContain("if settled is false then");
+      expect(s).toContain("if sig is prevSig then return true");
       expect(s).toContain("still re-laying out");
       // the settle precedes the row discrimination it protects
-      expect(s.indexOf("set settled to true")).toBeLessThan(s.indexOf('if sv is "Ends:" then'));
+      expect(s.indexOf("my cgSettle(g)")).toBeLessThan(s.indexOf("my cgField(g,"));
     }
+  });
+});
+
+describe("axSetRowFieldScript — the start-offset field is label-anchored (CGRD1 §B)", () => {
+  const script = axSetRowFieldScript("sheet 1 of window 1", "days earlier", "3");
+
+  it("finds the field by the label sharing its row, not by index in the shell", () => {
+    // The old spelling was `text field 1` of the dialog shell — right on 3.23 by
+    // luck (0 direct text fields with deadlines off, exactly 1 with them on) but
+    // never provably so. Now the anchor is the `days earlier` static text at y=413
+    // against the field's y=409.
+    expect(script).toContain('my rfField(c, "days earlier", 8)');
+    expect(script).toContain("my cgLabelY(c, rowLabel)");
+  });
+
+  it("fails closed on a missing label or a non-unique row, naming the inventory", () => {
+    expect(script).toContain('shows no \\"" & rowLabel & "\\" label');
+    expect(script).toContain("expected exactly 1");
+    expect(script).toContain("text fields:");
+  });
+
+  it("drives with the same closed loop as set-value, and no select-all (BEEP1)", () => {
+    expect(script).toContain("set focused of tf to true");
+    expect(script).toContain('keystroke "3"');
+    expect(script).toContain("key code 48");
+    expect(script).toContain('if ((value of tf) as text) is "3" then return "OK"');
+    expect(script).not.toContain("using command down");
+  });
+});
+
+describe("axAuditDialogScript — the pre-commit full-dialog audit (CGRD1 guard 2)", () => {
+  const SHELL = "sheet 1 of window 1";
+  const spec = {
+    shell: SHELL,
+    group: `group 1 of ${SHELL}`,
+    controls: [
+      {
+        label: "frequency = daily",
+        kind: "popup" as const,
+        path: `pop up button 1 of ${SHELL}`,
+        expected: ["daily"],
+      },
+      {
+        label: "interval = 3",
+        kind: "group-number" as const,
+        numberTarget: "interval" as const,
+        expected: ["3"],
+      },
+      {
+        label: "ends after = 4",
+        kind: "group-number" as const,
+        numberTarget: "ends-count" as const,
+        expected: ["4"],
+      },
+      {
+        label: "Add deadlines",
+        kind: "checkbox" as const,
+        path: `checkbox "Add deadlines" of ${SHELL}`,
+        expected: ["1"],
+        expectedLabel: "checked",
+      },
+      {
+        label: "start 2 days earlier",
+        kind: "row-field" as const,
+        rowLabel: "days earlier",
+        expected: ["2"],
+      },
+      {
+        label: "weekdays = monday, thursday",
+        kind: "weekdays" as const,
+        weekdayBase: 3,
+        expected: ["Monday", "Thursday"],
+        expectedLabel: "Monday + Thursday",
+      },
+      {
+        label: "Next (first occurrence) = 2026-07-12",
+        kind: "occurrence-popup" as const,
+        path: `pop up button 2 of group 1 of ${SHELL}`,
+        expected: ["2026-07-12"],
+      },
+    ],
+  };
+  const script = axAuditDialogScript(spec);
+
+  it("re-reads EVERY driven control, each through its own discriminated address", () => {
+    // The whole point: not one of these is re-read through the index the step
+    // wrote — the numbers go back through the label-row handlers, so a wrong
+    // ADDRESS (the #589 shape) is visible here in a way a per-step read-back
+    // structurally cannot be.
+    expect(script).toContain('my cgField(g, "interval", 8)');
+    expect(script).toContain('my cgField(g, "ends-count", 8)');
+    expect(script).toContain('my rfField(sh, "days earlier", 8)');
+    expect(script).toContain(`pop up button 1 of ${SHELL}`);
+    expect(script).toContain(`checkbox "Add deadlines" of ${SHELL}`);
+    expect(script).toContain("repeat with k from 3 to (count of pop up buttons of g)");
+  });
+
+  it("settles the cadence group before reading anything (no sleeps)", () => {
+    expect(script).toContain("my cgSettle(g)");
+    expect(script.indexOf("my cgSettle(g)")).toBeLessThan(
+      script.indexOf('my cgField(g, "interval"'),
+    );
+  });
+
+  it("returns OK only when nothing differs, and otherwise names every mismatch", () => {
+    expect(script).toContain('if (count of bad) is 0 then return "OK"');
+    expect(script).toContain("does not hold what this drive entered");
+    expect(script).toContain("control(s) differ");
+    // Both values ride the message, so the operator can see what the app did.
+    expect(script).toContain("intended");
+    expect(script).toContain("dialog shows");
+  });
+
+  it("reads a checkbox as checked/unchecked rather than 1/0", () => {
+    expect(script).toContain("on aqTick(v)");
+    expect(script).toContain('return "checked"');
+    expect(script).toContain('return "unchecked"');
+  });
+
+  it("compares the occurrence pop-up by PARSED DATE, never by display string", () => {
+    // Its titles are localized ("Sun, Jul 12, 2026"), so rebuilding the app's
+    // display string would be a locale bet — the audit parses instead.
+    expect(script).toContain("on aqYMD(t)");
+    expect(script).toContain("set d to date s");
+    expect(script).toContain("2026-07-12");
+  });
+
+  it("compares the weekday rows as a SET, both directions", () => {
+    // The converge law assigns every row from the target set cycling, so a
+    // surplus row duplicates a target weekday; set equality is the exact check.
+    expect(script).toContain("Monday");
+    expect(script).toContain("Thursday");
+    expect(script).toMatch(/repeat with w in \{"Monday", "Thursday"\}/);
+    expect(script).toContain("repeat with w in got5");
+  });
+});
+
+describe("axAuditDateAreasScript — the audit's date-area leg (CGRD1 guard 2)", () => {
+  const script = axAuditDateAreasScript([
+    { label: "ends on = 2026-12-01", target: "ends", spec: "date:2026-12-01" },
+    { label: "reminder = 08:15", target: "reminder", spec: "time:08:15" },
+  ]);
+
+  it("uses the same shell walk and target discriminator the WRITE uses", () => {
+    // If the reader and the writer disagreed about which area is "ends", the
+    // audit would be checking a different control than the one that was set.
+    expect(script).toContain("function findShell(app)");
+    expect(script).toContain("function pick(areas,target)");
+    expect(script).toContain("collect(shell,'AXDateTimeArea',16,found)");
+  });
+
+  it("reports a missing control with the dialog's whole date-area inventory", () => {
+    expect(script).toContain("presents no ");
+    expect(script).toContain("inv(found)");
+  });
+
+  it("names the intended and observed value on a mismatch, and OK otherwise", () => {
+    expect(script).toContain("dialog shows");
+    expect(script).toContain("does not hold what this drive entered");
+    expect(script).toContain("return 'OK'");
   });
 });
 

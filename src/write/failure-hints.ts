@@ -96,7 +96,13 @@ export function classifyTransportFailure(input: {
  * but the expected change never appeared in the database.
  */
 export function classifyVerifyFailure(input: {
-  reason: "timeout" | "mismatch" | "silent-noop";
+  /**
+   * `collateral` deliberately gets NO hint: the requested change landed, so none of
+   * the permission / feature-off / startup-window theories below apply, and the
+   * failure's own sentence already names the field that moved and both values.
+   * Attaching a speculative cause there would only invite a retry.
+   */
+  reason: "timeout" | "mismatch" | "silent-noop" | "collateral";
   vector: VectorId;
   /**
    * The on-disk 'Enable Things URLs' state (availability.ts); null when not
