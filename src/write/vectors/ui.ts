@@ -140,6 +140,16 @@ export type UiRunner = (command: UiCommand, timeoutMs: number) => Promise<UiRunR
 
 const SE = `tell application "System Events" to tell process "Things3"`;
 
+/**
+ * The cadence group's re-layout settle budget (BEEP1) — how many times
+ * `set-group-number` re-reads the group's shape looking for two consecutive
+ * identical reads, and how long it waits between reads. ~4s of headroom against
+ * a re-layout measured to finish well inside 1.5s; the gate exits on the FIRST
+ * agreeing pair, so the common (already-settled) case costs one extra read.
+ */
+const SETTLE_READS = 40;
+const SETTLE_POLL_S = 0.1;
+
 /** resolve-element: does the element exist right now? Returns "true"/"false". */
 export function axResolveScript(path: string): string {
   return `${SE} to return (exists (${path}))`;
@@ -150,33 +160,49 @@ export function axPressScript(path: string): string {
 }
 /**
  * set-field-value: enter a value into the dialog's numeric text field (interval,
- * ends-count, start-days-earlier). It FOCUSES the field, selects all, TYPES the
- * value, and Tabs to commit — because `set value of <field>` writes the field's
- * displayed text WITHOUT firing the edit, so the app's binding keeps the old
- * number (the field shows "5" but the rule stays interval 1 — a silent no-op
- * exactly like `set value` on a pop-up, UIC6; it went unnoticed while every base
- * case used the default interval 1). Real keystrokes fire the change the binding
- * needs; Tab (not Return, which would fire the default OK button) commits and
- * moves focus. Foreground-bound (keystrokes reach the frontmost app) — the
- * reveal/activate preamble puts Things there. One stable command shape.
+ * ends-count, start-days-earlier) — and into the Move… picker's filter field. It
+ * FOCUSES the field, TYPES the value, and Tabs to commit — because
+ * `set value of <field>` writes the field's displayed text WITHOUT firing the
+ * edit, so the app's binding keeps the old number (the field shows "5" but the
+ * rule stays interval 1 — a silent no-op exactly like `set value` on a pop-up,
+ * UIC6; it went unnoticed while every base case used the default interval 1).
+ * Real keystrokes fire the change the binding needs; Tab (not Return, which would
+ * fire the default OK button) commits and moves focus. Foreground-bound
+ * (keystrokes reach the frontmost app) — the reveal/activate preamble puts Things
+ * there. One stable command shape.
+ *
+ * NO SELECT-ALL KEYSTROKE (BEEP1, 2026-08-25, docs/lab/beep1-numeric-field-beep.md).
+ * The primitive used to send ⌘A before typing, and that ONE keystroke was the
+ * audible macOS alert beep every numeric-field drive fired on the live host:
+ * Things' `Edit ▸ Select All` menu item exists and is DISABLED while the Repeat
+ * sheet is up, AppKit dispatches ⌘A as a menu key equivalent FIRST, the disabled
+ * item swallows it, nothing handles it → NSBeep. It is a menu-dispatch fact, not
+ * a focus race: the beep survives a verified first responder and a 1.5 s settle,
+ * while Tab and the digits themselves are silent. ⌘A was also REDUNDANT —
+ * `set focused of tf to true` installs the field editor with the ENTIRE content
+ * selected (measured: `AXSelectedTextRange` length goes 0 → the full value
+ * length, on both a 1- and a 2-character value), so typing replaces the old value
+ * outright, including the shrinking case (12 → 3) that a stale caret would have
+ * corrupted into "123". Dropping the keystroke is therefore silent AND correct on
+ * all three fields.
+ *
+ * CLOSED-LOOP (determinism doctrine): type, Tab-commit, then READ THE FIELD BACK
+ * and retry if it did not hold — the interval field, when it is the first numeric
+ * field after a frequency/type switch, races the dialog's group re-layout and
+ * reverts to 1 (UIC7, oddities §8l). Re-focus + re-type after a settle lands it
+ * once the re-layout has finished, and the re-focus re-selects the whole value,
+ * so a retry starts from a clean field without ⌘A. Fail-closed (an `error`, i.e.
+ * a transport failure the pipeline re-verifies) if it never holds — the
+ * create/reschedule delta's rule assertion is the final DB-level authority.
  */
 export function axSetValueScript(path: string, value: string, attempts = 3): string {
   const v = escapeAppleScript(value);
   const n = Math.max(1, Math.trunc(attempts));
-  // CLOSED-LOOP (determinism doctrine): type, Tab-commit, then READ THE FIELD
-  // BACK and retry if it did not hold — the interval field, when it is the first
-  // numeric field after a frequency/type switch, races the dialog's group
-  // re-layout and reverts to 1 (UIC7, oddities §8l). Re-focus + re-type after a
-  // settle lands it once the re-layout has finished. Fail-closed (an `error`,
-  // i.e. a transport failure the pipeline re-verifies) if it never holds — the
-  // create/reschedule delta's rule assertion is the final DB-level authority.
   return `${SE}
   set tf to (${path})
   repeat ${n} times
     set focused of tf to true
     delay 0.15
-    keystroke "a" using command down
-    delay 0.1
     keystroke "${v}"
     delay 0.1
     key code 48
@@ -218,7 +244,10 @@ end tell`;
  * Anything other than exactly one match FAILS CLOSED rather than type a number
  * into a field it cannot vouch for. Labels are pinned English, as everywhere
  * else here. The write itself is the {@link axSetValueScript} closed loop —
- * focus, select all, type, Tab-commit, read back, bounded retries.
+ * focus, type, Tab-commit, read back, bounded retries — and, like it, sends NO
+ * select-all keystroke: the ⌘A that used to open it is the macOS alert beep
+ * (BEEP1, docs/lab/beep1-numeric-field-beep.md), and focusing the field already
+ * selects its whole content.
  */
 export function axSetGroupNumberScript(
   groupPath: string,
@@ -233,6 +262,40 @@ export function axSetGroupNumberScript(
   const wantOnEndsRow = target === "ends-count";
   return `${SE}
   set g to (${groupPath})
+  -- SETTLE ON THE GROUP'S OWN SHAPE, never on a clock (determinism doctrine).
+  -- A frequency switch REBUILDS the cadence group, and this primitive is the
+  -- step that follows it. Two things go wrong when it starts too early: the row
+  -- discrimination below reads positions from controls that are still moving,
+  -- and the keystrokes land on a field being torn down — unhandled, so macOS
+  -- beeps (BEEP1: a back-to-back frequency-switch drive beeps once; the same
+  -- drive with the group settled first is silent). Poll until two consecutive
+  -- reads of the group's label + field-position signature agree, then proceed.
+  set sig to ""
+  set prevSig to "<none>"
+  set settled to false
+  repeat ${SETTLE_READS} times
+    set prevSig to sig
+    set sig to ""
+    repeat with i from 1 to (count of static texts of g)
+      set sv to ""
+      try
+        set sv to (value of static text i of g) as text
+      end try
+      set sig to sig & "|s:" & sv
+    end repeat
+    repeat with i from 1 to (count of text fields of g)
+      set fp to position of text field i of g
+      set sig to sig & "|f:" & (item 2 of fp)
+    end repeat
+    if sig is prevSig then
+      set settled to true
+      exit repeat
+    end if
+    delay ${SETTLE_POLL_S}
+  end repeat
+  if settled is false then
+    error "set-group-number: the Repeat dialog's cadence group is still re-laying out — its shape changed on every read; last seen" & sig
+  end if
   set endsY to missing value
   repeat with i from 1 to (count of static texts of g)
     set sv to ""
@@ -272,8 +335,6 @@ export function axSetGroupNumberScript(
   repeat ${n} times
     set focused of tf to true
     delay 0.15
-    keystroke "a" using command down
-    delay 0.1
     keystroke "${v}"
     delay 0.1
     key code 48
