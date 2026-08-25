@@ -77,7 +77,11 @@ describe("dissolveHeadingRecipe", () => {
       "click-element",
       "click-element",
     ]);
-    expect(recipe.steps[2]?.path).toContain('description is "More. Phase 1"');
+    // The "More. <title>" node sits three levels below the content table, so the
+    // table is addressed and the description is matched by the row/cell walk
+    // (HXPC1 §B0 — a `whose` clause on the table reaches only its rows).
+    expect(recipe.steps[2]?.path).toContain("table 1 of scroll area 1");
+    expect(recipe.steps[2]?.rowCellDescription).toBe("More. Phase 1");
     expect(recipe.steps[3]?.path).toContain('description is "Delete"');
     // The Delete click is TERMINAL: no successor element is asserted (DISS1 — no
     // confirmation sheet; the read-after-write verifies the heading is gone).

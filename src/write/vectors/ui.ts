@@ -190,6 +190,103 @@ export function axSetValueScript(path: string, value: string, attempts = 3): str
 end tell`;
 }
 /**
+ * set-group-number: drive ONE of the Repeat dialog's two numeric fields —
+ * the cadence INTERVAL or the ENDS-AFTER COUNT — addressed by the ROW it sits on
+ * (HXPC1, docs/lab/hxpc1-picker-assert.md §A).
+ *
+ * Both fields used to be spelled `text field 1 of group 1`, which is the same
+ * control at different moments. Measured on Things 3.23 (build 32300036):
+ *
+ *   Ends: never   → group text fields = 1  ·  tf1 = interval  @[311,283]
+ *   Ends: after N → group text fields = 2  ·  tf1 = COUNT     @[402,372]
+ *                                             tf2 = interval  @[311,283]
+ *
+ * i.e. selecting the "after" bound INSERTS the count ahead of the interval. The
+ * create path got away with it by driving the interval while it was still the
+ * sole field, but a RESCHEDULE opens the dialog pre-populated: a rule that
+ * already ends after N presents both fields from the first step, so the interval
+ * drive wrote the requested interval into the count field, the count drive then
+ * overwrote it, and the interval silently never changed.
+ *
+ * The row anchor is the group's `Ends:` static text (y=375 against the count's
+ * y=372 — the same row-tolerance discriminator `probe-dialog-shape` uses):
+ *   - `ends-count` — the group text field sharing the `Ends:` row;
+ *   - `interval`   — the group text field that does NOT share it. An
+ *     after-completion rule offers no ends bound at all (its group carries
+ *     neither an `Ends:` label nor an Ends pop-up, only the unit pop-up and the
+ *     interval), so the "not on that row" rule leaves exactly the one field.
+ * Anything other than exactly one match FAILS CLOSED rather than type a number
+ * into a field it cannot vouch for. Labels are pinned English, as everywhere
+ * else here. The write itself is the {@link axSetValueScript} closed loop —
+ * focus, select all, type, Tab-commit, read back, bounded retries.
+ */
+export function axSetGroupNumberScript(
+  groupPath: string,
+  target: "interval" | "ends-count",
+  value: string,
+  attempts = 3,
+  rowTolerance = 8,
+): string {
+  const v = escapeAppleScript(value);
+  const n = Math.max(1, Math.trunc(attempts));
+  const tol = Math.max(1, Math.trunc(rowTolerance));
+  const wantOnEndsRow = target === "ends-count";
+  return `${SE}
+  set g to (${groupPath})
+  set endsY to missing value
+  repeat with i from 1 to (count of static texts of g)
+    set sv to ""
+    try
+      set sv to (value of static text i of g) as text
+    end try
+    if sv is "Ends:" then
+      -- bind the position, THEN index it: System Events refuses indexing a
+      -- position read inline from a specifier (-1700) — the same two-statement
+      -- shape axProbeDialogShapeScript uses.
+      set labelPos to position of static text i of g
+      set endsY to item 2 of labelPos
+    end if
+  end repeat
+  set hits to {}
+  set inventory to ""
+  repeat with i from 1 to (count of text fields of g)
+    set fieldPos to position of text field i of g
+    set fy to item 2 of fieldPos
+    set onEndsRow to false
+    if endsY is not missing value then
+      set dy to fy - endsY
+      if dy < 0 then set dy to -dy
+      if dy <= ${tol} then set onEndsRow to true
+    end if
+    set rowWord to ""
+    if onEndsRow then set rowWord to ",ends-row"
+    set inventory to inventory & " #" & i & "(y=" & fy & rowWord & ")"
+    if onEndsRow is ${wantOnEndsRow} then set end of hits to text field i of g
+  end repeat
+  if (count of hits) is not 1 then
+    set labelWord to "absent"
+    if endsY is not missing value then set labelWord to "at y=" & endsY
+    error "set-group-number: the Repeat dialog offers " & (count of hits) & " field(s) for the ${target}, expected exactly 1 — Ends: label " & labelWord & ", numeric fields:" & inventory
+  end if
+  set tf to item 1 of hits
+  repeat ${n} times
+    set focused of tf to true
+    delay 0.15
+    keystroke "a" using command down
+    delay 0.1
+    keystroke "${v}"
+    delay 0.1
+    key code 48
+    delay 0.2
+    try
+      if ((value of tf) as text) is "${v}" then return "OK"
+    end try
+    delay 0.3
+  end repeat
+  error "the ${target} field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
+end tell`;
+}
+/**
  * ensure-checkbox: converge a dialog checkbox to a target state through a
  * DETERMINISTIC CLOSED LOOP (RRD1, determinism doctrine) — never a blind toggle.
  * It reads the checkbox's `AXValue` (0 = unchecked, 1 = checked), presses it ONLY
@@ -683,6 +780,140 @@ export function axKeyScript(keys: string): string {
     );
   return `tell application "System Events" to tell process "Things3"\n  ${lines.join("\n  ")}\nend tell`;
 }
+/**
+ * type-text: send literal text to whatever control holds focus (HXPC1). The
+ * Move… picker focuses its own filter field the instant it opens, and that field
+ * is NOT addressable as a direct child of the picker window — so there is no
+ * element to hand `set-value`, whose select-all + Tab commit would be wrong for a
+ * search field regardless (a popover filter has no next key view for Tab to move
+ * to). Unlike {@link axKeyScript}, which splits its spec on whitespace and would
+ * drop the spaces out of a multi-word project title, this sends the string as
+ * ONE keystroke. It is deliberately not self-verifying: the `click-picker-row`
+ * step that follows resolves the destination row by name and fails closed when
+ * the filter did not produce it, so a keystroke that landed elsewhere can never
+ * be committed. One stable command shape.
+ */
+export function axTypeTextScript(text: string): string {
+  return `${SE}
+  keystroke "${escapeAppleScript(text)}"
+end tell`;
+}
+
+/**
+ * resolve-frame for a control nested inside a CONTENT-TABLE ROW: walk the
+ * table's rows → cells → cell children and return the frame of the one whose
+ * `AXDescription` equals `description` (HXPC1, docs/lab/hxpc1-picker-assert.md
+ * §B0). Same "x y w h" contract as {@link axFrameScript}.
+ *
+ * This exists because the heading row's `…` button — the only content-row
+ * control that carries its own title (`"More. <heading title>"`, the HEADXPROJ
+ * enabler) — sits at `UI element N of cell 1 of row M of the table`, and
+ * `first UI element of <table> whose description is …` searches the table's
+ * DIRECT children only. Those are the rows, which carry no description, so the
+ * shipped one-level spelling matched nothing and the ellipsis drives
+ * (`project.move-heading-to-project`, `project.dissolve-heading`) died at their
+ * own frame resolution before any click — measured on Things 3.23 against a
+ * heading whose button the raw Accessibility API resolves at the same instant.
+ * The row/cell indices are never guessed: every row is walked and the match is
+ * exact, so a heading whose title changed under us fails closed by name.
+ */
+export function axRowCellFrameScript(tablePath: string, description: string): string {
+  const d = escapeAppleScript(description);
+  return `${SE}
+  set t to (${tablePath})
+  repeat with r in rows of t
+    repeat with c in UI elements of r
+      repeat with e in UI elements of c
+        try
+          if ((description of e) as text) is "${d}" then
+            set _p to position of e
+            set _s to size of e
+            return ((item 1 of _p) as text) & " " & ((item 2 of _p) as text) & " " & ((item 1 of _s) as text) & " " & ((item 2 of _s) as text)
+          end if
+        end try
+      end repeat
+    end repeat
+  end repeat
+  error "no row of this project's list exposes \\"${d}\\" — the heading may have been renamed, moved or deleted since it was read"
+end tell`;
+}
+
+/**
+ * resolve-frame for the Move… picker ROW carrying an exact project title — the
+ * step that replaced the recipe's blind Return (HXPC1,
+ * docs/lab/hxpc1-picker-assert.md §B).
+ *
+ * The picker exposes no `AXSelected` / `AXFocused` / `AXHighlighted` on any row
+ * (measured — only its filter field is focused), so there is nothing to read
+ * back from a keyboard commit and no way to assert what Return would take. What
+ * it does expose is one `AXUnknown` per row whose `AXDescription` IS the project
+ * title, and — whenever the filter holds text — a trailing
+ * `New Project "<typed text>"` row that CREATES a project when committed. That
+ * row is what the blind Return took whenever the destination was missing from
+ * the picker, which an ordinary database-resolved destination reaches: a
+ * COMPLETED or CANCELED project appears nowhere in the picker, so the drive
+ * minted a second project of the same title and moved the heading into it
+ * (measured 3.23: projects 14 → 15, heading re-parented to the new row).
+ *
+ * So the commit is addressed instead of guessed. The script requires:
+ *   - the picker to be the window it claims (its `AXIdentifier` begins
+ *     `MovePopUpDialog-`) — a positive identity check, so a different detached
+ *     window can never be clicked into;
+ *   - EXACTLY ONE row whose description equals the destination title (the
+ *     New-Project row's description is the quoted form, so an exact match cannot
+ *     hit it);
+ *   - that row's centre to lie inside the picker's own scroll area — the CNCAC1
+ *     off-screen hazard, where a row scrolled past the fold still resolves a
+ *     frame and a click at it lands on the desktop.
+ * Any miss FAILS CLOSED naming the destination and listing every row the picker
+ * actually offered, so the caller learns what the app was willing to move to.
+ */
+export function axPickerRowFrameScript(pickerPath: string, title: string): string {
+  const t = escapeAppleScript(title);
+  return `${SE}
+  set w to (${pickerPath})
+  set pickerId to ""
+  try
+    set pickerId to (value of attribute "AXIdentifier" of w) as text
+  end try
+  if pickerId does not start with "MovePopUpDialog-" then
+    error "the front dialog is not the Move… project picker (window id \\"" & pickerId & "\\") — nothing was committed"
+  end if
+  set sa to scroll area 1 of w
+  set saPos to position of sa
+  set saSize to size of sa
+  set saTop to item 2 of saPos
+  set saBottom to saTop + (item 2 of saSize)
+  set hits to {}
+  set offered to ""
+  repeat with i from 1 to (count of UI elements of sa)
+    set e to UI element i of sa
+    set d to ""
+    try
+      set d to (description of e) as text
+    end try
+    if d is not "" and (role of e) is "AXUnknown" then
+      set offered to offered & " [" & d & "]"
+      if d is "${t}" then set end of hits to e
+    end if
+  end repeat
+  if (count of hits) is 0 then
+    error "the Move… picker offers no project named \\"${t}\\" — it offered:" & offered & ". Committing here would have created a new project with that name instead of moving into the existing one. A completed or canceled project is not offered by this picker."
+  end if
+  if (count of hits) > 1 then
+    error "the Move… picker offers " & (count of hits) & " rows named \\"${t}\\" — it offered:" & offered
+  end if
+  set row1 to item 1 of hits
+  set rp to position of row1
+  set rs to size of row1
+  set cy to (item 2 of rp) + ((item 2 of rs) / 2)
+  if cy < saTop or cy > saBottom then
+    error "the \\"${t}\\" row is scrolled out of the Move… picker's visible list, so clicking it would land outside the picker — narrow the destination or scroll it into view"
+  end if
+  return ((item 1 of rp) as text) & " " & ((item 2 of rp) as text) & " " & ((item 1 of rs) as text) & " " & ((item 2 of rs) as text)
+end tell`;
+}
+
 /** The abort keystroke sent to dismiss a half-open sheet/popover on failure. */
 export function axAbortScript(): string {
   return `tell application "System Events" to key code 53`; // Escape
@@ -1178,6 +1409,22 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         label: step.label,
         script: axSetValueScript(step.path ?? "", step.value ?? ""),
       };
+    case "set-group-number":
+      return {
+        primitive: "set-group-number",
+        label: step.label,
+        script: axSetGroupNumberScript(
+          step.path ?? "",
+          step.numberTarget ?? "interval",
+          step.value ?? "",
+        ),
+      };
+    case "type-text":
+      return {
+        primitive: "type-text",
+        label: step.label,
+        script: axTypeTextScript(step.value ?? ""),
+      };
     case "select-popup":
       return {
         primitive: "select-popup",
@@ -1249,11 +1496,27 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
     case "click-element":
       // Phase 1 of the click: read the target's frame. driveClickElement runs
       // this, then posts the click at the resolved center and asserts the outcome.
+      // A `rowCellDescription` step resolves its target by walking the addressed
+      // content table's rows/cells instead (the heading `…` button, which sits
+      // three levels below the table a `whose` clause can reach).
       return {
         primitive: "resolve-frame",
         label: step.label,
         lang: "applescript",
-        script: axFrameScript(step.path ?? ""),
+        script:
+          step.rowCellDescription !== undefined
+            ? axRowCellFrameScript(step.path ?? "", step.rowCellDescription)
+            : axFrameScript(step.path ?? ""),
+      };
+    case "click-picker-row":
+      // Phase 1 of the picker commit: resolve the row carrying the destination's
+      // exact title (identity-checked, uniqueness-checked, on-screen-checked).
+      // driveClickElement then clicks it — the recipe never presses Return.
+      return {
+        primitive: "resolve-frame",
+        label: step.label,
+        lang: "applescript",
+        script: axPickerRowFrameScript(step.path ?? "", step.value ?? ""),
       };
     case "drag-reorder":
       // Composite step: drive() hands it to the sidebar drag driver, which
@@ -1266,6 +1529,23 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         script: jxaSidebarSnapshotScript(),
       };
   }
+}
+
+/**
+ * Recover the message an AppleScript `error "…"` raised from osascript's stderr,
+ * dropping the wrapper osascript adds around it (`<line>:<col>: execution error:
+ * <message> (-1728)`). Returns null when stderr carries no such message, so a
+ * caller can fall back to its own wording. This is what lets a resolver script
+ * REFUSE with a sentence the operator can act on — "the Move… picker offers no
+ * project named X — it offered […]" — instead of the driver's generic guess.
+ */
+function scriptErrorText(stderr: string): string | null {
+  const raw = stderr.trim();
+  if (raw === "") return null;
+  const marker = raw.lastIndexOf("execution error:");
+  const body = marker >= 0 ? raw.slice(marker + "execution error:".length) : raw;
+  const trimmed = body.replace(/\s*\(-?\d+\)\s*$/, "").trim();
+  return trimmed === "" ? null : trimmed;
 }
 
 /**
@@ -1282,11 +1562,18 @@ async function driveClickElement(
   const frameRes = await run(commandForStep(step, ""), STEP_TIMEOUT_MS);
   const center = frameRes.ok ? parseFrameCenter(frameRes.stdout) : null;
   if (center === null) {
+    // A resolver that REFUSED (rather than merely failing to find an element)
+    // carries the diagnosis — which row it wanted, and what the surface offered
+    // instead. Prefer it over the generic guess: that text is the whole point of
+    // the picker-row and heading-button resolvers (HXPC1).
+    const named = scriptErrorText(frameRes.stderr);
     return {
       ok: false,
       why:
-        "its on-screen position did not resolve — a Things update may have moved the control, " +
-        "or the app is not in the expected state; no click was sent",
+        named !== null
+          ? `${named} — no click was sent`
+          : "its on-screen position did not resolve — a Things update may have moved the control, " +
+            "or the app is not in the expected state; no click was sent",
     };
   }
   const clickRes = await run(clickPointCommand(center.x, center.y, step.label), STEP_TIMEOUT_MS);
@@ -1675,9 +1962,11 @@ async function drive(
       done.push(step.label);
       continue;
     }
-    if (step.primitive === "click-element") {
+    if (step.primitive === "click-element" || step.primitive === "click-picker-row") {
       // A mouse click at an AX-resolved frame center (the NATIVE1 primitive),
-      // used only where AXPress is inert (Things' custom `…`/repeat-bar popover).
+      // used only where AXPress is inert (Things' custom `…`/repeat-bar popover)
+      // — and, for `click-picker-row`, where committing by keyboard would take
+      // whatever the app highlighted, including the row that CREATES a project.
       // the click depends on the UI state the previous step produced
       const outcome = await driveClickElement(step, run);
       if (!outcome.ok) {

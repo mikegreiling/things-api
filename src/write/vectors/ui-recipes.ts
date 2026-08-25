@@ -301,8 +301,6 @@ function dualForm(inner: string): string[] {
 // --- CERTIFIED controls (UIC1/UIC5) --------------------------------------
 /** Frequency pop-up — a direct child of the dialog. */
 const DIALOG_FREQUENCY = dualForm("pop up button 1");
-/** Interval field — nested in group 1 (UIC5-e). */
-const DIALOG_INTERVAL = dualForm("text field 1 of group 1");
 /** OK button. */
 const DIALOG_OK = dualForm(`button "OK"`);
 
@@ -348,8 +346,6 @@ const DIALOG_YEAR_ORDINAL = shapedPopup(5, 4);
  * the add button from live structure).
  */
 const WEEKDAY_BASE: Record<"next-popup" | "legacy", number> = { "next-popup": 3, legacy: 2 };
-/** "Ends after [n]" count field — becomes text field 1 of the group once shown (interval was set earlier while it was the sole field). */
-const DIALOG_ENDS_COUNT = dualForm("text field 1 of group 1");
 /** "Add reminders" checkbox (sheet-level, title-pinned). The time is an AXDateTimeArea driven by set-datetime. */
 const DIALOG_ADD_REMINDERS = dualForm(`checkbox "Add reminders"`);
 /** "Add deadlines" checkbox + the "start N days earlier" field it reveals as a DIRECT sheet child (text field 1 of the shell). */
@@ -454,6 +450,43 @@ function setField(label: string, pathCandidates: string[], value: string): UiSte
     primitive: "set-value",
     label,
     pathCandidates,
+    value,
+    dynamic: true,
+    addressing: "title",
+  };
+}
+/**
+ * Drive one of the Repeat dialog's TWO numeric fields — the cadence interval
+ * ("Every [n] days") or the "Ends: after [n] times" count. Both are text fields
+ * of the cadence group, and WHICH INDEX each holds depends on the dialog's
+ * state rather than on which one the caller means. Measured on Things 3.23
+ * (HXPC1, docs/lab/hxpc1-picker-assert.md §A):
+ *
+ *   Ends: never   →  1 text field  ·  #1 interval @[311,283]
+ *   Ends: after N →  2 text fields ·  #1 COUNT    @[402,372]  (`Ends:` label y=375)
+ *                                     #2 interval @[311,283]  (`Every` label y=286)
+ *
+ * Both used to be spelled `text field 1 of group 1`, which the create path
+ * survived only because it drives the interval BEFORE selecting the ends bound,
+ * while it is still the sole field. A RESCHEDULE opens the dialog PRE-POPULATED:
+ * a rule that already ends after N presents both fields from the first step, so
+ * the interval drive wrote the requested interval into the count field and the
+ * count drive then overwrote it — the interval never changed. The driver now
+ * resolves each field by the ROW it sits on (the count shares the `Ends:`
+ * label's row, the interval does not), which is order-independent and covers the
+ * after-completion dialog too: that one offers no ends bound at all, so the
+ * interval is again the only field. See ui.ts `axSetGroupNumberScript`.
+ */
+function setGroupNumber(
+  label: string,
+  numberTarget: "interval" | "ends-count",
+  value: string,
+): UiStep {
+  return {
+    primitive: "set-group-number",
+    label,
+    pathCandidates: DIALOG_GROUP,
+    numberTarget,
     value,
     dynamic: true,
     addressing: "title",
@@ -572,7 +605,7 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(selectPopup(`frequency = ${rule.frequency}`, DIALOG_FREQUENCY, rule.frequency));
   }
 
-  steps.push(setField(`interval = ${rule.interval}`, DIALOG_INTERVAL, String(rule.interval)));
+  steps.push(setGroupNumber(`interval = ${rule.interval}`, "interval", String(rule.interval)));
 
   // MEASURE the dialog before touching any control the 3.23 redesign moved
   // (RDLG2). Emitted only when such a control is actually addressed, so the
@@ -679,7 +712,7 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   if (rule.ends !== undefined && rule.ends.kind === "after") {
     steps.push(selectPopup("ends = after", DIALOG_ENDS, "after"));
     steps.push(
-      setField(`ends after = ${rule.ends.count}`, DIALOG_ENDS_COUNT, String(rule.ends.count)),
+      setGroupNumber(`ends after = ${rule.ends.count}`, "ends-count", String(rule.ends.count)),
     );
   } else if (endsOnDate !== null) {
     steps.push(selectPopup("ends = on date", DIALOG_ENDS, "on date"));
@@ -1011,29 +1044,74 @@ export function projectRescheduleRepeatRecipe(
 // repeat popover. The popover (Archive / Move… / Convert to Project… / Delete) is
 // the same custom AXUnknown-window shape as the repeat popover.
 //
-// PROVISIONAL element paths (pending HXPC1 certification): the `…` button's
-// container path, the popover-item enumeration, and the picker's search field are
-// best-guess structural paths from the HEADXPROJ AX inventory; the certification
-// sitting confirms/corrects them exactly as UIC1 corrected the repeat recipes.
+// CERTIFIED by HXPC1 (2026-08-25, Things 3.23 / golden-v4 —
+// docs/lab/hxpc1-picker-assert.md), which corrected three of the four provisional
+// paths the way UIC1 corrected the repeat recipes:
+//   * the `…` button is three levels below the content table, so no `whose`
+//     clause can reach it (§B0) — the click resolves it by walking rows/cells;
+//   * the picker is a DETACHED `MovePopUpDialog-` window, not a sheet of the main
+//     window (§B2), and its filter field is not addressable as a child of it;
+//   * the commit is a CLICK on the destination row, never a Return — the picker
+//     publishes no highlight to read back, and its `New Project "<typed>"` row
+//     turns an absent destination into a newly created project (§B4).
+// The popover-item enumeration (`whose description is "Move…"`) was the one
+// provisional path that measured correct: those items are direct children of the
+// popover's scroll area.
 
-/** The heading `…` "More. <title>" button — provisionally in the content table. */
-function headingMoreButton(headingTitle: string): string {
-  return `(first UI element of ${PROJECT_CONTENT_TABLE} whose description is "More. ${headingTitle}")`;
+/**
+ * The heading `…` "More. <title>" button. It carries the heading's title in its
+ * `AXDescription`, but it sits at `UI element N of cell 1 of row M` of the
+ * content table — three levels down — and a `whose` clause searches only DIRECT
+ * children, so the button is NOT addressable as a path. The click step names the
+ * table here and the description separately (`rowCellDescription`), and the
+ * driver walks rows → cells → children for the exact match (HXPC1 §B0; the
+ * one-level spelling this replaces matched nothing on 3.23, which is why every
+ * ellipsis drive died at its own frame resolution).
+ */
+function headingMoreDescription(headingTitle: string): string {
+  return `More. ${headingTitle}`;
 }
 /** The ellipsis popover — a custom AXUnknown window (same shape as the repeat popover). */
 const HEADING_ELLIPSIS_POPOVER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
 const HEADING_POPOVER_ITEMS = `scroll area 1 of ${HEADING_ELLIPSIS_POPOVER}`;
-/** The Move… project picker (a searchable list; provisionally a sheet of the main window). */
-const HEADING_MOVE_PICKER = `sheet 1 of ${MAIN_WINDOW}`;
-const HEADING_MOVE_PICKER_FIELD = `text field 1 of ${HEADING_MOVE_PICKER}`;
+/**
+ * The Move… project picker. NOT a sheet of the main window (the shape this
+ * recipe first assumed) — a DETACHED top-level window of the same custom
+ * `AXUnknown` class as the ellipsis popover, distinguished by an `AXIdentifier`
+ * beginning `MovePopUpDialog-` (HXPC1 §B2). The popover that opened it is gone
+ * by the time it appears, so the generic detached-window selector resolves it
+ * unambiguously; the row-commit script re-checks the identifier before clicking
+ * anything, so a different detached window can never be committed into.
+ */
+const HEADING_MOVE_PICKER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
+/**
+ * What proves the detached window that appeared IS the picker and not the
+ * ellipsis popover it replaced: the picker carries a direct child described
+ * `Move` (its header), the popover carries only its item list. Without this the
+ * post-click assert would be satisfied by the popover that was already open —
+ * i.e. by the click having done nothing (HXPC1 §B2).
+ */
+const HEADING_MOVE_PICKER_MARKER = `(first UI element of ${HEADING_MOVE_PICKER} whose description is "Move")`;
 
 /**
  * Move a HEADING to a different project via the ellipsis `Move…` menu (HEADXPROJ).
  * `sourceProjectUuid` is revealed to render the heading row; `headingTitle` is the
- * `"More. <title>"` click target; `destProjectTitle` is typed into the picker,
- * then Return selects the filtered match. DB effect (HEADXPROJ): the heading row's
- * `project` FK becomes the destination; its children follow via their intact
+ * `"More. <title>"` click target; `destProjectTitle` narrows the picker's list and
+ * then names the row that is CLICKED to commit. DB effect (HEADXPROJ): the heading
+ * row's `project` FK becomes the destination; its children follow via their intact
  * heading FK (a single-row change — no child rewrite, no index churn).
+ *
+ * The commit used to be a Return pressed BLIND on whatever the filter had
+ * highlighted, which is how a move could CREATE a project instead of performing
+ * one: the picker offers a trailing `New Project "<typed text>"` row, and it omits
+ * completed and canceled projects entirely — so a destination our pre-state had
+ * resolved from the database could be absent from the picker, leaving that row as
+ * the only offer. Measured on Things 3.23: the heading landed in a brand-new
+ * second project of the same name (HXPC1 §B4). The picker publishes no selection
+ * or highlight attribute on any row, so there is nothing to read back from a
+ * keyboard commit; the recipe therefore addresses the destination row by its exact
+ * title and clicks it, and fails closed — naming every row the picker offered —
+ * when that row is absent, duplicated, or scrolled out of view.
  */
 export function moveHeadingToProjectRecipe(
   sourceProjectUuid: string,
@@ -1059,7 +1137,8 @@ export function moveHeadingToProjectRecipe(
       {
         primitive: "click-element",
         label: `open the heading's ellipsis menu ("More. ${headingTitle}")`,
-        path: headingMoreButton(headingTitle),
+        path: PROJECT_CONTENT_TABLE,
+        rowCellDescription: headingMoreDescription(headingTitle),
         assertPath: HEADING_ELLIPSIS_POPOVER,
         assertLabel: "the heading ellipsis menu",
         assertTimeoutMs: 5000,
@@ -1070,24 +1149,28 @@ export function moveHeadingToProjectRecipe(
         primitive: "click-element",
         label: "ellipsis menu ▸ Move…",
         path: `(first UI element of ${HEADING_POPOVER_ITEMS} whose description is "Move…")`,
-        assertPath: HEADING_MOVE_PICKER,
+        assertPath: HEADING_MOVE_PICKER_MARKER,
         assertLabel: "the Move… project picker",
         assertTimeoutMs: 5000,
         dynamic: true,
         addressing: "title",
       },
       {
-        primitive: "set-value",
-        label: `type the destination "${destProjectTitle}" into the Move… picker`,
-        path: HEADING_MOVE_PICKER_FIELD,
+        // The picker focuses its own filter field as it opens, and that field is
+        // not addressable as a child of the picker window — so the destination is
+        // typed at the focus. Nothing is committed on the strength of the
+        // keystroke: the next step resolves the destination row by name.
+        primitive: "type-text",
+        label: `narrow the Move… picker to "${destProjectTitle}"`,
         value: destProjectTitle,
         dynamic: true,
         addressing: "title",
       },
       {
-        primitive: "key",
-        label: "press Return to select the filtered destination project",
-        keys: "return",
+        primitive: "click-picker-row",
+        label: `commit the Move… picker on the "${destProjectTitle}" row`,
+        path: HEADING_MOVE_PICKER,
+        value: destProjectTitle,
         dynamic: true,
         addressing: "title",
       },
@@ -1124,7 +1207,8 @@ export function dissolveHeadingRecipe(projectReveal: string, headingTitle: strin
       {
         primitive: "click-element",
         label: `open the heading's ellipsis menu ("More. ${headingTitle}")`,
-        path: headingMoreButton(headingTitle),
+        path: PROJECT_CONTENT_TABLE,
+        rowCellDescription: headingMoreDescription(headingTitle),
         assertPath: HEADING_ELLIPSIS_POPOVER,
         assertLabel: "the heading ellipsis menu",
         assertTimeoutMs: 5000,

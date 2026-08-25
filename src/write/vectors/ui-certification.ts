@@ -49,8 +49,9 @@ export interface CertificationEntry {
 
 /** The manifest profile — records the tier + Things build the suite certified. */
 export const UI_CERTIFICATION_PROFILE =
-  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + UIC7b + HEADCERT1 + HXPC1 + DISS1 in-VM (Things 3.22.11) + " +
-  "UIC8 promote-via-clone compounds in-VM (golden-v2 / Things 3.22.12) — on-device pending";
+  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + UIC7b + HEADCERT1 + HEADXPROJ + DISS1 in-VM (Things 3.22.11) + " +
+  "UIC8 promote-via-clone compounds in-VM (golden-v2 / Things 3.22.12) + RDLG2 recipe re-point + " +
+  "HXPC1 heading-ellipsis/Move-picker paths in-VM (golden-v4 / Things 3.23) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": {
@@ -98,16 +99,25 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     evidence: ["UI2-d", "UIC1-a", "HEADCERT1"],
   },
   "project.move-heading-to-project": {
-    // HXPC1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Move… recipe ran
-    // end-to-end in the clone — HID-click the "More. <title>" button → Move… →
-    // type the destination → Return — and the exact HEADXPROJ delta was observed:
-    // heading `HXH` project-FK rewritten HX-PA → HX-PB, both children followed via
-    // their intact heading FK (project NULL, heading=HXH), single-row change, no
-    // index churn. The shipped recipe's popover-item AX PATHS (description-based
-    // click-element) are provisional pending an on-device sitting — HXPC1 drove the
-    // equivalent frame-center synthesis; the DB oracle + recipe flow are certified.
+    // HEADXPROJ (2026-07-27, bjhx-lab, Things 3.22.11) established the flow and the
+    // DB oracle with a hand-written driver: HID-click the "More. <title>" button →
+    // Move… → type the destination → Return, and heading `HXH`'s project FK
+    // rewritten HX-PA → HX-PB with both children following via their intact heading
+    // FK (project NULL, heading=HXH) — a single-row change, no index churn.
+    //
+    // HXPC1 (2026-08-25, hxpc1-lab, Things 3.23 / golden-v4) certified the SHIPPED
+    // recipe for the first time and corrected three of the four provisional paths:
+    // the "More. <title>" button is three levels below the content table (so the
+    // shipped one-level `whose` clause matched nothing and the drive never got past
+    // its first click), the picker is a detached `MovePopUpDialog-` window rather
+    // than a sheet of the main window, and the commit is a CLICK on the row whose
+    // title matches exactly — the blind Return could take the picker's
+    // `New Project "<typed>"` row whenever the destination was absent from it,
+    // which a completed or canceled destination is. 7/7 through the production CLI
+    // (clean match, prefix collision, completed-destination refusal with zero
+    // mutation). docs/lab/hxpc1-picker-assert.md.
     status: "lab-certified",
-    evidence: ["HXPC1"],
+    evidence: ["HEADXPROJ", "HXPC1"],
   },
   "project.dissolve-heading": {
     // DISS1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Delete recipe ran
@@ -116,8 +126,13 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     // TMTask), its 3 children re-homed as DIRECT project children (heading→NULL,
     // project→parent, index preserved: c1<c2<c3, trashed=0). NO confirm sheet.
     // Popover items are AX-description-enumerable (the recipe resolves Delete by
-    // description, scoped to the popover). The shipped recipe's popover AX paths are
-    // provisional pending an on-device sitting; the DB oracle + flow are certified.
+    // description, scoped to the popover) — the one provisional path HXPC1 measured
+    // CORRECT. Its sibling was not: the "More. <title>" button this drive opens the
+    // popover with was addressed one level too shallow, so it resolved nothing and
+    // the drive died at its first click on every host. HXPC1 (2026-08-25, Things
+    // 3.23) fixed the walk and certified it through the move-heading sibling, but
+    // this op was NOT driven end to end there — its next sitting should carry a cell
+    // (docs/lab/hxpc1-picker-assert.md §B0/§D). The DB oracle + flow are certified.
     status: "lab-certified",
     evidence: ["DISS1"],
   },

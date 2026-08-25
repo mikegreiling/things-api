@@ -9,14 +9,19 @@ import {
   axAssertEligibleScript,
   axConvergeWeekdaysScript,
   axEnsureCheckboxScript,
+  axKeyScript,
+  axPickerRowFrameScript,
   axProbeDialogShapeScript,
+  axRowCellFrameScript,
   axSelectNextOccurrenceScript,
   axSelectPopupCandidatesScript,
   axSelectPopupScript,
   axSelectRowScript,
   axSetDateTimeScript,
+  axSetGroupNumberScript,
   axSetValueScript,
   axSheetOpenScript,
+  axTypeTextScript,
 } from "../../src/write/vectors/ui.ts";
 
 describe("axSelectPopupCandidatesScript — plural-safe menu-item resolution (defect (c))", () => {
@@ -339,5 +344,105 @@ describe("axSelectRowScript — the matched row must itself hold the selection (
     expect(script).toContain('is "My Project" then');
     expect(script).toContain('return "OK"');
     expect(script).toContain('return "NOMATCH"');
+  });
+});
+
+describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT fields (HXPC1 §A)", () => {
+  const interval = axSetGroupNumberScript("group 1 of sheet 1", "interval", "3");
+  const endsCount = axSetGroupNumberScript("group 1 of sheet 1", "ends-count", "5");
+
+  it("anchors on the `Ends:` label's row rather than a text-field index", () => {
+    // Measured on 3.23: with an ends bound shown the cadence group holds TWO text
+    // fields and the COUNT takes index 1, displacing the interval to 2 — so the
+    // shared `text field 1 of group 1` spelling wrote the requested interval into
+    // the count on any PRE-POPULATED (reschedule) dialog.
+    for (const s of [interval, endsCount]) {
+      expect(s).toContain('if sv is "Ends:" then');
+      expect(s).toContain("set endsY to item 2 of labelPos");
+      expect(s).not.toContain("text field 1 of g");
+    }
+  });
+
+  it("selects the field ON the ends row for the count and OFF it for the interval", () => {
+    expect(endsCount).toContain("if onEndsRow is true then");
+    expect(interval).toContain("if onEndsRow is false then");
+  });
+
+  it("fails closed unless EXACTLY one field matches, reporting the field inventory", () => {
+    for (const s of [interval, endsCount]) {
+      expect(s).toContain("if (count of hits) is not 1 then");
+      expect(s).toContain("expected exactly 1");
+      expect(s).toContain("numeric fields:");
+    }
+  });
+
+  it("drives with the same closed loop as set-value (type, Tab-commit, read back, retry)", () => {
+    expect(interval).toContain("set focused of tf to true");
+    expect(interval).toContain('keystroke "a" using command down');
+    expect(interval).toContain('keystroke "3"');
+    expect(interval).toContain("key code 48"); // Tab, never Return (the default button)
+    expect(interval).toContain('if ((value of tf) as text) is "3" then return "OK"');
+    expect(interval).toContain("did not hold value");
+  });
+});
+
+describe("axRowCellFrameScript — the heading `…` button is three levels down (HXPC1 §B0)", () => {
+  const script = axRowCellFrameScript("table 1 of scroll area 1 of window 1", "More. Phase 1");
+
+  it("walks rows -> cells -> cell children instead of filtering the table's children", () => {
+    // `first UI element of <table> whose description is …` searches the table's
+    // DIRECT children — the rows, which carry no description — so the shipped
+    // spelling matched nothing and every ellipsis drive died at frame resolution.
+    expect(script).toContain("repeat with r in rows of t");
+    expect(script).toContain("repeat with c in UI elements of r");
+    expect(script).toContain("repeat with e in UI elements of c");
+    expect(script).toContain('is "More. Phase 1" then');
+  });
+
+  it("returns the same 'x y w h' frame contract as axFrameScript", () => {
+    expect(script).toContain("set _p to position of e");
+    expect(script).toContain("set _s to size of e");
+    expect(script).toContain("(item 1 of _p) as text");
+  });
+
+  it("fails closed by name when no row exposes it", () => {
+    expect(script).toContain("error");
+    expect(script).toContain("More. Phase 1");
+  });
+});
+
+describe("axPickerRowFrameScript — the Move… commit is addressed, never blind (HXPC1 §B)", () => {
+  const script = axPickerRowFrameScript('(first window whose subrole is "AXUnknown")', "Dest");
+
+  it("verifies the window IS the Move… picker before anything is clicked", () => {
+    expect(script).toContain('does not start with "MovePopUpDialog-"');
+    expect(script).toContain("nothing was committed");
+  });
+
+  it("requires EXACTLY ONE row whose title matches exactly", () => {
+    expect(script).toContain('if d is "Dest" then set end of hits to e');
+    expect(script).toContain("if (count of hits) is 0 then");
+    expect(script).toContain("if (count of hits) > 1 then");
+  });
+
+  it("names every row the picker offered, and why committing blind was unsafe", () => {
+    // The `New Project "<typed>"` row is what the blind Return took whenever the
+    // destination was absent from the picker — a completed/canceled project is.
+    expect(script).toContain("it offered:");
+    expect(script).toContain("would have created a new project");
+    expect(script).toContain("completed or canceled project is not offered");
+  });
+
+  it("refuses a row scrolled outside the picker's own list (the CNCAC1 off-screen hazard)", () => {
+    expect(script).toContain("if cy < saTop or cy > saBottom then");
+    expect(script).toContain("scrolled out of the Move… picker's visible list");
+  });
+});
+
+describe("axTypeTextScript — one keystroke, spaces intact (HXPC1)", () => {
+  it("sends the whole string as ONE keystroke, unlike the whitespace-split key spec", () => {
+    expect(axTypeTextScript("Synthetic Work")).toContain('keystroke "Synthetic Work"');
+    // axKeyScript splits its spec on whitespace, which would drop the space.
+    expect(axKeyScript("Synthetic Work")).toContain('keystroke "Synthetic"');
   });
 });

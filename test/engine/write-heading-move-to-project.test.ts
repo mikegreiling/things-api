@@ -1,10 +1,11 @@
 /**
  * project.move-heading-to-project (HEADXPROJ / HXPC1). Covers
  * `classifyHeadingMoveToProject` — the source/heading/destination resolution and
- * every fail-closed refusal (the two title-collision surfaces the ellipsis Move…
- * drive cannot disambiguate) — and the recipe shape (reveal source → activate →
- * click the "More. <title>" button → Move… → type the destination → Return). Pure
- * classifier + recipe assertions; no `open` / System Events call fires.
+ * every fail-closed refusal (the title-collision surfaces the ellipsis Move… drive
+ * cannot disambiguate, plus the completed/canceled destination the Move… picker
+ * does not list at all) — and the recipe shape (reveal source → activate → click
+ * the "More. <title>" button → Move… → narrow the picker → CLICK the destination
+ * row). Pure classifier + recipe assertions; no `open` / System Events call fires.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -91,7 +92,7 @@ describe("classifyHeadingMoveToProject (HEADXPROJ)", () => {
     expect(tax).toMatchObject({ kind: "refuse", refusal: "same-project" });
   });
 
-  it("refuses a destination title shared by another project (the picker searches by title)", () => {
+  it("refuses a destination title shared by another project (one picker row each, both by title)", () => {
     const src = seedProject(fixture.db, { title: "Src" });
     const dst = seedProject(fixture.db, { title: "Twin" });
     seedProject(fixture.db, { title: "Twin" }); // a second project with the destination's title
@@ -99,10 +100,38 @@ describe("classifyHeadingMoveToProject (HEADXPROJ)", () => {
     const tax = classifyHeadingMoveToProject(fixture.db, { uuid: src }, "H", { uuid: dst });
     expect(tax).toMatchObject({ kind: "refuse", refusal: "dest-ambiguous" });
   });
+
+  it("refuses a COMPLETED destination — the Move… picker lists open projects only (HXPC1 §B4)", () => {
+    const src = seedProject(fixture.db, { title: "Src" });
+    const dst = seedProject(fixture.db, { title: "Archive", status: "completed" });
+    seedHeading(fixture.db, { title: "H", project: src });
+    const tax = classifyHeadingMoveToProject(fixture.db, { uuid: src }, "H", { uuid: dst });
+    expect(tax).toMatchObject({ kind: "refuse", refusal: "dest-not-open" });
+    if (tax.kind === "refuse") expect(tax.detail).toContain("completed");
+  });
+
+  it("refuses a CANCELED destination for the same reason, naming it as canceled", () => {
+    const src = seedProject(fixture.db, { title: "Src" });
+    const dst = seedProject(fixture.db, { title: "Dropped", status: "canceled" });
+    seedHeading(fixture.db, { title: "H", project: src });
+    const tax = classifyHeadingMoveToProject(fixture.db, { uuid: src }, "H", { uuid: dst });
+    expect(tax).toMatchObject({ kind: "refuse", refusal: "dest-not-open" });
+    if (tax.kind === "refuse") expect(tax.detail).toContain("canceled");
+  });
+
+  it("ALLOWS a destination whose title is a prefix of another project's (HXPC1 §B3 — the row is addressed exactly)", () => {
+    const src = seedProject(fixture.db, { title: "Src" });
+    const dst = seedProject(fixture.db, { title: "Synthetic Work" });
+    seedProject(fixture.db, { title: "Synthetic Work Stuff" });
+    seedHeading(fixture.db, { title: "H", project: src });
+    const tax = classifyHeadingMoveToProject(fixture.db, { uuid: src }, "H", { uuid: dst });
+    expect(tax.kind).toBe("ok");
+    if (tax.kind === "ok") expect(tax.pre.destProjectTitle).toBe("Synthetic Work");
+  });
 });
 
 describe("moveHeadingToProjectRecipe", () => {
-  it("reveals the source, foregrounds, clicks the titled More button + Move…, types the dest, Returns", () => {
+  it("reveals the source, foregrounds, clicks the titled More button + Move…, narrows, then CLICKS the row", () => {
     const recipe = moveHeadingToProjectRecipe("src-uuid", "Phase 1", "Dst");
     expect(recipe.op).toBe("project.move-heading-to-project");
     expect(recipe.targetUuid).toBe("src-uuid");
@@ -112,15 +141,22 @@ describe("moveHeadingToProjectRecipe", () => {
       "activate",
       "click-element",
       "click-element",
-      "set-value",
-      "key",
+      "type-text",
+      "click-picker-row",
     ]);
-    // The heading is addressed by its title-carrying "More. <title>" node.
-    expect(recipe.steps[2]?.path).toContain('description is "More. Phase 1"');
-    // The Move… popover item.
+    // The heading's "More. <title>" node sits three levels below the content
+    // table, so the table is addressed and the description matched by the walk.
+    expect(recipe.steps[2]?.path).toContain("table 1 of scroll area 1");
+    expect(recipe.steps[2]?.rowCellDescription).toBe("More. Phase 1");
+    // The Move… popover item (a direct child of the popover's scroll area).
     expect(recipe.steps[3]?.path).toContain('description is "Move…"');
-    // The destination is typed into the picker; Return selects the filtered match.
+    // The destination narrows the picker, then names the row that is clicked —
+    // no Return is ever pressed, so the `New Project "<typed>"` row is unreachable.
     expect(recipe.steps[4]?.value).toBe("Dst");
-    expect(recipe.steps[5]?.keys).toBe("return");
+    expect(recipe.steps[5]?.value).toBe("Dst");
+    // The commit step names the picker WINDOW: the resolver checks its identity
+    // (an `AXIdentifier` beginning MovePopUpDialog-) before it reads any row.
+    expect(recipe.steps[5]?.path).toContain('subrole is "AXUnknown"');
+    expect(recipe.steps.some((s) => s.primitive === "key")).toBe(false);
   });
 });

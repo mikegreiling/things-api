@@ -70,9 +70,40 @@ export type UiPrimitive =
   | "resolve"
   | "press"
   | "set-value"
+  /**
+   * Set ONE of the Repeat dialog's two numeric fields — the cadence INTERVAL
+   * ("Every [n] days") or the ENDS-AFTER COUNT ("Ends: after [n] times") —
+   * addressed by the ROW it sits on rather than by its index among the group's
+   * text fields (HXPC1). Both used to be spelled `text field 1 of group 1`,
+   * which is only correct in the order the create path happens to drive them:
+   * the interval is the group's sole text field until an "Ends: after" bound is
+   * selected, and the count then takes index 1 with the interval displaced to 2
+   * (measured, Things 3.23 — docs/lab/hxpc1-picker-assert.md §A). A RESCHEDULE
+   * opens the dialog PRE-POPULATED, so a rule that already ends after N
+   * presents both fields from the first step and the index spelling wrote the
+   * requested interval into the count field. The row anchor is the group's
+   * `Ends:` static text: the count is the field sharing its row, the interval
+   * is the field that does not (and after-completion rules, which offer no ends
+   * bound at all, have only the interval). {@link UiStep.numberTarget} picks
+   * which. Drives with the same focus → select-all → type → Tab → read-back
+   * closed loop as set-value, and fails closed when the row anchor resolves
+   * anything other than exactly one field.
+   */
+  | "set-group-number"
   | "select-popup"
   | "wait"
   | "key"
+  /**
+   * Type literal text into whatever control currently holds focus (HXPC1). Used
+   * for the Move… picker's filter field, which the picker focuses for itself the
+   * moment it opens: the field is not addressable as a direct child of the
+   * picker window, and the set-value primitive's select-all + Tab commit is
+   * wrong for a search field anyway (Tab has no next key view in a popover). The
+   * keystroke is not the verification — the `click-picker-row` step that follows
+   * resolves the intended destination row by name and fails closed if the filter
+   * did not produce it, so a keystroke that went astray can never be committed.
+   */
+  | "type-text"
   /**
    * Synthesize a MOUSE click at an AX-resolved element's frame center (the
    * NATIVE1 JXA ObjC-bridge / HID-tap primitive). Used ONLY for Things' custom
@@ -83,6 +114,28 @@ export type UiPrimitive =
    * foreground surface, NATIVE1-e), so a recipe using it must activate first.
    */
   | "click-element"
+  /**
+   * Commit the Move… project picker by CLICKING the row that carries the
+   * destination project's exact title — never by pressing Return on whatever the
+   * filter happened to highlight (HXPC1). The picker exposes no selection,
+   * focus, or highlight attribute on any row, so there is nothing to read back
+   * from a keyboard commit; what it does expose is one `AXUnknown` per row whose
+   * `AXDescription` IS the project title, plus — whenever text has been typed —
+   * a `New Project "<typed text>"` row that CREATES a project when committed.
+   * The blind Return committed that row whenever the destination was absent from
+   * the picker, which is reachable from an ordinary database-resolved
+   * destination: a COMPLETED or CANCELED project is offered nowhere in the
+   * picker, so the drive silently created a second project of the same name and
+   * moved the heading into it (measured on Things 3.23,
+   * docs/lab/hxpc1-picker-assert.md §B4). Addressing the row by exact title
+   * cannot match the New-Project row (its description is the quoted form) and
+   * fails closed — naming every row the picker DID offer — when the intended one
+   * is absent, ambiguous, or scrolled out of its own scroll area (the CNCAC1
+   * off-screen-frame hazard). `path` is the picker WINDOW — the resolver reads its
+   * `AXIdentifier` to confirm identity before it looks at any row; `value` is the
+   * destination title.
+   */
+  | "click-picker-row"
   /**
    * Synthesize a MOUSE DRAG that reorders a sidebar AREA row (the AXDRAG1
    * primitive). The driver resolves the source row and the destination slot
@@ -237,6 +290,29 @@ export interface UiStep {
   keys?: string;
   /** wait: how long to poll for the element before aborting. */
   timeoutMs?: number;
+  /**
+   * set-group-number only: WHICH of the Repeat dialog's two numeric fields to
+   * drive. `interval` = the cadence field ("Every [n] …"); `ends-count` = the
+   * "Ends: after [n] times" field. Each is resolved by the ROW it sits on, so
+   * the drive no longer depends on the order the dialog's controls were touched
+   * or on whether a reschedule opened it pre-populated. Required for every
+   * set-group-number step.
+   */
+  numberTarget?: "interval" | "ends-count";
+  /**
+   * click-element only: resolve the click target by walking the addressed
+   * content TABLE's rows → cells → cell children for the element whose
+   * `AXDescription` equals this, instead of resolving `path` itself. The heading
+   * row's `…` button is the one control that needs it: it carries its heading's
+   * title in `AXDescription` ("More. <title>"), but it sits three levels below
+   * the table, and a `whose` clause on `UI elements of <table>` searches only
+   * the table's DIRECT children — the rows — so the shipped one-level spelling
+   * matched nothing and every ellipsis drive died at its own frame resolution
+   * (measured on Things 3.23, docs/lab/hxpc1-picker-assert.md §B0 — the same
+   * frame-resolution miss the timestamp cells recorded against the golden-v2
+   * rig). The walk is an exact match and fails closed naming what it sought.
+   */
+  rowCellDescription?: string;
   /**
    * click-element only: the element expected to appear right AFTER the click
    * (a popover opening, a sheet appearing). The driver polls for it and, on

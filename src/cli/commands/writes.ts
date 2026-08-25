@@ -1897,8 +1897,9 @@ export function registerWriteCommands(program: Command): void {
             "destination. GUI-ONLY: it drives the heading row's ellipsis Move… menu, so enable it " +
             "once with `things config set ui.enabled true` and pass --dangerously-drive-gui. Fails " +
             "closed when the heading title is shared by another heading in the project, or the " +
-            "destination title by another project (the drive addresses both by title). No undo — " +
-            "move it back to reverse.",
+            "destination title by another project (both are addressed by title), and when the " +
+            "destination project is completed or canceled — reopen it first. No undo — move it " +
+            "back to reverse.",
         ),
     ),
   ).action(
