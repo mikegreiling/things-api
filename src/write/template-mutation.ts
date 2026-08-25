@@ -55,19 +55,39 @@
  * Reversibility is HALF and is disclosed at op time: `things undo` restores the
  * occurrence's own change perfectly, and can neither remove the materialized
  * occurrence nor rewind the series (CNC1 §7).
+ *
+ * Two contract facts hold for BOTH composites (ruling 2026-08-25):
+ *
+ *   - The result NAMES THE OCCURRENCE. Every success carries an
+ *     {@link OccurrenceResolution}: the template the caller aimed at, the
+ *     occurrence that was actually written, and whether that occurrence was
+ *     minted for this call or already existed. The caller never has to infer
+ *     which row moved — the same courtesy `add-repeating` does with its
+ *     template/instance pair.
+ *
+ *   - The composite is ONE op for idempotency. It records a single summary
+ *     record (the legs stay legs, and the caller's `opId` rides the summary
+ *     alone), so a caller that retries after an ambiguous failure — a killed
+ *     process, a timed-out agent — replays the recorded result instead of
+ *     minting a SECOND occurrence and advancing the series a second time. Every
+ *     re-run without a key is a genuinely new action, which is exactly the
+ *     add-repeating hazard class: pass `--op-id` on a retry.
  */
 import { addDaysIso, decodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
 import { projectOccurrences } from "../model/occurrences.ts";
 import { byUuid } from "../read/detail.ts";
 import type { OperationKind, UpdateFields } from "./operations.ts";
+import { replayIfApplied } from "./opid.ts";
 import {
+  appendCompositeSummary,
   runComposite,
   runMutation,
   type MutationResult,
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
+import type { OccurrenceResolution } from "./verify/delta.ts";
 
 /** How far ahead the collision check will look for a live slot. */
 const SLOT_LOOKAHEAD = 400;
@@ -242,8 +262,7 @@ async function mintPendingOccurrence(
     "todo.create-next-copy",
     { uuid: templateUuid },
     {
-      ...options,
-      txn: { id: txnId, role: "leg" },
+      ...legOptions(options, txnId),
       vector: "ui",
       // The GUI-drive ACKNOWLEDGEMENT is made here, on the caller's behalf, and
       // it is the one place in the package that does so. Rationale (ruling
@@ -275,6 +294,58 @@ async function mintPendingOccurrence(
 
 function newTxnId(now: Date): string {
   return `txn-${now.getTime().toString(36)}-${process.pid.toString(36)}`;
+}
+
+/**
+ * The options a LEG runs under: the caller's, grouped into the composite's txn,
+ * with the idempotency key REMOVED. The key identifies the whole composite, and
+ * the composite records exactly one record for it (the summary) — leaving it on
+ * the legs would put the same key on two or three records and let a resubmission
+ * match half a verb.
+ */
+function legOptions(options: WriteOptions, txnId: string): WriteOptions {
+  const { opId: _opId, ...rest } = options;
+  return { ...rest, txn: { id: txnId, role: "leg" } };
+}
+
+/**
+ * Record the composite as ONE summary record and hand back its undo token.
+ *
+ * This is the record the whole verb is addressed by: `undo` targets it (a leg is
+ * never a direct undo target, so before this existed the composite left nothing
+ * for `things undo` to reach), and it is the single record the caller's `opId`
+ * keys, carrying the occurrence pair so a replay can answer with it.
+ *
+ * The summary's vector/tier report the composite's MOST disruptive leg: a mint
+ * drives the app window, so a minted occurrence is reported as such even though
+ * the status/update leg that followed it was an ordinary quiet write.
+ */
+function recordComposite(
+  deps: WriteDeps,
+  args: {
+    op: OperationKind;
+    startedAt: Date;
+    txnId: string;
+    requested: Record<string, unknown>;
+    occurrence: OccurrenceResolution;
+    legResult: Extract<MutationResult, { kind: "ok" }>;
+    options: WriteOptions;
+  },
+): string {
+  return appendCompositeSummary(deps, {
+    startedAt: args.startedAt,
+    op: args.op,
+    uuid: args.occurrence.occurrenceUuid,
+    txnId: args.txnId,
+    invocation:
+      `${args.op} on repeating series ${args.occurrence.templateUuid}: ` +
+      `${args.occurrence.minted ? "create next copy, then " : ""}write ${args.occurrence.occurrenceUuid}`,
+    requested: args.requested,
+    vector: args.occurrence.minted ? "ui" : args.legResult.vector,
+    disruption: args.occurrence.minted ? 3 : args.legResult.tier,
+    options: args.options,
+    occurrence: args.occurrence,
+  });
 }
 
 // ------------------------------------------------------------ status writes
@@ -320,11 +391,24 @@ export async function runTemplateStatusWrite(
       minted = true;
     }
 
-    const write = await runStatusLeg(targetUuid, {
-      ...options,
-      txn: { id: txnId, role: "leg" },
-    });
+    const write = await runStatusLeg(targetUuid, legOptions(options, txnId));
     if (write.kind !== "ok") return { ...write, op } as MutationResult;
+
+    const occurrence: OccurrenceResolution = {
+      templateUuid: state.templateUuid,
+      occurrenceUuid: targetUuid,
+      minted,
+      date: occurrenceDate,
+    };
+    const undoToken = recordComposite(deps, {
+      op,
+      startedAt: now,
+      txnId,
+      requested: { uuid: state.templateUuid },
+      occurrence,
+      legResult: write,
+      options,
+    });
 
     const verb = op === "todo.complete" ? "checked off" : "canceled";
     const nextDate = nextOccurrenceAfter(deps, state.templateUuid);
@@ -342,6 +426,8 @@ export async function runTemplateStatusWrite(
     return {
       ...write,
       op,
+      occurrence,
+      undoToken,
       warnings: [...(write.warnings ?? []), ...disclosure],
     };
   });
@@ -363,6 +449,11 @@ export async function runTemplateExceptionWrite(
   const op: OperationKind = "todo.update";
   const now = deps.now?.() ?? new Date();
   const todayIso = localToday(now, options.zone);
+  // Idempotency before the lock, like every refusal: a resubmitted key means the
+  // exception already landed, and re-running it would mint a SECOND occurrence
+  // (this composite always mints) and consume another of the series' slots.
+  const replay = replayIfApplied(deps, options);
+  if (replay !== null) return replay;
   return runComposite(deps, op, async () => {
     const state = readSeriesState(deps, uuid);
     if (state === null) return blocked(op, "this to-do is no longer a repeating series", "retry");
@@ -408,7 +499,7 @@ export async function runTemplateExceptionWrite(
       deps,
       "todo.update",
       { uuid: mint.uuid, ...patch },
-      { ...options, txn: { id: txnId, role: "leg" } },
+      legOptions(options, txnId),
     );
     if (write.kind !== "ok") {
       return {
@@ -424,10 +515,30 @@ export async function runTemplateExceptionWrite(
       } as MutationResult;
     }
 
+    const occurrence: OccurrenceResolution = {
+      templateUuid: state.templateUuid,
+      occurrenceUuid: mint.uuid,
+      // An exception ALWAYS mints: the semantics belong to the occurrence the
+      // rule has not spawned yet (see the module header).
+      minted: true,
+      date: state.cursor,
+    };
+    const undoToken = recordComposite(deps, {
+      op,
+      startedAt: now,
+      txnId,
+      requested: { uuid: state.templateUuid, ...patch },
+      occurrence,
+      legResult: write,
+      options,
+    });
+
     const nextDate = nextOccurrenceAfter(deps, state.templateUuid);
     return {
       ...write,
       op,
+      occurrence,
+      undoToken,
       warnings: [
         ...(write.warnings ?? []),
         `changed only ${occurrenceLabel(state.cursor)} of "${state.title}" — the series itself is ` +

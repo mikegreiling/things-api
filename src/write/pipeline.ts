@@ -77,6 +77,7 @@ import {
   evaluateDelta,
   getField,
   type DeltaSpec,
+  type OccurrenceResolution,
   type PreModDates,
   type RepeatingDiscovery,
 } from "./verify/delta.ts";
@@ -214,6 +215,17 @@ export type MutationResult =
        * reschedule the repeat). Absent for every other op.
        */
       repeating?: RepeatingDiscovery;
+      /**
+       * Template-target composite outcome (ADDITIVE, presence-keyed): present
+       * when `complete`/`cancel`/`update --exception` was aimed at a REPEATING
+       * to-do, naming both uuids — the series the caller named and the
+       * occurrence the composite actually wrote — plus whether that occurrence
+       * was minted for this call (`minted`) and the date it carries. The
+       * result's own `uuid` is the occurrence (the row that changed, and what
+       * undo reaches); this field is how a caller learns WHICH occurrence that
+       * is without inferring it. Absent for every other op.
+       */
+      occurrence?: OccurrenceResolution;
       /** Advisory notes (e.g. a changed environment tuple — consent may re-prompt later). */
       warnings?: string[];
       /**
@@ -1585,6 +1597,12 @@ export async function runMutation<K extends OperationKind>(
  * uses (only for a non-leg, reversible op — an irreversible op or a batch leg
  * carries none), and `title` rides `requested.title` when the record stored one
  * (the audit record has no dedicated title field — see the trail-record note).
+ *
+ * A template-target composite's summary record additionally stored WHICH
+ * occurrence it wrote ({@link OccurrenceResolution}); that rides back verbatim,
+ * so a retry that replays instead of executing still names the same two uuids
+ * the original call returned — the whole point of putting an `opId` on a verb
+ * that would otherwise mint a second occurrence.
  */
 export function replayResultFromRecord(record: AuditRecord): MutationResult {
   const op = record.op as OperationKind;
@@ -1610,8 +1628,68 @@ export function replayResultFromRecord(record: AuditRecord): MutationResult {
     vector: (record.vector ?? "url-scheme") as VectorId,
     tier: (record.disruption ?? 0) as DisruptionTier,
     ...(token !== undefined && { undoToken: token }),
+    ...(record.occurrence !== undefined && { occurrence: record.occurrence }),
     alreadyApplied: true,
   };
+}
+
+/**
+ * Append a COMPOSITE's summary record — the single record that stands for a
+ * multi-leg verb on the trail. It is what `undo` targets (the legs are excluded
+ * from direct targeting) and, when the caller supplied one, the ONE record that
+ * carries the composite's `opId`, so a resubmission matches the whole verb
+ * exactly once instead of matching a leg (or nothing at all).
+ *
+ * Shared by both composite families — the resolution-timestamp flip-dance
+ * (resolution-timestamps.ts) and the template-target CNC composites
+ * (template-mutation.ts) — so the two cannot drift on what a summary record
+ * looks like.
+ */
+export function appendCompositeSummary(
+  deps: WriteDeps,
+  args: {
+    startedAt: Date;
+    op: OperationKind;
+    uuid: string;
+    txnId: string;
+    invocation: string;
+    /** The composite's own request, as the caller expressed it. */
+    requested?: Record<string, unknown>;
+    /** How the composite as a whole reached the app (its most disruptive leg). */
+    vector?: VectorId;
+    disruption?: DisruptionTier;
+    options?: WriteOptions;
+    occurrence?: OccurrenceResolution;
+  },
+): string {
+  const fp = deps.fingerprint();
+  const record: AuditRecord = {
+    v: 1,
+    ts: args.startedAt.toISOString(),
+    actor: args.options?.actor ?? deps.config.actor,
+    host: deps.config.host,
+    op: args.op,
+    uuid: args.uuid,
+    vector: args.vector ?? "applescript",
+    disruption: args.disruption ?? 0,
+    invocation: args.invocation,
+    requested: args.requested ?? {},
+    txn: { id: args.txnId, role: "summary" },
+    ...(args.options?.opId !== undefined && { opId: args.options.opId }),
+    ...(args.occurrence !== undefined && { occurrence: args.occurrence }),
+    pre: null,
+    observed: { uuid: args.uuid },
+    result: "ok",
+    verify: null,
+    durationMs: (deps.now?.() ?? new Date()).getTime() - args.startedAt.getTime(),
+    env: {
+      pkg: deps.pkgVersion ?? "0.0.1",
+      dbVersion: fp.observation.databaseVersion,
+      fingerprint: fingerprintLabel(fp, deps.config),
+    },
+  };
+  deps.audit.append(record);
+  return args.txnId;
 }
 
 export function fingerprintLabel(

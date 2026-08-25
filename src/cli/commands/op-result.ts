@@ -47,6 +47,14 @@ export function registerOpResult(program: Command): void {
               : "unknown op-id";
         process.stdout.write(`op-result ${opId}: ${head}\n`);
         process.stdout.write(`  ${data.note}\n`);
+        if (data.occurrence !== undefined) {
+          const o = data.occurrence;
+          process.stdout.write(
+            `  occurrence: ${o.occurrenceUuid}${o.date === null ? "" : ` dated ${o.date}`} ` +
+              `(${o.minted ? "created for that call" : "already open"}) of repeating to-do ` +
+              `${o.templateUuid}\n`,
+          );
+        }
         if (data.status === "found" && data.observed !== null) {
           process.stdout.write(`  observed: ${JSON.stringify(data.observed)}\n`);
         }

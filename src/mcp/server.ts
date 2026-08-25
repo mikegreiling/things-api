@@ -1874,9 +1874,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe(
             "todo, repeating only: change just the NEXT occurrence and leave the series alone " +
               "(the occurrence is created if it has not appeared yet). Refused when the series " +
-              "already lands on the requested day, and for a series that repeats a fixed time " +
-              "after each completion. Undo restores the occurrence's own change but cannot " +
-              "remove the occurrence or rewind the series",
+              "already lands on the requested day, and when the series names no next date at " +
+              "all (a paused one — resume it first). The result's occurrence field names both the occurrence " +
+              "and the series. Each call takes another occurrence out of the series, so pass " +
+              "op_id when retrying: a resubmission with the same key replays the first result " +
+              "instead of creating a second occurrence. Undo restores the occurrence's own " +
+              "change but cannot remove the occurrence or rewind the series",
           ),
         parent: z.string().optional().describe("tag: existing tag to nest under"),
         unnest: z.boolean().optional().describe("tag: move the tag to the top level"),
@@ -1967,7 +1970,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "Set a to-do's or project's status (scope selects which): completed, canceled, or open " +
-        "(reopening a completed/canceled item). Not available for repeating to-dos. " +
+        "(reopening a completed/canceled item). scope todo, a REPEATING to-do: completed/canceled " +
+        "resolves the series' CURRENT occurrence — the unfinished one if there is one, otherwise " +
+        "the next one, created for the purpose — and leaves the series running; the result's " +
+        "occurrence field names both uuids and says which of the two was created. Each call is a " +
+        "new resolution that takes the FOLLOWING occurrence, so pass op_id when retrying: a " +
+        "resubmission with the same key replays the first result instead of creating a second " +
+        "occurrence. Reopening a repeating to-do is not available. " +
         "scope project, completing or canceling requires a children policy: 'require-resolved' " +
         "errors if open to-dos remain; 'auto-complete'/'auto-cancel' resolves them together with " +
         "the project (canceling never alters already-completed children). scope project, status " +

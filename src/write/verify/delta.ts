@@ -132,6 +132,28 @@ export interface RepeatingDiscovery {
 }
 
 /**
+ * Which row a TEMPLATE-TARGET composite actually wrote (template-mutation.ts) —
+ * the two-uuid answer, mirroring {@link RepeatingDiscovery}'s shape for
+ * make/add-repeating:
+ *  - templateUuid    — the series the caller named (never itself written).
+ *  - occurrenceUuid  — the occurrence that was completed/canceled/changed; the
+ *                      result's own `uuid`, restated here so the pair is one
+ *                      object a caller can read without inferring anything.
+ *  - minted          — TRUE when the composite brought that occurrence into
+ *                      existence for this call, FALSE when the series already
+ *                      had an open one and it was resolved directly. The two
+ *                      differ in what undo can reach (a minted occurrence cannot
+ *                      be un-minted), so the fact is stated, not implied.
+ *  - date            — the occurrence's own date, null when it has none.
+ */
+export interface OccurrenceResolution {
+  templateUuid: string;
+  occurrenceUuid: string;
+  minted: boolean;
+  date: string | null;
+}
+
+/**
  * Build a source fingerprint from a decoded task for RepeatingProbe. Deadline is
  * intentionally omitted (asymmetric between template and instance).
  */

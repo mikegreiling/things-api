@@ -1988,6 +1988,26 @@ describe("things MCP server", () => {
       expect(description).toContain("no undo token is returned");
       expect(description).toContain("Deleting a single occurrence leaves the series running");
     });
+
+    // #578: the two template-target composites CREATE an occurrence, so a blind
+    // retry takes a second one out of the series. Both descriptions must state
+    // what the call resolves and point at op_id as the retry answer — and
+    // set_status must stop claiming a repeating to-do is out of bounds.
+    it("set_status and update --exception teach the occurrence + retry contract", async () => {
+      await connect([fakeVector(null).vector]);
+      const { tools } = await client.listTools();
+      const setStatus = tools.find((t) => t.name === "set_status")?.description ?? "";
+      expect(setStatus).not.toContain("Not available for repeating to-dos");
+      expect(setStatus).toContain("resolves the series' CURRENT occurrence");
+      expect(setStatus).toContain("pass op_id when retrying");
+      expect(setStatus).toContain("second occurrence");
+      const updateSchema = tools.find((t) => t.name === "update")?.inputSchema as
+        | Record<string, unknown>
+        | undefined;
+      const exception = JSON.stringify(updateSchema?.["properties"] ?? {});
+      expect(exception).toContain("pass op_id when retrying");
+      expect(exception).toContain("second occurrence");
+    });
   });
 
   describe("tool-argument casing", () => {
