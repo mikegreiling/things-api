@@ -226,6 +226,23 @@ Both are durable across a relaunch, and both net to *no field changed on any sur
 
 The lesson from §6g still holds and gets sharper: an exception moves **two** independent cursor columns (one of which, `rt1_instanceCreationStartDate`, nothing shipped even reads), hard-deletes are unavailable to us, and no surface lets us restore a rule blob or rewind a template's `umd`. Evidence: [lab/repx3-chooser-residuals.md](lab/repx3-chooser-residuals.md) §4. Things 3.23.
 
+### 6k. Upcoming says "Waiting" instead of inventing a date for a series that has none
+
+An **after-completion** series has no calendar: its next occurrence is a function of a completion that may never happen, so there is genuinely no date to file it under. A list view that insists on sorting by day has to do *something* with such a row, and the tempting answers are all lies — park it on today, guess an interval from the last spawn, or hide it.
+
+Things does none of them. While `rt1_nextInstanceStartDate` is NULL, Upcoming files the series in a trailing section headed **`Repeating To-Dos`**, outside the dated day-blocks entirely, and labels the row **`Waiting`**:
+
+```
+[38] AXRow  desc=Repeating To-Dos            <- a section header, not a date
+[39] AXRow
+       [4]  AXUnknown desc=‎CNCAC1-FRESH
+       [10] AXUnknown desc=Waiting
+```
+
+The moment that occurrence is resolved the app anchors the series and derives a real cursor, and the same row moves into its proper day-block. So the rendering is a faithful function of the one column that carries the fact, with a distinct visual state for "no answer yet" rather than a fabricated one — the §1 derivation discipline applied to the hardest case it has, where the honest answer is *there isn't one*.
+
+The credit is narrow and worth bounding: the row it draws there still carries a live checkbox, and checking it produces the [oddities §18](things-app-oddities.md) stranded copy. The *state modelling* is exactly right; only the affordance on top of it is not. Evidence: [lab/cncac1-after-completion-checkoff.md](lab/cncac1-after-completion-checkoff.md) §7.1/§7.4. Things 3.23.
+
 ---
 
 ## Edge cases this project routed through
