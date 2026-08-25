@@ -1104,6 +1104,47 @@ The pause otherwise holds: rolling to 2026-07-12 spawns nothing on this series (
 
 **Automation note:** the shipped composite refuses a series with no cursor and names `things todo resume-repeat` as the remedy, rather than guessing at what "check this off" means for a series the user deliberately paused. Evidence: [lab/cncac1-after-completion-checkoff.md](lab/cncac1-after-completion-checkoff.md) §8.
 
+## 20. Things 3.23: heading (and to-do) reordering is a first-class capability with NO affordance — no menu item, no context-menu item, no AX action, no advertised key equivalent (HEADORD1, 2026-08-25, golden-v4 / Things 3.23 build 32300036)
+
+This is a discoverability and accessibility report, not a behaviour bug: the capability itself is excellent ([craft §5c](things-app-craft.md)). The problem is that **the only way to reach it is a keyboard chord the app never mentions.**
+
+With a heading row selected in a project, `⌘↑` / `⌘↓` move it one slot up / down and `⌘⌥↑` / `⌘⌥↓` move it to the top / bottom of the project's heading list. The identical chord family reorders **to-dos**. Neither is documented, and a census of every surface a user or an assistive technology could inspect finds nothing.
+
+**Probe (HEADORD1 cell 1).** All eight menu-bar menus were enumerated with each item's `enabled` state and its `AXMenuItemCmdChar`/`CmdModifiers`, once with nothing selected and once with a heading selected. The **entire** diff between the two states is:
+
+```
+<   [false] Complete                     >   [true] Complete
+<       -> [false] Mark as Completed     >       -> [true] Mark as Completed
+<   [false] Convert to Project…          >   [true] Convert to Project…
+<   [false] Remove From Project/Area     >   [false] Remove From Project
+<   [false] Show in Area                 >   [true] Show in Project
+```
+
+Nothing resembling **Move Up / Move Down / Reorder / Arrange** appears anywhere in the menu bar, enabled or disabled. The only `Move`-named item in the whole application is `Items ▸ Move…` (⌘M), which is the cross-project relocation. A second sweep asked which menu items carry *any* key equivalent expressed as a `CmdGlyph` — the attribute an arrow-key binding would use — and returned the complete list:
+
+```
+Apple  > Force Quit…          glyph=27  char=[⎋]
+Apple  > Force Quit Things    glyph=27  char=[⎋]
+Things > Empty Trash…         glyph=23
+Things > Empty Trash          glyph=23
+Edit   > Delete Heading       glyph=23
+Edit   > Emoji & Symbols      glyph=149 char=[🌐]
+```
+
+**No arrow glyph anywhere.** The heading's own right-click menu (AX-visible on 3.23, unlike 3.22) offers `When…` · `Move…` · `Tags…` · `Deadline…` · `Complete` · `Get Info` · `Duplicate Heading` · `Convert to Project…` · `Delete Heading` · `Remove From Project` · `Show in Project` · `Log Completed` · `Services` — and no reorder item. The heading row publishes **zero AX actions**.
+
+**Why this matters, three ways.**
+
+- **Users cannot find it.** The only ordering gesture the app advertises for a heading is drag, which stops being practical in a long project and is unavailable to anyone who cannot drag precisely. The chords solve exactly that problem and are invisible.
+- **It is unreachable through Accessibility.** With no menu item and no `AXPress`-able row action, a VoiceOver or Switch Control user has no exposed path to a capability the app demonstrably has. Every other heading operation is published somewhere — `Delete Heading` has a menu item *and* a key equivalent *and* a context item; `Duplicate Heading` has a context item — reorder alone has neither.
+- **The failure feedback is an error tone with no visible cause.** A chord with nowhere to go is declined with an **alert beep** ([craft §5c](things-app-craft.md)). A menu item would have been drawn *disabled*, which is macOS's standard way of saying "not available here"; a bare keybinding has no disabled state, so a user who presses `⌘↑` on the top heading hears a beep with nothing on screen to explain it.
+
+**Contrast with §12.** Things 3.23 left `_private_experimental_ reorder` declared in the scripting dictionary but silently inert, taking heading order off the automation surface entirely. So the app simultaneously **removed** the ordering path it had published and **kept** an ordering path it never published — the capability is present in exactly one form, the undiscoverable one.
+
+**Expected:** publish it. A `Move Up` / `Move Down` / `Move to Top` / `Move to Bottom` group under `Items` (and in the row's context menu) carrying the existing ⌘↑ / ⌘↓ / ⌘⌥↑ / ⌘⌥↓ key equivalents would make the feature discoverable, give it a disabled state at the list boundaries in place of the beep, and expose it to assistive technology for free — the app already has the implementation. **Actual:** four undocumented chords with no representation on any surface.
+
+**Automation note:** HEADORD1 was probe-only; nothing shipped from it. The consequence for us is that a driver built on these chords rests on an *unadvertised* private keybinding with no dictionary entry and no menu item to check against — it has no more contract than any other undocumented AX surface, so it needs the same fail-closed discipline (and it must compute its move count from the database rather than firing until nothing changes, or the user hears one beep per wasted chord). Evidence: [lab/headord1-heading-order.md](lab/headord1-heading-order.md) §1, §6.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
