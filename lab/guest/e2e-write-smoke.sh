@@ -18,6 +18,26 @@ export THINGS_API_UI_DIRECT=1
 FAILURES=0
 STEP=0
 
+# THE BEEP SENTINEL (docs/lab/harness.md §The beep sentinel). A macOS alert beep
+# means the app was handed a gesture it declined to handle — the write can still
+# land while the user hears an error tone, so a beep is a FAILURE here, counted
+# and attributed to the step that produced it. Marks are cheap (one timestamp);
+# the single `log show` runs once, at the end.
+BEEP_SENTINEL="$(dirname "$0")/beep-sentinel.sh"
+export BEEP_MARKS="$HOME/things-lab/beep-marks.tsv"
+if [ ! -f "$BEEP_SENTINEL" ]; then
+  # Fail closed: an un-shipped sentinel measures nothing, and silence from an
+  # oracle that is not running is not evidence of a quiet run.
+  echo "FAIL beep sentinel missing at $BEEP_SENTINEL — it must ship beside this script"
+  FAILURES=$((FAILURES + 1))
+fi
+beep() {
+  [ -f "$BEEP_SENTINEL" ] || return 0 # already counted above; don't double-count
+  bash "$BEEP_SENTINEL" "$@"
+}
+beep reset
+beep mark "e2e start"
+
 things() {
   "$NODE" "$APP" "$@"
 }
@@ -27,6 +47,7 @@ run_step() {
   local expect="$1" desc="$2"
   shift 2
   STEP=$((STEP + 1))
+  beep mark "[$STEP] $desc"
   local out
   out=$(things "$@" --json 2>/dev/null)
   local code=$?
@@ -468,6 +489,12 @@ if [ -n "$TOKEN" ] && grep -q "$TOKEN" ~/.local/state/things-api/audit/*.jsonl 2
   FAILURES=$((FAILURES + 1))
 else
   echo "ok   audit trail is token-free (structural redaction verified)"
+fi
+
+echo "== alert beeps =="
+beep mark "e2e end"
+if ! beep assert --name "e2e-write-smoke" --json "$HOME/things-lab/beeps.json"; then
+  FAILURES=$((FAILURES + 1))
 fi
 
 echo ""

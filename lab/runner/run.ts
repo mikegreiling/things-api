@@ -110,7 +110,8 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
     pushBundle(ip, options.suitePath, metadata, seed);
     const guestExit = await sshStreaming(
       ip,
-      `python3 ${GUEST_HARNESS}/probe-runner.py --suite ${GUEST_HARNESS}/suite.json ` +
+      `${beepOptOut() ? "THINGS_LAB_BEEPS_OK=1 " : ""}` +
+        `python3 ${GUEST_HARNESS}/probe-runner.py --suite ${GUEST_HARNESS}/suite.json ` +
         `--context ${GUEST_HARNESS}/context.json --out ~/${GUEST_RUN}`,
     );
     if (guestExit !== 0) throw new Error(`guest probe-runner exited ${guestExit}`);
@@ -120,7 +121,8 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
 
     log("evaluating evidence…");
     const verdicts = evaluate({ ...suite, probes: active }, metadata, seed, artifactsDir, runId);
-    ok = active.every((p) => verdicts[p.id]?.ok === true);
+    const beeps = judgeBeeps(artifactsDir);
+    ok = active.every((p) => verdicts[p.id]?.ok === true) && beeps.ok;
     exitCode = ok ? 0 : 1;
 
     writeFileSync(
@@ -133,6 +135,7 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
           vm,
           startedAt,
           endedAt: new Date().toISOString(),
+          beeps: beeps.beeps,
           ok,
         },
         null,
@@ -151,6 +154,53 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
 
   log(`run ${runId}: ${ok ? "GREEN" : "RED"} — artifacts in ${artifactsDir}`);
   return { runId, artifactsDir, ok, exitCode };
+}
+
+interface BeepReport {
+  name: string;
+  beeps: number;
+  allowed: number;
+  optOut: boolean;
+  ok: boolean;
+  window: string;
+  events: { ts: string; step: string; message: string }[];
+}
+
+/**
+ * Probe/research drivers may opt out of the beep GATE — never out of the
+ * accounting (docs/lab/harness.md §The beep sentinel). Suites never set it.
+ */
+function beepOptOut(): boolean {
+  return process.env["THINGS_LAB_BEEPS_OK"] === "1";
+}
+
+/**
+ * A macOS alert beep during a suite is a failure state: it means the app was
+ * sent a gesture it declined to handle (BEEP1). The guest counts them post-hoc
+ * with `log show` and writes beeps.json; the verdict is host-side, like every
+ * other verdict. Fail CLOSED — a missing report means nothing was measured.
+ */
+function judgeBeeps(artifactsDir: string): { ok: boolean; beeps: number } {
+  const path = join(artifactsDir, "guest-run", "beeps.json");
+  let report: BeepReport;
+  try {
+    report = JSON.parse(readFileSync(path, "utf8")) as BeepReport;
+  } catch {
+    if (beepOptOut()) {
+      log("beep sentinel: no report (THINGS_LAB_BEEPS_OK=1 — not gating)");
+      return { ok: true, beeps: -1 };
+    }
+    log(`beep sentinel: RED — no beeps.json in the run artifacts (${path}); nothing was measured`);
+    return { ok: false, beeps: -1 };
+  }
+  if (report.beeps <= report.allowed) {
+    log(`beep sentinel: ${report.beeps} alert beep(s) — clean (${report.window})`);
+    return { ok: true, beeps: report.beeps };
+  }
+  const verdict = report.optOut ? "report-only (THINGS_LAB_BEEPS_OK=1)" : "RED";
+  log(`beep sentinel: ${verdict} — ${report.beeps} alert beep(s), allowed ${report.allowed}`);
+  for (const e of report.events) log(`  · ${e.ts} · ${e.step} · ${e.message}`);
+  return { ok: report.optOut, beeps: report.beeps };
 }
 
 function preflight(): void {
@@ -211,6 +261,12 @@ async function bootstrap(
   scp([
     join(REPO_ROOT, "lab/guest/probe-runner.py"),
     `${SSH_USER}@${ip}:${GUEST_HARNESS}/probe-runner.py`,
+  ]);
+  // The beep sentinel rides along in the same dir; probe-runner.py resolves it
+  // beside itself (docs/lab/harness.md §The beep sentinel).
+  scp([
+    join(REPO_ROOT, "lab/guest/beep-sentinel.sh"),
+    `${SSH_USER}@${ip}:${GUEST_HARNESS}/beep-sentinel.sh`,
   ]);
 
   // Warm-up: one background launch so the app recomputes Today buckets and

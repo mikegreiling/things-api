@@ -50,6 +50,31 @@ Unit and simulator suites are unaffected and must NOT use this: they exercise ui
 
 > **Counting macOS ALERT BEEPS in a headless, muted clone (BEEP1, 2026-08-25).** There is no NSBeep hook under SIP, but two oracles track system alerts 1:1 and — the part that matters here — **neither is blinded by `lab_mute_guest`**, which every clone-boot path applies. (a) The unified log: `systemsoundserverd` emits exactly one `SSServerImp.cpp:733  -> Incoming Request : actionID 4096` per play request; a muted guest simply logs `SSServerImp.cpp:774  Device is currently muted` beside it. (b) `sudo fs_usage -w -f filesys`, filtered IN THE GUEST (unfiltered it is megabytes a second), counting `open` calls on a distinctively-named alert sound installed with `defaults write -g com.apple.sound.beep.sound /System/Library/Sounds/Submarine.aiff`. **Validate POSITIVELY before judging anything** — three deliberate `osascript -e beep` calls must read exactly 3 and a matched quiet control 0; an oracle that cannot see a deliberate beep proves nothing about a drive. Two gotchas: the predicate must be SUBSYSTEM-scoped, since the app never plays its own alert (`process == "Things3"` matches nothing), and `log stream --style ndjson` output must be windowed against the gesture's own start/end stamps. Reusable rig: [`lab/scripts/research-beep1.sh`](../../lab/scripts/research-beep1.sh) (`measure.sh` runs both oracles plus the gesture inside ONE ssh invocation, so nothing is ever orphaned; `count.py` does the windowing and the signature count).
 
+## The beep sentinel — an alert beep is a FAILURE STATE (BEEPSEN1, default ON)
+
+A macOS alert beep means the app was handed a gesture it declined to handle — a keystroke a disabled menu item swallowed, a click on a control being rebuilt ([BEEP1](beep1-numeric-field-beep.md)). The drive can still "succeed": the value lands, the probe goes green, and the user hears an error tone. So the harness **counts beeps and reds the run on any it did not expect**, exactly like a failed assertion. Certified in [beepsen1-beep-sentinel.md](beepsen1-beep-sentinel.md).
+
+`lab/guest/beep-sentinel.sh` is the guest-side helper. Three verbs, no state beyond a marks file:
+
+```sh
+beep-sentinel.sh reset                  # drop marks from a prior run
+beep-sentinel.sh mark "<label>"         # stamp the guest clock; the FIRST mark opens the window
+beep-sentinel.sh assert [--allow N] [--json PATH] [--name NAME]
+```
+
+**Post-hoc, never a live listener** — no detached `log stream`, ever. `mark` costs one `date` call, so marks can be per-step; `assert` reads the whole window back with ONE `log show`, attributes each beep to the most recent mark at or before it, prints the matched log lines, and exits 1 on an unallowed count (2 if the oracle itself failed). Where it is wired:
+
+| Site | Granularity | Gate |
+|---|---|---|
+| `lab/guest/probe-runner.py` → all eight `lab:` suites | a mark per probe PHASE (`<id> setup` / `commands` / `cleanup`) | guest writes `beeps.json`; `lab/runner/run.ts` (`judgeBeeps`) turns the run RED and prints the offending lines. `run-meta.json` records `beeps` |
+| `lab/guest/e2e-write-smoke.sh` | a mark per step (`[<n>] <description>`) | counted into `FAILURES` before the result line |
+
+**Fail closed.** A missing `beeps.json`, a sentinel that did not ship, or a `log show` error is RED — silence from an oracle that is not running is not evidence of a quiet run.
+
+**Opt-out — `THINGS_LAB_BEEPS_OK=1` — is for research/probe drivers only, and it is NOT a mute.** It downgrades the gate to accounting: the count and every offending line still print (probes are exempt from FAILING, never from COUNTING). Both `lab:run` and the e2e orchestrator forward it from the host env; no suite sets it.
+
+> **In a lab clone, log timestamps are not identity — pin to `bootUUID`** (BEEPSEN1 §2). The unified log store is part of the disk image, so every clone inherits the golden's own log history — and because every clone pins its clock to the SAME date, those old entries are stamped inside the current run's window. `log show --start/--end` does not exclude them and neither does `--last` (measured: three beeps from a months-old build session returned in an *empty* window). The sentinel therefore treats `--start` as a cheap prefilter only, requires `bootUUID == sysctl kern.bootsessionuuid`, and applies the real window against its own marks. It also requires BEEP1's full signature — `SSServerImp.cpp:733` **with `actionID 4096`** — because other system sounds share that line. Any future guest-side log oracle inherits this trap.
+
 ## Animation settings — standing config for the NEXT golden mint (PERF2)
 
 Reduce Motion + disabling automatic window animations measurably speed sheet presentation — the Repeat dialog's present+settle roughly HALVES on a golden clone (~532 → ~260ms, PERF2 S6, [perf2-step-latency.md](perf2-step-latency.md)). When the next golden is minted, consider baking these into the image so ui-vector drives (and the certification suite) run faster:
@@ -78,7 +103,7 @@ npm run lab:compare -- u-20260703-091530 u-20260703-104512   # acceptance gate
 npm run lab:gc                           # delete stray things-run-* VMs
 ```
 
-Requirements: host GUI session (tart needs an unlocked keychain), `tart` + `sshpass` on PATH, the golden image under `TART_HOME` (default `/Volumes/Workspace/tart`). Exit code 0 = every probe green.
+Requirements: host GUI session (tart needs an unlocked keychain), `tart` + `sshpass` on PATH, the golden image under `TART_HOME` (default `/Volumes/Workspace/tart`). Exit code 0 = every probe green **and** the run beeped zero times (§The beep sentinel).
 
 ## Anatomy of a run
 
