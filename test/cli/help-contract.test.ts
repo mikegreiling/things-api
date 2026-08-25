@@ -300,12 +300,13 @@ describe("plural list views accept a ref (true synonym of show, with the canonic
   });
 });
 
-// Single-op idempotency is phase 1: a multi-leg COMPOUND records several results
-// (or a summary), so `--op-id` is refused before dispatch. Help must not offer a
-// flag the command can never accept, and the runtime refusal stays as the
+// One recorded result per key: a command that records SEVERAL has no single
+// result to replay, so `--op-id` is refused before dispatch. Help must not offer
+// a flag the command can never accept, and the runtime refusal stays as the
 // backstop — with its bespoke pointer at `things batch`, which is why the option
 // is registered hidden rather than dropped (a dropped option would degrade the
-// message to commander's "unknown option").
+// message to commander's "unknown option"). A compound that records ONE SUMMARY
+// the key rides is NOT in this list — see PROMOTE_TAKES_OP_ID below.
 const COMPOUND_NO_OP_ID: { path: [string, ...string[]]; argv: string[] }[] = [
   { path: ["todo", "move"], argv: ["todo", "move", "u1", "--to-project", "p"] },
   { path: ["project", "move"], argv: ["project", "move", "u1", "--to-area", "a"] },
@@ -313,19 +314,19 @@ const COMPOUND_NO_OP_ID: { path: [string, ...string[]]; argv: string[] }[] = [
   { path: ["project", "add-heading"], argv: ["project", "add-heading", "p", "H"] },
   { path: ["project", "archive-heading"], argv: ["project", "archive-heading", "p", "H"] },
   { path: ["project", "unarchive-heading"], argv: ["project", "unarchive-heading", "p", "H"] },
-  {
-    path: ["project", "make-repeating"],
-    argv: ["project", "make-repeating", "u1", "--frequency", "daily", "--interval", "1"],
-  },
-  {
-    path: ["project", "add-repeating"],
-    argv: ["project", "add-repeating", "T", "--frequency", "daily", "--interval", "1"],
-  },
-  {
-    path: ["todo", "add-repeating"],
-    argv: ["todo", "add-repeating", "T", "--frequency", "daily", "--interval", "1"],
-  },
   { path: ["project", "reopen"], argv: ["project", "reopen", "u1"] },
+];
+
+// The promote verbs each record ONE summary the key rides, so all four take
+// `--op-id` — symmetrically, which is the whole point (ruling 2026-08-25): the
+// asymmetry where `todo make-repeating` accepted it and its three siblings
+// refused it was the bug. Each re-run makes a whole new series, so the help also
+// has to teach the retry contract where the caller is deciding.
+const PROMOTE_TAKES_OP_ID: [string, string][] = [
+  ["todo", "make-repeating"],
+  ["project", "make-repeating"],
+  ["todo", "add-repeating"],
+  ["project", "add-repeating"],
 ];
 
 describe("--op-id: help matches the runtime capability", () => {
@@ -370,12 +371,21 @@ describe("--op-id: help matches the runtime capability", () => {
       ["todo", "add"],
       ["todo", "update"],
       ["todo", "delete"],
-      ["todo", "make-repeating"],
       ["project", "delete"],
       ["project", "move-heading"],
       ["area", "reorder"],
     ]) {
       expect(helpFor(...(path as [string, string])), path.join(" ")).toContain("--op-id <key>");
+    }
+  });
+
+  it("ALL FOUR promote verbs advertise --op-id and teach the retry contract", () => {
+    for (const path of PROMOTE_TAKES_OP_ID) {
+      const help = helpFor(...path);
+      const label = path.join(" ");
+      expect(help, label).toContain("--op-id <key>");
+      expect(help, label).toContain("--op-id on a retry");
+      expect(help, label).toContain("second series");
     }
   });
 });

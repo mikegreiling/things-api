@@ -135,11 +135,12 @@ function addWriteFlags(cmd: Command, capability: WriteFlagCapability = {}): Comm
 }
 
 /**
- * The write flags for a multi-leg COMPOUND command: the same set, with `--op-id`
- * kept out of `--help` because that command's execution refuses it (see
- * `opIdCompoundRefused` / `runMoveCmd`). Every command wrapped in this MUST
+ * The write flags for a multi-result COMPOUND command: the same set, with
+ * `--op-id` kept out of `--help` because that command's execution refuses it
+ * (see `opIdCompoundRefused` / `runMoveCmd`). Every command wrapped in this MUST
  * refuse `--op-id` at runtime, and every command that refuses it MUST be wrapped
- * in this — `test/cli/help-contract.test.ts` holds the two halves together.
+ * in this — `test/cli/help-contract.test.ts` holds the two halves together. A
+ * compound that records ONE summary the key rides uses plain `addWriteFlags`.
  */
 const addCompoundWriteFlags = (cmd: Command): Command =>
   addWriteFlags(cmd, { opId: "unsupported" });
@@ -153,11 +154,16 @@ function opIdOk(opts: WriteFlagOpts): boolean {
 }
 
 /**
- * Refuse `--op-id` on a multi-leg COMPOUND command. Single-op idempotency (phase
- * 1) replays exactly ONE recorded ok result; a compound records several (or a
- * summary) and its idempotency is the batch-shaped per-line `op_id`. Refusing is
- * honest — dropping the flag silently would leave a resubmission un-deduped.
- * Returns true when refused (the caller returns).
+ * Refuse `--op-id` on a multi-leg COMPOUND command. The rule is ONE RECORDED
+ * RESULT PER KEY: an idempotency key replays exactly one recorded outcome, so a
+ * command that records SEVERAL — the variadic move/reorder, the granular
+ * checklist edit, clear-reminder, the heading archive pair, project reopen —
+ * cannot honor one, and its idempotency is the batch-shaped per-line `op_id`.
+ * (A compound that records ONE SUMMARY the key rides — the template-target
+ * verbs, the `--completed-at` flip-dance, and the promote verbs — accepts the
+ * flag instead; ruling 2026-08-25.) Refusing is honest — dropping the flag
+ * silently would leave a resubmission un-deduped. Returns true when refused
+ * (the caller returns).
  */
 function opIdCompoundRefused(opts: WriteFlagOpts, what: string): boolean {
   if (opts.opId === undefined) return false;
@@ -1652,7 +1658,9 @@ export function registerWriteCommands(program: Command): void {
             "Turn a plain to-do into a repeating one. A disposable copy is promoted and the " +
               "ORIGINAL is moved to the Trash — so `things undo` reverses it (it removes the new " +
               "series and restores the original). The new template's uuid is printed. Set the rule " +
-              "with the flags below; see `things help repeating`.",
+              "with the flags below; see `things help repeating`. Each re-run makes ANOTHER series, " +
+              "so pass --op-id on a retry: a resubmission with the same key replays the first " +
+              "result instead of making a second series.",
           )
           .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
           .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
@@ -2017,7 +2025,7 @@ export function registerWriteCommands(program: Command): void {
 
   addDriveGuiFlag(
     addRepeatRuleFlags(
-      addCompoundWriteFlags(
+      addWriteFlags(
         project
           .command("make-repeating <ref>")
           .description(
@@ -2025,7 +2033,10 @@ export function registerWriteCommands(program: Command): void {
               "moved to the Trash — so `things undo` reverses it (it removes the new series and " +
               "restores the original). Refuses a project that holds a nested repeating template. An " +
               "Anytime project with no area is moved to Someday first (a cleanup-free intermediate " +
-              "step, shown in --dry-run). Set the rule with the flags below; see `things help repeating`.",
+              "step, shown in --dry-run). Set the rule with the flags below; see `things help " +
+              "repeating`. Each re-run makes ANOTHER series, so pass --op-id on a retry: a " +
+              "resubmission with the same key replays the first result instead of making a second " +
+              "series.",
           )
           .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
           .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
@@ -2033,7 +2044,6 @@ export function registerWriteCommands(program: Command): void {
     ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const frequency = opts["frequency"] as RepeatFrequency;
-    if (opIdCompoundRefused(opts, "project make-repeating")) return;
     await runWrite(opts, (c) =>
       c.write.makeRepeatingProject(
         uuid,
@@ -2049,7 +2059,7 @@ export function registerWriteCommands(program: Command): void {
 
   addDriveGuiFlag(
     addRepeatCalendarFlags(
-      addCompoundWriteFlags(
+      addWriteFlags(
         project
           .command("add-repeating <title>")
           .description(
@@ -2057,7 +2067,9 @@ export function registerWriteCommands(program: Command): void {
               "is created (notes/area/when/deadline/child to-dos) and PERSISTS even if the promote " +
               "refuses; then it is promoted (which drives the GUI). Give --area to place it, or omit " +
               "it to create in Someday. The new repeating project's uuid is printed; `things undo` " +
-              "removes the created series (trash-both).",
+              "removes the created series (trash-both). Each re-run makes ANOTHER series, so pass " +
+              "--op-id on a retry: a resubmission with the same key replays the first result " +
+              "instead of making a second series.",
           )
           .option("--notes <text>", `notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
           .option("--area <ref>", "destination area (uuid or unique name)")
@@ -2077,7 +2089,6 @@ export function registerWriteCommands(program: Command): void {
     const todos = opts["todo"] as string[];
     const area = containerRef(opts["area"] as string | undefined);
     const frequency = opts["frequency"] as RepeatFrequency;
-    if (opIdCompoundRefused(opts, "project add-repeating")) return;
     if (!(await resolveNotesStdin(opts))) return;
     await runWrite(opts, (c) =>
       c.write.addRepeatingProject(
@@ -2097,14 +2108,16 @@ export function registerWriteCommands(program: Command): void {
 
   addDriveGuiFlag(
     addRepeatCalendarFlags(
-      addCompoundWriteFlags(
+      addWriteFlags(
         todo
           .command("add-repeating <title>")
           .description(
             "Create a to-do and turn it into a repeating series in ONE call. Two legs: the to-do is " +
               "created (notes/tags/when/deadline/reminder/checklist/--created-at) and PERSISTS even " +
               "if the promote refuses; then it is promoted (which drives the GUI). The new repeating " +
-              "template's uuid is printed; `things undo` removes the created series (trash-both).",
+              "template's uuid is printed; `things undo` removes the created series (trash-both). " +
+              "Each re-run makes ANOTHER series, so pass --op-id on a retry: a resubmission with " +
+              "the same key replays the first result instead of making a second series.",
           )
           .option("--notes <text>", `notes body — ${NOTES_FORMAT} (${NOTES_INPUT})`)
           .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -2140,7 +2153,6 @@ export function registerWriteCommands(program: Command): void {
     const projectRef = containerRef(opts["project"] as string | undefined);
     const area = containerRef(opts["area"] as string | undefined);
     const frequency = opts["frequency"] as RepeatFrequency;
-    if (opIdCompoundRefused(opts, "todo add-repeating")) return;
     if (!(await resolveNotesStdin(opts))) return;
     await runWrite(opts, (c) =>
       c.write.addRepeatingTodo(

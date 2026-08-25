@@ -38,7 +38,7 @@
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { OPERATION_KINDS, type OperationKind, type OperationParamsMap } from "./operations.ts";
-import { findAppliedOpId, OP_ID_RE } from "./opid.ts";
+import { OP_ID_RE, RECONCILED_NOTE, resolveOpId } from "./opid.ts";
 import { validateOperationParams } from "./param-schema.ts";
 import { fingerprintLabel, runMutation, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
@@ -694,11 +694,19 @@ export async function runBatch(
     // so `entry` is a well-formed op with object params and a valid opId here.
     // opId idempotency: an earlier submission already applied this line — skip,
     // report already-applied with the recorded uuid, and rebind it so later
-    // $refs still resolve.
+    // $refs still resolve. The decision is the shared one (src/write/opid.ts):
+    // a confirmed earlier change replays; an earlier attempt that TIMED OUT is
+    // reconciled against current state (present → replay, absent → run); one
+    // that cannot be settled from its record refuses this line rather than
+    // risking a double. The trail read is the batch's single up-front read; the
+    // state re-read happens here, at the line's own turn.
     if (opId !== undefined) {
-      const applied = findAppliedOpId(priorRecords, opId, startedAt);
-      if (applied !== undefined) {
-        const uuid = applied.uuid ?? "";
+      const decision = resolveOpId(deps, priorRecords, opId, startedAt);
+      if (decision !== null && decision.kind === "blocked") {
+        return { outcome: decision };
+      }
+      if (decision !== null && decision.kind === "ok") {
+        const uuid = decision.uuid ?? "";
         if (tempId !== undefined && uuid !== "")
           bind(tempId, { primary: uuid, instance: null, replaced: null });
         return {
@@ -707,7 +715,10 @@ export async function runBatch(
             op: entry.op,
             uuid,
             detail:
-              "already applied by an earlier submission (matching opId in the change history) — not re-run",
+              decision.warnings?.includes(RECONCILED_NOTE) === true
+                ? "already applied by an earlier submission whose confirmation timed out — the " +
+                  "change was found in place, so it was not re-run"
+                : "already applied by an earlier submission (matching opId in the change history) — not re-run",
           },
           ...(tempId !== undefined && uuid !== "" && { boundUuid: uuid }),
         };

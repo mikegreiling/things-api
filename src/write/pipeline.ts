@@ -312,7 +312,21 @@ export type MutationResult =
   | {
       kind: "blocked";
       op: OperationKind;
-      reason: "hazard" | "disruption-tier" | "drift" | "lock" | "environment" | "clock" | "scope";
+      /**
+       * `reconcile` is the IDEMPOTENCY refusal: a resubmission's `opId` matched
+       * an earlier attempt that never finished confirming, and that attempt's
+       * record carries nothing that can tell whether its change landed — so the
+       * caller is told to look rather than handed a guess (src/write/opid.ts).
+       */
+      reason:
+        | "hazard"
+        | "disruption-tier"
+        | "drift"
+        | "lock"
+        | "environment"
+        | "clock"
+        | "scope"
+        | "reconcile";
       hazard?: HazardId;
       detail: string;
       remediation: string;
@@ -1316,6 +1330,10 @@ export async function runMutation<K extends OperationKind>(
             invocation: invocation.redactedPayload,
             pre: flattenPreFields(preCapture.fields),
             observed: recovery.observed,
+            // The watchdog abort is THE ambiguous outcome — the detail below says
+            // so — so the assertion rides the record and a resubmission with the
+            // same opId re-reads state instead of risking the duplicate.
+            expected: delta,
           });
           const budgetS = Math.round(wd.budgetMs / 1000);
           const elapsedS = Math.round(wd.elapsedMs / 1000);
@@ -1447,6 +1465,11 @@ export async function runMutation<K extends OperationKind>(
       pre: flattenPreFields(preCapture.fields),
       observed: outcome.observed,
       verify: { attempts: outcome.attempts, elapsedMs: outcome.elapsedMs },
+      // The target, as far as it is known — the same uuid the intent marker
+      // carries (null for a create whose row was never discovered). A FAILED
+      // record used to leave this null even for an op that names its target,
+      // which is the one thing a caller reading the record needs to look at.
+      uuid: outcome.discoveredUuid ?? intentUuid,
     };
 
     if (outcome.kind === "ok") {
@@ -1632,7 +1655,15 @@ export async function runMutation<K extends OperationKind>(
       };
     }
 
-    audit({ ...auditCommon, result: verifyFailedCode({ reason: outcome.kind }) });
+    audit({
+      ...auditCommon,
+      result: verifyFailedCode({ reason: outcome.kind }),
+      // A TIMEOUT is the one ambiguous verdict — the change may or may not have
+      // landed — so the assertion this attempt was checking is recorded with it.
+      // A resubmission carrying the same opId re-evaluates it against current
+      // state instead of guessing (`replayIfApplied`, src/write/opid.ts).
+      ...(outcome.kind === "timeout" && { expected: delta }),
+    });
     return withHint(
       {
         kind: "verify-failed" as const,

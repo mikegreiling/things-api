@@ -40,6 +40,7 @@ import type {
   RepeatRuleParams,
   TodoAddRepeatingParams,
 } from "./operations.ts";
+import { replayIfApplied } from "./opid.ts";
 import {
   fingerprintLabel,
   runComposite,
@@ -55,7 +56,12 @@ import {
   isIsoDate,
 } from "./repeat-anchor.ts";
 import { assertRepeatRule, ruleToInverseParams, splitAddRepeatingRule } from "./repeat-rule.ts";
-import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
+import {
+  createDbReader,
+  type DeltaSpec,
+  type PreModDates,
+  type RepeatingDiscovery,
+} from "./verify/delta.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
 
 type PromoteOp =
@@ -452,17 +458,56 @@ function discoveryOf(promote: Extract<MutationResult, { kind: "ok" }>): {
 
 // -------------------------------------------------------------- audit summary
 
+/**
+ * The promote compound's presence oracle: "a repeating TEMPLATE with this title,
+ * created since this call started, exists". It is the same create-probe the
+ * compound's own dry-run plan states, TIME-BOUNDED to the call — the app mints a
+ * template with a fresh write-time creationDate even when the promoted row was
+ * created earlier (`--preserve-created`), so the bound is safe and it keeps an
+ * older namesake series from reading as this call's work. Recorded on an
+ * AMBIGUOUS summary so a resubmission can settle it (see {@link appendPromoteSummary}).
+ */
+function promotePresenceDelta(
+  title: string,
+  type: "to-do" | "project",
+  startedAt: Date,
+): DeltaSpec {
+  return {
+    mode: "create",
+    probe: { title, type, sinceEpoch: Math.floor(startedAt.getTime() / 1000) },
+    assert: [{ field: "repeating.isTemplate", equals: true }],
+  };
+}
+
+/**
+ * Append the promote compound's SUMMARY record — the ONE record that stands for
+ * the whole verb (its legs are `leg`-role records, excluded from direct undo),
+ * and the one record the caller's `opId` rides, so a resubmission matches the
+ * whole promote exactly once instead of matching a leg or nothing at all.
+ *
+ * Two shapes, one record either way:
+ *  - the SUCCESS summary (default) — result `ok`, the single undoable unit;
+ *  - an AMBIGUOUS summary (`ambiguous`) — result `verify-failed:timeout` with the
+ *    presence oracle attached, written when a leg dispatched and never confirmed.
+ *    It is not an undo target (undo reads `ok` records only); it exists so a
+ *    resubmission carrying the same key re-reads state and decides instead of
+ *    minting a second series.
+ */
 function appendPromoteSummary(
   deps: WriteDeps,
   args: {
     startedAt: Date;
     op: PromoteOp;
     txnId: string;
-    templateUuid: string;
+    templateUuid: string | null;
     instanceUuid: string | null;
     originalUuid?: string;
     invocation: string;
     requested: Record<string, unknown>;
+    /** The caller's write options — the `opId` (when given) rides this record alone. */
+    options?: WriteOptions;
+    /** The unconfirmed-outcome shape: the assertion a resubmission re-evaluates. */
+    ambiguous?: DeltaSpec;
     /** The trashed original's pre-write umd (--preserve-modified) — drives the
      * symmetric undo restore (undo.ts) so the reversal is also timeline-silent. */
     preModDates?: PreModDates;
@@ -477,7 +522,7 @@ function appendPromoteSummary(
   const record: AuditRecord = {
     v: 1,
     ts: args.startedAt.toISOString(),
-    actor: deps.config.actor,
+    actor: args.options?.actor ?? deps.config.actor,
     host: deps.config.host,
     op: args.op,
     uuid: args.templateUuid,
@@ -486,9 +531,11 @@ function appendPromoteSummary(
     invocation: args.invocation,
     requested: args.requested,
     txn: { id: args.txnId, role: "summary" },
+    ...(args.options?.opId !== undefined && { opId: args.options.opId }),
+    ...(args.ambiguous !== undefined && { expected: args.ambiguous }),
     pre: null,
-    observed,
-    result: "ok",
+    observed: args.ambiguous === undefined ? observed : null,
+    result: args.ambiguous === undefined ? "ok" : "verify-failed:timeout",
     ...(args.preModDates !== undefined && { preModDates: args.preModDates }),
     verify: null,
     durationMs: (deps.now?.() ?? new Date()).getTime() - args.startedAt.getTime(),
@@ -499,6 +546,43 @@ function appendPromoteSummary(
     },
   };
   deps.audit.append(record);
+}
+
+/**
+ * Record the AMBIGUOUS summary when a promote compound's own outcome is a
+ * timeout — the one verdict where the series may or may not exist. Returns the
+ * outcome unchanged, so it wraps a composite body without re-shaping it. Only a
+ * keyed call records one: without an `opId` there is nothing to reconcile
+ * against later, and the leg records already carry the failure.
+ */
+function recordAmbiguousPromote(
+  deps: WriteDeps,
+  outcome: MutationResult,
+  args: {
+    startedAt: Date;
+    op: PromoteOp;
+    txnId: string;
+    title: string;
+    type: "to-do" | "project";
+    invocation: string;
+    requested: Record<string, unknown>;
+    options: WriteOptions;
+  },
+): MutationResult {
+  if (args.options.opId === undefined) return outcome;
+  if (outcome.kind !== "verify-failed" || outcome.reason !== "timeout") return outcome;
+  appendPromoteSummary(deps, {
+    startedAt: args.startedAt,
+    op: args.op,
+    txnId: args.txnId,
+    templateUuid: null,
+    instanceUuid: null,
+    invocation: args.invocation,
+    requested: args.requested,
+    options: args.options,
+    ambiguous: promotePresenceDelta(args.title, args.type, args.startedAt),
+  });
+  return outcome;
 }
 
 /** Build the ok result for a promote (make/add-repeating). */
@@ -553,6 +637,14 @@ async function makeRepeatingViaClone(
   // Validate the rule BEFORE anything (a bad rule must never mint a clone).
   assertRepeatRule(params);
 
+  // Idempotency FIRST, before the target is even resolved: a successful promote
+  // moves the original to the Trash and hands back a different uuid, so a
+  // resubmission of the same key must be answered from the trail rather than
+  // re-driven against a source that is no longer the item it names. The key
+  // rides the compound's single summary record, so a match is the whole verb.
+  const replay = replayIfApplied(deps, options);
+  if (replay !== null) return replay;
+
   const now = deps.now?.() ?? new Date();
   const srcUuid =
     kind === "project"
@@ -573,6 +665,9 @@ async function makeRepeatingViaClone(
           : "verify the uuid with `things show <uuid>`, or use `things project make-repeating` for a project",
     };
   }
+  // Bound after the existence guard so the composite body (a hoisted function,
+  // where TypeScript cannot carry the narrowing) still sees a plain string.
+  const srcTitle = src.title;
 
   // ANCH2 (issue #476): the app's Repeat dialog HAS a "Next:" first-occurrence
   // field; its default is the today-anchored next match, but it is editable and
@@ -636,15 +731,31 @@ async function makeRepeatingViaClone(
   const gate = await gateUiPreflight(deps, op);
   if (gate !== null) return gate;
 
+  const startedAt = now;
+  const txnId = newTxnId(startedAt);
+
   // COMPOSITE LOCK: everything below is ONE verb executed as several mutations
   // (clone → trash → promote → the DBLSPAWN1 clean-up), and they must not
   // interleave with another writer's legs — the promote's row selection is by
   // TITLE, so a concurrent clone of the same item makes it ambiguous. One lock,
   // held to the end; each leg's own acquisition is a reentrant no-op.
   return runComposite(deps, op, async () => {
-    const startedAt = now;
-    const txnId = newTxnId(startedAt);
+    const outcome = await promoteBody();
+    // An unconfirmed outcome gets the compound's AMBIGUOUS summary, so a
+    // resubmission of the same key reconciles instead of minting a second series.
+    return recordAmbiguousPromote(deps, outcome, {
+      startedAt,
+      op,
+      txnId,
+      title: srcTitle,
+      type: expectedType,
+      invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote (unconfirmed)`,
+      requested: effParams as unknown as Record<string, unknown>,
+      options,
+    });
+  });
 
+  async function promoteBody(): Promise<MutationResult> {
     // 1. Clone the source as a disposable, embedded leg (--preserve-created). The
     // clone has captured X's full content by the time it returns.
     const clone =
@@ -669,7 +780,7 @@ async function makeRepeatingViaClone(
             reason: "mismatch",
             expected: {
               mode: "create",
-              probe: { title: src.title, type: expectedType, sinceEpoch: 0 },
+              probe: { title: srcTitle, type: expectedType, sinceEpoch: 0 },
               assert: [],
             },
             observed: null,
@@ -804,6 +915,7 @@ async function makeRepeatingViaClone(
       originalUuid: srcUuid,
       invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote ${cloneUuid} → template ${templateUuid}`,
       requested: effParams as unknown as Record<string, unknown>,
+      options,
       ...(preserveModified && preUmd !== null && { preModDates: { [srcUuid]: preUmd } }),
     });
 
@@ -812,11 +924,11 @@ async function makeRepeatingViaClone(
       templateUuid,
       instanceUuid,
       replacedUuid: cloneUuid,
-      title: src.title,
+      title: srcTitle,
       txnId,
       warnings,
     });
-  });
+  }
 }
 
 export function runMakeRepeatingTodo(
@@ -852,6 +964,12 @@ async function addRepeatingViaCreate(
 ): Promise<MutationResult> {
   const op: PromoteOp = kind === "project" ? "project.add-repeating" : "todo.add-repeating";
   assertRepeatRule(rule);
+
+  // Idempotency FIRST: this verb CREATES, so a blind resubmission is a duplicate
+  // series. The key rides the compound's single summary record, so a match is the
+  // whole verb — the add leg and the promote leg together — not one of them.
+  const replay = replayIfApplied(deps, options);
+  if (replay !== null) return replay;
 
   // ANCH2 (issue #476): drive the Repeat dialog's "Next:" field with --when so the
   // series starts on the requested date (the field's default is today-anchored but
@@ -930,13 +1048,29 @@ async function addRepeatingViaCreate(
   const gate = await gateUiPreflight(deps, op);
   if (gate !== null) return gate;
 
+  const startedAt = deps.now?.() ?? new Date();
+  const txnId = newTxnId(startedAt);
+
   // COMPOSITE LOCK: add → promote (→ the seed auto-trash / DBLSPAWN1 clean-up)
   // is one verb, several mutations; hold one lock across all of them so a
   // concurrent composite cannot land its own legs between ours.
   return runComposite(deps, op, async () => {
-    const startedAt = deps.now?.() ?? new Date();
-    const txnId = newTxnId(startedAt);
+    const outcome = await addBody();
+    // An unconfirmed outcome gets the compound's AMBIGUOUS summary, so a
+    // resubmission of the same key reconciles instead of creating a second series.
+    return recordAmbiguousPromote(deps, outcome, {
+      startedAt,
+      op,
+      txnId,
+      title,
+      type: expectedType,
+      invocation: `${op}: add "${title}" → promote (unconfirmed)`,
+      requested: { title, ...effRule },
+      options,
+    });
+  });
 
+  async function addBody(): Promise<MutationResult> {
     // 1. Create the item (full add vocabulary) as an embedded leg.
     const addOp = kind === "project" ? "project.add" : "todo.add";
     const add = await runMutation(
@@ -1037,6 +1171,7 @@ async function addRepeatingViaCreate(
       instanceUuid,
       invocation: `${op}: add "${title}" ${createdUuid} → template ${templateUuid}`,
       requested: { title, ...effRule },
+      options,
     });
 
     return promoteOk({
@@ -1048,7 +1183,7 @@ async function addRepeatingViaCreate(
       txnId,
       warnings,
     });
-  });
+  }
 }
 
 /** The add-repeating rule bag once a concrete deadline has been folded into it. */

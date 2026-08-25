@@ -831,26 +831,26 @@ describe("--op-id makes a retry safe (no second occurrence)", () => {
     expect(cnc.state.calls).toBe(1);
   });
 
-  it("a TIMED-OUT original is not replayed (phase 1 matches confirmed changes only)", async () => {
-    // The record says the write was dispatched and never confirmed, so what
-    // landed is unknown — replaying it would claim an occurrence exists that may
-    // not. Phase 1 re-runs instead and leaves reconciliation to the caller (who
-    // can read the outcome back with `things op-result`).
-    const { template } = seedSeries();
-    const cnc = cncVector(() => template);
+  /** A prior attempt under `opId` that dispatched and never confirmed. */
+  function writeTimedOutRecord(
+    opId: string,
+    expected?: AuditRecord["expected"],
+    uuid = "ghost-occurrence",
+  ): void {
     writeTrail({
       v: 1,
       ts: NOW.toISOString(),
       actor: "mike",
       host: "test-host",
       op: "todo.complete",
-      uuid: "ghost-occurrence",
+      uuid,
       vector: "ui",
       disruption: 3,
       invocation: "todo.complete",
-      requested: { uuid: template },
+      requested: { uuid: "template" },
       txn: { id: "txn-ghost", role: "summary" },
-      opId: "timed-out",
+      opId,
+      ...(expected !== undefined && { expected }),
       pre: null,
       observed: null,
       result: "verify-failed:timeout",
@@ -858,6 +858,16 @@ describe("--op-id makes a retry safe (no second occurrence)", () => {
       durationMs: 1,
       env: { pkg: "test", dbVersion: 27, fingerprint: "ok" },
     });
+  }
+
+  it("a TIMED-OUT original with nothing recorded to check REFUSES — it does not mint a second occurrence", async () => {
+    // The record says the write was dispatched and never confirmed, so what
+    // landed is unknown. Re-running would take a SECOND occurrence out of the
+    // series; replaying would claim one that may not exist. With no recorded
+    // assertion to settle it, the honest answer is neither (phase 2).
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    writeTimedOutRecord("timed-out");
 
     const result = await runCompleteWithDate(
       deps([urlVector().vector, cnc.vector]),
@@ -867,8 +877,36 @@ describe("--op-id makes a retry safe (no second occurrence)", () => {
       { opId: "timed-out" },
     );
 
-    expect(result.kind === "ok" && result.alreadyApplied).toBeUndefined();
-    expect(cnc.state.calls).toBe(1);
-    expect(occurrenceOf(result)?.occurrenceUuid).toBe(cnc.state.mintedUuids[0]);
+    expect(result.kind).toBe("blocked");
+    if (result.kind !== "blocked") throw new Error("unreachable");
+    expect(result.reason).toBe("reconcile");
+    expect(result.remediation).toContain("things op-result timed-out");
+    expect(cnc.state.calls, "nothing was materialized").toBe(0);
+  });
+
+  it("a TIMED-OUT original whose change IS in place replays it", async () => {
+    // The occurrence the earlier attempt was resolving reads back completed, so
+    // the change is there: replay, and materialize nothing.
+    const { template } = seedSeries();
+    const ghost = seedTodo(fixture.db, { title: "Ghost occurrence", repeatingTemplate: template });
+    fixture.db.prepare("UPDATE TMTask SET status = 3 WHERE uuid = ?").run(ghost);
+    const cnc = cncVector(() => template);
+    writeTimedOutRecord(
+      "landed-late",
+      { mode: "update", uuid: ghost, assert: [{ field: "status", equals: "completed" }] },
+      ghost,
+    );
+
+    const result = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      { opId: "landed-late" },
+    );
+
+    expect(result.kind === "ok" && result.alreadyApplied).toBe(true);
+    expect(result.kind === "ok" && result.uuid).toBe(ghost);
+    expect(cnc.state.calls, "no second occurrence").toBe(0);
   });
 });
