@@ -6,7 +6,12 @@
  * data from other apps" (`kTCCServiceSystemPolicyAppData`) — that covers the
  * Things group container. It is MEASURED allow-once-per-responsible-process-
  * instance: the grant is pinned to the running host app, and it dies when that
- * app quits. It is also, by TCC's ask-on-access design, undetectable without
+ * app quits. APDP1 (docs/lab/apdp1-grant-pinning.md) settled the axis this
+ * marker rests on — TCC writes the row against the RESPONSIBLE APP (its bundle
+ * id, pinned to that instance's pid + pid_version), never against the pid that
+ * opened the file, so every process under one host-app instance shares a single
+ * grant and a relaunch of the host app re-arms the prompt. It is also, by
+ * TCC's ask-on-access design, undetectable without
  * FDA: the only way to learn whether you hold it is to open the file, and the
  * open is what raises the modal. That is precisely what Article I forbids
  * outside a ceremony.
