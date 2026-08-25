@@ -30,6 +30,7 @@ export function defaultVectors(
   config: ThingsApiConfig = loadConfig(),
   uiAux: UiDriveAux = {},
   resolvedDbPath?: string,
+  dbPathIsExplicit = false,
 ): WriteVector[] {
   // Bench harness (Phase 0): THINGS_SIM_WRITES=1 REQUESTS simulated writes. When
   // it is unset (the ordinary path) the real transports are returned unchanged.
@@ -63,8 +64,16 @@ export function defaultVectors(
   // point with a marked DB means the env fence is absent/incomplete (the exact
   // shape of the escape that fired real url-scheme adds at a live app while
   // verification read the fixture) — refuse rather than return real transports.
+  // The sweep opens each candidate to read the marker, so it may only touch
+  // EXPLICITLY supplied paths (Article VI plain-file world): a bench fixture
+  // is only ever reached via THINGS_DB or an explicit dbPath, and the LOCATED
+  // default container is definitionally not one. Opening the default container
+  // here is also an Article I violation — from a non-FDA host that open raises
+  // the app-data consent modal (measured live 2026-08-24: every `things` read
+  // from a grant-less terminal hung on this exact check, prompting as the
+  // host, even with reads fully routed through the reader).
   const envDb = process.env["THINGS_DB"];
-  const markedPath = [resolvedDbPath, envDb]
+  const markedPath = [dbPathIsExplicit ? resolvedDbPath : undefined, envDb]
     .filter((p): p is string => p !== undefined && p.trim() !== "")
     .find((p) => dbCarriesBenchMarker(p));
   if (markedPath !== undefined) {

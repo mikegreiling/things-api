@@ -1634,7 +1634,7 @@ describe("simulator fence", () => {
   it("no env gate but the client OPENED a marked fixture (--db) → defaultVectors throws", () => {
     delete process.env["THINGS_SIM_WRITES"];
     delete process.env["THINGS_DB"];
-    expect(() => defaultVectors(CONFIG, {}, fixture.path)).toThrow(
+    expect(() => defaultVectors(CONFIG, {}, fixture.path, true)).toThrow(
       /bench fixture.*fence is not active/s,
     );
   });
