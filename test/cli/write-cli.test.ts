@@ -509,6 +509,35 @@ describe("batch (Phase 13)", () => {
     expect(process.exitCode).toBe(3); // invalid/verify-failed
   });
 
+  it("#580: a malformed param refuses the WHOLE batch — nonzero exit, nothing planned", async () => {
+    const project = seedProject(fixture.db, { title: "Synthetic Project" });
+    const batchFile = join(stateDir, "malformed.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({ op: "todo.add", params: { title: "Fine" } }),
+        JSON.stringify({
+          op: "todo.add",
+          params: { title: "Synthetic child", project },
+          opId: "malformed-project-probe",
+        }),
+      ].join("\n"),
+    );
+    await run(["batch", batchFile, "--dry-run"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines[0].outcome).toBe("skipped");
+    expect(lines[1].outcome).toBe("invalid");
+    expect(lines[1].detail).toContain("params.project");
+    expect(lines[1].detail).toContain("expected a container reference object");
+    expect(lines[2].summary).toEqual({ total: 2, ok: 0, failed: 1, skipped: 1 });
+    expect(process.exitCode).toBe(3);
+  });
+
   it("a batch of only unsupported ops exits 6 (Unsupported), not 3", async () => {
     // url-scheme cannot delete a to-do (matrix support "no"); forcing that
     // vector makes the op unsupported at planning time — nothing executes.

@@ -3147,7 +3147,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Run any cataloged operation by kind — the generic entry for operations without a " +
         "dedicated tool (e.g. trash.empty). Call capabilities first for the catalog of " +
-        "operation kinds and their parameter shapes.",
+        "operation kinds and their parameter shapes (each entry carries a params list naming " +
+        "every field, whether it is optional, and the shape it accepts). A malformed params " +
+        "bag — an unknown field, a wrong type, a bare string where a container reference " +
+        "object belongs — is refused before anything runs.",
       inputSchema: {
         op: z.enum(OPERATION_KINDS as unknown as [string, ...string[]]),
         params: z
@@ -3191,8 +3194,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Run several operations in order, each independently — there are no transactions, " +
         "and a failure does not roll back earlier operations. A statically-invalid operation " +
-        "(bad shape, unknown op, a $ref to an undeclared/forward temp_id, a duplicate temp_id) " +
-        "refuses the WHOLE batch before anything runs, naming every bad operation. Otherwise " +
+        "(unknown op, an unknown or wrongly-typed param, a $ref to an undeclared/forward " +
+        "temp_id, a duplicate temp_id) refuses the WHOLE batch before anything runs, naming " +
+        "every bad operation and the field it names. A container param takes an object " +
+        '({"project": {"uuid": "…"}}), never a bare string. Otherwise ' +
         "per-operation results return in order. By DEFAULT a runtime failure STOPS the batch " +
         "(later operations reported not-run, with resume guidance in the summary); " +
         "continue_on_error runs past failures. " +

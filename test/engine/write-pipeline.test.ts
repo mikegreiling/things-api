@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
+import { ParamSchemaError } from "../../src/write/param-schema.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import type { VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -101,6 +102,47 @@ function deps(vector: WriteVector, overrides: Partial<WriteDeps> = {}): WriteDep
     ...overrides,
   };
 }
+
+describe("structural parameter refusal (#580)", () => {
+  it("a bare-string container is refused BEFORE anything is locked, dispatched, or audited", async () => {
+    const { vector, calls } = fakeVector(() => {});
+    await expect(
+      runMutation(deps(vector), "todo.add", {
+        title: "Synthetic child",
+        project: "sample-project-uuid" as never,
+      }),
+    ).rejects.toThrow(ParamSchemaError);
+    await expect(
+      runMutation(deps(vector), "todo.add", {
+        title: "Synthetic child",
+        project: "sample-project-uuid" as never,
+      }),
+    ).rejects.toThrow(/params\.project.*expected a container reference object.*received a string/s);
+    expect(calls).toHaveLength(0);
+    expect(auditRecords).toHaveLength(0);
+  });
+
+  it("an unknown parameter and a wrong primitive are refused the same way", async () => {
+    const { vector, calls } = fakeVector(() => {});
+    await expect(
+      runMutation(deps(vector), "todo.add", { title: "S", proejct: "typo" } as never),
+    ).rejects.toThrow(/params\.proejct/);
+    await expect(
+      runMutation(deps(vector), "todo.move", { uuid: "u", inbox: "true" as never }),
+    ).rejects.toThrow(/params\.inbox/);
+    expect(calls).toHaveLength(0);
+    expect(auditRecords).toHaveLength(0);
+  });
+
+  it("the refusal is a RangeError, so every surface reads it as an input-contract error", async () => {
+    const { vector } = fakeVector(() => {});
+    const err = await runMutation(deps(vector), "todo.complete", {} as never).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RangeError);
+    expect((err as ParamSchemaError).op).toBe("todo.complete");
+  });
+});
 
 describe("when-value validation", () => {
   it("rejects the raw URL @time grammar with the reminder-parameter pointer", async () => {

@@ -67,8 +67,12 @@ function assertWeekday(day: unknown, where: string): asserts day is Weekday {
   }
 }
 
-/** Validate a month/year day anchor (shared by monthly + yearly). */
-function assertMonthlyAnchor(anchor: unknown, where: string): void {
+/**
+ * Validate a month/year day anchor (shared by monthly + yearly). Exported so the
+ * per-op parameter schema (param-schema.ts) WRAPS this one validator instead of
+ * restating the anchor grammar — the two would drift.
+ */
+export function assertMonthlyAnchor(anchor: unknown, where: string): void {
   if (!isRecord(anchor)) {
     throw new RangeError(`${where} must be a day-of-month or nth-weekday anchor`);
   }
@@ -95,7 +99,11 @@ function assertMonthlyAnchor(anchor: unknown, where: string): void {
   throw new RangeError(`${where} must name a day-of-month or a weekday + ordinal`);
 }
 
-function assertEnds(ends: RepeatEnds): void {
+/**
+ * Validate the "Ends" bound. Exported as {@link assertEndsBound} so the per-op
+ * parameter schema wraps this validator rather than restating the grammar.
+ */
+export function assertEndsBound(ends: RepeatEnds): void {
   switch (ends.kind) {
     case "never":
       return;
@@ -240,7 +248,7 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
     assertMonthlyAnchor(params.yearly, "yearly");
   }
 
-  if (params.ends !== undefined) assertEnds(params.ends);
+  if (params.ends !== undefined) assertEndsBound(params.ends);
 
   if (params.reminder !== undefined) {
     if (!/^\d{1,2}:\d{2}$/.test(params.reminder)) {

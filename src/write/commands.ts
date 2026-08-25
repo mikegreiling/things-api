@@ -191,8 +191,30 @@ function applyTagRefs(db: DatabaseSync, pre: PreState, tags: string[]): void {
   pre.resolvedTagTitles = res.titles;
 }
 
-function containerGiven(ref: ContainerRef | undefined): boolean {
-  return ref !== undefined && (ref.uuid !== undefined || ref.title !== undefined);
+/**
+ * Is a destination container SUPPLIED? A PRESENCE check, not a duck-test (#580):
+ * the parameter schema (param-schema.ts) has already proven that a present ref is
+ * a `{uuid}`/`{title}` object, so anything else reaching here is an engine bug,
+ * not caller input — and it THROWS rather than reading as "no destination given",
+ * which is precisely how a bare-string `project` used to compile an Inbox capture
+ * with no placement and no placement assertion, then verify clean.
+ */
+export function containerGiven(ref: ContainerRef | undefined | null): boolean {
+  if (ref === undefined || ref === null) return false;
+  assertContainerRef(ref);
+  return true;
+}
+
+/** Belt-and-braces: a present container reference must carry a uuid or a title. */
+export function assertContainerRef(ref: ContainerRef): void {
+  if (typeof ref !== "object" || Array.isArray(ref)) {
+    throw new RangeError(
+      `a container reference must be an object naming a uuid or a title — received ${JSON.stringify(ref)}`,
+    );
+  }
+  if (ref.uuid === undefined && ref.title === undefined) {
+    throw new RangeError("a container reference must name a uuid or a title — it names neither");
+  }
 }
 
 /**

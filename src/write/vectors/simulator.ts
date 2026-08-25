@@ -42,7 +42,7 @@ import type {
   ReorderParams,
   WhenValue,
 } from "../operations.ts";
-import { resolveResolutionInstant } from "../commands.ts";
+import { assertContainerRef, resolveResolutionInstant } from "../commands.ts";
 import {
   computeReorderPre,
   resolveArea,
@@ -328,7 +328,12 @@ function containerUuid(
   ref: ContainerRef | undefined,
   kind: "project" | "area",
 ): string | null {
-  if (ref === undefined || (ref.uuid === undefined && ref.title === undefined)) return null;
+  // Presence, not a duck-test — the same law the engine's own `containerGiven`
+  // follows (#580): a present ref that names neither a uuid nor a title THROWS
+  // instead of reading as "no container", so the simulator can never model a
+  // placement-free create for a caller who asked for a placement.
+  if (ref === undefined || ref === null) return null;
+  assertContainerRef(ref);
   const res = kind === "project" ? resolveProject(sim, ref) : resolveArea(sim, ref);
   if (res.resolved === null) throw new Error(`simulator: unresolved ${kind} reference`);
   return res.resolved.uuid;

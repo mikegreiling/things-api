@@ -1588,6 +1588,67 @@ describe("things MCP server", () => {
     expect(result.isError).toBe(true);
   });
 
+  // #580: `params` is a pass-through record, so the per-op PARAMETER schema is
+  // what stands between a malformed bag and a silently-degraded mutation. The
+  // MCP surface must refuse the same payloads, with the same copy, as batch.
+  it("run_operation refuses a bare-string container with the object spelling", async () => {
+    const { vector, calls } = fakeVector(null);
+    await connect([vector]);
+    const result = await client.callTool({
+      name: "run_operation",
+      arguments: {
+        op: "todo.add",
+        params: { title: "Synthetic child", project: "sample-project-uuid" },
+      },
+    });
+    expect(result.isError).toBe(true);
+    const error = textOf(result) as { code: string; message: string };
+    expect(error.code).toBe("usage");
+    expect(error.message).toContain("params.project");
+    expect(error.message).toContain("expected a container reference object");
+    expect(error.message).toContain("received a string");
+    expect(error.message).toContain('{"uuid": "sample-project-uuid"}');
+    expect(calls).toEqual([]);
+  });
+
+  it("run_operation refuses an unknown parameter and a wrong primitive", async () => {
+    const { vector, calls } = fakeVector(null);
+    await connect([vector]);
+    const unknown = await client.callTool({
+      name: "run_operation",
+      arguments: { op: "todo.add", params: { title: "Sample", proejct: "typo" } },
+    });
+    expect(unknown.isError).toBe(true);
+    expect((textOf(unknown) as { message: string }).message).toContain("params.proejct");
+    const wrongType = await client.callTool({
+      name: "run_operation",
+      arguments: { op: "todo.add", params: { title: 42 } },
+    });
+    expect(wrongType.isError).toBe(true);
+    expect((textOf(wrongType) as { message: string }).message).toContain("params.title");
+    expect(calls).toEqual([]);
+  });
+
+  it("the batch tool refuses the same payload whole-batch, executing nothing", async () => {
+    const { vector, calls } = fakeVector(null);
+    await connect([vector]);
+    const results = textOf(
+      await client.callTool({
+        name: "batch",
+        arguments: {
+          ops: [
+            { op: "todo.add", params: { title: "Fine" } },
+            { op: "todo.add", params: { title: "Malformed", project: "sample-project-uuid" } },
+          ],
+        },
+      }),
+    ) as { outcome: string; detail?: string }[];
+    expect(results.map((r) => r.outcome)).toEqual(["skipped", "invalid"]);
+    expect(results[1]?.detail).toContain("params.project");
+    expect(results[1]?.detail).toContain("expected a container reference object");
+    expect(calls).toEqual([]);
+  });
+
   it("capabilities dumps the support matrix for every op kind", async () => {
     await connect([fakeVector(null).vector]);
     const table = textOf(await client.callTool({ name: "capabilities", arguments: {} })) as {

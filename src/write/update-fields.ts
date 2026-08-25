@@ -552,8 +552,27 @@ export function buildUpdatePatch(
     }
     // The values are surface-parsed strings; the pipeline validates their SHAPE
     // (whenAssertions / the reminder codec / the date parsers) and refuses a bad
-    // one with a named error, so no re-validation happens here.
-    if (typeof value === "string") patch[spec.param] = value;
+    // one with a named error, so no re-validation happens here. A NON-string
+    // present value is refused rather than skipped (#580): silently dropping it
+    // produced an update that reported success while leaving the field untouched
+    // — the same silent-degradation genus this registry exists to make
+    // unreachable.
+    if (value === undefined) continue;
+    if (typeof value !== "string") {
+      return {
+        kind: "error",
+        message: `${(labels as unknown as Record<string, string | undefined>)[key] ?? key}: expected a string — received ${
+          value === null
+            ? "null"
+            : Array.isArray(value)
+              ? "an array"
+              : typeof value === "object"
+                ? "an object"
+                : typeof value
+        }`,
+      };
+    }
+    patch[spec.param] = value;
   }
   return { kind: "ok", patch: patch as UpdatePatch };
 }

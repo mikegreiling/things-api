@@ -39,6 +39,7 @@
 import type { AuditRecord } from "../audit/schema.ts";
 import { OPERATION_KINDS, type OperationKind, type OperationParamsMap } from "./operations.ts";
 import { findAppliedOpId, OP_ID_RE } from "./opid.ts";
+import { validateOperationParams } from "./param-schema.ts";
 import { fingerprintLabel, runMutation, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
 import { readAuditRecords } from "./undo.ts";
@@ -233,9 +234,20 @@ const REF_KEYS = new Set([
   "project",
   "area",
   "container",
+  "toProject",
   "heading",
   "headings",
 ]);
+
+/**
+ * The subset of {@link REF_KEYS} whose value is a CONTAINER REFERENCE OBJECT.
+ * Their `$ref` lives INSIDE the object (`{"uuid": "$proj"}`) — a bare `"$proj"`
+ * string is a malformed container, refused by the parameter schema at preflight
+ * (#580), so the resolver never writes a bare uuid string back into one of these
+ * fields (which is exactly how a resolved temp ref used to vanish: the string
+ * failed the destination duck-test and the placement was silently dropped).
+ */
+const CONTAINER_REF_KEYS = new Set(["project", "area", "container", "toProject"]);
 
 /** The discovery uuids a bound temp id can resolve (primary + identity-replacement kin). */
 interface Binding {
@@ -254,7 +266,10 @@ export function outcomeFailed(outcome: BatchItemOutcome): boolean {
  * name→line index of valid tempId declarations and, per statically-invalid line,
  * the usage detail. "Statically detectable" means checkable with NO DB/app state:
  * a torn/non-object line, missing/unknown op, a BATCH_UNSUPPORTED_COMPOUND op,
- * non-object params, a malformed opId, a malformed/misplaced/duplicate tempId
+ * non-object params, a malformed opId, an unrecognized line/option key, ANY
+ * violation of the op's PARAMETER SCHEMA (param-schema.ts — wrong type, unknown
+ * key, a bare string where a container reference belongs, #580), a
+ * malformed/misplaced/duplicate tempId
  * declaration, and a `$ref` naming a tempId that NO EARLIER line declares
  * (unresolved or forward). ANY hit rejects the WHOLE batch (nothing executes) —
  * a script with a structural error is refused as a unit. RUNTIME failures
@@ -337,7 +352,56 @@ function staticLineError(
   if (entry.opId !== undefined && !OP_ID_RE.test(entry.opId)) {
     return "opId must match [A-Za-z0-9_-] and be 1–64 characters";
   }
+  const lineKey = unknownLineKey(entry);
+  if (lineKey !== undefined) return lineKey;
+  // The per-op PARAMETER schema (#580): a malformed field — a bare string where
+  // a container reference belongs, a wrong primitive, an unknown key — is a
+  // STRUCTURAL error, refusing the whole batch before anything is dispatched,
+  // instead of degrading into a silently-absent value at compile time.
+  const shape = validateOperationParams(entry.op, entry.params);
+  if (shape !== null) return shape;
   return staticRefError(entry.params, declIndex, index);
+}
+
+/** The LINE-level keys a batch entry may carry (anything else is a typo, not a silent no-op). */
+const LINE_KEYS: readonly string[] = ["op", "params", "tempId", "opId", "options"];
+
+/** The per-line `options` keys (a safe subset of WriteOptions — see {@link BatchOp.options}). */
+const LINE_OPTION_KEYS: readonly string[] = [
+  "acknowledgeChecklistReset",
+  "acknowledgeProjectReopen",
+  "dangerouslyPermanent",
+  "acknowledgeTagSubtree",
+  "allowNonEmptyArea",
+  "dangerouslyDriveGui",
+  "createTags",
+  "preserveModified",
+  "vector",
+  "verifyTimeoutMs",
+  "maxDisruption",
+];
+
+/** An unrecognized key on the LINE (or inside its `options`), or undefined when clean. */
+function unknownLineKey(entry: BatchOp): string | undefined {
+  const line = entry as unknown as Record<string, unknown>;
+  for (const key of Object.keys(line)) {
+    if (line[key] === undefined) continue;
+    if (!LINE_KEYS.includes(key)) {
+      return `"${key}" is not a recognized field on a batch operation — accepted fields are ${LINE_KEYS.join(", ")}`;
+    }
+  }
+  if (entry.options === undefined) return undefined;
+  if (typeof entry.options !== "object" || entry.options === null || Array.isArray(entry.options)) {
+    return "options must be an object";
+  }
+  const options = entry.options as Record<string, unknown>;
+  for (const key of Object.keys(options)) {
+    if (options[key] === undefined) continue;
+    if (!LINE_OPTION_KEYS.includes(key)) {
+      return `options.${key} is not a recognized per-operation option — accepted options are ${LINE_OPTION_KEYS.join(", ")}`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -461,6 +525,19 @@ function resolveRefs(
   for (const key of Object.keys(out)) {
     if (!REF_KEYS.has(key)) continue;
     const value = out[key];
+    if (CONTAINER_REF_KEYS.has(key)) {
+      // A container field's ref lives INSIDE the object; the schema has already
+      // refused every other shape here, so there is no bare-string branch to
+      // fall into (that branch is what dropped the destination in #580).
+      if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+      const ref = value as Record<string, unknown>;
+      if (isRef(ref["uuid"])) {
+        const r = resolveOne(ref["uuid"] as string);
+        if (!r.ok) return r;
+        out[key] = { ...ref, uuid: r.uuid };
+      }
+      continue;
+    }
     if (isRef(value)) {
       const r = resolveOne(value);
       if (!r.ok) return r;
@@ -475,14 +552,6 @@ function resolveRefs(
         }
       }
       out[key] = next;
-    } else if (typeof value === "object" && value !== null) {
-      // Container ref: resolve a `$` uuid sub-field, leave title/others alone.
-      const ref = value as Record<string, unknown>;
-      if (isRef(ref["uuid"])) {
-        const r = resolveOne(ref["uuid"] as string);
-        if (!r.ok) return r;
-        out[key] = { ...ref, uuid: r.uuid };
-      }
     }
   }
   return { ok: true, params: out };
@@ -493,14 +562,18 @@ function usesRef(params: Record<string, unknown>): boolean {
   for (const key of Object.keys(params)) {
     if (!REF_KEYS.has(key)) continue;
     const value = params[key];
+    if (CONTAINER_REF_KEYS.has(key)) {
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        !Array.isArray(value) &&
+        isRef((value as Record<string, unknown>)["uuid"])
+      )
+        return true;
+      continue;
+    }
     if (isRef(value)) return true;
     if (Array.isArray(value) && value.some(isRef)) return true;
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      isRef((value as Record<string, unknown>)["uuid"])
-    )
-      return true;
   }
   return false;
 }
