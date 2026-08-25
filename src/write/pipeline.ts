@@ -1751,6 +1751,15 @@ export function replayResultFromRecord(record: AuditRecord): MutationResult {
  * (resolution-timestamps.ts) and the template-target CNC composites
  * (template-mutation.ts) — so the two cannot drift on what a summary record
  * looks like.
+ *
+ * Two shapes, one record either way (mirroring the promote compounds'
+ * `appendPromoteSummary`):
+ *  - the SUCCESS summary (default) — result `ok`, the single undoable unit;
+ *  - an AMBIGUOUS summary (`ambiguous`) — result `verify-failed:timeout` with the
+ *    presence oracle attached, written when a leg dispatched and never confirmed.
+ *    It is not an undo target (undo reads `ok` records only); it exists so a
+ *    resubmission carrying the same key re-reads state and decides instead of
+ *    running the whole composite again.
  */
 export function appendCompositeSummary(
   deps: WriteDeps,
@@ -1767,6 +1776,8 @@ export function appendCompositeSummary(
     disruption?: DisruptionTier;
     options?: WriteOptions;
     occurrence?: OccurrenceResolution;
+    /** The unconfirmed-outcome shape: the assertion a resubmission re-evaluates. */
+    ambiguous?: DeltaSpec;
   },
 ): string {
   const fp = deps.fingerprint();
@@ -1784,9 +1795,10 @@ export function appendCompositeSummary(
     txn: { id: args.txnId, role: "summary" },
     ...(args.options?.opId !== undefined && { opId: args.options.opId }),
     ...(args.occurrence !== undefined && { occurrence: args.occurrence }),
+    ...(args.ambiguous !== undefined && { expected: args.ambiguous }),
     pre: null,
-    observed: { uuid: args.uuid },
-    result: "ok",
+    observed: args.ambiguous === undefined ? { uuid: args.uuid } : null,
+    result: args.ambiguous === undefined ? "ok" : "verify-failed:timeout",
     verify: null,
     durationMs: (deps.now?.() ?? new Date()).getTime() - args.startedAt.getTime(),
     env: {

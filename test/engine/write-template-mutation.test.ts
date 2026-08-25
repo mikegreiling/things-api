@@ -100,10 +100,21 @@ function config(): ThingsApiConfig {
   };
 }
 
-function deps(vectors: WriteVector[]): WriteDeps {
+/**
+ * A poller whose clock JUMPS instead of sleeping, so the fixed 2s recovery
+ * re-verify a watchdog abort triggers costs nothing here. Deadline arithmetic is
+ * unchanged — only the passage of time is faked.
+ */
+function fastPoller(): WriteDeps["poller"] {
+  let clock = 0;
+  return { now: () => (clock += 500), sleep: async () => {} };
+}
+
+function deps(vectors: WriteVector[], poller?: WriteDeps["poller"]): WriteDeps {
   return {
     db: fixture.db,
     vectors,
+    ...(poller !== undefined && { poller }),
     config: config(),
     audit: {
       append: (r) => {
@@ -908,5 +919,386 @@ describe("--op-id makes a retry safe (no second occurrence)", () => {
     expect(result.kind === "ok" && result.alreadyApplied).toBe(true);
     expect(result.kind === "ok" && result.uuid).toBe(ghost);
     expect(cnc.state.calls, "no second occurrence").toBe(0);
+  });
+});
+
+// ------------------------------ the unconfirmed outcome writes its own record
+
+/**
+ * The residue #600 left: the reconcile machinery was live, but these composites
+ * never CREATED a record for a timed-out run — so a keyed resubmission found
+ * nothing and ran the whole verb again, minting a second occurrence. Each cell
+ * here drives a real timeout through a leg, then resubmits the key.
+ *
+ * Two stall shapes, matching what the two legs can actually do:
+ *  - the MINT is a GUI drive, so its ambiguous verdict is the watchdog abort
+ *    (the CLI gave up first; a change committed at the last moment could still
+ *    appear);
+ *  - the status/update leg is an ordinary url-scheme write, so its ambiguous
+ *    verdict is the pipeline's own: the row was touched, the asserted field
+ *    never moved.
+ */
+describe("a composite that never confirmed records an ambiguous summary", () => {
+  /** `Create Next Copy` killed by the GUI watchdog — nothing is minted. */
+  function watchdogCnc(): { vector: WriteVector; state: { calls: number } } {
+    const state = { calls: 0 };
+    return {
+      state,
+      vector: {
+        id: "ui",
+        matrix: UI_MATRIX,
+        async execute() {
+          state.calls += 1;
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: "budget blown",
+            watchdog: {
+              budgetMs: 90_000,
+              elapsedMs: 91_000,
+              lastStep: "choose Create Next Copy",
+              clear: "dismissed" as const,
+            },
+          };
+        },
+      },
+    };
+  }
+
+  /** A url-scheme write that TOUCHES the row without applying the change. */
+  function stallingUrl(): { vector: WriteVector; payloads: string[] } {
+    const payloads: string[] = [];
+    return {
+      payloads,
+      vector: {
+        id: "url-scheme",
+        matrix: URL_MATRIX,
+        async execute(inv: CompiledInvocation) {
+          payloads.push(inv.payload);
+          const uuid = new URL(inv.payload).searchParams.get("id");
+          if (uuid !== null) {
+            fixture.db
+              .prepare("UPDATE TMTask SET userModificationDate = ? WHERE uuid = ?")
+              .run(NOW_EPOCH + 9, uuid);
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+    };
+  }
+
+  const summaries = (): AuditRecord[] => auditRecords.filter((r) => r.txn?.role === "summary");
+  const ambiguous = (): AuditRecord | undefined =>
+    summaries().find((r) => r.result === "verify-failed:timeout");
+
+  /** Seed the occurrence a landed-but-unconfirmed mint would have left. */
+  function landedOccurrence(template: string, status: "open" | "completed"): string {
+    return seedTodo(fixture.db, {
+      title: "Water plants",
+      repeatingTemplate: template,
+      startDate: "2026-07-12",
+      creationDate: NOW_EPOCH,
+      ...(status === "completed" && { status, stopDate: NOW_EPOCH }),
+    });
+  }
+
+  // ------------------------------------------------ complete/cancel: the mint
+
+  it("an unconfirmed MINT records the probe it was making, extended to the status it promised", async () => {
+    const { template } = seedSeries();
+    const cnc = watchdogCnc();
+    const result = await runCompleteWithDate(
+      deps([stallingUrl().vector, cnc.vector], fastPoller()),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-checked", verifyTimeoutMs: 0 },
+    );
+
+    expect(result.kind).toBe("verify-failed");
+    expect(result.kind === "verify-failed" && result.reason).toBe("timeout");
+    const record = ambiguous();
+    expect(record?.opId).toBe("maybe-checked");
+    expect(record?.observed, "an ambiguous summary observed nothing").toBeNull();
+    // The occurrence's uuid is unknown at this point, so the oracle is the mint's
+    // OWN time-bounded create probe — plus the status, because a resubmission
+    // that stopped at "a copy exists" would report the series checked off when
+    // only the copy had been made.
+    expect(record?.expected).toMatchObject({
+      mode: "create",
+      probe: { title: "Water plants", type: "to-do" },
+      assert: [
+        { field: "repeating.templateUuid", equals: template },
+        { field: "status", equals: "completed" },
+      ],
+    });
+    const probe = (record?.expected as { probe?: { sinceEpoch: number } } | undefined)?.probe;
+    expect(probe?.sinceEpoch, "an untime-bounded probe would read as unusable").toBeGreaterThan(0);
+  });
+
+  it("the occurrence landed AND was resolved after all → the retry replays, minting nothing", async () => {
+    const { template } = seedSeries();
+    await runCompleteWithDate(
+      deps([stallingUrl().vector, watchdogCnc().vector], fastPoller()),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-checked", verifyTimeoutMs: 0 },
+    );
+    const late = landedOccurrence(template, "completed");
+
+    const cnc = cncVector(() => template);
+    const retry = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-checked" },
+    );
+
+    expect(retry.kind === "ok" && retry.alreadyApplied).toBe(true);
+    expect(retry.kind === "ok" && retry.uuid, "the uuid comes from the re-read").toBe(late);
+    expect(cnc.state.calls, "no second occurrence").toBe(0);
+  });
+
+  it("a BARE occurrence landed → the retry resolves that one, still minting nothing", async () => {
+    // The dangerous middle case: the mint took but the status write never ran.
+    // The oracle is unsatisfied, so the write runs — and the composite's
+    // open-instance branch picks up the very occurrence the stalled call left.
+    const { template } = seedSeries();
+    await runCompleteWithDate(
+      deps([stallingUrl().vector, watchdogCnc().vector], fastPoller()),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-checked", verifyTimeoutMs: 0 },
+    );
+    const orphan = landedOccurrence(template, "open");
+
+    const cnc = cncVector(() => template);
+    const retry = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-checked" },
+    );
+
+    expect(retry.kind).toBe("ok");
+    expect(retry.kind === "ok" && retry.alreadyApplied, "it really ran").toBeUndefined();
+    expect(cnc.state.calls, "the orphan is resolved, not duplicated").toBe(0);
+    expect(statusOf(orphan)).toBe(3);
+  });
+
+  it("nothing landed → the retry runs the composite for real, exactly once", async () => {
+    const { template } = seedSeries();
+    await runCompleteWithDate(
+      deps([stallingUrl().vector, watchdogCnc().vector], fastPoller()),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-checked", verifyTimeoutMs: 0 },
+    );
+
+    const cnc = cncVector(() => template);
+    const retry = await runCompleteWithDate(
+      deps([urlVector().vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-checked" },
+    );
+
+    expect(retry.kind).toBe("ok");
+    expect(retry.kind === "ok" && retry.alreadyApplied).toBeUndefined();
+    expect(cnc.state.calls).toBe(1);
+    expect(statusOf(cnc.state.mintedUuids[0] as string)).toBe(3);
+  });
+
+  it("without a key nothing is recorded — there would be nothing to reconcile against", async () => {
+    const { template } = seedSeries();
+    await runCompleteWithDate(
+      deps([stallingUrl().vector, watchdogCnc().vector], fastPoller()),
+      "todo",
+      template,
+      {},
+      { verifyTimeoutMs: 0 },
+    );
+    expect(summaries(), "the leg records already carry the failure").toHaveLength(0);
+  });
+
+  // ----------------------------------------- complete/cancel: the status leg
+
+  it("an unconfirmed STATUS leg records the leg's own assertion against the occurrence", async () => {
+    const { template, instance } = seedSeries({ withOpenInstance: true });
+    const result = await runCancelWithDate(
+      deps([stallingUrl().vector, cncVector(() => template).vector]),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-canceled", verifyTimeoutMs: 0 },
+    );
+
+    expect(result.kind === "verify-failed" && result.reason).toBe("timeout");
+    const record = ambiguous();
+    expect(record?.opId).toBe("maybe-canceled");
+    expect(record?.uuid, "the summary is addressed to the occurrence").toBe(instance);
+    expect(record?.occurrence).toMatchObject({ occurrenceUuid: instance, minted: false });
+    expect(record?.expected).toMatchObject({ uuid: instance });
+    const asserted = (record?.expected as { assert?: unknown[] } | undefined)?.assert;
+    expect(
+      asserted?.length,
+      "an assertion that names a field is what makes it reconcilable",
+    ).toBeGreaterThan(0);
+  });
+
+  it("the status landed late → the retry replays it and dispatches nothing", async () => {
+    const { template, instance } = seedSeries({ withOpenInstance: true });
+    await runCancelWithDate(
+      deps([stallingUrl().vector, cncVector(() => template).vector]),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-canceled", verifyTimeoutMs: 0 },
+    );
+    fixture.db
+      .prepare("UPDATE TMTask SET status = 2, stopDate = ? WHERE uuid = ?")
+      .run(NOW_EPOCH, instance as string);
+
+    const url = urlVector();
+    const cnc = cncVector(() => template);
+    const retry = await runCancelWithDate(
+      deps([url.vector, cnc.vector]),
+      "todo",
+      template,
+      {},
+      { opId: "maybe-canceled" },
+    );
+
+    expect(retry.kind === "ok" && retry.alreadyApplied).toBe(true);
+    expect(retry.kind === "ok" && retry.uuid).toBe(instance);
+    expect(url.payloads, "nothing may be dispatched on a replay").toHaveLength(0);
+    expect(cnc.state.calls).toBe(0);
+  });
+
+  // ----------------------------------------------------- update --exception
+
+  it("an unconfirmed exception MINT records honestly, and the retry REFUSES rather than mint again", async () => {
+    // This composite ALWAYS mints, so "not satisfied → run" would take a second
+    // slot — and a mint that never confirmed is exactly the point at which the
+    // patch is KNOWN not to have landed. Neither answer is available, so the
+    // record names only the series (which this verb leaves byte-unchanged) and
+    // the resubmission refuses.
+    const { template } = seedSeries();
+    const result = await runTemplateExceptionWrite(
+      deps([stallingUrl().vector, watchdogCnc().vector], fastPoller()),
+      template,
+      { when: "2026-07-15" },
+      { opId: "maybe-moved", verifyTimeoutMs: 0 },
+    );
+
+    expect(result.kind === "verify-failed" && result.reason).toBe("timeout");
+    const record = ambiguous();
+    expect(record?.opId).toBe("maybe-moved");
+    expect(record?.expected).toEqual({ mode: "state", uuid: template, assert: [] });
+
+    const cnc = cncVector(() => template);
+    const retry = await runTemplateExceptionWrite(
+      deps([urlVector().vector, cnc.vector]),
+      template,
+      { when: "2026-07-15" },
+      { opId: "maybe-moved" },
+    );
+
+    expect(retry.kind).toBe("blocked");
+    if (retry.kind !== "blocked") throw new Error("unreachable");
+    expect(retry.reason).toBe("reconcile");
+    expect(retry.detail).toContain("never confirmed");
+    expect(retry.remediation).toContain("things op-result maybe-moved");
+    expect(retry.remediation).toContain(template);
+    expect(cnc.state.calls, "the refusal is what stops the blind re-mint").toBe(0);
+  });
+
+  it("an unconfirmed exception PATCH records the update leg's own assertion, and replays when it landed", async () => {
+    // Here the slot is already spent and the occurrence is named, so the leg's
+    // own assertion re-read against that row settles it.
+    const { template } = seedSeries();
+    const cnc = cncVector(() => template);
+    const result = await runTemplateExceptionWrite(
+      deps([stallingUrl().vector, cnc.vector]),
+      template,
+      { when: "2026-07-15" },
+      { opId: "maybe-moved", verifyTimeoutMs: 0 },
+    );
+
+    expect(result.kind === "verify-failed" && result.reason).toBe("timeout");
+    const minted = cnc.state.mintedUuids[0] as string;
+    const record = ambiguous();
+    expect(record?.uuid).toBe(minted);
+    expect(record?.occurrence).toMatchObject({ occurrenceUuid: minted, minted: true });
+    expect(record?.expected).toMatchObject({ uuid: minted });
+
+    // The move landed late.
+    fixture.db
+      .prepare(
+        "UPDATE TMTask SET startDate = ?, start = 2, todayIndexReferenceDate = ? WHERE uuid = ?",
+      )
+      .run(encode("2026-07-15"), encode("2026-07-15"), minted);
+
+    const second = cncVector(() => template);
+    const retry = await runTemplateExceptionWrite(
+      deps([urlVector().vector, second.vector]),
+      template,
+      { when: "2026-07-15" },
+      { opId: "maybe-moved" },
+    );
+
+    expect(retry.kind === "ok" && retry.alreadyApplied).toBe(true);
+    expect(retry.kind === "ok" && retry.uuid).toBe(minted);
+    expect(second.state.calls, "the series does not lose a second slot").toBe(0);
+  });
+
+  // --------------------------------------------------- the flip-dance itself
+
+  it("a timed-out flip-dance leg records the sequence's own final assertion, and reconciles", async () => {
+    const plain = seedTodo(fixture.db, { title: "Plain", startDate: "2026-07-05" });
+    const result = await runCompleteWithDate(
+      deps([stallingUrl().vector]),
+      "todo",
+      plain,
+      { completedAt: "2026-07-01" },
+      { opId: "maybe-backdated", verifyTimeoutMs: 0 },
+    );
+
+    expect(result.kind === "verify-failed" && result.reason).toBe("timeout");
+    const record = ambiguous();
+    expect(record?.opId).toBe("maybe-backdated");
+    expect(record?.uuid).toBe(plain);
+    expect(record?.expected).toEqual({
+      mode: "state",
+      uuid: plain,
+      assert: [
+        { field: "status", equals: "completed" },
+        { field: "stoppedDate", equals: "2026-07-01" },
+      ],
+    });
+
+    // The dance landed after all.
+    const noonEpoch = Math.floor(new Date(2026, 6, 1, 12, 0, 0).getTime() / 1000);
+    fixture.db
+      .prepare("UPDATE TMTask SET status = 3, stopDate = ? WHERE uuid = ?")
+      .run(noonEpoch, plain);
+
+    const second = stallingUrl();
+    const retry = await runCompleteWithDate(
+      deps([second.vector]),
+      "todo",
+      plain,
+      { completedAt: "2026-07-01" },
+      { opId: "maybe-backdated" },
+    );
+
+    expect(retry.kind === "ok" && retry.alreadyApplied).toBe(true);
+    expect(second.payloads, "the dance is not walked a second time").toHaveLength(0);
   });
 });

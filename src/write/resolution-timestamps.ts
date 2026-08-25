@@ -112,7 +112,8 @@ function dryRunComposite(
  * Execute a leg sequence: each leg one at a time (the mutation lock + verify
  * must never race), stopping on the first non-ok result and reporting the exact
  * recovery state. On success, append a txn SUMMARY and return an ok result whose
- * undoToken targets the summary (replayed leg-by-leg in reverse).
+ * undoToken targets the summary (replayed leg-by-leg in reverse). A leg that
+ * TIMED OUT writes the summary too, in its ambiguous shape — see below.
  *
  * NESTED case: when the caller has already grouped this call into a transaction
  * (`--completed-at` aimed at a REPEATING to-do — the template composite runs the
@@ -157,10 +158,32 @@ async function runComposite(
         done.length === 0
           ? "nothing was applied — the item is unchanged"
           : `applied so far: ${done.join("; ")} — leg ${i + 1} (${leg.describe}) failed; the item is left mid-sequence`;
+      const reason = result.kind === "verify-failed" ? result.reason : "mismatch";
+      // A TIMED-OUT leg leaves the sequence ambiguous — the flip may or may not
+      // have landed — so a KEYED call records the AMBIGUOUS summary in the same
+      // shape the promote compounds use: result `verify-failed:timeout` carrying
+      // the assertion a resubmission re-evaluates. Without it a retry on the same
+      // key would find no record and walk the whole dance again. The oracle is
+      // this composite's OWN final assertion (`finalDelta`) — a uuid-keyed state
+      // check on the one item every leg touches, so it settles the question
+      // either way; and re-running is safe when it says the change is absent,
+      // because the dance creates nothing. NESTED runs write no summary at all
+      // (the outer composite owns the record) and carry no key to record.
+      if (inheritedTxn === null && reason === "timeout") {
+        appendCompositeSummary(deps, {
+          startedAt,
+          op: summaryOp,
+          uuid,
+          txnId,
+          invocation: `${summaryOp} (${legs.length}-leg): ${disclosure} — unconfirmed`,
+          options,
+          ambiguous: finalDelta,
+        });
+      }
       return {
         kind: "verify-failed",
         op: summaryOp,
-        reason: result.kind === "verify-failed" ? result.reason : "mismatch",
+        reason,
         expected: finalDelta,
         observed: result.kind === "verify-failed" ? result.observed : null,
         detail: `${result.kind === "blocked" ? result.detail : "a leg did not verify"} — ${recovery}`,
