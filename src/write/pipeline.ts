@@ -277,7 +277,14 @@ export type MutationResult =
   | {
       kind: "verify-failed";
       op: OperationKind;
-      reason: "timeout" | "mismatch" | "silent-noop";
+      /**
+       * `timeout` / `mismatch` / `silent-noop` are the read-after-write verdicts.
+       * `ui-unreachable` is the ENVIRONMENT verdict (#512): a GUI drive stopped
+       * because the Things window was not reachable/answering, and the re-verify
+       * found nothing landed — the app never got the chance to accept or reject
+       * the command, so it must not be reported as a silent no-op.
+       */
+      reason: "timeout" | "mismatch" | "silent-noop" | "ui-unreachable";
       expected: DeltaSpec;
       observed: Record<string, unknown> | null;
       detail: string;
@@ -1313,6 +1320,48 @@ export async function runMutation<K extends OperationKind>(
               `retrying (retrying could create a duplicate series).${traceNote}`,
             uncertain: true as const,
             ...(wd.tracePath != null && wd.tracePath !== "" && { tracePath: wd.tracePath }),
+          };
+        }
+        // The ui drive stopped because the Things WINDOW stopped answering
+        // (#512): the session went AX-blind mid-drive, or a step was killed by
+        // its own deadline. The re-verify above just proved nothing landed, so
+        // this is an ENVIRONMENT failure — reported as such, naming the step
+        // that stopped and how to make a retry work. It is NOT
+        // `silent-noop`, whose meaning ("the app accepted the command and
+        // changed nothing") tells a caller the app was reachable and it is safe
+        // to look for a rejected parameter. The reachability GATES refuse this
+        // shape before a mutation whenever the session is already blind; this
+        // branch is for a session that degrades under a running drive.
+        const unreachable = executeResult.uiUnreachable;
+        if (unreachable !== undefined) {
+          audit({
+            result: verifyFailedCode({ reason: "ui-unreachable" }),
+            vector: vector.id,
+            disruption: effectiveTier,
+            invocation: invocation.redactedPayload,
+            pre: flattenPreFields(preCapture.fields),
+            observed: recovery.observed,
+          });
+          return {
+            kind: "verify-failed" as const,
+            op,
+            reason: "ui-unreachable" as const,
+            expected: delta,
+            observed: recovery.observed,
+            detail:
+              `the Things window could not be driven: the drive stopped at step ` +
+              `"${unreachable.step}" because ` +
+              (unreachable.cause === "unreachable"
+                ? "no Things window was reachable on the screen you're viewing (the Mac is locked, " +
+                  "or a full-screen app is covering the desktop)"
+                : "Things did not answer that step before its deadline") +
+              ". A follow-up re-read found no change, so nothing landed" +
+              (unreachable.clear === "may-remain"
+                ? "; a sheet or popover may still be open in Things — dismiss it before retrying"
+                : "") +
+              ".",
+            likelyCause: "ui-unreachable" as const,
+            hint: unreachable.remediation,
           };
         }
         audit({

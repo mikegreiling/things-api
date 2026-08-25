@@ -79,6 +79,8 @@ export interface AuditRecord {
     | "verify-failed:timeout"
     | "verify-failed:mismatch"
     | "verify-failed:silent-noop"
+    /** A GUI drive stopped because the Things window was unreachable/unresponsive (#512). */
+    | "verify-failed:ui-unreachable"
     | `blocked:${string}`
     | "unsupported";
   verify: { attempts: number; elapsedMs: number } | null;

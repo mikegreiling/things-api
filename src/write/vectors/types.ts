@@ -373,6 +373,34 @@ export interface ExecuteResult {
     /** The local trace file reconstructing the timeline, when tracing is on. */
     tracePath?: string | null;
   };
+  /**
+   * A ui drive stopped because the Things WINDOW stopped answering — not because
+   * the app accepted a command and did nothing (issue #512). The pre-seed and
+   * in-drive reachability gates catch a session that is ALREADY AX-blind; this
+   * covers the state that degrades UNDER a running drive (the screen locks, a
+   * full-screen app takes the Space, the app stops answering a step before its
+   * per-step deadline). Carried alongside a nonzero `exitCode` so the pipeline
+   * still runs the transport-failure re-verify (a step that landed before the
+   * abort is still honored), and, when nothing landed, shapes
+   * `verify-failed:ui-unreachable` — an ENVIRONMENT failure naming the step and
+   * the recovery — instead of `verify-failed:silent-noop`, which claims the app
+   * was reachable and chose to do nothing. See {@link drive}.
+   */
+  uiUnreachable?: {
+    /** The drive step that stopped (the label the recipe gave it). */
+    step: string;
+    /**
+     * "unreachable" — the cleanup's own blindness probe found NO Things window on
+     * the current screen (locked Mac / full-screen Space); "unresponsive" — the
+     * step was killed by its own deadline, so the window may be reachable but did
+     * not answer in time.
+     */
+    cause: "unreachable" | "unresponsive";
+    /** How a half-open sheet was cleaned up, when the drive had opened one. */
+    clear?: "dismissed" | "cleared-blind" | "may-remain";
+    /** What the caller does to make a retry work. */
+    remediation: string;
+  };
 }
 
 export interface WriteVector {
