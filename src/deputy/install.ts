@@ -233,6 +233,16 @@ function launchTarget(): string {
 }
 
 function launchctl(args: string[]): { ok: boolean; output: string } {
+  // The other half of the test blast-shield: with the LaunchAgents dir
+  // redirected, real launchctl calls would still act on the REAL jobs while
+  // the plists are fakes — tests booted the live helpers out mid-check on
+  // 2026-08-24 exactly this way. Under the override, launchctl is inert.
+  if ((process.env["THINGS_API_LAUNCH_AGENTS_DIR"] ?? "") !== "") {
+    return {
+      ok: false,
+      output: "launchctl disabled under THINGS_API_LAUNCH_AGENTS_DIR (test shield)",
+    };
+  }
   try {
     // stderr must be captured, never inherited: a routine negative probe
     // ("Could not find service … in domain") is a state we REPORT, not noise
