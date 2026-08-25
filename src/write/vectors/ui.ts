@@ -1375,7 +1375,18 @@ async function drive(
   // `clear`: how a half-open sheet was cleaned up after a failure (honest — never
   // claim a dismissal we could not see, SESSGATE #480); undefined = no sheet was
   // opened / no cleanup ran (a benign preamble/canary failure).
-  const partial = (failed: string, why: string, clear?: ClearResult): ExecuteResult => {
+  const partial = (
+    failed: string,
+    why: string,
+    clear?: ClearResult,
+    /**
+     * The failing step's own transport outcome: `true` when its osascript was
+     * killed by its deadline rather than answering. Together with a blind cleanup
+     * this is what separates "the Things window stopped answering" from "the app
+     * answered and refused/did nothing" (#512) — see {@link ExecuteResult.uiUnreachable}.
+     */
+    stepTimedOut = false,
+  ): ExecuteResult => {
     const base = `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}.`;
     const cleanup =
       clear === undefined
@@ -1391,7 +1402,29 @@ async function drive(
             : " WARNING: a sheet or popover may still be open in Things — Escape did not dismiss it." +
               " Dismiss it manually before retrying (a leftover sheet disables the menu bar and will" +
               " make the next drive's preflight fail).";
-    return refusal(base + cleanup);
+    // #512: name an environment failure as one. A cleanup that had to run BLIND
+    // is direct evidence the session went AX-blind mid-drive; a step killed by
+    // its own deadline is the window not answering. Either way the app was not
+    // reachable to be driven — which is not the app accepting a command and
+    // changing nothing, and must not be reported as that.
+    const cause: "unreachable" | "unresponsive" | null =
+      clear?.state === "cleared-blind" ? "unreachable" : stepTimedOut ? "unresponsive" : null;
+    const res = refusal(base + cleanup);
+    if (cause === null) return res;
+    return {
+      ...res,
+      uiUnreachable: {
+        step: failed,
+        cause,
+        ...(clear !== undefined && { clear: clear.state }),
+        remediation:
+          cause === "unreachable"
+            ? "unlock the Mac, or leave the full-screen app so a Things window is visible on the " +
+              "desktop you're viewing, then run the same command again"
+            : "bring Things to the front and check that it is responding, then run the same " +
+              "command again",
+      },
+    };
   };
 
   // 0. Run the leading reveal/activate preamble BEFORE the canary. The Items
@@ -1411,6 +1444,8 @@ async function drive(
       return partial(
         step.label,
         res.timedOut === true ? "the step timed out" : res.stderr.trim() || "the step failed",
+        undefined,
+        res.timedOut === true,
       );
     }
     done.push(step.label);
@@ -1577,6 +1612,7 @@ async function drive(
               ? "the dialog-shape probe timed out"
               : res.stderr.trim() || "the dialog-shape probe failed",
           clear,
+          res.timedOut === true,
         );
       }
       dialogShape = verdict;
@@ -1606,6 +1642,7 @@ async function drive(
               ? "the row-selection step timed out"
               : res.stderr.trim() || "the row-selection step failed",
           clear,
+          res.timedOut === true,
         );
       }
       done.push(step.label);
@@ -1632,6 +1669,7 @@ async function drive(
               ? "the eligibility check timed out"
               : res.stderr.trim() || "the eligibility check failed",
           clear,
+          res.timedOut === true,
         );
       }
       done.push(step.label);
@@ -1663,6 +1701,7 @@ async function drive(
         step.label,
         res.timedOut === true ? "the step timed out" : res.stderr.trim() || "the step failed",
         clear,
+        res.timedOut === true,
       );
     }
     done.push(step.label);

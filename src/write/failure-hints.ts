@@ -16,6 +16,8 @@ export type LikelyCause =
   | "app-not-running"
   | "app-updated"
   | "app-behavior-change"
+  /** A GUI drive could not reach the Things window (locked screen / unresponsive app), #512. */
+  | "ui-unreachable"
   | "schema-drift"
   | "unknown";
 

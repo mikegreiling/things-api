@@ -24,6 +24,7 @@
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { undoToken } from "../audit/schema.ts";
+import { uiAllowed, uiCapability as uiCapabilityDefault } from "../capability.ts";
 import { addDaysIso, decodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
@@ -116,21 +117,45 @@ function blockedUiDrive(op: PromoteOp): MutationResult {
 }
 
 /**
- * SESSGATE (#480) pre-seed reachability gate. A promote composite is NOT atomic:
- * it SEEDS a row (clone / add) before the GUI promote leg drives the dialog. If
- * the Mac's session is AX-blind (screen locked / full-screen Space), the dialog
- * would open on an unreachable window and the drive would fail — leaving an
- * orphan seed. So probe the live session BEFORE seeding and refuse fast (zero
- * mutation) on the certain-failure LOCKED signature. Only "session" scope refuses
- * here: a window merely on another Space is left for the in-drive relocation (the
- * reveal has not run yet, so refusing before the seed would be a false positive).
- * No ui vector (simulator / bench), ui disabled, or a fail-open probe → proceed
- * (the promote leg's own gate + cleanup remain the backstop).
+ * The pre-seed UI PREFLIGHT (SESSGATE #480 + issue #512). A promote composite is
+ * NOT atomic: it SEEDS a row (clone / add) before the GUI promote leg drives the
+ * dialog. Anything that will certainly stop that drive must be established BEFORE
+ * the seed exists, or the composite mutates, fails, and cleans up after itself for
+ * a reason it could have known up front. Two checks, cheapest and most decisive
+ * first, both prompt-free:
+ *
+ *  1. STANDING (permissions doctrine, Article IV). Driving the window needs
+ *     Accessibility + Automation → System Events, held by the helper pair and
+ *     nothing else. The pipeline already gates this — but only on the PROMOTE leg,
+ *     which runs after the seed, so a machine without the grants used to create
+ *     the row, refuse, and trash it. Same verdict, same copy, one leg earlier;
+ *     nothing is created. Keyed on a vector's `drivesGui` DECLARATION exactly as
+ *     the pipeline's gate is, never on its id, so a fake/simulator substituted
+ *     under "ui" is not gated on the developer's own host state.
+ *  2. REACHABILITY (SESSGATE). If the Mac's session is AX-blind (screen locked /
+ *     full-screen Space), the dialog would open on an unreachable window. Only
+ *     "session" scope refuses here: a window merely on another Space is left for
+ *     the in-drive relocation (the reveal has not run yet, so refusing before the
+ *     seed would be a false positive). A fail-open probe proceeds — the promote
+ *     leg's own gate + the seed cleanup remain the backstop.
+ *
+ * Running the standing check FIRST also keeps the probe itself doctrine-clean: no
+ * System Events call is attempted on a host that has not granted one.
  */
-async function gateSessionReachability(
-  deps: WriteDeps,
-  op: PromoteOp,
-): Promise<MutationResult | null> {
+async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<MutationResult | null> {
+  const gui = deps.vectors.find((v) => v.drivesGui === true && v.simulates !== true);
+  if (gui !== undefined) {
+    const capability = (deps.uiCapability ?? (() => uiCapabilityDefault()))();
+    if (!uiAllowed(capability)) {
+      return {
+        kind: "blocked",
+        op,
+        reason: "environment",
+        detail: `this operation drives the Things window, and ${capability.detail} — nothing was created`,
+        remediation: capability.remediation.join("; "),
+      };
+    }
+  }
   if (!deps.config.ui.enabled) return null;
   const ui = deps.vectors.find((v) => v.probeReachability !== undefined);
   if (ui?.probeReachability === undefined) return null;
@@ -604,10 +629,11 @@ async function makeRepeatingViaClone(
     };
   }
 
-  // SESSGATE (#480): refuse a locked / full-screen session BEFORE minting a clone
-  // — otherwise the promote's dialog opens on an unreachable window and the whole
-  // compound fails, stranding a disposable clone. Zero mutation on refusal.
-  const gate = await gateSessionReachability(deps, op);
+  // PRE-SEED UI PREFLIGHT (#480/#512): refuse a host that cannot drive the window,
+  // or a locked / full-screen session, BEFORE minting a clone — otherwise the
+  // promote's dialog never opens and the whole compound fails, stranding a
+  // disposable clone. Zero mutation on refusal.
+  const gate = await gateUiPreflight(deps, op);
   if (gate !== null) return gate;
 
   // COMPOSITE LOCK: everything below is ONE verb executed as several mutations
@@ -897,10 +923,11 @@ async function addRepeatingViaCreate(
     };
   }
 
-  // SESSGATE (#480): refuse a locked / full-screen session BEFORE seeding the row
-  // (the two legs are not atomic — a doomed promote would strand the seed). Zero
-  // mutation on refusal; a window merely on another Space is relocated in-drive.
-  const gate = await gateSessionReachability(deps, op);
+  // PRE-SEED UI PREFLIGHT (#480/#512): refuse a host that cannot drive the window,
+  // or a locked / full-screen session, BEFORE seeding the row (the two legs are not
+  // atomic — a doomed promote would strand the seed). Zero mutation on refusal; a
+  // window merely on another Space is relocated in-drive.
+  const gate = await gateUiPreflight(deps, op);
   if (gate !== null) return gate;
 
   // COMPOSITE LOCK: add → promote (→ the seed auto-trash / DBLSPAWN1 clean-up)
@@ -1319,9 +1346,10 @@ export async function cloneTemplateViaRepromote(
     };
   }
 
-  // SESSGATE (#480): refuse a locked / full-screen session BEFORE minting the
-  // plain clone (a doomed promote would strand it). Zero mutation on refusal.
-  const gate = await gateSessionReachability(deps, op);
+  // PRE-SEED UI PREFLIGHT (#480/#512): refuse a host that cannot drive the window,
+  // or a locked / full-screen session, BEFORE minting the plain clone (a doomed
+  // promote would strand it). Zero mutation on refusal.
+  const gate = await gateUiPreflight(deps, op);
   if (gate !== null) return gate;
 
   // COMPOSITE LOCK: clone-as-plain → promote-with-the-source's-rule is one verb;

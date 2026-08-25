@@ -126,6 +126,12 @@ function foundNote(result: AuditRecord["result"], uuid: string | null): string {
         "the operation ran but landed in the WRONG state (verification mismatch) — re-read the " +
         `target (\`things show ${target}\`) to see what committed before retrying`
       );
+    case "verify-failed:ui-unreachable":
+      return (
+        "the operation could not drive the Things window (it was locked away or not answering) and " +
+        "a follow-up re-read found NO change — nothing landed. Make a Things window visible on the " +
+        "screen you're viewing, then run the same command again"
+      );
     case "verify-failed:silent-noop":
       return (
         "the operation ran but the app did not move (silent no-op) — the change did NOT land; it is " +

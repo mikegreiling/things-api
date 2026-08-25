@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
+import type { UiCapability } from "../../src/capability.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { decodePackedDate, encodePackedDate } from "../../src/model/dates.ts";
@@ -1411,5 +1412,166 @@ describe("promote composites — pre-seed session-reachability gate (SESSGATE #4
     // The gate did NOT block — the compound ran (the simulator applies the legs).
     expect(res.kind).not.toBe("blocked");
     expect(titleRows("SESSGATE reachable")).toBeGreaterThan(0);
+  });
+});
+
+// Issue #512: the pre-seed preflight has a SECOND half. A machine that cannot
+// drive the Things window at all (Article IV standing — the helper pair holds
+// Accessibility + Automation → System Events, and nothing else does) used to fail
+// on the PROMOTE leg, i.e. after the seed already existed: the composite created
+// the row, refused, and trashed its own artifact for a reason it could have read
+// off a config file before touching anything. Same verdict, one leg earlier.
+/** A ui vector that DECLARES it drives the GUI (the pipeline gate's own key). */
+function guiDrivingVector(): WriteVector {
+  return {
+    id: "ui",
+    matrix: {},
+    async execute() {
+      throw new Error("execute must never run — the preflight blocks before the seed");
+    },
+    drivesGui: true,
+    probeReachability: async () => {
+      throw new Error("the standing check must refuse before any window probe runs");
+    },
+  };
+}
+
+describe("promote composites — pre-seed GUI-standing preflight (#512)", () => {
+  const HOST = { bundleId: null, name: "test-host" } as const;
+  const NO_STANDING: UiCapability = {
+    mode: "helpers-missing",
+    detail:
+      "GUI-driving is granted only to the helpers, and no helper is answering on this machine",
+    remediation: ["run `things helpers setup --gui` to grant GUI-driving to the helpers"],
+    host: HOST,
+  };
+
+  /** deps whose GUI standing is INJECTED — no test ever reads the host's TCC state. */
+  function depsStanding(capability: UiCapability): WriteDeps {
+    return {
+      ...deps([vector, guiDrivingVector()]),
+      config: { ...CONFIG, ui: { enabled: true } },
+      uiCapability: () => capability,
+    };
+  }
+  const rowsTitled = (title: string): number =>
+    (
+      fixture.db.prepare("SELECT COUNT(*) AS n FROM TMTask WHERE title = ?").get(title) as {
+        n: number;
+      }
+    ).n;
+
+  it("add-repeating REFUSES without GUI standing and seeds NOTHING", async () => {
+    const res = await runAddRepeatingTodo(
+      depsStanding(NO_STANDING),
+      { title: "PREFLIGHT doomed seed", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind !== "blocked") throw new Error("expected blocked");
+    expect(res.reason).toBe("environment");
+    expect(res.detail).toContain("no helper is answering");
+    expect(res.detail).toContain("nothing was created");
+    expect(res.remediation).toContain("things helpers setup --gui");
+    // The decisive guarantee: the seed to-do was never created.
+    expect(rowsTitled("PREFLIGHT doomed seed")).toBe(0);
+  });
+
+  it("project make-repeating REFUSES without GUI standing and never clones/trashes the original", async () => {
+    const src = seedProject(fixture.db, { title: "PREFLIGHT original" });
+    const res = await runMakeRepeatingProject(
+      depsStanding(NO_STANDING),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    expect(row(src)?.["trashed"]).toBe(0);
+    expect(rowsTitled("PREFLIGHT original")).toBe(1);
+  });
+
+  it("proceeds past the preflight when the helpers hold the GUI tier", async () => {
+    const granted: UiCapability = {
+      mode: "helpers",
+      detail: "the helpers hold Accessibility and app control for System Events",
+      remediation: [],
+      host: HOST,
+    };
+    const reachableUi: WriteVector = {
+      id: "ui",
+      matrix: {},
+      // The promote leg is delivered by the simulator; this fake only answers the
+      // standing/reachability preflight.
+      async execute() {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      drivesGui: true,
+      probeReachability: async () => ({ reachable: true }),
+    };
+    const res = await runAddRepeatingTodo(
+      {
+        ...deps([vector, reachableUi]),
+        config: { ...CONFIG, ui: { enabled: true } },
+        uiCapability: () => granted,
+      },
+      { title: "PREFLIGHT granted", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).not.toBe("blocked");
+    expect(rowsTitled("PREFLIGHT granted")).toBeGreaterThan(0);
+  });
+});
+
+// Issue #512, second half: no preflight can catch a session that degrades UNDER a
+// running drive (the Mac locks, a full-screen app takes the Space, the window
+// stops answering). When that happens mid-composite the fail-closed cleanup is
+// unchanged — the seed is trashed and named — but the OUTCOME must read as an
+// environment failure, not as the app accepting the command and changing nothing.
+describe("add-repeating — a mid-drive unreachable window (#512)", () => {
+  /** A simulator whose promote leg reports the ui vector's `uiUnreachable` outcome. */
+  function promoteUnreachableVector(): WriteVector {
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    return {
+      ...sim,
+      async execute(inv) {
+        if (inv.op === "todo.make-repeating") {
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: 'ui drive stopped at "select the row" (the row-selection step timed out).',
+            uiUnreachable: {
+              step: "select the row",
+              cause: "unreachable" as const,
+              clear: "cleared-blind" as const,
+              remediation: "unlock the Mac, then run the same command again",
+            },
+          };
+        }
+        return sim.execute(inv);
+      },
+    };
+  }
+
+  it("reports ui-unreachable (not silent-noop), trashes the seed, and names the retry path", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(promoteUnreachableVector()),
+      { title: "Unreachable habit", when: "someday", frequency: "weekly", interval: 1 },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
+    expect(res.reason).toBe("ui-unreachable");
+    expect(res.op).toBe("todo.add-repeating");
+    // The window, not the app's choice — plus the honest retry path.
+    expect(res.detail).toContain("select the row");
+    expect(res.detail).toContain("no Things window was reachable");
+    expect(res.hint).toContain("unlock the Mac");
+    // The fail-closed cleanup is unchanged: the seed is trashed and disclosed.
+    const seed = fixture.db
+      .prepare("SELECT uuid, trashed FROM TMTask WHERE title = ? LIMIT 1")
+      .get("Unreachable habit") as { uuid: string; trashed: number } | undefined;
+    expect(seed?.trashed).toBe(1);
+    expect(res.detail).toContain(seed?.uuid ?? "MISSING");
+    expect(res.detail).toContain("moved to the Trash");
+    expect(res.detail).toContain("things todo restore");
   });
 });
