@@ -206,7 +206,11 @@ describe("repeat dialog recipe — per-control drive", () => {
     const cb = steps.find((s) => s.label === "Add deadlines");
     expect(cb?.primitive).toBe("ensure-checkbox");
     expect(cb?.checkboxTarget).toBe(true);
-    expect(steps.find((s) => s.value === "3")?.primitive).toBe("set-value");
+    // CGRD1: the start-offset field is addressed by its "days earlier" label row,
+    // not by `text field 1` of the shell.
+    const offset = steps.find((s) => s.value === "3");
+    expect(offset?.primitive).toBe("set-row-field");
+    expect(offset?.rowLabel).toBe("days earlier");
   });
 
   it("RRD1: no blind checkbox press survives — deadline/reminder go through ensure-checkbox", () => {
@@ -231,7 +235,9 @@ describe("repeat dialog recipe — per-control drive", () => {
     const cb = steps.find((s) => s.label === "Add deadlines");
     expect(cb?.primitive).toBe("ensure-checkbox");
     expect(cb?.checkboxTarget).toBe(true);
-    expect(steps.find((s) => s.value === "21")?.primitive).toBe("set-value");
+    const offset = steps.find((s) => s.value === "21");
+    expect(offset?.primitive).toBe("set-row-field");
+    expect(offset?.rowLabel).toBe("days earlier");
   });
 
   it("RRD1 preserve-unspecified: no deadline/reminder step when neither is requested", () => {

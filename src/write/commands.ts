@@ -2037,6 +2037,23 @@ function reschedRuleExtras(params: RepeatRuleParams): RepeatRuleExtras {
   return drive !== undefined ? { ...base, next: drive } : base;
 }
 
+/**
+ * The rule-vocabulary keys this reschedule REQUESTED — the input to the
+ * unexplained-delta check (CGRD1 guard 3): every decoded-rule field that moves
+ * must be attributable to one of these, or to a mapped co-mover of one.
+ *
+ * Built from the EFFECTIVE params, the same bag the recipe drives, so a
+ * `--when`-only reschedule that DERIVES a calendar anchor counts that anchor as
+ * requested rather than as an unexplained move (RSPA1 / YANCH1 #493) — the drive
+ * really does address those pop-ups. `uuid` is the target, not a rule field.
+ */
+function requestedRuleKeys(params: RepeatRuleParams): string[] {
+  const eff = reschedEffParams(params);
+  return Object.entries(eff)
+    .filter(([key, value]) => key !== "uuid" && value !== undefined)
+    .map(([key]) => key);
+}
+
 /** ui ops all guard existence/type + the H-UI-DRIVE acknowledgement. */
 const UI_HAZARDS: HazardId[] = ["H-UNKNOWN-DESTINATION", "H-UI-DRIVE"];
 
@@ -2125,6 +2142,12 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
         includeCursor: assessOffRuleFirst(eff)?.kind !== "honored",
       }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
+      // UNEXPLAINED-DELTA DETECTION (CGRD1 guard 3). The assertions above prove
+      // the requested rule landed; this proves nothing ELSE did. A reschedule
+      // rewrites an EXISTING rule, so there is a full pre-state to diff against —
+      // which is why make-repeating / add-repeating do not carry it: they mint the
+      // rule, so every field is new by construction and there is nothing to compare.
+      collateral: { requested: requestedRuleKeys(params) },
     };
   },
   compile(params, vector) {
@@ -2272,6 +2295,12 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
         includeCursor: assessOffRuleFirst(eff)?.kind !== "honored",
       }),
       capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
+      // UNEXPLAINED-DELTA DETECTION (CGRD1 guard 3). The assertions above prove
+      // the requested rule landed; this proves nothing ELSE did. A reschedule
+      // rewrites an EXISTING rule, so there is a full pre-state to diff against —
+      // which is why make-repeating / add-repeating do not carry it: they mint the
+      // rule, so every field is new by construction and there is nothing to compare.
+      collateral: { requested: requestedRuleKeys(params) },
     };
   },
   compile(params, vector) {

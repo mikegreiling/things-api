@@ -8,6 +8,12 @@ import type { DatabaseSync } from "node:sqlite";
 import type { AnyTask, TaskType } from "../../model/entities.ts";
 import { anchorKeyOfOffsets } from "../../model/recurrence.ts";
 import { byUuid } from "../../read/detail.ts";
+import {
+  collateralFindings,
+  COLLATERAL_FIELD_PATHS,
+  type CollateralFinding,
+} from "../repeat-collateral.ts";
+import type { RuleFields } from "../repeat-asserts.ts";
 
 /**
  * A JSON-serializable predicate an assertion may check IN PLACE OF equality.
@@ -192,6 +198,16 @@ export type DeltaSpec =
        * decoded prior rule so undo can re-drive it faithfully).
        */
       capture?: { field: string }[];
+      /**
+       * UNEXPLAINED-DELTA DETECTION (CGRD1 guard 3), for the rule-writing verbs.
+       * Once the requested assertions hold, diff the DECODED rule pre versus post
+       * and require every CHANGED field to be attributable — to a requested field,
+       * or to an explicitly mapped co-mover. An unattributable one is a
+       * `verify-failed:collateral`: the requested change landed, but a field the
+       * caller did not name also moved. `requested` is the rule-vocabulary keys the
+       * caller actually set; see src/write/repeat-collateral.ts.
+       */
+      collateral?: { requested: string[] };
     }
   | { mode: "create"; probe: CreateProbe; assert: FieldAssertion[] }
   | {
@@ -291,6 +307,14 @@ export interface DeltaEvaluation {
   terminal?: boolean;
   /** Custom failure detail surfaced by the pipeline in place of the generic one. */
   detail?: string;
+  /**
+   * The requested change LANDED, but these decoded-rule fields moved with nothing
+   * to attribute them to (CGRD1 guard 3). Set only on an `update` spec carrying
+   * `collateral`, and only once the requested assertions pass — so it is never a
+   * mid-settle observation. Its presence makes the evaluation unsatisfied and
+   * routes the pipeline to `verify-failed:collateral`.
+   */
+  collateral?: CollateralFinding[];
 }
 
 export interface VerifyReader {
@@ -769,6 +793,25 @@ export function evaluateDelta(
       const entity = reader.taskByUuid(spec.uuid);
       const { pass, observed } = checkAssertions(entity, spec.assert);
       let satisfied = entity !== null && pass;
+      // UNEXPLAINED-DELTA DETECTION (CGRD1 guard 3). Run ONLY once the requested
+      // assertions hold: before that the write may still be settling, and "a field
+      // moved" is not yet meaningful. After that the row is written, so any watched
+      // field that differs pre → post with no request and no mapped co-mover to
+      // explain it is a real unrequested change — reported, never blessed.
+      let collateral: CollateralFinding[] | undefined;
+      if (spec.mode === "update" && spec.collateral !== undefined && satisfied && entity !== null) {
+        const post: Record<string, unknown> = {};
+        for (const path of COLLATERAL_FIELD_PATHS) post[path] = getField(entity, path) ?? null;
+        const found = collateralFindings(
+          new Set(spec.collateral.requested as (keyof RuleFields)[]),
+          pre.fields[spec.uuid] ?? {},
+          post,
+        );
+        if (found.length > 0) {
+          collateral = found;
+          satisfied = false;
+        }
+      }
       let cascadeObserved: Record<string, unknown> = {};
       if (spec.mode === "state" && spec.cascade !== undefined) {
         for (const c of spec.cascade) {
@@ -789,7 +832,14 @@ export function evaluateDelta(
         satisfied,
         movement,
         assertedMovement,
-        observed: { ...observed, ...cascadeObserved },
+        observed: {
+          ...observed,
+          ...cascadeObserved,
+          // Surface the moved fields' post-values alongside the asserted ones, so
+          // the failure's `observed` bag shows what actually changed.
+          ...Object.fromEntries((collateral ?? []).map((c) => [c.field, c.post])),
+        },
+        ...(collateral !== undefined && { collateral }),
       };
     }
     case "create": {

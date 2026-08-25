@@ -81,6 +81,11 @@ export interface AuditRecord {
     | "verify-failed:silent-noop"
     /** A GUI drive stopped because the Things window was unreachable/unresponsive (#512). */
     | "verify-failed:ui-unreachable"
+    /**
+     * The requested change landed, but a field the caller never named moved with it
+     * and nothing in the operation's vocabulary attributes the movement (CGRD1).
+     */
+    | "verify-failed:collateral"
     | `blocked:${string}`
     | "unsupported";
   verify: { attempts: number; elapsedMs: number } | null;

@@ -90,6 +90,40 @@ export type UiPrimitive =
    * anything other than exactly one field.
    */
   | "set-group-number"
+  /**
+   * Set a Repeat-dialog text field addressed by the pinned English LABEL sharing
+   * its row — the same discrimination law as `set-group-number`, for a field that
+   * lives on the dialog SHELL rather than in the cadence group. Its one caller is
+   * the "and start [n] days earlier" offset the "Add deadlines" checkbox reveals,
+   * which shipped as `text field 1` of the shell: a value-bearing field picked by
+   * index out of a tree whose shape depends on that checkbox, and verified only by
+   * re-reading the same index it wrote — the HXPC1 error class exactly. It was
+   * right on Things 3.23 (measured: the shell carries 0 direct text fields with
+   * deadlines off and exactly 1 with them on, CGRD1 §B), but nothing in the address
+   * said so. {@link UiStep.rowLabel} names the anchor (`days earlier`); a missing
+   * label, or anything but exactly one field on its row, fails closed naming the
+   * shell's whole text-field inventory.
+   */
+  | "set-row-field"
+  /**
+   * PRE-COMMIT FULL-DIALOG AUDIT — re-read every control this drive set, through
+   * each control's own discriminated address, and refuse to press OK if any of
+   * them does not hold the intended value (CGRD1).
+   *
+   * Every setter in this vocabulary confirms its own write by re-reading the
+   * element it addressed, which proves the keystrokes landed where they were
+   * aimed and nothing more; a wrong ADDRESS is invisible to it (#589: the interval
+   * drive typed into the ends-count field, then read that field back and found its
+   * own number). This step is the outside view. The plan is derived from the
+   * recipe's own step list ({@link UiStep.audit}), so a control the recipe drives
+   * cannot be left out of the audit by omission, and it compares the dialog's
+   * complete intended state — frequency, cadence unit, interval, ends bound and
+   * count, deadline/reminder checkboxes, start-days-earlier, the weekday set, the
+   * monthly/yearly anchors, the first occurrence and the ends date. A mismatch
+   * names every differing control with both values and aborts the drive
+   * fail-closed BEFORE the commit, through the usual clean-abort path.
+   */
+  | "audit-dialog"
   | "select-popup"
   | "wait"
   | "key"
@@ -300,6 +334,19 @@ export interface UiStep {
    */
   numberTarget?: "interval" | "ends-count";
   /**
+   * set-row-field only: the pinned English static text whose ROW the target field
+   * shares (`days earlier` for the start-offset field). Locale fail-closed, like
+   * every other title-pinned selector here.
+   */
+  rowLabel?: string;
+  /**
+   * audit-dialog only: the complete set of controls to re-read before the commit,
+   * with the value the drive intended for each. Built by the recipe from its own
+   * emitted steps, so the audit and the drive can never disagree about which
+   * controls were touched.
+   */
+  audit?: DialogAuditPlan;
+  /**
    * click-element only: resolve the click target by walking the addressed
    * content TABLE's rows → cells → cell children for the element whose
    * `AXDescription` equals this, instead of resolving `path` itself. The heading
@@ -372,6 +419,53 @@ export interface UiStep {
    * A step carrying this field whose probed shape has no entry fails closed.
    */
   shaped?: Partial<Record<RepeatDialogShape, { pathCandidates?: string[]; value?: string }>>;
+}
+
+/**
+ * ONE control of the pre-commit dialog audit, as the RECIPE declares it — before
+ * the driver has resolved which dialog shell is live or which shape the dialog is.
+ * Paths are per-shell candidate lists in the same order as {@link DialogAuditPlan.shells}.
+ */
+export interface DialogAuditControl {
+  /** Human name of the control, as the mismatch report should say it. */
+  label: string;
+  kind:
+    | "popup"
+    | "checkbox"
+    | "group-number"
+    | "row-field"
+    | "weekdays"
+    | "occurrence-popup"
+    | "date-area";
+  /** popup / checkbox / occurrence-popup: per-shell candidate paths. */
+  pathCandidates?: string[];
+  /** group-number: which of the cadence group's numeric fields. */
+  numberTarget?: "interval" | "ends-count";
+  /** row-field: the pinned English label sharing the field's row. */
+  rowLabel?: string;
+  /** weekdays: the group pop-up index of the first weekday row. */
+  weekdayBase?: number;
+  /** date-area: which of the dialog's `AXDateTimeArea` controls. */
+  dtTarget?: "next" | "ends" | "reminder";
+  /** date-area: the spec the drive wrote (`date:YYYY-MM-DD` / `time:HH:mm`). */
+  dtSpec?: string;
+  /** The accepted observed values — ANY one satisfies (the singular/plural pair). */
+  expected?: string[];
+  /** How the intended value should READ in the report ("checked", not "1"). */
+  expectedLabel?: string;
+  /** Check this control ONLY under the named dialog shape (the +1-index fork). */
+  onlyShape?: RepeatDialogShape;
+  /** Per-shape overrides, merged once the dialog shape is measured. */
+  shaped?: Partial<Record<RepeatDialogShape, { pathCandidates?: string[]; weekdayBase?: number }>>;
+}
+
+/** The pre-commit audit an `audit-dialog` step carries. */
+export interface DialogAuditPlan {
+  /** The dialog shells, in the SAME priority order the drive resolves them. */
+  shells: string[];
+  /** The cadence group inside each shell (same order as {@link shells}). */
+  groups: string[];
+  controls: DialogAuditControl[];
 }
 
 /**

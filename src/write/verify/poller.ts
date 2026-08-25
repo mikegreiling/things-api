@@ -22,6 +22,7 @@
  * (timeout < the window) are unaffected — the window never elapses. It never
  * touches the tripwire (timeout) or silent-noop paths.
  */
+import type { CollateralFinding } from "../repeat-collateral.ts";
 import type { DeltaEvaluation, RepeatingDiscovery } from "./delta.ts";
 
 /** Consecutive identical mismatching polls required before an early stable-mismatch exit. */
@@ -30,7 +31,7 @@ const STABLE_MISMATCH_MIN_POLLS = 3;
 const STABLE_MISMATCH_MIN_MS = 5000;
 
 export interface PollOutcome {
-  kind: "ok" | "timeout" | "mismatch" | "silent-noop";
+  kind: "ok" | "timeout" | "mismatch" | "silent-noop" | "collateral";
   attempts: number;
   elapsedMs: number;
   observed: Record<string, unknown> | null;
@@ -41,6 +42,8 @@ export interface PollOutcome {
   repeatingWarnings?: string[];
   /** A distinct failure detail from a terminal evaluation (overrides the generic one). */
   detail?: string;
+  /** `collateral` only: the fields that moved with nothing to attribute them to. */
+  collateral?: CollateralFinding[];
 }
 
 export interface PollerDeps {
@@ -77,6 +80,20 @@ export async function pollUntilVerified(
         ...(last.discoveredUuid !== undefined && { discoveredUuid: last.discoveredUuid }),
         ...(last.repeating !== undefined && { repeating: last.repeating }),
         ...(last.repeatingWarnings !== undefined && { repeatingWarnings: last.repeatingWarnings }),
+      };
+    }
+    // UNEXPLAINED DELTA (CGRD1 guard 3): the requested change LANDED — the
+    // evaluation only looks for collateral once the assertions pass — and a field
+    // nobody requested moved with it. Waiting cannot unmake that, so return at
+    // once with its own kind; the pipeline shapes `verify-failed:collateral`.
+    if (last.collateral !== undefined && last.collateral.length > 0) {
+      return {
+        kind: "collateral",
+        attempts,
+        elapsedMs: now() - started,
+        observed: last.observed,
+        collateral: last.collateral,
+        ...(last.detail !== undefined && { detail: last.detail }),
       };
     }
     // A terminal evaluation (e.g. an unbreakable template ambiguity) will never
