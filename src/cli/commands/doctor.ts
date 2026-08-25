@@ -72,6 +72,8 @@ function permissionLines(report: DiagnoseReport): string[] {
         return "deputy TCC Automation (Things API Helper)";
       case "direct-granted":
         return `host TCC Automation (${hostLabel})`;
+      case "direct-escape":
+        return "the lab's direct escape (not consumer surface)";
       default:
         return "none";
     }

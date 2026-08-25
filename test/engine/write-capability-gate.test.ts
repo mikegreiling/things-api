@@ -214,6 +214,21 @@ describe("app control present dispatches exactly as before", () => {
     expect(result.kind).not.toBe("blocked");
     expect(calls).toHaveLength(1);
   });
+
+  // The lab's write-vector escape (docs/lab/harness.md §The lab escapes). A
+  // guest shell has no bundle id, so without it every AppleScript-vector verb
+  // — and every composite carrying an AppleScript leg — is unreachable in a
+  // clone, which is what blocked the write-layer e2e smoke.
+  it("the lab's write escape lets the write through", async () => {
+    const { result, calls } = await update(
+      capability({
+        mode: "direct-escape",
+        detail: "THINGS_API_WRITE_DIRECT=1 — Apple Events are sent directly under this process",
+      }),
+    );
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
+  });
 });
 
 /**

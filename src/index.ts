@@ -409,6 +409,7 @@ export {
   writeAllowed,
   writeCapability,
   WriteCapabilityError,
+  WRITE_DIRECT_ESCAPE_ENV,
   THINGS_BUNDLE_ID,
 } from "./capability.ts";
 export type {

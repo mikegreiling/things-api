@@ -6,15 +6,24 @@ set -u
 NODE="$1"
 APP="$2/dist/cli/main.js"
 
-# THE LAB'S UI-VECTOR ESCAPE (docs/design/permissions-doctrine.md, Article IV;
-# docs/lab/harness.md §The UI-vector lab escape). Shipped hosts may drive the
-# Things window only through the helper pair, whose signed identities hold
-# Accessibility. A golden clone has no helper bundle and nobody to answer a
-# consent dialog — what it has is the AXVM1 layer, an in-guest Accessibility
-# grant on the runner's own processes. This env var is the documented, non-
-# consumer escape that restores direct UI-vector availability for exactly that
-# situation. It does NOT bypass `ui-enabled`; a lab clone still sets that key.
+# THE LAB'S TWO ESCAPES (docs/design/permissions-doctrine.md, Articles I/II+IV;
+# docs/lab/harness.md §The lab escapes). Both are documented, non-consumer
+# escapes that restore DIRECT availability of one vector inside a golden clone,
+# which has no helper bundle and nobody to answer a consent dialog — what it has
+# is the AXVM1 layer, an in-guest Accessibility + Automation grant on the
+# runner's own sshd-descended processes.
+#
+#   THINGS_API_UI_DIRECT     the ui vector. Shipped hosts drive the Things
+#                            window only through the helper pair. Does NOT
+#                            bypass `ui-enabled`; a clone still sets that key.
+#   THINGS_API_WRITE_DIRECT  the AppleScript vector. A guest shell descends from
+#                            sshd, so it has no bundle id and macOS has no
+#                            identity to have recorded an Automation grant
+#                            against — the verdict is `direct-unknown` and every
+#                            AppleScript-vector step below (plus every composite
+#                            with an AppleScript leg) refuses without this.
 export THINGS_API_UI_DIRECT=1
+export THINGS_API_WRITE_DIRECT=1
 FAILURES=0
 STEP=0
 
@@ -103,16 +112,19 @@ if [ "$NATIVE_REORDER" = "no" ]; then
   # Native-only reaches refuse pre-dispatch: blocked, exit 4.
   EXIT_HEADING_ORDER=4   # `project move-heading` — heading order has no fallback
   EXIT_TEMPLATE_DAY=4    # any day-group holding a repeating template
-  # A Today set containing a PROJECT row has no fallback either: the today
-  # BOUNCE re-schedules via todo.update, and a project's daytime `when=today`
-  # landing is mid-pack rather than the front-insert the protocol needs
-  # (ORD-12 / SIT3 EVEPROJ), so it fails CLOSED rather than land a wrong order.
-  EXIT_TODAY_WITH_PROJECT=4
 else
   EXIT_HEADING_ORDER=0
   EXIT_TEMPLATE_DAY=0
-  EXIT_TODAY_WITH_PROJECT=0
 fi
+# A Today set containing a PROJECT row is NOT version-conditional any more.
+# VMRES1 (2026-08-23, golden-v4 / Things 3.23) measured `update-project?when=
+# today` FRONT-INSERTING at the day cohort's todayIndex minimum — falsifying the
+# ORD-12 / SIT3 EVEPROJ "mid-pack" caveat the refusal rested on — so the `today`
+# bounce carries project movees on its per-type leg and the op lands on both app
+# generations (`bounceSpecOf("today")`, src/write/reorder.ts). The refusal was
+# retired in the same change; this expectation is the last thing still carrying
+# it (measured stale on the first full e2e since 2026-08-22).
+EXIT_TODAY_WITH_PROJECT=0
 
 echo "== doctor =="
 run_step 0 "doctor" doctor
@@ -188,10 +200,10 @@ R3=$(json_get "d['data']['uuid']")
 # Dual-axis refusal: a loose Today set is ambiguous (Today view vs the flag-safe
 # loose Anytime index, SIT6 LOOSEPARK) — REFUSED without --in (blocked, exit 4).
 run_step 4 "loose Today reorder REFUSES without --in (dual-axis ambiguity)" reorder "$R3" "$R1"
-# --in disambiguation success: name the Today view axis → native todayIndex re-rank.
-# The golden's Today list holds a seed PROJECT row, which only the native wire can
-# carry (O12 intermix) — so from 3.23 this is the one Today shape with no working
-# path and the op refuses instead (see EXIT_TODAY_WITH_PROJECT above).
+# --in disambiguation success: name the Today view axis. The golden's Today list
+# holds a seed PROJECT row (O12 intermix), which pre-3.23 only the native wire
+# carried; from 3.23 the per-type `today` bounce carries it too (VMRES1 — see
+# EXIT_TODAY_WITH_PROJECT above), so the op lands on either generation.
 run_step "$EXIT_TODAY_WITH_PROJECT" "today reorder with --in today (native re-rank, partial list)" reorder "$R3" "$R1" --in today
 # Flag-aware routing newly expressible (Phase B): --in anytime reorders the loose
 # Anytime index via the flag-safe LOOSEPARK MOVE protocol, preserving the Today flag.

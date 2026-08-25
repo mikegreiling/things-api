@@ -118,6 +118,8 @@ export type WriteCapabilityMode =
   | "deputy"
   /** macOS records an Automation grant for the host app against Things. */
   | "direct-granted"
+  /** The lab's documented in-guest escape (see {@link WRITE_DIRECT_ESCAPE_ENV}). */
+  | "direct-escape"
   /** macOS records a REFUSAL. It will not re-ask; the human must re-arm it. */
   | "direct-denied"
   /** No record either way, or none readable — never resolved by prompting. */
@@ -152,7 +154,11 @@ export function uiAllowed(capability: UiCapability): boolean {
 
 /** True when app automation may be dispatched. */
 export function writeAllowed(capability: WriteCapability): boolean {
-  return capability.mode === "deputy" || capability.mode === "direct-granted";
+  return (
+    capability.mode === "deputy" ||
+    capability.mode === "direct-granted" ||
+    capability.mode === "direct-escape"
+  );
 }
 
 /**
@@ -222,6 +228,23 @@ function automationAuthValueDefault(
       // A close failure cannot change the answer we already have.
     }
   }
+}
+
+// ── The lab escapes (not consumer surface) ───────────────────────────────────
+
+/**
+ * Is one of the lab's documented escapes set? ({@link UI_DIRECT_ESCAPE_ENV},
+ * {@link WRITE_DIRECT_ESCAPE_ENV}.)
+ *
+ * Both are read in exactly one place each — the capability function for the
+ * vector they cover — and both spell "on" the same way, as the literal `1`.
+ * Anything else is off, deliberately: an escape that answered to `true`, `yes`
+ * or a stray empty string would be a config surface, and these are neither
+ * config nor consumer surface. They are documented in docs/lab/harness.md and
+ * exported by the lab's guest environment; nothing shipped mentions them.
+ */
+function labEscapeSet(env: NodeJS.ProcessEnv, name: string): boolean {
+  return (env[name] ?? "") === "1";
 }
 
 // ── Read capability (Article I + II) ─────────────────────────────────────────
@@ -382,6 +405,28 @@ function classifyAuthValue(value: number | null): "granted" | "denied" | "unknow
 }
 
 /**
+ * The LAB's escape hatch for the AppleScript vector — the write-side twin of
+ * {@link UI_DIRECT_ESCAPE_ENV}, and just as deliberately not consumer surface.
+ *
+ * A guest shell in a golden clone descends from sshd, not from an application
+ * bundle, so `hostApp()` finds no `__CFBundleIdentifier` and macOS has no
+ * identity to have recorded an Automation grant against. The verdict is
+ * therefore `direct-unknown` in every clone, which blocks every AppleScript-
+ * vector verb and every composite carrying an AppleScript leg. What the clone
+ * actually has is an in-guest Automation grant on the runner's own processes
+ * (the same AXVM1 layer the ui escape leans on), so the block is an artefact of
+ * UNKNOWABILITY, not of a missing grant. Setting this to `1` says so.
+ *
+ * Bounded, and the bound is the point: it is consulted ONLY on the
+ * bundle-id-less path. A host that has an identity is answered from its TCC row
+ * as it always was, so the escape can never mask a recorded refusal
+ * (`direct-denied`) or manufacture a grant for a real user's terminal.
+ * Documented in docs/lab/harness.md and exported by the lab's guest
+ * environment; nothing consumer-facing mentions it.
+ */
+export const WRITE_DIRECT_ESCAPE_ENV = "THINGS_API_WRITE_DIRECT";
+
+/**
  * May this process drive Things over Apple Events, and on whose authority?
  *
  * The deputy wins when it is onboarded (its own handshake reports the grant it
@@ -406,6 +451,14 @@ export function writeCapability(deps: CapabilityDeps = {}): WriteCapability {
     };
   }
   if (host.bundleId === null) {
+    if (labEscapeSet(env, WRITE_DIRECT_ESCAPE_ENV)) {
+      return {
+        mode: "direct-escape",
+        detail: `${WRITE_DIRECT_ESCAPE_ENV}=1 — Apple Events are sent directly under this process (lab escape)`,
+        remediation: [],
+        host,
+      };
+    }
     return {
       mode: "direct-unknown",
       detail:
@@ -468,7 +521,8 @@ export class WriteCapabilityError extends Error {
 // ── UI capability (Article IV) ───────────────────────────────────────────────
 
 /**
- * The LAB's escape hatch, and deliberately not consumer surface. The VM lab and
+ * The LAB's escape hatch for the ui vector, and deliberately not consumer
+ * surface (its write-side twin is {@link WRITE_DIRECT_ESCAPE_ENV}). The VM lab and
  * the guest e2e bundle drive the UI vector DIRECT — the in-guest Accessibility
  * grant is held by the runner's own processes (the AXVM1 layer), there is no
  * helper bundle in a disposable clone, and there is nobody to answer a dialog
@@ -519,7 +573,7 @@ export function uiCapability(deps: CapabilityDeps = {}): UiCapability {
       host,
     };
   }
-  if ((env[UI_DIRECT_ESCAPE_ENV] ?? "") === "1") {
+  if (labEscapeSet(env, UI_DIRECT_ESCAPE_ENV)) {
     return {
       mode: "direct-escape",
       detail: `${UI_DIRECT_ESCAPE_ENV}=1 — GUI-driving runs directly under this process (lab escape)`,
