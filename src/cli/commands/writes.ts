@@ -40,6 +40,7 @@ import {
   openThings,
   OP_ID_RE,
   outcomeFailed,
+  ParamSchemaError,
   ReferenceResolutionError,
   saveConfigKey,
   splitWhenSugar,
@@ -416,6 +417,14 @@ async function runWrite(
     }
     // A malformed THINGS_TZ / THINGS_NOW fails closed as a usage error.
     if (err instanceof ClockError) {
+      usageError(opts, err.message);
+      return;
+    }
+    // A structural parameter refusal (#580) is an INPUT-CONTRACT error — the
+    // caller's bag was malformed and nothing was dispatched — not an internal
+    // fault. It exits `usage`, naming the JSON path, the expected shape, and
+    // what was received.
+    if (err instanceof ParamSchemaError) {
       usageError(opts, err.message);
       return;
     }
@@ -2749,9 +2758,11 @@ export function registerWriteCommands(program: Command): void {
       "Run MANY mutations from JSONL (file, or stdin when omitted/'-'): one op per line, " +
         '{"op": "<kind>", "params": {...}, "options": {...}} — see `things capabilities` for ' +
         "op kinds and params. Ops run sequentially and independently — NO transactions; a " +
-        "failure does not roll back earlier ops. A statically-invalid line (bad shape, unknown " +
-        "op, a $ref to an undeclared/forward tempId, a duplicate tempId) refuses the WHOLE " +
-        "batch before anything runs, naming every bad line. Otherwise ops run and per-op " +
+        "failure does not roll back earlier ops. A statically-invalid line (unknown op, an " +
+        "unknown or wrongly-typed param, a $ref to an undeclared/forward tempId, a duplicate " +
+        "tempId) refuses the WHOLE batch before anything runs, naming every bad line and the " +
+        'field it names. A container param takes an object — {"project": {"uuid": "…"}} — ' +
+        "never a bare string. Otherwise ops run and per-op " +
         "results stream as JSONL. Per-op " +
         "options carry the confirmation flags (acknowledgeChecklistReset, " +
         "acknowledgeProjectReopen, dangerouslyPermanent, acknowledgeTagSubtree). " +

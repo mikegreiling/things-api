@@ -403,6 +403,29 @@ describe("buildUpdatePatch: the ONE consumer mapping (CLI + MCP)", () => {
     });
   });
 
+  it("refuses a NON-string value instead of silently dropping the field (#580)", () => {
+    // The silent-degradation genus, inside #491's own registry: a value of the
+    // wrong type used to be skipped by the `typeof value === "string"` filter, so
+    // the update reported success with that field untouched.
+    expect(buildUpdatePatch({ notes: 42 })).toEqual({
+      kind: "error",
+      message: "--notes: expected a string — received number",
+    });
+    expect(buildUpdatePatch({ deadline: { date: "2026-09-01" } })).toEqual({
+      kind: "error",
+      message: "--deadline: expected a string — received an object",
+    });
+    expect(buildUpdatePatch({ notes: ["a", "b"] }, MCP_UPDATE_LABELS)).toEqual({
+      kind: "error",
+      message: "notes: expected a string — received an array",
+    });
+    // `title` has no flag label in the vocabulary — the key names itself.
+    expect(buildUpdatePatch({ title: true })).toEqual({
+      kind: "error",
+      message: "title: expected a string — received boolean",
+    });
+  });
+
   it("refuses an @time suffix against BOTH reminder flags (the suffix IS a reminder)", () => {
     expect(buildUpdatePatch({ when: "today@09:00", reminder: "10:00" })).toEqual({
       kind: "error",

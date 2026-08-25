@@ -55,6 +55,7 @@ import {
 } from "../model/template-projection.ts";
 import type { ReorderParams, ReorderScope, WhenValue } from "./operations.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
+import { assertOperationParams } from "./param-schema.ts";
 import { computeReorderPre, resolveArea, resolveProject, todayEveningFlagOf } from "./pre-state.ts";
 import { privateReorderIsNoOp, sdefDeclaresPrivateReorder } from "./experimental.ts";
 import {
@@ -342,6 +343,9 @@ export async function runReorder(
   params: ReorderParams,
   options: WriteOptions = {},
 ): Promise<ReorderResult> {
+  // `reorder` is the one op that bypasses runMutation, so it applies the SAME
+  // structural parameter check itself (#580) before it reads a single field.
+  assertOperationParams("reorder", params);
   params = { ...params, uuids: params.uuids.map((u) => resolveTaskUuidPrefix(deps.db, u)) };
 
   // HEADSUB1 within-heading sub-bucket compound (headsub1-heading-subbuckets.md):

@@ -152,6 +152,28 @@ describe("batch temp-id chaining", () => {
     expect(token).toBeDefined();
   });
 
+  it("a BARE $ref in a container param is refused statically — a resolved uuid never lands as a string (#580)", async () => {
+    // The temp-ID species of the silent-degradation bug: `"project": "$proj"`
+    // used to pass preflight, resolve to a bare uuid STRING, and then fail the
+    // destination duck-test — so the child was created loose in the Inbox while
+    // the batch reported success. The container's ref belongs INSIDE the object.
+    const {
+      results,
+      tempIdMapping,
+      undoToken: token,
+    } = await runBatch(deps(vector, auditDirPath), [
+      { op: "project.add", params: { title: "Synthetic Project" }, tempId: "project1" },
+      { op: "todo.add", params: { title: "Synthetic Child", project: "$project1" } },
+    ]);
+    expect(results.map((r) => r.outcome.kind)).toEqual(["skipped", "invalid"]);
+    const detail = results[1]?.outcome.kind === "invalid" ? results[1].outcome.detail : "";
+    expect(detail).toContain("params.project");
+    expect(detail).toContain('{"uuid": "$project1"}');
+    // Nothing ran: no project was created, no handle bound, no undo token.
+    expect(tempIdMapping).toEqual({});
+    expect(token).toBeUndefined();
+  });
+
   it("summary carries tempIdMapping for every bound handle", async () => {
     const { tempIdMapping } = await runBatch(deps(vector, auditDirPath), [
       { op: "project.add", params: { title: "P" }, tempId: "a" },

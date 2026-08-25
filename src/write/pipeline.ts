@@ -59,6 +59,7 @@ import {
   type OperationKind,
   type OperationParamsMap,
 } from "./operations.ts";
+import { assertOperationParams } from "./param-schema.ts";
 import { computeCompletionContext, type CompletionContext } from "./completion-context.ts";
 import { assessOffRuleFirst } from "./repeat-anchor.ts";
 import type { RepeatRuleParams } from "./operations.ts";
@@ -661,6 +662,15 @@ export async function runMutation<K extends OperationKind>(
   options: WriteOptions = {},
 ): Promise<MutationResult> {
   const startedAt = deps.now?.() ?? new Date();
+  // 0. STRUCTURAL parameter check (#580) — FIRST, before uuid-prefix resolution
+  // and before anything reads the params: an untyped caller (MCP
+  // `run_operation`'s `params` pass-through, a JavaScript caller handing over
+  // parsed JSON, `things run`) must be refused on a malformed bag rather than
+  // have the malformed field inferred as absent. Throws ParamSchemaError (a
+  // RangeError) — an input-contract refusal, so nothing is locked, dispatched, or
+  // audited. The batch surface checks the SAME registry in its static preflight,
+  // one line earlier.
+  assertOperationParams(op, params);
   // Uuid params accept unique PREFIXES (>= 6 chars) — resolved to full uuids
   // here so guards/compiles/audit all see canonical ids. Throws (RangeError)
   // on unknown or ambiguous prefixes, like the title resolvers. PROJECT write

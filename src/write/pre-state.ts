@@ -821,8 +821,23 @@ export function classifyProjectRepeat(
   };
 }
 
+/**
+ * The lookup key of a container reference. UNREACHABLE-but-throwing (#580): the
+ * parameter schema proves a present ref names a uuid or a title, so the old
+ * `?? ""` degradation — which quietly queried the empty key and reported
+ * "not found" for input that was in fact malformed — can no longer be reached
+ * silently.
+ */
+function containerKey(ref: ContainerRef): string {
+  const key = ref.uuid ?? ref.title;
+  if (key === undefined || key === "") {
+    throw new RangeError("a container reference must name a uuid or a title — it names neither");
+  }
+  return key;
+}
+
 export function resolveArea(db: DatabaseSync, ref: ContainerRef): ContainerResolution {
-  return resolveNamedRef(db, "TMArea", "1=1", [], ref.uuid ?? ref.title ?? "");
+  return resolveNamedRef(db, "TMArea", "1=1", [], containerKey(ref));
 }
 
 /**
@@ -837,7 +852,7 @@ export function resolveArea(db: DatabaseSync, ref: ContainerRef): ContainerResol
  * found".
  */
 export function resolveProject(db: DatabaseSync, ref: ContainerRef): ContainerResolution {
-  const key = ref.uuid ?? ref.title ?? "";
+  const key = containerKey(ref);
   const r = resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 0", [], key, {
     nameExtraWhere: "status = 0",
   });

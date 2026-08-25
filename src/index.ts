@@ -48,6 +48,17 @@ export type {
 export type { FailureHint, LikelyCause } from "./write/failure-hints.ts";
 export { capabilitiesTable } from "./write/capabilities.ts";
 export type { CapabilityEntry } from "./write/capabilities.ts";
+// The per-operation PARAMETER schema (#580): the one structural contract every
+// untyped entry point is held to. Exported so the consumer surfaces (CLI, MCP)
+// reach it through this barrel rather than importing a write internal.
+export {
+  assertOperationParams,
+  ParamSchemaError,
+  PARAM_SCHEMAS,
+  paramSummary,
+  validateOperationParams,
+} from "./write/param-schema.ts";
+export type { FieldKind, FieldSpec, ParamSummary } from "./write/param-schema.ts";
 export { describeConfig, getConfigKey, loadConfig, saveConfigKey } from "./config.ts";
 export type { ConfigKeyView } from "./config.ts";
 export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/undo.ts";
