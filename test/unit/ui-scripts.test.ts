@@ -75,6 +75,24 @@ describe("axSetValueScript — closed-loop read-back retry (interval-field race,
   it("honors a custom attempt count", () => {
     expect(axSetValueScript("f", "5", 1)).toContain("repeat 1 times");
   });
+
+  // BEEP1 (docs/lab/beep1-numeric-field-beep.md): the ⌘A that used to precede the
+  // typing was the audible macOS alert beep every numeric-field drive fired — a
+  // DISABLED `Edit ▸ Select All` menu item swallows the key equivalent while the
+  // Repeat sheet is up, so nothing handles it and AppKit beeps. It was redundant
+  // too: focusing the field selects its whole content, so typing replaces it.
+  it("sends NO select-all keystroke (the ⌘A that beeped)", () => {
+    expect(script).not.toContain("using command down");
+    expect(script).not.toContain('keystroke "a"');
+  });
+
+  it("still opens each attempt by focusing the field (which is what selects the old value)", () => {
+    expect(script).toContain("set focused of tf to true");
+    // focus precedes the typing in every attempt
+    expect(script.indexOf("set focused of tf to true")).toBeLessThan(
+      script.indexOf('keystroke "2"'),
+    );
+  });
 });
 
 describe("axEnsureCheckboxScript — deterministic closed-loop convergence (RRD1)", () => {
@@ -378,11 +396,37 @@ describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT field
 
   it("drives with the same closed loop as set-value (type, Tab-commit, read back, retry)", () => {
     expect(interval).toContain("set focused of tf to true");
-    expect(interval).toContain('keystroke "a" using command down');
     expect(interval).toContain('keystroke "3"');
     expect(interval).toContain("key code 48"); // Tab, never Return (the default button)
     expect(interval).toContain('if ((value of tf) as text) is "3" then return "OK"');
     expect(interval).toContain("did not hold value");
+  });
+
+  // BEEP1: the select-all keystroke is the beep, and it is redundant — see the
+  // axSetValueScript block above. Both numeric primitives must stay free of it.
+  it("sends NO select-all keystroke either (BEEP1)", () => {
+    for (const s of [interval, endsCount]) {
+      expect(s).not.toContain("using command down");
+      expect(s).not.toContain('keystroke "a"');
+    }
+  });
+
+  // BEEP1 §5: a frequency switch REBUILDS the cadence group, and this primitive
+  // is the step that follows it — so it settles on the group's own shape (two
+  // consecutive identical reads) before addressing a field, rather than reading
+  // positions off controls that are still moving and typing into a field being
+  // torn down (which is unhandled, i.e. a second alert beep).
+  it("settles on the group's own shape before addressing a field, and fails closed", () => {
+    for (const s of [interval, endsCount]) {
+      // the signature is the labels plus the field y-positions, read twice
+      expect(s).toContain("set prevSig to sig");
+      expect(s).toContain("if sig is prevSig then");
+      expect(s).toContain("set settled to true");
+      expect(s).toContain("if settled is false then");
+      expect(s).toContain("still re-laying out");
+      // the settle precedes the row discrimination it protects
+      expect(s.indexOf("set settled to true")).toBeLessThan(s.indexOf('if sv is "Ends:" then'));
+    }
   });
 });
 
