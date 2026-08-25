@@ -59,12 +59,26 @@ import {
   READER_TOKEN_ENV,
 } from "./protocol.ts";
 
-export function deputyPlistPath(): string {
-  return join(homedir(), "Library/LaunchAgents", `${DEPUTY_LAUNCHD_LABEL}.plist`);
+/**
+ * Where the LaunchAgent plists live. THINGS_API_LAUNCH_AGENTS_DIR overrides
+ * for tests — WITHOUT it, every suite that exercises install/uninstall/reset
+ * mutates the DEVELOPER MACHINE's real ~/Library/LaunchAgents. That is not
+ * hypothetical: it deleted the live helpers' plists mid-`npm run check`
+ * twice on 2026-08-24 before this seam existed. Test setup must always set
+ * it alongside THINGS_API_STATE_DIR.
+ */
+export function launchAgentsDir(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env["THINGS_API_LAUNCH_AGENTS_DIR"];
+  if (explicit !== undefined && explicit !== "") return explicit;
+  return join(homedir(), "Library/LaunchAgents");
 }
 
-export function readerPlistPath(): string {
-  return join(homedir(), "Library/LaunchAgents", `${READER_LAUNCHD_LABEL}.plist`);
+export function deputyPlistPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(launchAgentsDir(env), `${DEPUTY_LAUNCHD_LABEL}.plist`);
+}
+
+export function readerPlistPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(launchAgentsDir(env), `${READER_LAUNCHD_LABEL}.plist`);
 }
 
 /**
@@ -359,7 +373,7 @@ export function installHelpers(
   mkdirSync(installDir, { recursive: true, mode: 0o700 });
   cpSync(source, bundlePath, { recursive: true });
 
-  const plistPath = deputyPlistPath();
+  const plistPath = deputyPlistPath(env);
   mkdirSync(dirname(plistPath), { recursive: true });
   writeFileSync(plistPath, renderPlist(deputyInstalledBinaryPath(env), stateDir));
 
@@ -381,7 +395,7 @@ export function installHelpers(
     // The rendezvous is minted BEFORE the plist is written: the plist carries
     // the same token, so the two must be laid down from one value.
     const readerToken = mintReaderRendezvous(env);
-    const readerPlist = readerPlistPath();
+    const readerPlist = readerPlistPath(env);
     writeFileSync(
       readerPlist,
       renderReaderPlist(readerInstalledAppPath(env), readerSocketPath(env), readerToken),
@@ -579,7 +593,7 @@ export function uninstallHelpers(
   const removed: string[] = [];
   launchctl(["bootout", launchTarget()]);
   launchctl(["bootout", readerLaunchTarget()]);
-  for (const path of [deputyPlistPath(), readerPlistPath()]) {
+  for (const path of [deputyPlistPath(env), readerPlistPath(env)]) {
     if (existsSync(path)) {
       rmSync(path);
       removed.push(path);
@@ -1524,7 +1538,7 @@ export function helpersStatus(
     bundleInstalled: binaryInstalled,
     installedVersion: installedHelpersVersion(env),
     deputy: {
-      plistInstalled: existsSync(deputyPlistPath()),
+      plistInstalled: existsSync(deputyPlistPath(env)),
       loaded: launchctl(["print", launchTarget()]).ok,
       running: hello !== null,
       socketPath,
@@ -1574,7 +1588,7 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
   }
   return {
     installed,
-    plistInstalled: existsSync(readerPlistPath()),
+    plistInstalled: existsSync(readerPlistPath(env)),
     loaded,
     running,
     granted,

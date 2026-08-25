@@ -12,6 +12,15 @@ export default defineConfig({
     // test file reads into the production reader, which refuses paths outside
     // its granted folder (observed 2026-08-22 when the maintainer enabled
     // routing). Suites that exercise routing set the env themselves.
-    env: { NO_COLOR: "1", THINGS_API_HELPERS: "false" },
+    env: {
+      NO_COLOR: "1",
+      THINGS_API_HELPERS: "false",
+      // Blast shield: without this, any suite exercising helpers
+      // install/uninstall/reset mutates the DEVELOPER MACHINE's real
+      // ~/Library/LaunchAgents (it deleted the live helpers' plists
+      // mid-check twice, 2026-08-24). Suites that assert plist contents set
+      // their own per-test dir on top of this shared throwaway.
+      THINGS_API_LAUNCH_AGENTS_DIR: "/tmp/things-api-test-launch-agents",
+    },
   },
 });
