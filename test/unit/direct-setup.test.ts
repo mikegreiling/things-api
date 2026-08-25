@@ -5,8 +5,7 @@
  * link, the Apple Event, the container open, the install sheets — is stubbed.
  * No cell in this file may reach the host's real consent state.
  */
-import { existsSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -18,6 +17,7 @@ import {
 } from "../../src/direct-setup.ts";
 import { resetCapabilityForTests } from "../../src/capability.ts";
 import { CeremonyStopped, createWizard } from "../../src/wizard.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 /**
  * A ceremony wired entirely to stubs. Defaults describe the hardest machine:
@@ -29,10 +29,10 @@ function ceremony(over: Partial<DirectSetupDeps> = {}): DirectSetupDeps {
   return {
     env: {
       __CFBundleIdentifier: "com.mitchellh.ghostty",
-      THINGS_API_STATE_DIR: mkdtempSync(join(tmpdir(), "things-setup-")),
+      THINGS_API_STATE_DIR: makeTempDir("things-setup"),
       // A scratch config dir, so the ceremony's `ui-enabled` read cannot pick
       // up the developer's own stored config and change what the closing says.
-      THINGS_API_CONFIG_DIR: mkdtempSync(join(tmpdir(), "things-setup-cfg-")),
+      THINGS_API_CONFIG_DIR: makeTempDir("things-setup-cfg"),
       THINGS_API_HELPERS: "false",
     },
     // Strict mode unless a cell asks otherwise: no TTY gate, no explainers.

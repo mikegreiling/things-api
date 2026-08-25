@@ -5,8 +5,6 @@
  * covered op asserts (a) an "ok" result, (b) the DB post-state by direct SQL,
  * and (c) an audit record appended.
  */
-import { randomUUID } from "node:crypto";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -44,6 +42,7 @@ import {
   seedTag,
   seedTodo,
 } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -118,8 +117,8 @@ describe("simulator write vector — covered operations", () => {
     savedConfig = process.env["THINGS_API_CONFIG_DIR"];
     process.env["THINGS_SIM_WRITES"] = "1";
     process.env["THINGS_DB"] = fixture.path;
-    process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "sim-state-"));
-    process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "sim-config-"));
+    process.env["THINGS_API_STATE_DIR"] = makeTempDir("sim-state");
+    process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("sim-config");
     vector = createSimulatorVector(fixture.path, { now: () => NOW });
   });
   afterEach(() => {
@@ -690,7 +689,7 @@ describe("simulator write vector — covered operations", () => {
     // The undo executor replays an INVERSE mutation through the same pipeline
     // (and the same simulator vector) from the on-disk audit trail — so it needs
     // a real audit writer, not the in-memory array.
-    const auditDir = join(tmpdir(), `sim-audit-${randomUUID()}`);
+    const auditDir = makeTempDir("sim-audit");
     const writer = createAuditWriter({ dir: auditDir, secrets: [], enabled: true });
     const d = deps(vector, { audit: writer });
     const uuid = seedTodo(fixture.db, { title: "Before" });
@@ -1605,8 +1604,8 @@ describe("simulator fence", () => {
       THINGS_API_STATE_DIR: process.env["THINGS_API_STATE_DIR"],
       THINGS_API_CONFIG_DIR: process.env["THINGS_API_CONFIG_DIR"],
     };
-    process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "sim-state-"));
-    process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "sim-config-"));
+    process.env["THINGS_API_STATE_DIR"] = makeTempDir("sim-state");
+    process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("sim-config");
   });
   afterEach(() => {
     for (const key of Object.keys(saved)) restoreEnv(key, saved[key]);
@@ -1760,8 +1759,8 @@ describe("simulator fence — host-escape guards (no live app under the fence)",
     };
     process.env["THINGS_SIM_WRITES"] = "1";
     process.env["THINGS_DB"] = fixture.path;
-    process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "sim-state-"));
-    process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "sim-config-"));
+    process.env["THINGS_API_STATE_DIR"] = makeTempDir("sim-state");
+    process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("sim-config");
     vector = createSimulatorVector(fixture.path, { now: () => NOW });
   });
   afterEach(() => {

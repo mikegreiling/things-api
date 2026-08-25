@@ -6,9 +6,7 @@
  * it describes goes away, because the macOS grant it records dies at exactly
  * that moment.
  */
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -18,6 +16,7 @@ import {
   witnessSessionGrant,
   type SessionGrantDeps,
 } from "../../src/session-grant.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const BUNDLE = "com.mitchellh.ghostty";
 const START = "Thu Jul 16 00:29:43 2026";
@@ -36,7 +35,7 @@ function deps(over: Partial<SessionGrantDeps> = {}): SessionGrantDeps {
 }
 
 beforeEach(() => {
-  stateDir = mkdtempSync(join(tmpdir(), "things-session-"));
+  stateDir = makeTempDir("things-session");
 });
 
 describe("witnessing", () => {

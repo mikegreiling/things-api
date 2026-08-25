@@ -5,7 +5,6 @@
  * `$refs` resolve against real rows. Mirrors write-simulator.test.ts's fence
  * setup.
  */
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -21,6 +20,7 @@ import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedTodo } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -85,15 +85,15 @@ const row = (uuid: string): Record<string, unknown> | undefined =>
 
 beforeEach(() => {
   fixture = buildFixtureDb({ benchMarker: true });
-  auditDirPath = mkdtempSync(join(tmpdir(), "batch-temp-audit-"));
+  auditDirPath = makeTempDir("batch-temp-audit");
   savedSim = process.env["THINGS_SIM_WRITES"];
   savedDb = process.env["THINGS_DB"];
   savedState = process.env["THINGS_API_STATE_DIR"];
   savedConfig = process.env["THINGS_API_CONFIG_DIR"];
   process.env["THINGS_SIM_WRITES"] = "1";
   process.env["THINGS_DB"] = fixture.path;
-  process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "batch-temp-state-"));
-  process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "batch-temp-config-"));
+  process.env["THINGS_API_STATE_DIR"] = makeTempDir("batch-temp-state");
+  process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("batch-temp-config");
   vector = createSimulatorVector(fixture.path, { now: () => NOW });
 });
 afterEach(() => {

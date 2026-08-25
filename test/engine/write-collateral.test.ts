@@ -17,7 +17,6 @@
  *   - a simulated collateral write            → verify-failed:collateral, naming
  *                                                the field and both values
  */
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,6 +30,7 @@ import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { CompiledInvocation, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedTodo } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const GUI = { dangerouslyDriveGui: true } as const;
@@ -119,8 +119,8 @@ describe("reschedule-repeat: an unrequested field movement is verify-failed:coll
     savedConfig = process.env["THINGS_API_CONFIG_DIR"];
     process.env["THINGS_SIM_WRITES"] = "1";
     process.env["THINGS_DB"] = fixture.path;
-    process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "collateral-state-"));
-    process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "collateral-config-"));
+    process.env["THINGS_API_STATE_DIR"] = makeTempDir("collateral-state");
+    process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("collateral-config");
     vector = createSimulatorVector(fixture.path, { now: () => NOW });
   });
   afterEach(() => {

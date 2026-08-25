@@ -7,7 +7,7 @@
  * an EMBEDDED leg (not an independent todo.clone summary), (e) the undo trash-both
  * + restore round-trip, (f) the refusal + gating copy. No Things app is touched.
  */
-import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -33,6 +33,7 @@ import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 /** A pre-write umd well before NOW — the value --preserve-modified must return X to. */
@@ -145,9 +146,9 @@ beforeEach(() => {
   savedConfig = process.env["THINGS_API_CONFIG_DIR"];
   process.env["THINGS_SIM_WRITES"] = "1";
   process.env["THINGS_DB"] = fixture.path;
-  process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "promote-state-"));
-  process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "promote-config-"));
-  auditDir = mkdtempSync(join(tmpdir(), "promote-audit-"));
+  process.env["THINGS_API_STATE_DIR"] = makeTempDir("promote-state");
+  process.env["THINGS_API_CONFIG_DIR"] = makeTempDir("promote-config");
+  auditDir = makeTempDir("promote-audit");
   vector = createSimulatorVector(fixture.path, { now: () => NOW });
 });
 function restoreEnv(k: string, v: string | undefined): void {

@@ -4,8 +4,6 @@
  * keep-rule. Exercised through the client read methods (where the filter is
  * applied, before bounding) for `anytime` (grouped) and `today` (the split).
  */
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openThings, ReferenceResolutionError, type ThingsClient } from "../../src/index.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const NOW = new Date(2026, 6, 2, 12, 0); // local 2026-07-02
 
@@ -57,7 +56,7 @@ function seedWorld(): { alpha: string; beta: string } {
 
 beforeEach(() => {
   fx = buildFixtureDb();
-  stateDir = mkdtempSync(join(tmpdir(), "things-api-area-filter-"));
+  stateDir = makeTempDir("things-api-area-filter");
 });
 afterEach(() => fx?.close());
 

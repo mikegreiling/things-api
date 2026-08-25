@@ -10,8 +10,7 @@
  * emitted in one turn dropped one edit ~1/3 of the time.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -20,11 +19,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { buildBenchFixture } from "../../bench/fixture.ts";
 import { createSandbox, type Sandbox } from "../../bench/sandbox.ts";
+import { makeTempDir } from "../fixtures/temp-dir.ts";
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), "../../bin/things.js");
 
 function fenceEnv(dbPath: string): Record<string, string> {
-  const root = mkdtempSync(join(tmpdir(), "sandbox-test-"));
+  const root = makeTempDir("sandbox-test");
   mkdirSync(join(root, "config"));
   mkdirSync(join(root, "state"));
   return {
