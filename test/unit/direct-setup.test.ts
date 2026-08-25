@@ -163,10 +163,27 @@ describe("leg (a) — read access", () => {
     expect(offered).toHaveLength(1);
     const copy = offered[0] ?? "";
     expect(copy).toContain("Next: read access to your Things data — two ways:");
-    expect(copy).toContain("Enter  allow this session only");
-    expect(copy).toContain("access ends when Ghostty quits");
+    expect(copy).toContain("Enter  allow while Ghostty runs");
+    // APDP1: one Allow covers every process under the host app, and the copy
+    // has to say so — the reach is the whole value of this tier.
+    expect(copy).toContain("every command under");
+    expect(copy).toContain("any tab, window, or agent it spawns");
+    expect(copy).toContain("until Ghostty quits");
     expect(copy).toContain("f      Full Disk Access");
     expect(copy).toContain("Ghostty must quit and reopen");
+    // No tmux here, so no tmux caveat.
+    expect(copy).not.toContain("tmux");
+  });
+
+  it("names the tmux server's app when TMUX says the shell is inside one", () => {
+    const { offered, wizard } = chooser("");
+    const base = ceremony({ wizard, openContainer: () => {} });
+    directSetup({ ...base, env: { ...base.env, TMUX: "/private/tmp/tmux-501/default,123,0" } });
+    const copy = offered[0] ?? "";
+    // Responsibility is fixed at spawn and survives re-parenting, so inside
+    // tmux the grant belongs to the app that started the server.
+    expect(copy).toContain("inside tmux the grant belongs to the app that started the tmux server");
+    expect(copy).toContain("not the window you are attached from");
   });
 
   it("Enter provokes the session dialog now, and witnesses the grant it lands", () => {
@@ -181,8 +198,10 @@ describe("leg (a) — read access", () => {
     expect(existsSync(join(deps.env?.["THINGS_API_STATE_DIR"] ?? "", "session-grant.json"))).toBe(
       true,
     );
-    // The copy must be honest about how long it lasts.
-    expect(step?.detail).toContain("until it quits");
+    // The copy must be honest about how long it lasts — and state the reach it
+    // actually has while it does (APDP1: the whole host-app instance).
+    expect(step?.detail).toContain("until Ghostty quits");
+    expect(step?.detail).toContain("every command running under Ghostty");
   });
 
   it("`f` deep-links Settings, waits for NOTHING, and goes pending on the relaunch", () => {

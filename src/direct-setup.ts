@@ -249,14 +249,31 @@ function sendAutomationProbeDefault(timeoutMs: number): void {
  * The two ways to read, offered as a choice rather than a ranking. Enter takes
  * the session grant; `f` takes Full Disk Access, which is the wider grant and
  * the one that costs the human a relaunch.
+ *
+ * The Enter line states what the session grant actually buys, as MEASURED
+ * (APDP1): one Allow covers every process under this host app — this window,
+ * other tabs and windows, and anything they spawn — until the app quits. Under
+ * tmux that app is the one that first started the tmux server rather than
+ * whatever window you are attached from, because macOS fixes responsibility at
+ * spawn and it survives re-parenting; the caveat is printed only when `TMUX`
+ * says so, and nothing is detected to produce it.
  */
-function readAccessChoice(hostName: string): string[] {
-  return [
+function readAccessChoice(hostName: string, env: NodeJS.ProcessEnv): string[] {
+  const lines = [
     "Next: read access to your Things data — two ways:",
-    `  Enter  allow this session only: a dialog asks now; access ends when ${hostName} quits`,
+    `  Enter  allow while ${hostName} runs: one dialog now, then every command under`,
+    `         ${hostName} — any tab, window, or agent it spawns — reads without asking,`,
+    `         until ${hostName} quits`,
     `  f      Full Disk Access: durable, but grants ${hostName} broad file access —`,
     `         flip it in System Settings, then ${hostName} must quit and reopen`,
   ];
+  if ((env["TMUX"] ?? "") !== "") {
+    lines.push(
+      `  note: inside tmux the grant belongs to the app that started the tmux server, and`,
+      `        lasts until THAT app quits — not the window you are attached from`,
+    );
+  }
+  return lines;
 }
 
 /**
@@ -334,10 +351,15 @@ function sessionGrantBranch(
       ...base,
       state: "pending",
       alreadySatisfied: false,
+      // The open failed. Usually that is a Don't Allow — which then stands for
+      // the whole run of this app, every later open failing instantly with no
+      // second dialog (APDP1 stage B) — but the errno could also be something
+      // else entirely, so the copy hedges the cause and states the remedy.
       detail:
-        `no read access yet — a refusal stands for as long as this ${hostName} instance runs, ` +
-        `so quit and reopen ${hostName} to be asked again, choose Full Disk Access at the read ` +
-        "step instead, or run `things helpers setup` to let a helper hold the grant",
+        `no read access yet — if the dialog was refused, that answer stands for the rest of ` +
+        `this ${hostName} run and macOS will not ask again, so quit and reopen ${hostName} to ` +
+        "be asked; or choose Full Disk Access at the read step, or run `things helpers setup` " +
+        "to let a helper hold the grant",
     };
   }
   const witnessed = witnessSessionGrant(host.bundleId ?? "", deps);
@@ -351,14 +373,18 @@ function sessionGrantBranch(
         "grant could be tied to — choose Full Disk Access instead, or run `things helpers setup`",
     };
   }
-  progress("read access: granted for as long as this app stays open");
+  progress(
+    `read access: granted — every command under ${hostName}, in any tab or window, reads ` +
+      `without asking until ${hostName} quits`,
+  );
   return {
     ...base,
     state: "granted",
     alreadySatisfied: false,
     detail:
-      `${hostName} may read the Things data folder until it quits. Full Disk Access makes ` +
-      "it permanent; `things helpers setup` moves it onto a helper that keeps it across restarts",
+      `every command running under ${hostName} — any tab, window, or agent it spawns — may ` +
+      `read the Things data folder until ${hostName} quits. Full Disk Access makes it ` +
+      "permanent; `things helpers setup` moves it onto a helper that keeps it across restarts",
   };
 }
 
@@ -384,7 +410,10 @@ function readAccessLeg(
     return { ...base, state: "granted", alreadySatisfied: true, detail: capability.detail };
   }
   if (capability.mode === "session-grant") {
-    progress("read access: already granted for as long as this app stays open");
+    progress(
+      `read access: already granted — every command under ${hostName} reads without asking ` +
+        `until ${hostName} quits`,
+    );
     return { ...base, state: "granted", alreadySatisfied: true, detail: capability.detail };
   }
   // Nothing on record: the human's choice decides which grant this leg gathers.
@@ -680,7 +709,7 @@ function runCeremony(deps: DirectSetupDeps): DirectSetupResult {
   // grant, `f` takes Full Disk Access. Strict mode answers "" without asking,
   // which is the session grant — the only one an absent human can still get.
   const readChoice = willRaise.has("read-access")
-    ? wizard.choose(readAccessChoice(hostName), [FDA_CHOICE_KEY])
+    ? wizard.choose(readAccessChoice(hostName, env), [FDA_CHOICE_KEY])
     : "";
   const readStep = readAccessLeg(readBefore, readChoice, withProgress);
   brief("app-control");

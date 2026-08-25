@@ -194,8 +194,11 @@ describe("readCapability — the direct tiers", () => {
     );
     expect(cap.mode).toBe("session-grant");
     expect(readAllowed(cap)).toBe(true);
-    // The copy must not imply durability — the grant dies with the app.
-    expect(cap.detail).toContain("as long as it stays open");
+    // The copy must not imply durability — the grant dies with the app — and it
+    // must state the reach the grant really has (APDP1: every process under the
+    // host app instance, not just this one command).
+    expect(cap.detail).toContain("until Ghostty quits");
+    expect(cap.detail).toContain("every command running under Ghostty");
   });
 
   it("refusing names the host app and offers BOTH provenances", () => {
@@ -206,6 +209,12 @@ describe("readCapability — the direct tiers", () => {
     expect(remediation).toContain("things helpers setup");
     expect(remediation).toContain("Full Disk Access");
     expect(remediation).toContain("things setup");
+    // APDP1 stage B: a refusal is silent for the rest of that app's run, so the
+    // relaunch is named — hedged, because a refusal and "never asked" look the
+    // same from here and the copy may not accuse the user of either.
+    expect(remediation).toContain("quit and reopen Ghostty");
+    expect(remediation).toContain("if that dialog was already refused");
+    expect(remediation).not.toMatch(/you (denied|refused)/i);
   });
 
   it("the verdict is re-derived every call — no cached yes, no cached no", () => {

@@ -104,6 +104,18 @@ function lookupAppNameDefault(bundleId: string): string | null {
  * safe on the hot path. `__CFBundleIdentifier` is set by macOS when a process
  * descends from an app bundle, which is how a terminal's shell (and everything
  * it spawns) carries its emulator's identity.
+ *
+ * Why the environment and not the process tree. MEASURED 2026-08-25 on the live
+ * host: macOS fixes RESPONSIBILITY at spawn and it sticks — through
+ * daemonization, through re-parenting to launchd, even past the responsible
+ * app's own exit. A tmux server whose parent is launchd is still attributed to
+ * the terminal app that first started it, and every pane shell under it
+ * inherits that attribution. The inherited `__CFBundleIdentifier` says the same
+ * thing, because it too is copied down from the process that first spawned the
+ * server. A PPID WALK would not: inside tmux it tops out at launchd and names
+ * nothing. Nothing here walks the process tree, and nothing should — the
+ * kernel's own answer (`responsibility_get_pid_responsible_for_pid`) is private
+ * API and is deliberately not used.
  */
 export function hostApp(deps: HostAccessDeps = {}): HostApp {
   const env = deps.env ?? process.env;
