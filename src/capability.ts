@@ -235,12 +235,26 @@ function automationAuthValueDefault(
  */
 const ORDINARY_DENIALS = new Set(["EPERM", "EACCES", "ENOENT"]);
 
-/** The ways a machine can earn read capability, phrased for a human. */
+/**
+ * The ways a machine can earn read capability, phrased for a human.
+ *
+ * The ask-again line is deliberately CONDITIONAL, because of what this process
+ * can and cannot know. A container that will not open carries no cause: "this
+ * host app was never asked" and "this host app was asked and the human clicked
+ * Don't Allow" are the same observation from here, and the app-data class
+ * cannot be told apart without opening the container — which is the very act
+ * that raises the dialog (Article I corollary). What IS measured is the price
+ * of a refusal (APDP1, docs/lab/apdp1-grant-pinning.md): it stands for the
+ * whole life of that host-app instance, every later open failing instantly and
+ * silently, and macOS never re-asks inside it. So the line names the relaunch
+ * as the way to be asked again without asserting that anyone refused anything.
+ */
 function readRemediation(hostName: string): string[] {
   return [
     "run `things helpers setup` — reads then flow through a helper that holds its own durable grant",
+    "or run `things setup` — it asks for read access once, while you are at the machine",
+    `if that dialog was already refused, quit and reopen ${hostName} first — macOS does not ask a second time inside one run of an app`,
     `or grant Full Disk Access to ${hostName} in System Settings ▸ Privacy & Security ▸ Full Disk Access`,
-    "or run `things setup`, which walks through both",
   ];
 }
 
@@ -314,9 +328,15 @@ export function readCapability(
   // app instance. Only consulted when FDA has already said no.
   const session = sessionGrantValid(host.bundleId, deps);
   if (session.valid) {
+    const name = hostDisplayName(deps);
     return {
       mode: "session-grant",
-      detail: `${hostDisplayName(deps)} was granted access to the Things data folder for as long as it stays open`,
+      // MEASURED (APDP1): the grant belongs to the host app INSTANCE, so it
+      // covers every process under it — this command, other tabs and windows,
+      // anything they spawn — and it ends when that app quits. The copy states
+      // both halves, because the reach is the part that is worth knowing and
+      // the expiry is the part that must never read as durable.
+      detail: `${name} holds access to the Things data folder — every command running under ${name}, in any tab or window, reads it without a dialog until ${name} quits`,
       remediation: [],
       host,
     };

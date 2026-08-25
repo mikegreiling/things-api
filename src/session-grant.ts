@@ -83,6 +83,16 @@ function hostPidDefault(bundleId: string): number | null {
   try {
     // LaunchServices answers for RUNNING apps only, which is exactly the
     // question: a bundle id with no pid means that instance is gone.
+    //
+    // This asks about the RESPONSIBLE APP (the bundle id this process inherited
+    // from it), never about this process — the CLI's own pid is irrelevant to
+    // the grant and would expire the marker on every command. It is also not a
+    // process-tree walk, so it stays correct inside tmux, where the responsible
+    // app is the one that started the tmux server and the ppid chain leads only
+    // to launchd. Where the bundle id names an app that quit and relaunched,
+    // this returns the NEW instance's pid, which fails the marker's pid +
+    // start-time comparison — the marker expires, which is the conservative
+    // answer and the true one: the grant died with the old instance.
     const out = execFileSync("lsappinfo", ["info", "-only", "pid", bundleId], {
       encoding: "utf8",
       timeout: 3000,

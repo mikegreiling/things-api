@@ -59,7 +59,7 @@ function permissionLines(report: DiagnoseReport): string[] {
       case "direct-fda":
         return `host Full Disk Access (${hostLabel})`;
       case "session-grant":
-        return `session marker (${hostLabel}, until it quits)`;
+        return `session marker (${hostLabel} and everything under it, until it quits)`;
       case "explicit-db":
         return "none needed (an explicit --db path)";
       default:
