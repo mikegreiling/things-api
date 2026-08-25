@@ -1,12 +1,21 @@
 /**
  * Signal-safe final words (TRACE1, #487). Tests the pure report builder — the
  * structured "interrupted, outcome uncertain" result a SIGTERM/SIGINT emits —
- * without touching process teardown.
+ * without touching process teardown, plus the ARMING lifecycle: the listeners
+ * exist only for the span of a write, because a listener a blocked event loop
+ * cannot dispatch swallows the signal instead of honoring it.
  */
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { InflightWrite } from "../../src/index.ts";
-import { interruptMessage, interruptReport } from "../../src/cli/interrupt.ts";
+import {
+  armInterrupt,
+  disarmInterrupt,
+  installServerSignalHandlers,
+  interruptMessage,
+  interruptReport,
+} from "../../src/cli/interrupt.ts";
 
 const uiDrive: InflightWrite = {
   op: "todo.make-repeating",
@@ -78,5 +87,69 @@ describe("interruptReport", () => {
         startedAt: 0,
       }),
     ).toContain("while writing");
+  });
+});
+
+/**
+ * A JS listener can only run ON the event loop, so one registered across a
+ * synchronous span makes the process SWALLOW the signal rather than die to it.
+ * The guard is therefore armed only where it can be honored and has something to
+ * say — see src/cli/interrupt.ts's module note.
+ */
+const counts = (): [number, number] => [
+  process.listenerCount("SIGTERM"),
+  process.listenerCount("SIGINT"),
+];
+
+describe("arming lifecycle — listeners exist only while a write is in flight", () => {
+  /** Vitest itself may hold listeners; every assertion is relative to that. */
+  const base = counts();
+
+  afterEach(() => {
+    disarmInterrupt();
+  });
+
+  it("arming adds exactly one handler per signal; disarming removes them", () => {
+    expect(counts()).toEqual(base);
+    armInterrupt(true);
+    expect(counts()).toEqual([base[0] + 1, base[1] + 1]);
+    disarmInterrupt();
+    expect(counts()).toEqual(base);
+  });
+
+  it("re-arming inside a span does not stack handlers", () => {
+    armInterrupt(false);
+    armInterrupt(true);
+    armInterrupt(true);
+    expect(counts()).toEqual([base[0] + 1, base[1] + 1]);
+    disarmInterrupt();
+    expect(counts()).toEqual(base);
+  });
+
+  it("disarming twice is a no-op, and re-arming after it works", () => {
+    armInterrupt(true);
+    disarmInterrupt();
+    disarmInterrupt();
+    expect(counts()).toEqual(base);
+    armInterrupt(true);
+    expect(counts()).toEqual([base[0] + 1, base[1] + 1]);
+  });
+
+  it("the server install is the same handlers, kept for the process lifetime", () => {
+    installServerSignalHandlers();
+    expect(counts()).toEqual([base[0] + 1, base[1] + 1]);
+    // Idempotent: a second call cannot double-register.
+    installServerSignalHandlers();
+    expect(counts()).toEqual([base[0] + 1, base[1] + 1]);
+  });
+
+  it("the CLI startup path registers nothing — an ordinary command keeps the kernel's disposition", () => {
+    const main = readFileSync(new URL("../../src/cli/main.ts", import.meta.url), "utf8");
+    // The regression this locks: `runCli` used to install the handlers before
+    // dispatch, so `timeout 30 things today` was ignored while the read blocked
+    // in open(2) (measured 2026-08-24 — the clean-host probes needed SIGKILL).
+    expect(main).not.toMatch(/process\.(on|once)\(\s*["']SIG/);
+    expect(main).not.toContain("installServerSignalHandlers");
+    expect(main).not.toContain("armInterrupt");
   });
 });

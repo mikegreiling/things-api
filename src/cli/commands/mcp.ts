@@ -6,6 +6,7 @@
 import type { Command } from "commander";
 
 import { ExitCode, loadMcpServer, type DisruptionTier } from "../../index.ts";
+import { installServerSignalHandlers } from "../interrupt.ts";
 
 export function registerMcp(program: Command): void {
   program
@@ -74,6 +75,13 @@ export function registerMcp(program: Command): void {
         });
         const transport = new StdioServerTransport();
         await server.connect(transport);
+        // The one place a lifetime-long signal handler is legitimate: from here
+        // the process is event-loop-resident, so a supervisor's SIGTERM
+        // dispatches immediately, and one landing mid-write still gets the
+        // honest "outcome uncertain" line on stderr (never stdout — that is the
+        // JSON-RPC channel). One-shot commands arm the same guard only for the
+        // span of a write; see ../interrupt.ts.
+        installServerSignalHandlers();
         // Log the active scope loudly at startup so the jail is never silently on.
         if (opts.scope !== undefined) {
           process.stderr.write(`things-api MCP server scoped to "${opts.scope}"\n`);
