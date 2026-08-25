@@ -3,16 +3,41 @@
  * WAL mode for realism (the real Things DB is WAL).
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const SCHEMA_SQL = readFileSync(new URL("./schema-v26.sql", import.meta.url), "utf8");
 
+/**
+ * Every fixture path handed out by this module, so nothing on disk depends on a
+ * call site remembering to clean up. Vitest isolates the module graph per test
+ * file, so the registry would otherwise be per-file while the WORKER PROCESS
+ * outlives it — the exit backstop below has to see every file's paths, hence the
+ * process-global home.
+ */
+const REGISTRY_KEY = Symbol.for("things-api.test.fixture-paths");
+const registry: Set<string> = ((globalThis as Record<symbol, unknown>)[REGISTRY_KEY] ??=
+  new Set<string>()) as Set<string>;
+
+const EXIT_HOOK_KEY = Symbol.for("things-api.test.fixture-exit-hook");
+if ((globalThis as Record<symbol, unknown>)[EXIT_HOOK_KEY] === undefined) {
+  (globalThis as Record<symbol, unknown>)[EXIT_HOOK_KEY] = true;
+  // Backstop only: the per-file afterAll sweep (test/setup/fixture-sweep.ts)
+  // does the real work. This catches processes that never reach it — a crashed
+  // vitest worker, or a bench run that throws before `cleanup()`.
+  process.on("exit", () => sweepFixtureDbs());
+}
+
 export interface FixtureDb {
   db: DatabaseSync;
   path: string;
+  /**
+   * Release the SQLite handle. Deliberately does NOT delete the file: callers
+   * close to flush WAL and then keep using the path (bench hands it to a child
+   * process). Deletion is the registry sweep's job.
+   */
   close(): void;
 }
 
@@ -22,11 +47,33 @@ export function buildFixtureDb(opts: { benchMarker?: boolean } = {}): FixtureDb 
   // so a later file reopened an earlier file's leftover db — "table already
   // exists" flakes. randomUUID is collision-free by construction.
   const path = join(tmpdir(), `things-api-fixture-${randomUUID()}.sqlite`);
+  registry.add(path);
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA_SQL);
   seedMeta(db, opts.benchMarker === true);
   return { db, path, close: () => db.close() };
+}
+
+/**
+ * Delete a fixture db and its WAL siblings. Unlinking an open SQLite file is
+ * fine on POSIX — the handle keeps working until it is closed, and the bytes are
+ * reclaimed at that point.
+ */
+export function removeFixtureDb(path: string): void {
+  for (const suffix of ["", "-wal", "-shm"]) {
+    rmSync(`${path}${suffix}`, { force: true });
+  }
+  registry.delete(path);
+}
+
+/**
+ * Delete every fixture db built by this process so far. Safe to call repeatedly
+ * — `removeFixtureDb` deletes the entry it is visiting, which Set iteration
+ * defines as fine, and a path already gone is a no-op.
+ */
+export function sweepFixtureDbs(): void {
+  for (const path of registry) removeFixtureDb(path);
 }
 
 function seedMeta(db: DatabaseSync, benchMarker: boolean): void {
