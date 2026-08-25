@@ -1024,7 +1024,14 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     // The resolved DB path — backs the default launch's WAL-advance readiness
     // signal (#486) as well as vector construction.
     dbPath: located.path,
-    vectors: options.vectors ?? defaultVectors(config, createUiDriveAux(conn.db), located.path),
+    vectors:
+      options.vectors ??
+      defaultVectors(
+        config,
+        createUiDriveAux(conn.db),
+        located.path,
+        options.dbPath !== undefined || (env["THINGS_DB"] ?? "") !== "",
+      ),
     config,
     audit,
     fingerprint,

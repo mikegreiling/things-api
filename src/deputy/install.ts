@@ -54,17 +54,31 @@ import {
   readerRendezvousDir,
   readerSandboxContainerDir,
   readerSocketPath,
-  READER_SOCKET_KEY,
+  READER_SOCKET_ENV,
   readerTokenPath,
   READER_TOKEN_ENV,
 } from "./protocol.ts";
 
-export function deputyPlistPath(): string {
-  return join(homedir(), "Library/LaunchAgents", `${DEPUTY_LAUNCHD_LABEL}.plist`);
+/**
+ * Where the LaunchAgent plists live. THINGS_API_LAUNCH_AGENTS_DIR overrides
+ * for tests — WITHOUT it, every suite that exercises install/uninstall/reset
+ * mutates the DEVELOPER MACHINE's real ~/Library/LaunchAgents. That is not
+ * hypothetical: it deleted the live helpers' plists mid-`npm run check`
+ * twice on 2026-08-24 before this seam existed. Test setup must always set
+ * it alongside THINGS_API_STATE_DIR.
+ */
+export function launchAgentsDir(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env["THINGS_API_LAUNCH_AGENTS_DIR"];
+  if (explicit !== undefined && explicit !== "") return explicit;
+  return join(homedir(), "Library/LaunchAgents");
 }
 
-export function readerPlistPath(): string {
-  return join(homedir(), "Library/LaunchAgents", `${READER_LAUNCHD_LABEL}.plist`);
+export function deputyPlistPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(launchAgentsDir(env), `${DEPUTY_LAUNCHD_LABEL}.plist`);
+}
+
+export function readerPlistPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(launchAgentsDir(env), `${READER_LAUNCHD_LABEL}.plist`);
 }
 
 /**
@@ -124,14 +138,6 @@ function readerExecPath(appPath: string): string {
 }
 
 /**
- * 0600 as a plist `<integer>`. Property lists have no octal literal, and
- * launchd reads `SockPathMode` as the decimal number it finds — so the mode
- * must be written base-10 (0o600 === 384) or the socket comes out world-
- * readable. Derived, never typed as a magic constant.
- */
-const SOCK_PATH_MODE_0600 = 0o600;
-
-/**
  * The reader's LaunchAgent. Two keys carry the whole host-universal rendezvous:
  *
  * - **`Sockets`** — launchd creates, binds, listens on and chmods the socket at
@@ -163,25 +169,18 @@ export function renderReaderPlist(appPath: string, socketPath: string, token: st
   <true/>
   <key>KeepAlive</key>
   <true/>
-  <!-- launchd owns the listening socket, at a path OUTSIDE the reader's App
-       Sandbox container: it binds and listens, then hands the reader the fd.
-       SockPathMode is decimal (${SOCK_PATH_MODE_0600} === 0${SOCK_PATH_MODE_0600.toString(8)}). -->
-  <key>Sockets</key>
-  <dict>
-    <key>${READER_SOCKET_KEY}</key>
-    <dict>
-      <key>SockPathName</key>
-      <string>${socketPath}</string>
-      <key>SockPathMode</key>
-      <integer>${SOCK_PATH_MODE_0600}</integer>
-      <key>SockFamily</key>
-      <string>Unix</string>
-    </dict>
-  </dict>
-  <!-- The access token the reader expects, minted by install. This file is
-       written 0600 because of it. -->
+  <key>StandardErrorPath</key>
+  <string>${dirname(socketPath)}/reader.stderr.log</string>
+  <!-- The rendezvous path and access token, minted/chosen by install. The
+       reader BINDS the socket itself at this host-neutral path — its sandbox
+       entitlement covers exactly this directory. launchd Sockets activation
+       is NOT usable: launch_activate_socket fails with 159 "Sandbox
+       restriction" inside the App Sandbox (measured 2026-08-24). This file is
+       written 0600 because of the token. -->
   <key>EnvironmentVariables</key>
   <dict>
+    <key>${READER_SOCKET_ENV}</key>
+    <string>${socketPath}</string>
     <key>${READER_TOKEN_ENV}</key>
     <string>${token}</string>
   </dict>
@@ -374,7 +373,7 @@ export function installHelpers(
   mkdirSync(installDir, { recursive: true, mode: 0o700 });
   cpSync(source, bundlePath, { recursive: true });
 
-  const plistPath = deputyPlistPath();
+  const plistPath = deputyPlistPath(env);
   mkdirSync(dirname(plistPath), { recursive: true });
   writeFileSync(plistPath, renderPlist(deputyInstalledBinaryPath(env), stateDir));
 
@@ -396,7 +395,7 @@ export function installHelpers(
     // The rendezvous is minted BEFORE the plist is written: the plist carries
     // the same token, so the two must be laid down from one value.
     const readerToken = mintReaderRendezvous(env);
-    const readerPlist = readerPlistPath();
+    const readerPlist = readerPlistPath(env);
     writeFileSync(
       readerPlist,
       renderReaderPlist(readerInstalledAppPath(env), readerSocketPath(env), readerToken),
@@ -594,7 +593,7 @@ export function uninstallHelpers(
   const removed: string[] = [];
   launchctl(["bootout", launchTarget()]);
   launchctl(["bootout", readerLaunchTarget()]);
-  for (const path of [deputyPlistPath(), readerPlistPath()]) {
+  for (const path of [deputyPlistPath(env), readerPlistPath(env)]) {
     if (existsSync(path)) {
       rmSync(path);
       removed.push(path);
@@ -1539,7 +1538,7 @@ export function helpersStatus(
     bundleInstalled: binaryInstalled,
     installedVersion: installedHelpersVersion(env),
     deputy: {
-      plistInstalled: existsSync(deputyPlistPath()),
+      plistInstalled: existsSync(deputyPlistPath(env)),
       loaded: launchctl(["print", launchTarget()]).ok,
       running: hello !== null,
       socketPath,
@@ -1589,7 +1588,7 @@ function readerStatus(env: NodeJS.ProcessEnv): ReaderHalfStatus {
   }
   return {
     installed,
-    plistInstalled: existsSync(readerPlistPath()),
+    plistInstalled: existsSync(readerPlistPath(env)),
     loaded,
     running,
     granted,

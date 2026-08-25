@@ -55,10 +55,17 @@ function markInstalled(): string {
 
 beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "uninst-"));
-  for (const key of ["THINGS_API_STATE_DIR", "THINGS_API_READER_DIR"]) {
+  for (const key of [
+    "THINGS_API_STATE_DIR",
+    "THINGS_API_READER_DIR",
+    "THINGS_API_LAUNCH_AGENTS_DIR",
+  ]) {
     savedEnv[key] = process.env[key];
   }
   process.env["THINGS_API_STATE_DIR"] = stateDir;
+  // Per-test LaunchAgents dir: the REAL one must never be touched (the
+  // 2026-08-24 incident — checks deleted the live helpers' plists).
+  process.env["THINGS_API_LAUNCH_AGENTS_DIR"] = join(stateDir, "launch-agents");
   process.env["THINGS_API_READER_DIR"] = join(stateDir, "reader-container");
   calls = [];
 });
