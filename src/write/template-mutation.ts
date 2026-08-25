@@ -87,7 +87,7 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
-import type { OccurrenceResolution } from "./verify/delta.ts";
+import type { DeltaSpec, FieldAssertion, OccurrenceResolution } from "./verify/delta.ts";
 
 /** How far ahead the collision check will look for a live slot. */
 const SLOT_LOOKAHEAD = 400;
@@ -348,6 +348,88 @@ function recordComposite(
   });
 }
 
+// -------------------------------------------------- the unconfirmed outcome
+
+/**
+ * The assertion a timed-out LEG was waiting on, or undefined for any other
+ * verdict. A timeout is the one ambiguous result — the change may or may not
+ * have landed — and the leg's own recorded `expected` IS the attempt's oracle,
+ * so it is LIFTED rather than re-derived here (the phase-2 rule: never per-op
+ * logic invented after the fact).
+ */
+function timedOutExpectation(result: MutationResult): DeltaSpec | undefined {
+  return result.kind === "verify-failed" && result.reason === "timeout"
+    ? result.expected
+    : undefined;
+}
+
+/**
+ * The mint leg's own create probe with the composite's END STATE folded in — "a
+ * new occurrence of this series, created since this call started, that carries
+ * the change". The probe is already exactly bounded (time-bounded AND excluding
+ * every row the series held before the mint, `todo.create-next-copy`'s
+ * `expectedDelta`), so extending its assertions is the whole job. Undefined when
+ * the mint did not record a create probe, which leaves the caller's honest
+ * default in place.
+ */
+function mintedOccurrenceOracle(
+  mintExpected: DeltaSpec | undefined,
+  assert: FieldAssertion[],
+): DeltaSpec | undefined {
+  if (mintExpected === undefined || mintExpected.mode !== "create") return undefined;
+  return { ...mintExpected, assert: [...mintExpected.assert, ...assert] };
+}
+
+/**
+ * The AMBIGUOUS summary for a composite whose own verdict is a timeout — the one
+ * outcome where the occurrence may or may not have been minted, and the change
+ * may or may not have landed. Written in the exact shape the promote compounds
+ * use (`recordAmbiguousPromote`): result `verify-failed:timeout`, carrying the
+ * presence oracle a resubmission re-evaluates. Returns the outcome unchanged.
+ *
+ * Only a KEYED call records one: without an `opId` there is nothing to reconcile
+ * against later, and the leg records already carry the failure.
+ *
+ * The `expected` handed in is the best oracle the timeout point actually had. A
+ * point that knew too little still records — an assertion naming no field is
+ * classified UNUSABLE by `presenceOracle`, so the resubmission is REFUSED with a
+ * pointer at the item instead of blindly minting a second occurrence, which is
+ * what no record at all would have produced.
+ */
+function recordAmbiguousComposite(
+  deps: WriteDeps,
+  outcome: MutationResult,
+  args: {
+    op: OperationKind;
+    startedAt: Date;
+    txnId: string;
+    /** The row the refusal should point at: the occurrence when known, else the series. */
+    uuid: string;
+    invocation: string;
+    requested: Record<string, unknown>;
+    expected: DeltaSpec;
+    occurrence?: OccurrenceResolution;
+    options: WriteOptions;
+  },
+): MutationResult {
+  if (args.options.opId === undefined) return outcome;
+  if (outcome.kind !== "verify-failed" || outcome.reason !== "timeout") return outcome;
+  appendCompositeSummary(deps, {
+    startedAt: args.startedAt,
+    op: args.op,
+    uuid: args.uuid,
+    txnId: args.txnId,
+    invocation: args.invocation,
+    requested: args.requested,
+    vector: "ui",
+    disruption: 3,
+    options: args.options,
+    ...(args.occurrence !== undefined && { occurrence: args.occurrence }),
+    ambiguous: args.expected,
+  });
+  return outcome;
+}
+
 // ------------------------------------------------------------ status writes
 
 /**
@@ -371,10 +453,36 @@ export async function runTemplateStatusWrite(
   options: WriteOptions = {},
 ): Promise<MutationResult> {
   const now = deps.now?.() ?? new Date();
+  const txnId = newTxnId(now);
+  const resolvedStatus = op === "todo.complete" ? "completed" : "canceled";
+
+  // What an UNCONFIRMED outcome would record, refined as the composite learns
+  // more. The default names only the series — and a repeating template is left
+  // byte-unchanged by this composite BY DESIGN (CNC1 §6), so it genuinely shows
+  // nothing: `presenceOracle` reads that as unusable and the resubmission is
+  // refused rather than guessed. Every real timeout point below replaces it.
+  let ambiguous: DeltaSpec = { mode: "state", uuid, assert: [] };
+  let ambiguousUuid = uuid;
+  let ambiguousOccurrence: OccurrenceResolution | undefined;
+
   return runComposite(deps, op, async () => {
+    const outcome = await statusBody();
+    return recordAmbiguousComposite(deps, outcome, {
+      op,
+      startedAt: now,
+      txnId,
+      uuid: ambiguousUuid,
+      invocation: `${op} on repeating series ${uuid}: unconfirmed`,
+      requested: { uuid },
+      expected: ambiguous,
+      ...(ambiguousOccurrence !== undefined && { occurrence: ambiguousOccurrence }),
+      options,
+    });
+  });
+
+  async function statusBody(): Promise<MutationResult> {
     const state = readSeriesState(deps, uuid);
     if (state === null) return blocked(op, "this to-do is no longer a repeating series", "retry");
-    const txnId = newTxnId(now);
 
     let targetUuid: string;
     let occurrenceDate: IsoDate | null;
@@ -385,14 +493,24 @@ export async function runTemplateStatusWrite(
     } else {
       if (state.cursor === null) return noPendingRefusal(op, state);
       const mint = await mintPendingOccurrence(deps, op, state.templateUuid, options, txnId);
-      if (!mint.ok) return mint.result;
+      if (!mint.ok) {
+        // The MINT is what never confirmed, so the occurrence's uuid is unknown
+        // and the oracle has to be the probe that was looking for it — extended
+        // with the status this composite promised, because a resubmission whose
+        // oracle stopped at "the occurrence exists" would report the series
+        // checked off when only the copy had been made. Not satisfied is SAFE
+        // here: a re-run finds any bare occurrence through the open-instance
+        // branch above and resolves THAT one, minting nothing.
+        ambiguous =
+          mintedOccurrenceOracle(timedOutExpectation(mint.result), [
+            { field: "status", equals: resolvedStatus },
+          ]) ?? ambiguous;
+        return mint.result;
+      }
       targetUuid = mint.uuid;
       occurrenceDate = state.cursor;
       minted = true;
     }
-
-    const write = await runStatusLeg(targetUuid, legOptions(options, txnId));
-    if (write.kind !== "ok") return { ...write, op } as MutationResult;
 
     const occurrence: OccurrenceResolution = {
       templateUuid: state.templateUuid,
@@ -400,6 +518,24 @@ export async function runTemplateStatusWrite(
       minted,
       date: occurrenceDate,
     };
+    // From here the occurrence is known, so an unconfirmed status leg can be
+    // reconciled against the row itself — and named in the refusal if it cannot.
+    ambiguousUuid = targetUuid;
+    ambiguousOccurrence = occurrence;
+    ambiguous = {
+      mode: "state",
+      uuid: targetUuid,
+      assert: [{ field: "status", equals: resolvedStatus }],
+    };
+
+    const write = await runStatusLeg(targetUuid, legOptions(options, txnId));
+    if (write.kind !== "ok") {
+      // Prefer the leg's OWN assertion when it recorded one — for `--completed-at`
+      // that is the backdated stop date as well as the status.
+      ambiguous = timedOutExpectation(write) ?? ambiguous;
+      return { ...write, op } as MutationResult;
+    }
+
     const undoToken = recordComposite(deps, {
       op,
       startedAt: now,
@@ -430,7 +566,7 @@ export async function runTemplateStatusWrite(
       undoToken,
       warnings: [...(write.warnings ?? []), ...disclosure],
     };
-  });
+  }
 }
 
 // --------------------------------------------------------- exception writes
@@ -454,7 +590,37 @@ export async function runTemplateExceptionWrite(
   // (this composite always mints) and consume another of the series' slots.
   const replay = replayIfApplied(deps, options);
   if (replay !== null) return replay;
+  const txnId = newTxnId(now);
+
+  // What an UNCONFIRMED outcome would record. The default is the honest refusal
+  // shape and it STAYS in force for a timed-out MINT: the series' template is
+  // left byte-unchanged by design, so it names no field that could settle the
+  // question, and no other oracle is safe here. This composite ALWAYS mints, so
+  // "not satisfied → run" takes a second slot; and a mint that never confirmed
+  // is precisely the point at which the patch is KNOWN not to have landed (the
+  // update leg never ran), so any oracle a resubmission could satisfy would
+  // claim an exception that does not exist. Refusing, with `things op-result`
+  // and the series to look at, is the only answer that is neither.
+  let ambiguous: DeltaSpec = { mode: "state", uuid, assert: [] };
+  let ambiguousUuid = uuid;
+  let ambiguousOccurrence: OccurrenceResolution | undefined;
+
   return runComposite(deps, op, async () => {
+    const outcome = await exceptionBody();
+    return recordAmbiguousComposite(deps, outcome, {
+      op,
+      startedAt: now,
+      txnId,
+      uuid: ambiguousUuid,
+      invocation: `${op} --exception on repeating series ${uuid}: unconfirmed`,
+      requested: { uuid, ...patch },
+      expected: ambiguous,
+      ...(ambiguousOccurrence !== undefined && { occurrence: ambiguousOccurrence }),
+      options,
+    });
+  });
+
+  async function exceptionBody(): Promise<MutationResult> {
     const state = readSeriesState(deps, uuid);
     if (state === null) return blocked(op, "this to-do is no longer a repeating series", "retry");
 
@@ -491,9 +657,26 @@ export async function runTemplateExceptionWrite(
       }
     }
 
-    const txnId = newTxnId(now);
     const mint = await mintPendingOccurrence(deps, op, state.templateUuid, options, txnId);
+    // A timed-out mint keeps the refusal shape above — see the declaration.
     if (!mint.ok) return mint.result;
+
+    const occurrence: OccurrenceResolution = {
+      templateUuid: state.templateUuid,
+      occurrenceUuid: mint.uuid,
+      // An exception ALWAYS mints: the semantics belong to the occurrence the
+      // rule has not spawned yet (see the module header).
+      minted: true,
+      date: state.cursor,
+    };
+    // The slot is now spent and the occurrence is named, so an unconfirmed patch
+    // CAN be reconciled: the update leg's own assertion re-read against that row
+    // says whether it took. (A resubmission that finds it absent runs the whole
+    // composite again and mints a second occurrence — the same duplicate a
+    // keyless retry produces today, and the price of the other half being an
+    // honest replay instead of a guaranteed duplicate.)
+    ambiguousUuid = mint.uuid;
+    ambiguousOccurrence = occurrence;
 
     const write = await runMutation(
       deps,
@@ -502,6 +685,7 @@ export async function runTemplateExceptionWrite(
       legOptions(options, txnId),
     );
     if (write.kind !== "ok") {
+      ambiguous = timedOutExpectation(write) ?? ambiguous;
       return {
         ...write,
         op,
@@ -515,14 +699,6 @@ export async function runTemplateExceptionWrite(
       } as MutationResult;
     }
 
-    const occurrence: OccurrenceResolution = {
-      templateUuid: state.templateUuid,
-      occurrenceUuid: mint.uuid,
-      // An exception ALWAYS mints: the semantics belong to the occurrence the
-      // rule has not spawned yet (see the module header).
-      minted: true,
-      date: state.cursor,
-    };
     const undoToken = recordComposite(deps, {
       op,
       startedAt: now,
@@ -549,7 +725,7 @@ export async function runTemplateExceptionWrite(
         IRREVERSIBLE_NOTE,
       ],
     };
-  });
+  }
 }
 
 export { PROJECT_REFUSAL, PROJECT_REMEDIATION };
