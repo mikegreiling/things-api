@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
-import { buildFixtureDb } from "../test/fixtures/build-db.ts";
+import { buildFixtureDb, removeFixtureDb } from "../test/fixtures/build-db.ts";
 import {
   seedArea,
   seedChecklistItem,
@@ -278,9 +278,8 @@ export function buildBenchFixture(seeds: SeedSpec[], world?: WorldOptions): Benc
   return {
     path: fixture.path,
     snapshotHash: hashDbFiles(fixture.path),
-    cleanup: () => {
-      // Best-effort: node:sqlite already closed the handle; leave file removal to the
-      // OS tmp reaper (the fixtures live under os.tmpdir()).
-    },
+    // node:sqlite already closed the handle, so this just unlinks the db and its
+    // WAL siblings. It used to defer to the OS tmp reaper, which never came.
+    cleanup: () => removeFixtureDb(fixture.path),
   };
 }

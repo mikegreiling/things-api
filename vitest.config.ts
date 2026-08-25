@@ -3,6 +3,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
+    // Deletes each file's throwaway fixture databases once it finishes; without
+    // it the suite abandoned every fixture (and its -wal/-shm siblings) in the
+    // temp dir — ~250k files by the time it was noticed, 2026-08-24.
+    setupFiles: ["test/setup/fixture-sweep.ts"],
     // Live tests only run when explicitly enabled (VM lab or opted-in host).
     exclude: process.env["THINGS_LIVE"] ? [] : ["test/live/**"],
     // Render tests assert the plain-text skeleton; NO_COLOR beats any
