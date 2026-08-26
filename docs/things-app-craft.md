@@ -154,6 +154,67 @@ The boundary behaviour is equally deliberate. A chord with nowhere to go is **de
 
 The bounded credit: this is the mechanism, not the affordance. Nothing in the app advertises the chords — no menu item, no context-menu item, no AX action, no key equivalent anywhere in the menu bar — which is the [oddities §20](things-app-oddities.md) report item. The engineering underneath is excellent and the way in is a secret. Evidence: [lab/headord1-heading-order.md](lab/headord1-heading-order.md) §1/§2 (HEADORD1, 2026-08-25; cells 1e / 1g1–1g4 / 1i2 / 1i3, null-controlled). Things 3.23, golden-v4.
 
+**Two refinements measured since.** The one-row write is **direction-dependent** — a `⌘↓` leaves the *mover* byte-identical and renumbers the *sibling it passes* (`B −201 → −1152`), while `⌘↑` and both `⌘⌥` endpoint chords renumber the mover. Exactly one row either way, and always one the gesture passed over ([lab/chordmh1-move-heading-build.md](lab/chordmh1-move-heading-build.md)). And the same primitive serves **every rank axis and every row kind**: `index` in a project list, the Inbox, Someday and Anytime; `todayIndex` in Today, This Evening and an Upcoming day-group — one column, one row, per chord, with no `startDate` write anywhere and no re-dating (CHORD2 §4). The one primitive covers what the headless surface needed eight separate protocols for.
+
+### 5d. A multi-row reorder never rewrites a row you selected — it renumbers around the block, and coalesces a scattered selection for free
+
+§5c's single-row insertion generalizes into something better. Select several rows and chord them, and the app moves the whole block as a unit with its internal order intact — while **not writing a single one of the selected rows.** It renumbers only the unselected rows it has to displace, which for a ±1 move of a contiguous block is exactly one:
+
+```
+V1<V2<V3<V4<V5<V6, selection {V2,V3,V4}, one ⌘↑
+  ==> V2 < V3 < V4 < V1 < V5 < V6
+  CHANGED V1.index: -636 -> -74          <- one row, and it is not in the block
+```
+
+The elegant case is a **non-contiguous** selection, where the obvious implementations are all worse. Things coalesces it — and does so by *leaving the selected rows exactly where they are numerically* and lifting everything else past them:
+
+```
+before                      after                    selection {G2, G5}
+  G1  -390                    G2  -215   selected, index UNTOUCHED
+  G2  -215  selected          G5   -19   selected, index UNTOUCHED
+  G3   -79                    G1   625
+  G4   -51                    G3  1007
+  G5   -19  selected          G4  1665
+  G6     0                    G6  2093
+```
+
+Four writes reorder six rows, the two rows the user is holding are never touched, and the unselected rows keep their own relative order. The property that makes it work is the same sparse `index` space as §5c, used from the other side: instead of finding a gap for the mover, find values *beyond* the block for everyone else. It also means a multi-row reorder is **atomic from the mover's point of view** — nothing about the rows you grabbed can be corrupted by the operation, because nothing about them is written.
+
+Two more deliberate touches in the same family. A selection **mixing a heading with a to-do** is refused wholesale — zero delta, one beep, both directions — rather than partially applied, so there is no half-move to unwind. And the chord is **view-relative**: under a tag filter it re-ranks against the rows the view is *displaying*, not the container's true sibling list, which is what a user pressing `⌘↑` on what looks like the second row means. (That last one is correct for a human and a trap for a driver, which must own the view's filter state — CHORD2 §4bf.) Evidence: [lab/chord2-reorder-laws.md](lab/chord2-reorder-laws.md) §2 (CHORD2, 2026-08-25; cells 2a/2a2/2b1/2b3/2b4/2c1/2c3/2c4, full 41-column row diffs, selection read back on every arm). Things 3.23, golden-v4.
+
+### 5e. A reorder is not a modification — `userModificationDate` separates "moved" from "reparented"
+
+Ranking a row is not editing it, and Things models that distinction in the one column that carries it. **A pure rank move does not stamp `userModificationDate`** — not in a project list, not in Today, not in an Upcoming day-block, not for a heading, a to-do, or a repeating template's projection. The entire delta of a `⌘↑` on a to-do is one integer:
+
+```
+6a  ⌘↑ on a plain to-do
+    CHANGED PnUDfiYY.index: -320 -> -1133
+    (that is the ENTIRE delta — 4 rows, 164 fields compared)
+```
+
+But the gestures that look identical and are *not* pure reorders — a headed child driven off the end of its bucket into the next one, a child driven off the first heading's top edge into the project root, a loose row adopted by the first heading, a row driven out of This Evening into the daytime section — every one of them **does** stamp it, alongside the FK or `startBucket` it rewrote:
+
+```
+3e  CHANGED UKNv7MES.heading: UyZ6uyCe…(DH1) -> Fi5KHSPp…(DH2)
+    CHANGED UKNv7MES.userModificationDate: …712.355946 -> …779.903347
+4be2 CHANGED GE5wAw5y.startBucket: 1 -> 0
+     CHANGED GE5wAw5y.userModificationDate: …180.778549 -> …222.051719
+```
+
+So the column means what it says: it moved when the row's *content or membership* changed, and stayed still when only its position did. For sync that is the difference between a reorder replicating as a rank record and as an edit; for us it is a free, reliable post-drive oracle for the one hazard the alert beep cannot report — because a boundary crossing is performed silently, while only a *declined* chord beeps. Evidence: [lab/chord2-reorder-laws.md](lab/chord2-reorder-laws.md) §6/§3 (CHORD2, 2026-08-25). Things 3.23, golden-v4.
+
+### 5f. An archived heading leaves the rendered row list entirely, so positional addressing stays honest
+
+A completed or canceled heading keeps its `index` in the project's one shared heading axis (HEADSORT's lifecycle trinary), which raises an obvious worry for anything that addresses rows by position: does a retired heading sit in the list as a ghost slot? It does not. It **is not rendered as a content row at all** — the project view's heading rows drop from four to three when one is archived — and the row ordinals a positional walk sees are exactly the live headings, in order, with no gap:
+
+```
+DB:  BH1 status 0 idx -547 | BH2 status 3 idx -263 | BH3 status 0 idx -167 | BH4 status 0 idx 0
+rendered heading rows: BH1, BH3, BH4          (BH2 absent)
+select-heading-row ordinal 0/1/2 -> OK, OK, OK    ordinal 3 -> NOMATCH
+```
+
+And the chord agrees with the rendering rather than with the database: one `⌘↑` on `BH3` moves it straight past the archived `BH2` *and* under `BH1` in a single step, no beep, one row written (`BH3.index −167 → −1127`). The visible list and the gesture that reorders it share one model — the archived row is not a hidden obstacle that a ±1 has to be spent on, and its own `index` is never rewritten. Evidence: [lab/chord2-reorder-laws.md](lab/chord2-reorder-laws.md) §7 (CHORD2 cell 7a′, 2026-08-25). Things 3.23, golden-v4.
+
 ## 6. Repeat craft in the 3.23 dialog
 
 ### 6a. `Create Next Copy` is a clean "spawn the pending occurrence now" — with the same bookkeeping the clock does
