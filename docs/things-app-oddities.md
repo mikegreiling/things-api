@@ -1200,6 +1200,36 @@ Six seconds of polling never recovers it, and opening and escaping the menu does
 
 **Automation note.** Our drive lost this race intermittently, which is what made `add-repeating --deadline <date>` fail closed on monthly/yearly rules on 3.23 ([lab/vmres1-residuals.md](lab/vmres1-residuals.md) §4.3): the deadlined arms press more controls in sequence than the daily/weekly ones. The fix is a `settle-occurrences` step that polls the control until it moves or a bounded budget expires, inserted between the last anchor step and whatever follows — a closed loop on the control's own value, never a sleep. Evidence: [lab/nextpop1-deadlined-promote.md](lab/nextpop1-deadlined-promote.md) §2.
 
+## 22. Things 3.23: a `things:///json` batch containing a to-do with `checklist-items` lands NOTHING — the whole payload is discarded, silently and with a success exit (CHORD2, 2026-08-25, golden-v4 / Things 3.23 build 32300036)
+
+The `json` URL route takes an array of items and creates them. One malformed or unaccepted attribute anywhere in that array does not skip the offending item, does not create the rest, and does not report anything: **the entire batch evaporates.**
+
+**Probe.** A single `project` item with four `to-do` children, one of which carries `checklist-items` and `notes`:
+
+```json
+[{"type":"project","attributes":{"title":"C2SD-P-…","items":[
+  {"type":"to-do","attributes":{"title":"E1-…"}},
+  {"type":"to-do","attributes":{"title":"E2-…","checklist-items":["ck-a","ck-b","ck-c"],"notes":"synthetic note"}},
+  {"type":"to-do","attributes":{"title":"E3-…"}},
+  {"type":"to-do","attributes":{"title":"E4-…"}}]}}]
+```
+
+`open -g` on the resulting URL exits 0. Nothing at all appears — not the project, not the three unremarkable to-dos:
+
+```
+project=                       <- the project uuid lookup found nothing
+checklist rows on E2: 0
+START: (none)
+```
+
+The identical payload minus that one child creates the project and its to-dos normally, and the same checklist lands without complaint through the ordinary `add` route (`todo.add`, vector `url-scheme`, `observed.checklistTitles = ["ck-a","ck-b","ck-c"]`). So the attribute is supported by the app — it is the `json` route's handling of it inside a nested `items` array that fails, and the failure mode is total.
+
+**Why it matters.** The `json` route is the app's bulk-import surface, which is exactly where a caller submits a large array assembled from somewhere else and cannot eyeball each item. An all-or-nothing transaction would be a defensible design; so would a per-item error. What happens instead is all-or-nothing **with a success signal**, so a caller that checks the exit code — the only signal the URL scheme offers — concludes the import worked. A user importing a hundred items discovers the loss only by looking.
+
+**Expected:** either report the rejection (the scheme has no error channel, so at minimum do not exit 0), or create the items that are well-formed. **Actual:** silent total discard, indistinguishable from success.
+
+**Automation note.** CHORD2's cell 6 fixture was built by this payload and the cell ran to completion against an empty project, producing four "no field changed on any surviving row" diffs that looked like real declines. Nothing but the `project=` echo being blank gave it away. Any driver building fixtures through `things:///json` must assert the fixture exists before measuring anything downstream of it. Evidence: [lab/chord2-reorder-laws.md](lab/chord2-reorder-laws.md) §10.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
