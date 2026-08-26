@@ -1145,6 +1145,41 @@ Edit   > Emoji & Symbols      glyph=149 char=[🌐]
 
 **Automation note:** HEADORD1 was probe-only; nothing shipped from it. The consequence for us is that a driver built on these chords rests on an *unadvertised* private keybinding with no dictionary entry and no menu item to check against — it has no more contract than any other undocumented AX surface, so it needs the same fail-closed discipline (and it must compute its move count from the database rather than firing until nothing changes, or the user hears one beep per wasted chord). Evidence: [lab/headord1-heading-order.md](lab/headord1-heading-order.md) §1, §6.
 
+## 21. Things 3.23: the Repeat dialog's `Next:` pop-up recomputes ASYNCHRONOUSLY, and an input landing inside that window CANCELS the recompute permanently (NEXTPOP1, 2026-08-25, golden-v4 / Things 3.23 build 32300036)
+
+Changing a calendar anchor in the redesigned Repeat dialog (the yearly month, the monthly ordinal, the day-of-month) schedules an **asynchronous** recompute of the `Next:` first-occurrence pop-up — both its displayed value and the menu of occurrences behind it. The recompute lands ~0.4–0.5 s later. **If any further input reaches the dialog inside that window, the pending recompute is discarded and never re-runs**: the pop-up goes on describing the *previous* rule for as long as the dialog stays open.
+
+**Probe.** A yearly rule is built control by control on a to-do starting 2026-08-06, anchoring the series on the 20th. `popup2` is the `Next:` pop-up, read directly out of the AX tree.
+
+*Recompute lands when nothing interrupts it* (cells `diag`, `diag2`, `diag4` — three independent runs):
+
+```
+clicked 20th   t+0.0s  popup2 = Thu, Aug  6, 2026
+               t+0.5s  popup2 = Thu, Aug 20, 2026     ← recompute lands
+               t+1.0s … t+4.5s   unchanged
+menu head: [1] Today  [2] Thu, Aug 20, 2026  [3] Fri, Aug 20, 2027 …
+```
+
+*Recompute is cancelled by an input inside the window* (cell `diag3` — the deadline checkbox pressed immediately after the ordinal click):
+
+```
+clicked 20th
+checkbox pressed · popup2 = Thu, Aug  6, 2026
+  t+0.5s  popup2 = Thu, Aug 6, 2026
+  t+1.0s  popup2 = Thu, Aug 6, 2026
+  …                                            (twelve consecutive reads, 6 s)
+  t+6.0s  popup2 = Thu, Aug 6, 2026
+menu head after the poll: [1] Today  [2] Thu, Aug 6, 2026  [3] Fri, Aug 6, 2027 …
+```
+
+Six seconds of polling never recovers it, and opening and escaping the menu does not force a refresh either. The dialog is left in a **coherently wrong** state: the frequency, ordinal and deadline controls all read as the user set them, while the `Next:` control — and the menu a user would pick their first occurrence from — enumerate a rule that no longer exists. There is no spinner, no placeholder and no other on-screen sign that the value is stale.
+
+**Why it is a user-visible bug, not just an automation one.** The cancelling input does not have to come from a script; it is any second interaction inside half a second, which a fast typist or anyone tabbing through the dialog will produce. The consequence is that the user picks a first occurrence from a list of the *old* rule's dates, and either commits a series starting on a date the new rule does not produce or is refused a date the new rule plainly does.
+
+**Expected:** the recompute should be coalesced rather than cancelled — a later input should reschedule it, not discard it — and the `Next:` control should not present a stale menu as authoritative. **Actual:** the first input inside the window wins, permanently, for the life of the dialog.
+
+**Automation note.** Our drive lost this race intermittently, which is what made `add-repeating --deadline <date>` fail closed on monthly/yearly rules on 3.23 ([lab/vmres1-residuals.md](lab/vmres1-residuals.md) §4.3): the deadlined arms press more controls in sequence than the daily/weekly ones. The fix is a `settle-occurrences` step that polls the control until it moves or a bounded budget expires, inserted between the last anchor step and whatever follows — a closed loop on the control's own value, never a sleep. Evidence: [lab/nextpop1-deadlined-promote.md](lab/nextpop1-deadlined-promote.md) §2.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

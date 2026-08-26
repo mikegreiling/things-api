@@ -87,19 +87,47 @@ export function addRepeatCalendarFlags(cmd: Command): Command {
     .option("--ends-on <date>", "YYYY-MM-DD — stop after this date");
 }
 
+/**
+ * EXHAUSTIVE over the rule-flag fields an add-repeating params bag does NOT
+ * carry — every key of the full flag vocabulary that is absent from
+ * {@link AddRepeatingRuleFields}. The bag the composites accept is the
+ * calendar-anchor subset: the item's own `--when` / `--deadline` / `--reminder`
+ * belong to the base add, and the rule-level `next` is DERIVED from `--when`
+ * downstream rather than passed.
+ *
+ * The type is what makes this safe: adding a field to `RepeatRuleParams` that is
+ * not also in `AddRepeatingRuleFields` breaks compilation here until it is
+ * classified, so a flag can never again leak into the composite's params bag.
+ * That leak was real — the old hand-written destructure forgot `next` (the
+ * `--when` mapping), and the composite passed `next` straight through to its
+ * `todo.add` leg, which since #584 REFUSES an unknown parameter: every
+ * `things todo add-repeating --when <date>` (and the project verb) exited 2 with
+ * `params.next: not a parameter of "todo.add"` before anything was created
+ * (measured in-lab, NEXTPOP1).
+ */
+const NON_ADD_RULE_FLAGS: {
+  [K in Exclude<keyof RepeatRuleFlagFields, keyof AddRepeatingRuleFields>]-?: true;
+} = {
+  reminder: true,
+  deadline: true,
+  startDaysEarlier: true,
+  next: true,
+};
+
 /** Map the calendar-anchor rule flags (add-repeating), excluding the base-add-owned fields. */
 export function addRepeatingRuleFieldsFromOpts(
   opts: Record<string, unknown>,
   frequency: RepeatFrequency,
   interval: number,
 ): AddRepeatingRuleFields {
-  const {
-    reminder: _r,
-    deadline: _d,
-    startDaysEarlier: _s,
-    ...rest
-  } = repeatRuleFlagsFromOpts(opts, frequency);
-  return { frequency, interval, ...rest };
+  const flags = repeatRuleFlagsFromOpts(opts, frequency) as Record<string, unknown>;
+  const fields: Record<string, unknown> = { frequency, interval };
+  for (const [key, value] of Object.entries(flags)) {
+    if (value === undefined) continue;
+    if (Object.hasOwn(NON_ADD_RULE_FLAGS, key)) continue;
+    fields[key] = value;
+  }
+  return fields as unknown as AddRepeatingRuleFields;
 }
 
 // The raw CLI strings are cast to the vocabulary types WITHOUT validation here —

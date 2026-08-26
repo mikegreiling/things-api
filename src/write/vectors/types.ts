@@ -274,6 +274,18 @@ export type UiPrimitive =
    */
   | "select-next-occurrence"
   /**
+   * Let the Things 3.23 `Next:` occurrence pop-up ABSORB the rule change the
+   * preceding steps made, before any further input reaches the dialog
+   * (NEXTPOP1). The dialog recomputes that control — its displayed first
+   * occurrence AND the menu of occurrences behind it — ASYNCHRONOUSLY, ~0.4s
+   * after a calendar-anchor change, and an input that lands inside that window
+   * CANCELS the recompute for good: the pop-up goes on describing the PREVIOUS
+   * rule indefinitely. The step polls the control until it moves (the common
+   * case, ~0.4s) or a bounded budget expires (nothing to absorb), so the next
+   * input never races it.
+   */
+  | "settle-occurrences"
+  /**
    * Converge the weekly dialog's weekday ROWS onto an exact target set through a
    * deterministic closed loop (RDLG2, the RRD1 fix): read the live row count,
    * press the row-add button until there are at least as many rows as target

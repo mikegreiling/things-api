@@ -764,6 +764,32 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(...monthlyAnchorSteps(y, DIALOG_YEAR_MODE, DIALOG_YEAR_ORDINAL));
   }
 
+  // LET THE `Next:` POP-UP ABSORB THE RULE (NEXTPOP1) before any further input.
+  //
+  // The 3.23 dialog recomputes its first-occurrence pop-up — the displayed date
+  // AND the menu of occurrences behind it — ASYNCHRONOUSLY, ~0.4s after the
+  // calendar anchor moves, and an input that lands inside that window CANCELS
+  // the recompute permanently: the control keeps describing the PREVIOUS rule.
+  // The very next thing this recipe drives is the deadline checkbox, which is
+  // exactly such an input, so every deadlined monthly/yearly promote reached
+  // `select-next-occurrence` with the SEED's occurrence series in the menu and
+  // failed closed on a date the rule really does produce (VMRES1 §4.3).
+  //
+  // Emitted for the pop-up shape only — the ≤3.22 `Next:` is a free date area
+  // with no menu to recompute — and never for after-completion, which has no
+  // first-occurrence control at all. It is a WAIT, not a setter, so it
+  // contributes no control to the pre-commit audit.
+  if (needsShape && rule.afterCompletion !== true) {
+    steps.push({
+      primitive: "settle-occurrences",
+      label: "let the first-occurrence pop-up absorb the rule",
+      pathCandidates: DIALOG_NEXT_POPUP,
+      onlyShape: "next-popup",
+      dynamic: true,
+      addressing: "title",
+    });
+  }
+
   // "Add deadlines" / "start N days earlier" — DEADLINE MODE, converged (RRD1)
   // BEFORE the "Next:" field is driven below. In deadline mode the "Next:" field IS
   // the deadline date and the instance start = deadline − startDaysEarlier (YANCH1

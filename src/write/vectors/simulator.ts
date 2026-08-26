@@ -50,7 +50,7 @@ import {
   resolveProject,
   resolveTag,
 } from "../pre-state.ts";
-import { fixedSpawnPlan, isIsoDate } from "../repeat-anchor.ts";
+import { deadlineDriveNext, fixedSpawnPlan } from "../repeat-anchor.ts";
 import { composeRepeatRuleSpec, ruleXml } from "../recurrence-rule-blob.ts";
 import { resolveTagRefs } from "../tag-refs.ts";
 import type {
@@ -1145,7 +1145,13 @@ function applyMakeRepeatingFixed(
   // is today. Left to its DEFAULT (no params.next), a FIXED rule anchors to the
   // next calendar match ≥ today (ANCH1 fixedSpawnPlan for daily/weekly; monthly/
   // yearly keep the today+interval model, their default-anchor law being unprobed).
-  const nextIso = isIsoDate(params.next) ? params.next : null;
+  //
+  // `params.next` is the requested first-occurrence START in every params bag
+  // (NEXTPOP1 — one meaning, one place that shifts it). What the DIALOG carries,
+  // and therefore what the app anchors the rule on, is the deadline-adjusted DUE
+  // date, so the plan below is built from that and the template's own start
+  // columns are back-shifted out of it further down.
+  const nextIso = deadlineDriveNext(params) ?? null;
   const plan =
     nextIso !== null
       ? {

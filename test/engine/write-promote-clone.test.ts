@@ -532,6 +532,67 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     expect(rule?.startOffsetDays).toBe(-14);
   });
 
+  // NEXTPOP1: the deadline shift is applied EXACTLY ONCE, in the promote leg's
+  // compile. It used to be applied upstream as well, so `next` reached the leg
+  // already holding the DUE date and everything downstream that shifts —
+  // `assessOffRuleFirst`, through `assertRepeatRule` — shifted it a second time.
+  // On a MONTHLY rule that lands off the derived anchor, so the composite was
+  // refused before it ran, quoting a date the caller never asked for.
+  it("add-repeating: a deadlined MONTHLY rule is NOT refused as off-anchor (the double-shift)", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "Monthly deadlined",
+        when: "2026-07-15",
+        deadline: "2026-07-29", // anchor = day 29, start = the 15th
+        frequency: "monthly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(-14);
+    // The series STARTS on --when; the anchor (the 29th) is the due date.
+    expect(decodePackedDate(row(res.uuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-15",
+    );
+  });
+
+  it("make-repeating: the same deadlined MONTHLY shape lands through the direct verb", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Monthly deadlined source",
+      start: "active",
+      startDate: "2026-07-15",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      {
+        uuid: src,
+        frequency: "monthly",
+        interval: 1,
+        // `next` is the requested first-occurrence START — what `--when` maps to
+        // on this verb — and it stays a START all the way to the compile.
+        next: "2026-07-15",
+        deadline: true,
+        startDaysEarlier: 14,
+      } satisfies RepeatRuleParams,
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
+    const templateUuid = res.repeating?.templateUuid;
+    expect(templateUuid).toBeTruthy();
+    const rule = decodeRecurrenceRule(
+      row(templateUuid as string)?.["rt1_recurrenceRule"] as Uint8Array,
+    );
+    expect(rule?.startOffsetDays).toBe(-14);
+    expect(
+      decodePackedDate(row(templateUuid as string)?.["rt1_instanceCreationStartDate"] as number),
+    ).toBe("2026-07-15");
+  });
+
   it("add-repeating: --deadline AND --start-days-earlier that DISAGREE are refused (zero mutation)", async () => {
     await expect(
       runAddRepeatingTodo(
