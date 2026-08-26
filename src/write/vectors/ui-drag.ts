@@ -57,6 +57,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
 import type { UiCommand, UiRunner, UiRunResult } from "./ui.ts";
 
 // ------------------------------------------------------------------- types
@@ -82,18 +83,22 @@ export interface AreaSidebarState {
 }
 
 /**
- * Auxiliary seams the ui vector needs beyond osascript dispatch. The sidebar
- * drag driver asserts the database between hops; the client wires `areaState`
- * to the open connection. Absent (e.g. the capabilities surface, which never
- * executes), a drag op refuses cleanly.
+ * Auxiliary seams the ui vector needs beyond osascript dispatch. Both ordering
+ * drivers assert the database between gestures — the sidebar drag driver
+ * through `areaState`, the heading-chord driver through `headingOrder` — and
+ * the client wires each to the open connection. Absent (e.g. the capabilities
+ * surface, which never executes), those ops refuse cleanly.
  */
 export interface UiDriveAux {
   areaState?: () => AreaSidebarState;
+  /** Heading order + child containment for one project (the chord driver's oracle). */
+  headingOrder?: HeadingOrderReader;
 }
 
 /** The client-side default aux: reads area order + assignments from the DB. */
 export function createUiDriveAux(db: DatabaseSync): UiDriveAux {
   return {
+    headingOrder: createHeadingOrderReader(db),
     areaState(): AreaSidebarState {
       const areas = db
         .prepare(`SELECT uuid, title, "index" AS idx FROM TMArea ORDER BY "index", uuid`)

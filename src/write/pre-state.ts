@@ -219,22 +219,25 @@ export interface HeadingMovePre {
   /** Full target order after moving the block — the verified END state (delta). */
   targetOrder: string[];
   /**
-   * The MINIMAL native re-rank wire (#V11): the shortest front-clustered id list
-   * that realizes {@link targetOrder}. A partial wire re-ranks only its ids and
-   * clusters them above the un-named headings, which keep their current relative
-   * order (HEADSORT partial-wire law) — so an ARCHIVED heading that need not move
-   * stays OUT of the wire and is provably untouched (H-UNSWEPT). The compile sends
-   * THIS, not the full order, so archived bystanders are never reopened.
+   * The headings the caller did not name AND whose POSITION the move leaves
+   * alone. Each chord rewrites exactly ONE row's `index` and only ever a row it
+   * passed over, so a heading outside the moved span must read back at
+   * BYTE-IDENTICAL rank. That is the untouched-siblings assertion the delta
+   * carries (RRF1), and it is what catches a positionally-selected chord that
+   * landed on the wrong row. (The per-chord check inside the driver is the tight
+   * one — it knows each step's span; this is the outside view over the whole
+   * move, which can only fence the rows no step should have come near.)
    */
-  wire: string[];
+  untouched: string[];
   /**
-   * Archived headings FORCED into the wire (wire ∩ archived). Re-ranking an
-   * archived heading REOPENS it (HEADSORT: status 3→0, stopDate→NULL, umd bump,
-   * heading-only — children stay resolved). Non-empty only when the target order
-   * cannot be reached without moving an archived heading; disclosed in the result
-   * and dry-run, never silent, never guarded (#V11).
+   * Every non-trashed child of a MOVED heading, with the heading it hangs off.
+   * The chord law says children follow their heading through an intact FK,
+   * un-renumbered; the delta re-reads each one and requires exactly that (the
+   * one measured hazard in this chord family is a row driven across a heading
+   * boundary having its FK rewritten — HEADORD1 §2 cells 1h4/1i2 — which cannot
+   * happen to a heading, and this proves it did not happen here).
    */
-  reopened: string[];
+  children: { uuid: string; heading: string }[];
   /** Reasons the move is illegal (empty = ok). */
   problems: string[];
 }
@@ -336,9 +339,8 @@ export function computeHeadingMovePre(
   const current = rows.map((r) => r.uuid);
   // Archived = the heading is completed/canceled (any closed status). All lifecycle
   // classes — open, archived-unswept, archived-swept — sit in this ONE index axis
-  // (HEADSORT, read-shape v2 R5); only `archived` marks the closed ones, and only
-  // they reopen when re-ranked (#V11).
-  const archived = new Set(rows.filter((r) => r.status !== 0).map((r) => r.uuid));
+  // (HEADSORT, read-shape v2 R5).
+  const archived = rows.filter((r) => r.status !== 0).map((r) => r.uuid);
   const problems: string[] = [];
   const currentSet = new Set(current);
   const movees = new Set<string>();
@@ -349,6 +351,21 @@ export function computeHeadingMovePre(
   if (headings.length === 0) problems.push("no headings given");
   for (const h of headings) {
     if (!currentSet.has(h)) problems.push(`${h} is not a heading of this project`);
+  }
+  // ARCHIVED HEADINGS FENCE THE WHOLE PROJECT. The chord vector addresses a
+  // heading row POSITIONALLY — the Nth selectable row in the rendered project
+  // view whose to-do readback is empty (HEADCERT1) — and that ordinal is only
+  // the database's `index` ordinal if the view renders every heading the
+  // database holds. Whether Things renders a COMPLETED/CANCELED heading in the
+  // project view is not measured, so one anywhere in the project makes every
+  // ordinal in the plan unvouchable. Refuse the whole move rather than chord a
+  // row we cannot name (harness.md §AX-drive scrutiny, over-caution direction).
+  if (archived.length > 0) {
+    problems.push(
+      `this project has ${archived.length} completed/canceled heading(s) (${archived.join(", ")}), ` +
+        "and heading order is driven by selecting rows positionally in the project view — an " +
+        "archived heading makes every position ambiguous",
+    );
   }
   let anchor: string | null = null;
   if ("before" in placement || "after" in placement) {
@@ -361,7 +378,7 @@ export function computeHeadingMovePre(
     }
   }
   if (problems.length > 0) {
-    return { project, current, targetOrder: current, wire: [], reopened: [], problems };
+    return { project, current, targetOrder: current, untouched: [], children: [], problems };
   }
 
   const rest = current.filter((u) => !movees.has(u));
@@ -373,13 +390,27 @@ export function computeHeadingMovePre(
     const insertAt = "before" in placement ? idx : idx + 1;
     targetOrder = [...rest.slice(0, insertAt), ...headings, ...rest.slice(insertAt)];
   }
-  // Minimal front-cluster wire (#V11). An empty wire means the request is already
-  // satisfied (target == current); fall back to the full order so the pipeline has
-  // a concrete invocation that reproduces it (and any forced reopen is disclosed).
-  const minimal = minimalReorderWire(current, targetOrder);
-  const wire = minimal.length > 0 ? minimal : [...targetOrder];
-  const reopened = wire.filter((u) => archived.has(u));
-  return { project, current, targetOrder, wire, reopened, problems: [] };
+  // The untouched set: headings the caller did not name AND whose POSITION the
+  // move does not change. Position-unchanged is the right fence, not merely
+  // not-a-movee: a ±1 chord renumbers exactly one of the two rows it swaps, and
+  // which one depends on direction (moving DOWN rewrites the sibling being
+  // passed, not the mover — CHORDMH1 arm 2, correcting HEADORD1's ⌘↑-only
+  // measurement). A row the move never passes over is byte-identical, and that
+  // is what the delta asserts.
+  const untouched = current.filter((u, i) => !movees.has(u) && targetOrder[i] === u);
+  const children =
+    movees.size === 0
+      ? []
+      : (
+          db
+            .prepare(
+              `SELECT uuid, heading FROM TMTask
+                WHERE trashed = 0 AND heading IN (${[...movees].map(() => "?").join(",")})
+                ORDER BY uuid`,
+            )
+            .all(...movees) as { uuid: string; heading: string }[]
+        ).map((r) => ({ uuid: r.uuid, heading: r.heading }));
+  return { project, current, targetOrder, untouched, children, problems: [] };
 }
 
 /**

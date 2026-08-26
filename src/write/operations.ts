@@ -107,6 +107,15 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   // sheet. GUI-only. Contrast the Shortcuts delete cascade (P12), which TRASHES
   // the children.
   "project.dissolve-heading",
+  // CHORDMH1 (on the HEADORD1 law): within-project heading ORDER. The private
+  // reorder command went inert on Things 3.23, taking heading order offline with
+  // no headless substitute — no reorder spelling on any vector even ADDRESSES a
+  // heading. What the app does still offer is four bare keybindings on a selected
+  // heading row (⌘↑/⌘↓ = ±1 slot, ⌘⌥↑/⌘⌥↓ = to top/bottom), carried by no menu
+  // item and no AX action. Driven as a closed loop: select the row positionally,
+  // post ONE chord at the Things process, read the order back out of the
+  // database, repeat. Background-capable with no focus steal.
+  "project.move-heading",
 ] as const;
 
 export function isUiDriveOp(op: OperationKind): boolean {
@@ -255,6 +264,12 @@ export interface HeadingAddParams {
  * ordered block (spec §2/§4). `headings` are resolved heading uuids in the
  * order they should land (selection order = resulting order); their children
  * follow. Anchors in `placement` are resolved heading uuids too.
+ *
+ * GUI-driven (CHORDMH1): the app offers heading order only as keyboard chords on
+ * a selected heading row, so this drives the Things window — it needs
+ * `ui.enabled` plus the `--dangerously-drive-gui` acknowledgement, and it
+ * refuses when the project holds a completed/canceled heading (the row addresses
+ * are positional, and an archived heading makes every position ambiguous).
  */
 export interface MoveHeadingParams {
   project: ContainerRef;

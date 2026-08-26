@@ -1881,17 +1881,23 @@ export function registerWriteCommands(program: Command): void {
   );
 
   addPlacementFlags(
-    addWriteFlags(
-      project
-        .command("move-heading <project> <headings...>")
-        .description(
-          "Reposition one or more of a project's headings as an ordered block — the selection " +
-            "order is the resulting order, and each heading's to-dos follow it. Pass exactly one " +
-            "placement: --first, --last, --before-heading <sel>, or --after-heading <sel>. Each " +
-            `<heading> is a ${HEADING_SEL_HELP}. Reordering headings rides the same experimental ` +
-            "surface as `things reorder` — enable it once with `things config set " +
-            "allow-experimental true`.",
-        ),
+    addDriveGuiFlag(
+      addWriteFlags(
+        project
+          .command("move-heading <project> <headings...>")
+          .description(
+            "Reposition one or more of a project's headings as an ordered block — the selection " +
+              "order is the resulting order, and each heading's to-dos follow it. Pass exactly " +
+              "one placement: --first, --last, --before-heading <sel>, or --after-heading <sel>. " +
+              `Each <heading> is a ${HEADING_SEL_HELP}. GUI-ONLY: Things offers heading order as ` +
+              "keyboard shortcuts on a selected heading row and nowhere else, so this drives the " +
+              "app — enable it once with `things config set ui-enabled true` and pass " +
+              "--dangerously-drive-gui. It moves one heading one slot at a time, re-reading the " +
+              "order after each step. Refuses when the project holds a completed or canceled " +
+              "heading (the rows are addressed by position, which an archived heading makes " +
+              "ambiguous).",
+          ),
+      ),
     ),
   ).action(
     async (projectRef: string, sels: string[], opts: WriteFlagOpts & Record<string, unknown>) => {

@@ -1983,13 +1983,6 @@ async function runHeadingReorder(
       "reorder the headings of one project (read the project first)",
     );
   }
-  const touched = pre.wire.filter((u) => !movees.includes(u) && !pre.reopened.includes(u));
-  const reopenNote =
-    pre.reopened.length > 0
-      ? `; re-ranking archived heading(s) ${pre.reopened.join(", ")} brought them back to open ` +
-        "(their children stay resolved)"
-      : "";
-
   const result = await runMutation(
     deps,
     op,
@@ -2006,7 +1999,7 @@ async function runHeadingReorder(
         membership: "none (heading re-rank)",
         placement: `move-heading → ${describePosition(position)}`,
         placementClass: "guaranteed",
-        note: dryRunNote(result, "heading re-rank via the native heading-block wire") + reopenNote,
+        note: dryRunNote(result, "heading re-rank by driving the app's heading-order key chords"),
       },
     };
   }
@@ -2036,12 +2029,7 @@ async function runHeadingReorder(
     membership: [],
     placement: result,
     placementClass: "guaranteed",
-    note:
-      `reordered ${movees.length} heading(s) within project ${projectUuid}` +
-      reopenNote +
-      (touched.length > 0
-        ? `; also re-inserted ${touched.length} unnamed heading(s) to honor the order: ${touched.join(", ")}`
-        : ""),
+    note: `reordered ${movees.length} heading(s) within project ${projectUuid}`,
   };
 }
 

@@ -40,6 +40,7 @@ import {
   type ReachabilityVerdict,
 } from "./session-reachability.ts";
 import { certificationOf } from "./ui-certification.ts";
+import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import type {
   CompiledInvocation,
@@ -108,7 +109,9 @@ export type UiCommandPrimitive =
   | "sidebar-snapshot"
   | "sidebar-scroll"
   | "sidebar-drag"
-  | "sidebar-held-drag";
+  | "sidebar-held-drag"
+  /** One modifier-bearing key event pair posted straight at the Things process (ui-chord.ts). */
+  | "chord-post";
 
 /** A single primitive dispatch — one stable shape per primitive. */
 export interface UiCommand {
@@ -2104,6 +2107,13 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         lang: "javascript",
         script: jxaSidebarSnapshotScript(),
       };
+    case "chord-reorder":
+      // Composite step: drive() hands it to the heading-chord driver, which
+      // dispatches its own select/chord commands through `run` and asserts the
+      // database between them. This shape only exists so the step renders and
+      // compiles uniformly; the chord it names is the FIRST hop's, and the
+      // driver recomputes every subsequent one from the live order.
+      return chordCommand("up-one");
   }
 }
 
@@ -2561,6 +2571,21 @@ async function drive(
       if (step.drag === undefined) return partial(step.label, "no drag spec compiled");
       // the drag ladder depends on the UI state the preamble produced
       const outcome = await driveSidebarAreaReorder(step.drag, run, aux);
+      if (!outcome.ok) return partial(step.label, outcome.detail);
+      done.push(`${step.label} (${outcome.detail})`);
+      continue;
+    }
+    if (step.primitive === "chord-reorder") {
+      // The heading-chord driver runs its own select → chord → DB-assert loop
+      // (ui-chord.ts): every chord is computed from the order it just read, and
+      // a chord that moves nothing (or moves the wrong row) stops the drive
+      // rather than being re-sent. No sheet is involved, so no dismissal clause.
+      if (step.chord === undefined) return partial(step.label, "no chord spec compiled");
+      const spec = step.chord;
+      // the chord ladder depends on the UI state the reveal produced
+      const outcome = await driveHeadingChordReorder(spec, run, aux.headingOrder, (ordinal) =>
+        axSelectHeadingRowScript(spec.tablePath, ordinal),
+      );
       if (!outcome.ok) return partial(step.label, outcome.detail);
       done.push(`${step.label} (${outcome.detail})`);
       continue;

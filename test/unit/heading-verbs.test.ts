@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ReferenceResolutionError, resolveHeadingUuid } from "../../src/read/queries.ts";
 import { computeHeadingMovePre } from "../../src/write/pre-state.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedHeading, seedProject } from "../fixtures/seed.ts";
+import { seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 let fixture: FixtureDb;
 beforeEach(() => {
@@ -122,17 +122,32 @@ describe("computeHeadingMovePre (project.move-heading order)", () => {
     ).toContain("listed more than once");
   });
 
-  it("#V11: the wire is the MINIMAL front-cluster set, never the full order", () => {
+  it("CHORDMH1: `untouched` fences the headings the move never passes over", () => {
     const { proj, h1, h2, h3 } = seedThree();
-    // Moving h3 to the front is realized by front-clustering h3 alone — h1,h2 keep
-    // their current relative order at the back. So the wire is just [h3].
-    const pre = computeHeadingMovePre(fixture.db, proj, [h3], { position: "first" });
-    expect(pre.targetOrder).toEqual([h3, h1, h2]);
-    expect(pre.wire).toEqual([h3]);
-    expect(pre.reopened).toEqual([]);
+    // Move h3 to the front: h1 and h2 both shift down a slot, and a chord may
+    // renumber a row it passes (moving DOWN rewrites the passed sibling, not the
+    // mover — CHORDMH1 arm 2), so neither may be asserted byte-identical.
+    expect(computeHeadingMovePre(fixture.db, proj, [h3], { position: "first" }).untouched).toEqual(
+      [],
+    );
+    // Move h3 up one slot: h1 keeps position 0 and is provably untouched.
+    const pre = computeHeadingMovePre(fixture.db, proj, [h3], { before: h2 });
+    expect(pre.targetOrder).toEqual([h1, h3, h2]);
+    expect(pre.untouched).toEqual([h1]);
+    expect(pre.children).toEqual([]);
   });
 
-  it("#V11: an archived heading that need not move stays OUT of the wire (archived-free, no reopen)", () => {
+  it("CHORDMH1: `children` carries every non-trashed child of a MOVED heading, with its FK", () => {
+    const { proj, h1, h3 } = seedThree();
+    const kept = seedTodo(fixture.db, { title: "k", heading: h3 });
+    seedTodo(fixture.db, { title: "elsewhere", heading: h1 });
+    const trashed = seedTodo(fixture.db, { title: "gone", heading: h3 });
+    fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(trashed);
+    const pre = computeHeadingMovePre(fixture.db, proj, [h3], { position: "first" });
+    expect(pre.children).toEqual([{ uuid: kept, heading: h3 }]);
+  });
+
+  it("CHORDMH1: an ARCHIVED heading anywhere in the project refuses the whole move", () => {
     const project = seedProject(fixture.db, { title: "P" });
     seedHeading(fixture.db, { title: "H1", project, index: 1 });
     seedHeading(fixture.db, {
@@ -144,30 +159,12 @@ describe("computeHeadingMovePre (project.move-heading order)", () => {
     });
     const h3 = seedHeading(fixture.db, { title: "H3", project, index: 3 });
     const proj = { resolved: { uuid: project, title: "P" }, matches: 1 };
-    // Front-cluster h3 → [h3, h1, H2arch]; H2arch keeps its slot at the back and is
-    // never in the wire, so it is provably untouched (not reopened).
+    // The chord vector addresses heading rows POSITIONALLY in the rendered project
+    // view, and whether Things renders an archived heading there is unmeasured —
+    // so one anywhere in the project makes every ordinal unvouchable. Refuse.
     const pre = computeHeadingMovePre(fixture.db, proj, [h3], { position: "first" });
-    expect(pre.wire).toEqual([h3]);
-    expect(pre.reopened).toEqual([]);
-  });
-
-  it("#V11: an archived heading FORCED into the wire is disclosed as reopened", () => {
-    const project = seedProject(fixture.db, { title: "P" });
-    const h1 = seedHeading(fixture.db, { title: "H1", project, index: 1 });
-    const h2 = seedHeading(fixture.db, {
-      title: "H2arch",
-      project,
-      index: 2,
-      status: "completed",
-      stopDate: 1,
-    });
-    const h3 = seedHeading(fixture.db, { title: "H3", project, index: 3 });
-    const proj = { resolved: { uuid: project, title: "P" }, matches: 1 };
-    // Sending h1 to the end forces H2arch (and h3) above it into the wire — H2arch
-    // must move, so it reopens, and that is disclosed (never silent, never guarded).
-    const pre = computeHeadingMovePre(fixture.db, proj, [h1], { position: "last" });
-    expect(pre.targetOrder).toEqual([h2, h3, h1]);
-    expect(pre.wire).toEqual([h2, h3]);
-    expect(pre.reopened).toEqual([h2]);
+    expect(pre.problems.join(" ")).toContain("completed/canceled heading");
+    expect(pre.untouched).toEqual([]);
+    expect(pre.children).toEqual([]);
   });
 });

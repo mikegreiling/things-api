@@ -2422,7 +2422,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "promote_heading: promote a heading into a new project — this REPLACES the heading and " +
         "cannot be undone (its to-dos move under the new project), and requires " +
         "dangerously_drive_gui. move_heading: reposition headings as an ordered block (children " +
-        "follow); pass exactly one placement flag. Reordering headings needs allow-experimental. " +
+        "follow); pass exactly one placement flag. GUI-only (requires dangerously_drive_gui) — " +
+        "Things offers heading order as keyboard shortcuts on a selected heading row and nowhere " +
+        "else, so this moves one heading one slot at a time and re-reads the order after each " +
+        "step; it refuses when the project holds a completed or canceled heading. " +
         "move_heading_to_project: relocate ONE heading (with its to-dos) to a DIFFERENT project " +
         "(project + heading + to_project) — the cross-project move, distinct from move_heading's " +
         "within-project reorder; GUI-only (requires dangerously_drive_gui), fails closed on a " +

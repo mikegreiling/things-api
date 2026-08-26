@@ -405,28 +405,105 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
     expect(inv.payload.indexOf('with ids "C"')).toBeLessThan(inv.payload.indexOf('"C,B,A"'));
   });
 
-  it("project.move-heading: project specifier carries the MINIMAL front-cluster wire (#V11)", () => {
+  it("project.move-heading: compiles to the CHORD recipe — reveal, table canary, chord step", () => {
     const pre = emptyPreState();
     pre.destProject = { resolved: { uuid: "PROJ-9", title: "P" }, matches: 1 };
-    // Full target order ["H2","H1","H3"] is reachable by front-clustering H2 alone
-    // (H1,H3 keep their current relative order) — so the wire is the minimal ["H2"],
-    // never the full order, keeping un-named (and archived) headings out of it.
     pre.headingMove = {
       project: pre.destProject,
       current: ["H1", "H2", "H3"],
       targetOrder: ["H2", "H1", "H3"],
-      wire: ["H2"],
-      reopened: [],
+      untouched: ["H1", "H3"],
+      children: [{ uuid: "C1", heading: "H2" }],
       problems: [],
     };
     const inv = COMMANDS["project.move-heading"].compile(
       { project: { uuid: "PROJ-9" }, headings: ["H2"], placement: { position: "first" } },
-      "applescript",
+      "ui",
       pre,
       { token: TOKEN },
     );
-    expect(inv.payload).toContain('project id "PROJ-9"');
-    expect(inv.payload).toContain('with ids "H2"');
+    expect(inv.kind).toBe("ui-drive");
+    const steps = inv.recipe?.steps ?? [];
+    expect(steps.map((s) => s.primitive)).toEqual(["reveal", "resolve", "chord-reorder"]);
+    // NO `activate` step: the whole gesture is background-capable (CHORDMH1 §1).
+    expect(steps.some((s) => s.primitive === "activate")).toBe(false);
+    expect(inv.recipe?.needsWindowReachability).toBe(true);
+    const chord = steps.find((s) => s.primitive === "chord-reorder")?.chord;
+    expect(chord?.projectUuid).toBe("PROJ-9");
+    expect(chord?.targetOrder).toEqual(["H2", "H1", "H3"]);
+    // Only the caller's own heading may ever be chorded. The movee set is the
+    // caller's list VERBATIM — not "everything not in `untouched`", which would
+    // wrongly license chording a bystander whose position merely shifts.
+    expect(chord?.movees).toEqual(["H2"]);
+  });
+
+  it("project.move-heading: a bystander that merely SHIFTS is not licensed as a movee", () => {
+    const pre = emptyPreState();
+    pre.destProject = { resolved: { uuid: "PROJ-9", title: "P" }, matches: 1 };
+    // Sending H1 to the end shifts H2 and H3 up a slot each, so `untouched` is
+    // empty — but only H1 was named, and only H1 may be chorded.
+    pre.headingMove = {
+      project: pre.destProject,
+      current: ["H1", "H2", "H3"],
+      targetOrder: ["H2", "H3", "H1"],
+      untouched: [],
+      children: [],
+      problems: [],
+    };
+    const inv = COMMANDS["project.move-heading"].compile(
+      { project: { uuid: "PROJ-9" }, headings: ["H1"], placement: { position: "last" } },
+      "ui",
+      pre,
+      { token: TOKEN },
+    );
+    const chord = inv.recipe?.steps.find((s) => s.primitive === "chord-reorder")?.chord;
+    expect(chord?.movees).toEqual(["H1"]);
+  });
+
+  it("project.move-heading: the delta asserts order, untouched siblings AND child FKs", () => {
+    const pre = emptyPreState();
+    pre.destProject = { resolved: { uuid: "PROJ-9", title: "P" }, matches: 1 };
+    pre.headingMove = {
+      project: pre.destProject,
+      current: ["H1", "H2", "H3"],
+      targetOrder: ["H2", "H1", "H3"],
+      untouched: ["H1", "H3"],
+      children: [{ uuid: "C1", heading: "H2" }],
+      problems: [],
+    };
+    const spec = COMMANDS["project.move-heading"].expectedDelta(
+      pre,
+      { project: { uuid: "PROJ-9" }, headings: ["H2"], placement: { position: "first" } },
+      { nowEpoch: 0, todayIso: "2026-01-01" },
+    );
+    expect(spec).toMatchObject({
+      mode: "ordering",
+      key: "index",
+      sequence: ["H2", "H1", "H3"],
+      unchanged: ["H1", "H3"],
+      frozen: [{ uuid: "C1", assert: [{ field: "heading.uuid", equals: "H2" }] }],
+    });
+  });
+
+  it("project.move-heading: compile REFUSES rather than drive a plan the guard should have stopped", () => {
+    const pre = emptyPreState();
+    pre.destProject = { resolved: { uuid: "PROJ-9", title: "P" }, matches: 1 };
+    pre.headingMove = {
+      project: pre.destProject,
+      current: ["H1"],
+      targetOrder: ["H1"],
+      untouched: [],
+      children: [],
+      problems: ["this project has 1 completed/canceled heading(s)"],
+    };
+    expect(() =>
+      COMMANDS["project.move-heading"].compile(
+        { project: { uuid: "PROJ-9" }, headings: ["H1"], placement: { position: "first" } },
+        "ui",
+        pre,
+        { token: TOKEN },
+      ),
+    ).toThrow(/completed\/canceled heading/);
   });
 });
 
