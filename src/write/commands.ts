@@ -1940,7 +1940,7 @@ const projectMoveHeading: CommandSpec<"project.move-heading"> = {
     if (vector !== "ui") unsupportedVector(this.op, vector);
     const move = pre.headingMove;
     if (move === null || move.problems.length > 0) {
-      // The membership/anchor/archived refusals are surfaced by H-HEADING-ORDER
+      // The membership/anchor refusals are surfaced by H-HEADING-ORDER
       // before compile; reaching here with one means the guard was bypassed.
       throw new Error(
         `project.move-heading: ${move === null ? "no heading move computed (guard bypassed?)" : move.problems.join("; ")}`,

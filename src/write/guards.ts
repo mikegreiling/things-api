@@ -412,9 +412,10 @@ const GUARDS: Record<HazardId, GuardFn> = {
       hazard: "H-HEADING-ORDER",
       detail: `heading move rejected: ${pre.headingMove.problems.join("; ")}`,
       remediation:
-        "every heading must be one of this project's headings (list them with " +
+        "every heading must be one of this project's OPEN headings (list them with " +
         "`things project-view <project>`), named at most once, and the anchor must be a " +
-        "different heading in the same project",
+        "different open heading in the same project — a completed or canceled heading is not " +
+        "shown in the project view, so it can be neither moved nor used as an anchor",
     };
   },
   "H-NO-REMINDER": ({ op, pre }) => {

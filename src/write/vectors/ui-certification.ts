@@ -138,8 +138,21 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     // already-in-position no-op, the dry run, and the ungated call — children
     // byte-identical on every arm, sibling indexes byte-identical, zero beeps on
     // the normal paths. docs/lab/chordmh1-move-heading-build.md.
+    //
+    // CHORDMH2 (2026-08-25, chordmh2-lab, Things 3.23 / golden-v4) lifted CHORDMH1's
+    // one deliberate capability cut — the whole-project refusal on any archived
+    // heading — after CHORD2 cell 7a′ measured that an archived heading renders no
+    // content row, takes no ordinal in the walk, and is skipped by a live heading's
+    // ±1. The fence stood in for an ordinal mismatch, so the three reads that feed
+    // the plan, the driver and the bare-placement anchor now return the RENDERED
+    // (`status = 0`) order. Certified through the production CLI: one chord carried
+    // a heading past an archived row's slot, that heading was the only row
+    // rewritten, the archived row was byte-untouched on status/index/stopDate/umd,
+    // children intact, zero beeps; an archived heading named as a movee or an
+    // anchor still refuses with zero mutation.
+    // docs/lab/chordmh2-archived-fence-lift.md.
     status: "lab-certified",
-    evidence: ["HEADORD1", "CHORDMH1"],
+    evidence: ["HEADORD1", "CHORDMH1", "CHORDMH2"],
   },
   "project.dissolve-heading": {
     // DISS1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Delete recipe ran

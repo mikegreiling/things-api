@@ -147,10 +147,17 @@ describe("computeHeadingMovePre (project.move-heading order)", () => {
     expect(pre.children).toEqual([{ uuid: kept, heading: h3 }]);
   });
 
-  it("CHORDMH1: an ARCHIVED heading anywhere in the project refuses the whole move", () => {
+  /**
+   * CHORD2 cell 7a′ / CHORDMH2: an archived heading is invisible to the whole
+   * vector — it renders no content row, takes no ordinal in the positional
+   * `select-heading-row` walk, and a live heading's ±1 chord skips its slot.
+   * A project holding one is therefore ORDINARY; the plan simply counts the live
+   * headings, which is exactly what the walk it drives will count.
+   */
+  function seedWithArchived() {
     const project = seedProject(fixture.db, { title: "P" });
-    seedHeading(fixture.db, { title: "H1", project, index: 1 });
-    seedHeading(fixture.db, {
+    const h1 = seedHeading(fixture.db, { title: "H1", project, index: 1 });
+    const arch = seedHeading(fixture.db, {
       title: "H2arch",
       project,
       index: 2,
@@ -158,13 +165,48 @@ describe("computeHeadingMovePre (project.move-heading order)", () => {
       stopDate: 1,
     });
     const h3 = seedHeading(fixture.db, { title: "H3", project, index: 3 });
+    const h4 = seedHeading(fixture.db, { title: "H4", project, index: 4 });
     const proj = { resolved: { uuid: project, title: "P" }, matches: 1 };
-    // The chord vector addresses heading rows POSITIONALLY in the rendered project
-    // view, and whether Things renders an archived heading there is unmeasured —
-    // so one anywhere in the project makes every ordinal unvouchable. Refuse.
-    const pre = computeHeadingMovePre(fixture.db, proj, [h3], { position: "first" });
-    expect(pre.problems.join(" ")).toContain("completed/canceled heading");
-    expect(pre.untouched).toEqual([]);
-    expect(pre.children).toEqual([]);
+    return { project, proj, h1, arch, h3, h4 };
+  }
+
+  it("CHORDMH2: an ARCHIVED heading takes NO ordinal — the plan counts the live rows only", () => {
+    const { proj, h1, arch, h3, h4 } = seedWithArchived();
+    const pre = computeHeadingMovePre(fixture.db, proj, [h4], { position: "first" });
+    expect(pre.problems).toEqual([]);
+    // `current` is the RENDERED order: the index order filtered to status = 0.
+    expect(pre.current).toEqual([h1, h3, h4]);
+    expect(pre.targetOrder).toEqual([h4, h1, h3]);
+    // The archived row appears in NO set the op reasons about — not the walk, not
+    // the movees, not the untouched-siblings assertion (its rank drifts among the
+    // live rows over time and nothing renders it, so nothing may assert on it).
+    expect(pre.current).not.toContain(arch);
+    expect(pre.targetOrder).not.toContain(arch);
+    expect(pre.untouched).not.toContain(arch);
+  });
+
+  it("CHORDMH2: the ±1 that SKIPS the archived slot leaves the rows above it untouched", () => {
+    const { proj, h1, arch, h3, h4 } = seedWithArchived();
+    // Live order H1 < H3 < H4 with the archived row sitting between H1 and H3.
+    // Moving H4 up one lands it between H1 and H3 — one chord, and H1 (which the
+    // move never passes over) is provably byte-identical.
+    const pre = computeHeadingMovePre(fixture.db, proj, [h4], { before: h3 });
+    expect(pre.problems).toEqual([]);
+    expect(pre.targetOrder).toEqual([h1, h4, h3]);
+    expect(pre.untouched).toEqual([h1]);
+    expect(pre.untouched).not.toContain(arch);
+  });
+
+  it("CHORDMH2: an ARCHIVED heading is still refused as a MOVEE and as an ANCHOR", () => {
+    const { proj, arch, h4 } = seedWithArchived();
+    // It renders no row, so there is no ordinal to select it by…
+    expect(
+      computeHeadingMovePre(fixture.db, proj, [arch], { position: "first" }).problems.join(" "),
+    ).toContain("completed/canceled heading");
+    // …and no slot to place another heading against.
+    const anchored = computeHeadingMovePre(fixture.db, proj, [h4], { before: arch });
+    expect(anchored.problems.join(" ")).toContain("completed/canceled");
+    expect(anchored.targetOrder).toEqual(anchored.current);
+    expect(anchored.untouched).toEqual([]);
   });
 });

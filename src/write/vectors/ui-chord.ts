@@ -42,9 +42,11 @@ export interface HeadingChordSpec {
   /** The project whose headings are being reordered. */
   projectUuid: string;
   /**
-   * EVERY non-trashed heading of the project, in the order they must end up in
-   * — the full end state, not just the moved block. The driver places them
-   * left to right, so this doubles as the verification target.
+   * Every LIVE (`status = 0`) heading of the project, in the order they must end
+   * up in — the full end state, not just the moved block. The driver places them
+   * left to right, so this doubles as the verification target. Archived headings
+   * are absent by construction: they render no row, so they are neither
+   * addressable nor displaced (CHORD2 cell 7a′).
    */
   targetOrder: string[];
   /**
@@ -59,7 +61,14 @@ export interface HeadingChordSpec {
 
 /** The database read the driver asserts against between chords. */
 export interface HeadingOrderState {
-  /** The project's non-trashed headings in `index` order, with their raw index. */
+  /**
+   * The project's LIVE (`status = 0`) headings in `index` order, with their raw
+   * index — the rows the project view actually renders, and therefore the rows
+   * the positional `select-heading-row` walk enumerates. An ARCHIVED heading is
+   * absent: it renders no row, takes no ordinal, and a live heading's ±1 chord
+   * skips its slot in one dispatch (CHORD2 cell 7a′). Filtering here is what
+   * keeps the driver's ordinals in step with the walk's.
+   */
   headings: { uuid: string; index: number }[];
   /**
    * Digest over every non-trashed child of those headings: `uuid:headingFK:index`.
@@ -76,13 +85,20 @@ export interface HeadingOrderState {
 /** The database seam the chord driver reads its ground truth through. */
 export type HeadingOrderReader = (projectUuid: string) => HeadingOrderState;
 
-/** The client-side default: heading order + child containment, from the open DB. */
+/**
+ * The client-side default: heading order + child containment, from the open DB.
+ *
+ * The heading read is filtered to `status = 0` so it returns the RENDERED order
+ * (CHORD2 cell 7a′). The child digest is deliberately NOT filtered — it covers
+ * every non-trashed child of every heading of the project, archived headings
+ * included, because no heading chord may disturb any of them.
+ */
 export function createHeadingOrderReader(db: DatabaseSync): HeadingOrderReader {
   return (projectUuid: string): HeadingOrderState => {
     const headings = db
       .prepare(
         `SELECT uuid, "index" AS idx FROM TMTask
-          WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index", uuid`,
+          WHERE type = 2 AND trashed = 0 AND status = 0 AND project = ? ORDER BY "index", uuid`,
       )
       .all(projectUuid) as unknown as { uuid: string; idx: number }[];
     const children = db

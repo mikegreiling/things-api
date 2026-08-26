@@ -1889,11 +1889,17 @@ export async function runUniversalReorder(
 }
 
 /** The project's heading uuids in current display (index) order. */
+/**
+ * The project's LIVE heading order — the rendered order, which is the `index`
+ * order filtered to `status = 0` (CHORD2 cell 7a′). Archived headings render no
+ * row, so they hold no slot a bare placement could anchor against.
+ */
 function currentHeadingOrder(deps: WriteDeps, projectUuid: string): string[] {
   return (
     deps.db
       .prepare(
-        `SELECT uuid FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
+        `SELECT uuid FROM TMTask
+           WHERE type = 2 AND trashed = 0 AND status = 0 AND project = ? ORDER BY "index"`,
       )
       .all(projectUuid) as { uuid: string }[]
   ).map((r) => r.uuid);

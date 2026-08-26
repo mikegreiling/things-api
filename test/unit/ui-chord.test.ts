@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   chordGlyph,
+  createHeadingOrderReader,
   driveHeadingChordReorder,
   jxaChordScript,
   planChordStep,
@@ -23,6 +24,8 @@ import {
   type HeadingOrderState,
 } from "../../src/write/vectors/ui-chord.ts";
 import type { UiCommand, UiRunResult } from "../../src/write/vectors/ui.ts";
+import { buildFixtureDb } from "../fixtures/build-db.ts";
+import { seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 // ------------------------------------------------------------- the simulator
 
@@ -39,10 +42,16 @@ interface SimOptions {
   failSelect?: number;
   /** Move the selected heading by ±1 regardless of the chord (a lying app). */
   ignoreEndpointChords?: boolean;
+  /**
+   * Headings with a CLOSED status. They hold a slot in the one `index` axis but
+   * render no content row, so they take no ordinal in the positional walk and a
+   * live heading's ±1 skips straight over them (CHORD2 cell 7a′).
+   */
+  archived?: string[];
 }
 
 class HeadingSim {
-  /** uuid → index, ordered by index. */
+  /** uuid → index, ordered by index — EVERY heading row, live and archived. */
   order: { uuid: string; index: number }[];
   childIndex = 0;
   selected: string | null = null;
@@ -52,38 +61,61 @@ class HeadingSim {
   log: { primitive: string; meta?: Record<string, unknown> }[] = [];
 
   private opts: SimOptions;
+  private archived: Set<string>;
 
   constructor(uuids: string[], opts: SimOptions = {}) {
     this.opts = opts;
+    this.archived = new Set(opts.archived ?? []);
     // Sparse, irregular indexes — exactly what Things stores.
     this.order = uuids.map((uuid, i) => ({ uuid, index: (i + 1) * 100 - 37 }));
   }
 
+  /**
+   * The RENDERED rows — the `index` axis filtered to the open headings. Every
+   * ordinal the app exposes, and every slot a chord counts in, is a position in
+   * THIS list; the archived rows are simply not there (CHORD2 cell 7a′).
+   */
+  private live(): { uuid: string; index: number }[] {
+    return this.order.filter((h) => !this.archived.has(h.uuid));
+  }
+
+  /** What a `status = 0`-filtered reader hands the driver. */
   state(): HeadingOrderState {
     return {
-      headings: this.order.map((h) => ({ ...h })),
+      headings: this.live().map((h) => ({ uuid: h.uuid, index: h.index })),
       childDigest: `children@${this.childIndex}`,
       childCount: 3,
     };
   }
 
+  /** An archived row's raw index — the byte the drive must never write. */
+  indexOfRow(uuid: string): number | undefined {
+    return this.order.find((h) => h.uuid === uuid)?.index;
+  }
+
   /**
-   * The measured single-row rewrite. Moving a row into `slot` renumbers exactly
-   * ONE row — normally the mover (it takes a value between its new neighbours);
-   * with `renumberPassedSibling` it instead renumbers the sibling being passed
-   * on a ±1 swap, which is what Things actually does on a ⌘↓ (CHORDMH1 arm 2).
+   * The measured single-row rewrite. Moving a row into `slot` — a position among
+   * the LIVE rows — renumbers exactly ONE row: normally the mover (it takes a
+   * value between its new RENDERED neighbours, which is how a ±1 hops straight
+   * over an archived row's index in one dispatch); with `renumberPassedSibling`
+   * it instead renumbers the sibling being passed on a ±1 swap, which is what
+   * Things actually does on a ⌘↓ (CHORDMH1 arm 2).
    */
   private placeAt(uuid: string, slot: number): void {
-    const from = this.order.findIndex((h) => h.uuid === uuid);
+    const live = this.live();
+    const from = live.findIndex((h) => h.uuid === uuid);
+    const resort = (): void => {
+      this.order = this.order.toSorted((a, b) => a.index - b.index);
+    };
     if (this.opts.renumberPassedSibling === true && Math.abs(from - slot) === 1) {
-      const mover = this.order[from] as { uuid: string; index: number };
-      const passed = this.order[slot] as { uuid: string; index: number };
+      const mover = live[from] as { uuid: string; index: number };
+      const passed = live[slot] as { uuid: string; index: number };
       // The passed row takes a value on the mover's far side; the mover is untouched.
       passed.index = slot < from ? mover.index + 1 : mover.index - 1;
-      this.order = this.order.toSorted((a, b) => a.index - b.index);
+      resort();
       return;
     }
-    const without = this.order.filter((h) => h.uuid !== uuid);
+    const without = live.filter((h) => h.uuid !== uuid);
     const before = without[slot - 1];
     const after = without[slot];
     const index =
@@ -92,9 +124,8 @@ class HeadingSim {
         : after === undefined
           ? before.index + 50
           : (before.index + after.index) / 2;
-    this.order = [...without.slice(0, slot), { uuid, index }, ...without.slice(slot)].toSorted(
-      (a, b) => a.index - b.index,
-    );
+    (this.order.find((h) => h.uuid === uuid) as { index: number }).index = index;
+    resort();
   }
 
   run = async (command: UiCommand): Promise<UiRunResult> => {
@@ -108,7 +139,9 @@ class HeadingSim {
         return { ok: true, stdout: "NOMATCH", stderr: "" };
       }
       const ordinal = Number((command.meta as { ordinal: number }).ordinal);
-      this.selected = this.order[ordinal]?.uuid ?? null;
+      // The walk enumerates the RENDERED rows and then NOMATCHes — an archived
+      // heading is never reachable through any ordinal.
+      this.selected = this.live()[ordinal]?.uuid ?? null;
       return { ok: true, stdout: this.selected === null ? "NOMATCH" : "OK", stderr: "" };
     }
     if (command.primitive === "chord-post") {
@@ -120,8 +153,11 @@ class HeadingSim {
         // The app declines: zero delta (and, on a real Mac, one alert beep).
         return { ok: true, stdout: "POSTED", stderr: "" };
       }
-      const cur = this.order.findIndex((h) => h.uuid === sel);
-      const last = this.order.length - 1;
+      // The chord counts slots in the RENDERED list, so a ±1 across an archived
+      // row's slot is still one hop.
+      const liveNow = this.live();
+      const cur = liveNow.findIndex((h) => h.uuid === sel);
+      const last = liveNow.length - 1;
       let want: number;
       if (this.opts.ignoreEndpointChords === true) {
         want = chord === "up-one" || chord === "to-top" ? cur - 1 : cur + 1;
@@ -139,7 +175,7 @@ class HeadingSim {
       this.placeAt(sel, want);
       if (this.opts.collateralOnChord === this.chords) {
         // A row at the far END of the list — one the gesture never passed over.
-        const victim = this.order.findLast((h) => h.uuid !== sel);
+        const victim = this.live().findLast((h) => h.uuid !== sel);
         if (victim !== undefined) victim.index += 1;
       }
       if (this.opts.disturbChildOnChord === this.chords) this.childIndex += 1;
@@ -148,8 +184,14 @@ class HeadingSim {
     return { ok: true, stdout: "", stderr: "" };
   };
 
+  /** Every row in index order, archived included — the raw database order. */
   titles(): string[] {
     return this.order.map((h) => h.uuid);
+  }
+
+  /** The rendered order — what the user (and the driver) sees. */
+  liveTitles(): string[] {
+    return this.live().map((h) => h.uuid);
   }
 }
 
@@ -324,6 +366,38 @@ describe("driveHeadingChordReorder — the certified moves", () => {
     expect(rewritten).toEqual(["B"]);
   });
 
+  it("CHORDMH2: a ±1 SKIPS an archived heading's slot in one chord, leaving its row untouched", async () => {
+    // Live G1 < G2 < G3 < G4, with an archived row sitting between G2 and G3.
+    // Moving G3 up one puts it between G1 and G2 — ONE ⌘↑ that hops straight over
+    // the archived slot, exactly as measured (CHORD2 cell 7a′).
+    const sim = new HeadingSim(["G1", "G2", "ARCH", "G3", "G4"], { archived: ["ARCH"] });
+    const archBefore = sim.indexOfRow("ARCH");
+    const out = await drive(sim, specFor(["G1", "G3", "G2", "G4"], ["G3"]));
+    expect(out.ok).toBe(true);
+    expect(out.chords).toBe(1);
+    expect(chordsPosted(sim)).toEqual(["up-one"]);
+    expect(sim.liveTitles()).toEqual(["G1", "G3", "G2", "G4"]);
+    // The archived row's own index is never rewritten — the chord passed over it
+    // without addressing it.
+    expect(sim.indexOfRow("ARCH")).toBe(archBefore);
+  });
+
+  it("CHORDMH2: every row address is an ordinal in the LIVE list, never the raw one", async () => {
+    // The archived row is at raw slot 1; the movee G3 is at raw slot 3 but at
+    // RENDERED slot 2, and that is the ordinal the driver must select.
+    const sim = new HeadingSim(["G1", "ARCH", "G2", "G3"], { archived: ["ARCH"] });
+    const archBefore = sim.indexOfRow("ARCH");
+    const out = await drive(sim, specFor(["G3", "G1", "G2"], ["G3"]));
+    expect(out.ok).toBe(true);
+    expect(chordsPosted(sim)).toEqual(["to-top"]);
+    const ordinals = sim.log
+      .filter((c) => c.primitive === "select-heading-row")
+      .map((c) => (c.meta as { ordinal: number }).ordinal);
+    expect(ordinals).toEqual([2]);
+    expect(sim.liveTitles()).toEqual(["G3", "G1", "G2"]);
+    expect(sim.indexOfRow("ARCH")).toBe(archBefore);
+  });
+
   it("already in the requested order: zero chords, zero selections, zero beeps", async () => {
     const sim = new HeadingSim(["A", "B", "C"]);
     const out = await drive(sim, specFor(["A", "B", "C"], ["A"]));
@@ -425,5 +499,39 @@ describe("driveHeadingChordReorder — fail-closed behavior", () => {
     const out = await drive(sim, specFor(["E", "A", "B", "C", "D"], ["E"]));
     expect(out.ok).toBe(false);
     expect(out.chords).toBe(1);
+  });
+});
+
+// --------------------------------------------------------- the database seam
+
+describe("createHeadingOrderReader — the ordinal ground truth", () => {
+  it("CHORDMH2: returns the RENDERED order — index order filtered to status = 0", () => {
+    const fixture = buildFixtureDb();
+    try {
+      const project = seedProject(fixture.db, { title: "P" });
+      const g1 = seedHeading(fixture.db, { title: "G1", project, index: 1 });
+      const arch = seedHeading(fixture.db, {
+        title: "GARCH",
+        project,
+        index: 2,
+        status: "completed",
+        stopDate: 1,
+      });
+      const g2 = seedHeading(fixture.db, { title: "G2", project, index: 3 });
+      const g3 = seedHeading(fixture.db, { title: "G3", project, index: 4 });
+      const trashed = seedHeading(fixture.db, { title: "GONE", project, index: 5 });
+      fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(trashed);
+      // A child of the ARCHIVED heading still counts into the digest: no heading
+      // chord may disturb any child of any heading of the project.
+      seedTodo(fixture.db, { title: "kid", heading: arch });
+
+      const state = createHeadingOrderReader(fixture.db)(project);
+      // The archived row holds a slot in the index axis and is absent from the
+      // walk — so ordinal 1 is G2, not the archived row.
+      expect(state.headings.map((h) => h.uuid)).toEqual([g1, g2, g3]);
+      expect(state.childCount).toBe(1);
+    } finally {
+      fixture.close();
+    }
   });
 });
