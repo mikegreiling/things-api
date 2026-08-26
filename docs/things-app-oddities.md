@@ -1104,6 +1104,26 @@ The pause otherwise holds: rolling to 2026-07-12 spawns nothing on this series (
 
 **Automation note:** the shipped composite refuses a series with no cursor and names `things todo resume-repeat` as the remedy, rather than guessing at what "check this off" means for a series the user deliberately paused. Evidence: [lab/cncac1-after-completion-checkoff.md](lab/cncac1-after-completion-checkoff.md) §8.
 
+### 19a. …and `Resume` does not repair it — the series comes back unpaused and PERMANENTLY STALLED (CERTSWEEP1, 2026-08-25, golden-v4 / Things 3.23 build 32300036)
+
+The question §19 left open ("what `Resume` can reconstruct from that state is unclear") is measured, and the answer is *nothing*. Same fixture, same two gestures, then `Items ▸ Repeat ▸ Resume`:
+
+```
+CHANGED template.rt1_instanceCreationPaused : 1 -> 0
+CHANGED template.userModificationDate       : … -> …
+(and nothing else)
+
+after resume:  tp=1 …  next=None  icStart=2026-07-06  icCount=2  paused=0  acRef=None
+```
+
+`Resume` flips one flag. It derives no cursor and reinstates no anchor — and an after-completion rule's entire schedule derives from that anchor, which the `Create Next Copy` in between consumed. The series is now **unpaused, reported live by every surface that reads `paused`, and structurally incapable of ever spawning again.** No sheet, no warning, no visible difference from a healthy resumed series.
+
+**Expected:** `Resume` re-derives the cycle position (or the app declines to eat the anchor in the first place — see §19). **Actual:** two ordinary menu presses, neither of which announces anything, silently retire a repeating to-do.
+
+The state is presumably recoverable by resolving the occurrence the `Create Next Copy` minted, since completion is what anchors an after-completion series — **inferred, not measured**. Either way the only route back is through a row the user never asked for. Evidence: [lab/certsweep1-repeat-certification.md](lab/certsweep1-repeat-certification.md) §5.
+
+One inconsistency recorded in passing: on this fixture the paused template's submenu read `… · Pause · Stop`, where CNCAC1 §8's paused fixture read `… · Resume · Stop`. Not chased.
+
 ## 20. Things 3.23: heading (and to-do) reordering is a first-class capability with NO affordance — no menu item, no context-menu item, no AX action, no advertised key equivalent (HEADORD1, 2026-08-25, golden-v4 / Things 3.23 build 32300036)
 
 This is a discoverability and accessibility report, not a behaviour bug: the capability itself is excellent ([craft §5c](things-app-craft.md)). The problem is that **the only way to reach it is a keyboard chord the app never mentions.**
