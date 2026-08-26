@@ -161,6 +161,29 @@ const SETTLE_POLL_S = 0.1;
 const ROW_TOLERANCE = 8;
 
 /**
+ * How many of the Next: menu's own item titles a MISS reports back (NEXTPOP1).
+ * A refusal that names only the date the dialog lacked cannot distinguish "the
+ * rule genuinely does not produce that date" from "the menu was not the rule's"
+ * — the two failures read identically, and the second one cost a whole campaign
+ * to tell apart. Naming the pop-up's current value plus the first few options it
+ * offered makes the refusal self-diagnosing. Bounded so a 100-item level cannot
+ * flood the message.
+ */
+const SAMPLE_ITEMS = 5;
+
+/**
+ * The `Next:` occurrence pop-up's asynchronous-recompute budget (NEXTPOP1) — how
+ * long {@link axSettleOccurrencesScript} waits for the dialog to absorb a rule
+ * change before the drive touches it again, and how often it looks. MEASURED at
+ * **0.4s** on golden-v4 / Things 3.23 (DIAG4: the control flipped from the seed's
+ * first occurrence to the anchor's between t+0.3s and t+0.4s), so the budget is
+ * ~3× the observed latency; the poll exits early the moment the control moves,
+ * which is the only case that costs anything.
+ */
+const OCCURRENCE_SETTLE_MS = 1200;
+const OCCURRENCE_POLL_MS = 100;
+
+/**
  * The shared AppleScript handler prelude for every LABEL-ANCHORED field address
  * in the Repeat dialog — the HXPC1 discrimination law in ONE place, so the
  * pre-commit audit re-reads each field through the SAME address the drive wrote
@@ -932,6 +955,9 @@ ${SE}
   set theMenu to menu 1 of pu
   set clickedTitle to ""
   set levelsSeen to 0
+  set opener to (value of pu) as text
+  set sample to ""
+  set sampled to 0
   if isToday then
     set nms to name of every menu item of theMenu
     if (count of nms) > 0 then
@@ -952,6 +978,13 @@ ${SE}
     repeat with i from 1 to (count of nms)
       set nm to item i of nms
       if nm is not missing value then
+        -- Keep a short sample of what THIS menu actually offered, so a miss can
+        -- report the dates the dialog had rather than only the one it lacked.
+        if sampled < ${SAMPLE_ITEMS} then
+          if sample is not "" then set sample to sample & ", "
+          set sample to sample & (nm as text)
+          set sampled to sampled + 1
+        end if
         set ymd to my parsedYMD(nm)
         if ymd is not missing value then
           if (item 1 of ymd) is wantY and (item 2 of ymd) is wantM and (item 3 of ymd) is wantD then
@@ -985,7 +1018,7 @@ ${SE}
   end repeat
   if clickedTitle is "" then
     key code 53
-    error "select-next-occurrence: this Repeat dialog offers only the rule's own upcoming occurrences (and today) as the first occurrence, and ${isoDate} is not one of them — searched " & levelsSeen & " level(s) of the Next: menu. Ask for a date the rule actually produces, or change the rule."
+    error "select-next-occurrence: this Repeat dialog offers only the rule's own upcoming occurrences (and today) as the first occurrence, and ${isoDate} is not one of them — searched " & levelsSeen & " level(s) of the Next: menu, which opened on \\"" & opener & "\\" and led with: " & sample & ". Ask for a date the rule actually produces, or change the rule."
   end if
   delay 0.4
   set shown to (value of pu) as text
@@ -993,6 +1026,53 @@ ${SE}
     error "select-next-occurrence: the Next: pop-up committed \\"" & shown & "\\", not the requested \\"" & clickedTitle & "\\" — the selection did not take"
   end if
   return "OK"
+end tell`;
+}
+
+/**
+ * settle-occurrences: let the 3.23 `Next:` pop-up ABSORB the rule change the
+ * preceding steps made, before the drive touches the dialog again (NEXTPOP1).
+ *
+ * MEASURED (golden-v4 / Things 3.23, `research-nextpop1.sh` DIAG3/DIAG4): the
+ * dialog recomputes the first-occurrence pop-up — its displayed value AND the
+ * menu of occurrences behind it — ASYNCHRONOUSLY. After the yearly anchor was
+ * moved from Aug 6 to Aug 20 the control flipped at **t+0.4s** with nothing else
+ * driven; when the very next step (the "Add deadlines" checkbox) was pressed
+ * inside that window instead, the control NEVER caught up — it still read
+ * `Thu, Aug 6, 2026`, and its menu still enumerated the Aug-6 series, six
+ * seconds later. A cancelled recompute does not retry.
+ *
+ * That is what made every deadlined monthly/yearly promote fail closed on 3.23:
+ * the anchor drive is followed immediately by the deadline controls, so by the
+ * time `select-next-occurrence` opened the menu it was the SEED's series, and
+ * the requested date — the rule's own first due date — was genuinely not in it
+ * (VMRES1 §4.3, reproduced and explained in NEXTPOP1).
+ *
+ * The wait is closed-loop in the direction that matters: it exits the moment the
+ * control MOVES, which is the case that needs waiting for. When the rule change
+ * did not move the first occurrence there is nothing to observe, so the budget
+ * bounds it — deliberately over-cautious, since the cost is a fraction of a
+ * second and the alternative is a series that starts on the wrong date.
+ */
+export function axSettleOccurrencesScript(
+  popupPath: string,
+  budgetMs = OCCURRENCE_SETTLE_MS,
+  pollMs = OCCURRENCE_POLL_MS,
+): string {
+  const poll = Math.max(50, Math.trunc(pollMs)) / 1000;
+  const reads = Math.max(1, Math.ceil(Math.max(1, Math.trunc(budgetMs)) / Math.max(50, pollMs)));
+  // `before` and `after` are AppleScript's own positional keywords and `now` is
+  // taken too — `set before to …` does not even COMPILE (osacompile: "Expected
+  // expression but found “to”"), and osascript reports that as a drive failure at
+  // run time, mid-dialog. Hence the deliberately dull variable names.
+  return `${SE}
+  set wasValue to (value of ${popupPath}) as text
+  repeat ${reads} times
+    delay ${poll}
+    set curValue to (value of ${popupPath}) as text
+    if curValue is not wasValue then return "moved: " & wasValue & " -> " & curValue
+  end repeat
+  return "unchanged: " & wasValue
 end tell`;
 }
 
@@ -1948,6 +2028,12 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         primitive: "select-next-occurrence",
         label: step.label,
         script: axSelectNextOccurrenceScript(step.path ?? "", step.value ?? ""),
+      };
+    case "settle-occurrences":
+      return {
+        primitive: "settle-occurrences",
+        label: step.label,
+        script: axSettleOccurrencesScript(step.path ?? ""),
       };
     case "converge-weekdays":
       return {

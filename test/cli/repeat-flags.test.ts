@@ -11,6 +11,7 @@ import {
   type RepeatRuleFlagFields,
 } from "../../src/cli/commands/repeat-flags.ts";
 import type { RepeatFrequency } from "../../src/write/operations.ts";
+import { validateOperationParams } from "../../src/write/param-schema.ts";
 
 describe("repeatRuleFlagsFromOpts", () => {
   it("maps nothing for a bare command", () => {
@@ -148,5 +149,48 @@ describe("addRepeatingRuleFieldsFromOpts (add-repeating calendar subset)", () =>
         1,
       ),
     ).toEqual({ frequency: "weekly", interval: 1, weekdays: ["monday"] });
+  });
+
+  // NEXTPOP1: `--when` maps to the rule-level `next` for make/reschedule-repeat,
+  // but the add-repeating composites have no such parameter — the first
+  // occurrence is derived from the base add's own `--when` downstream. The
+  // mapper leaked it, so the composite handed `next` to its `todo.add` leg,
+  // which refuses an unknown parameter (#584): every dated add-repeating exited
+  // 2 with `params.next: not a parameter of "todo.add"` before anything was
+  // created.
+  it("strips the rule-level `next` that --when maps to (the composite derives it)", () => {
+    expect(addRepeatingRuleFieldsFromOpts({ when: "2026-08-06" }, "yearly", 1)).toEqual({
+      frequency: "yearly",
+      interval: 1,
+    });
+    expect(
+      addRepeatingRuleFieldsFromOpts({ when: "2026-08-06", onDay: "20" }, "monthly", 1),
+    ).toEqual({ frequency: "monthly", interval: 1, monthly: { day: 20 } });
+  });
+
+  // The structural lock, not just the one-key one: the bag the CLI hands the
+  // composite must satisfy the operation's own declared parameter shape, which
+  // is what the pipeline enforces on every leg.
+  it("produces a bag that validates against the add-repeating parameter schemas", () => {
+    const opts = {
+      when: "2026-08-06",
+      deadline: true,
+      reminder: "09:00",
+      startDaysEarlier: "14",
+      yearlyMonth: "8",
+      onDay: "20",
+      endsAfter: "5",
+    };
+    const rule = addRepeatingRuleFieldsFromOpts(opts, "yearly", 1);
+    for (const op of ["todo.add-repeating", "project.add-repeating"] as const) {
+      expect(
+        validateOperationParams(op, {
+          title: "NEXTPOP1-FIXTURE",
+          when: "2026-08-06",
+          deadline: "2026-08-20",
+          ...rule,
+        }),
+      ).toBeNull();
+    }
   });
 });

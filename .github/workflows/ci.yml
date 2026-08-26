@@ -36,3 +36,7 @@ jobs:
       - run: npx vitest run test/deputy test/unit/deputy-routing.test.ts test/unit/deputy-protocol.test.ts
         env:
           THINGS_DEPUTY_LIVE: "1"
+      # Every generated AppleScript/JXA must PARSE (NEXTPOP1). osacompile is a
+      # macOS tool, so the suite self-skips on the Linux `check` job; run it here
+      # where it can actually execute. Parse-only — no app is launched.
+      - run: npx vitest run test/unit/ui-script-syntax.test.ts

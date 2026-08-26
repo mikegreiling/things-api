@@ -692,10 +692,14 @@ async function makeRepeatingViaClone(
       ? (params.startDaysEarlier ?? 0)
       : 0;
   const driveIso = isIsoDate(whenIso) ? addDaysIso(whenIso, deadlineShift) : undefined;
-  // The dialog is driven with the deadline-adjusted date; the verify below expects
-  // the START to land back on the requested `--when`.
-  const nextIso = driveIso;
-  const expectedStartIso = isIsoDate(whenIso) ? whenIso : undefined;
+  // The ANCHOR is derived from the deadline-adjusted date (the anchor names the
+  // DUE date), but `next` is passed through as the requested START: the promote
+  // leg's own compile applies the "Next:" shift, and it is the ONLY place that
+  // does (NEXTPOP1 — shifting here as well made every downstream consumer that
+  // shifts, `assessOffRuleFirst` among them, shift a second time). The verify
+  // below expects the START to land on the requested `--when` either way.
+  const nextIso = isIsoDate(whenIso) ? whenIso : undefined;
+  const expectedStartIso = nextIso;
   const effParams: RepeatRuleParams = { ...params, ...deriveFixedAnchor(params, driveIso) };
 
   // The promote leg drives the GUI — block before minting a clone if the ack is missing.
@@ -991,8 +995,11 @@ async function addRepeatingViaCreate(
   const deadlineShift =
     rule.deadline === true || (rule.startDaysEarlier ?? 0) > 0 ? (rule.startDaysEarlier ?? 0) : 0;
   const driveIso = whenIso !== null ? addDaysIso(whenIso, deadlineShift) : null;
-  const nextIso = driveIso ?? undefined;
-  const expectedStartIso = whenIso ?? undefined;
+  // The ANCHOR is derived from the deadline-adjusted date; `next` passes through
+  // as the requested START and the promote leg's compile applies the "Next:"
+  // shift — the one place that does (NEXTPOP1; see promoteViaCloneAndMakeRepeating).
+  const nextIso = whenIso ?? undefined;
+  const expectedStartIso = nextIso;
   const effRule: AddRepeatingRuleFields &
     Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">> = {
     ...rule,

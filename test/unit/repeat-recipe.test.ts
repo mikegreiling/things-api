@@ -313,6 +313,9 @@ describe("repeat dialog recipe — shared by reschedule + project", () => {
 // pop-up sits between Ends and every per-frequency control (shifting them +1) and
 // REPLACES the first-occurrence date area. The recipe carries both shapes and the
 // driver measures which one is open; nothing keys off the app version.
+/** Where the NEXTPOP1 settle sits in a step list (-1 when the recipe omits it). */
+const settleAt = (steps: UiStep[]) => steps.findIndex((s) => s.primitive === "settle-occurrences");
+
 describe("repeat dialog recipe — the 3.23 shape fork (RDLG2)", () => {
   it("probes the dialog's shape BEFORE any control the redesign moved", () => {
     for (const extras of [
@@ -387,6 +390,70 @@ describe("repeat dialog recipe — the 3.23 shape fork (RDLG2)", () => {
     expect(legacy).toHaveLength(1);
     expect(legacy[0]?.primitive).toBe("set-datetime");
     expect(legacy[0]?.dtTarget).toBe("next");
+  });
+
+  // NEXTPOP1 (golden-v4 / Things 3.23): the dialog recomputes its first-occurrence
+  // pop-up ~0.4s after a calendar-anchor change, and an input inside that window
+  // CANCELS the recompute for good — the control (and its menu of occurrences) goes
+  // on describing the previous rule. The deadline checkbox is the very next thing
+  // this recipe drives, which is why every deadlined monthly/yearly promote used to
+  // fail closed on a date its own rule produces.
+  describe("the Next: pop-up gets a settle before any further input (NEXTPOP1)", () => {
+    it("sits between the calendar anchor and the deadline checkbox", () => {
+      const steps = forShape(
+        makeRepeatingRecipe("T-1", "yearly", 1, {
+          yearly: { month: 8, day: 20 },
+          deadline: true,
+          startDaysEarlier: 14,
+          next: "2026-08-20",
+        }).steps,
+        "next-popup",
+      );
+      const settle = settleAt(steps);
+      const anchor = steps.findIndex((s) => s.label === "monthly day = 20");
+      const checkbox = steps.findIndex((s) => s.label === "Add deadlines");
+      const next = steps.findIndex((s) => s.primitive === "select-next-occurrence");
+      expect(anchor).toBeGreaterThan(-1);
+      expect(settle).toBeGreaterThan(anchor);
+      expect(settle).toBeLessThan(checkbox);
+      expect(settle).toBeLessThan(next);
+      expect(steps[settle]?.pathCandidates?.[0]).toContain("pop up button 2 of group 1");
+    });
+
+    it("is emitted for the 3.23 pop-up only — the ≤3.22 date area has no menu to recompute", () => {
+      const raw = makeRepeatingRecipe("T-1", "yearly", 1, { next: "2026-08-20" }).steps;
+      expect(settleAt(forShape(raw, "next-popup"))).toBeGreaterThan(-1);
+      expect(settleAt(forShape(raw, "legacy"))).toBe(-1);
+    });
+
+    it("is emitted even when no first occurrence is requested (a stale pop-up commits itself)", () => {
+      const steps = forShape(
+        makeRepeatingRecipe("T-1", "monthly", 1, { monthly: { day: 20 } }).steps,
+        "next-popup",
+      );
+      expect(settleAt(steps)).toBeGreaterThan(-1);
+      expect(steps.some((s) => s.primitive === "select-next-occurrence")).toBe(false);
+    });
+
+    it("is NOT emitted for an after-completion rule (no first-occurrence control at all)", () => {
+      const steps = forShape(
+        makeRepeatingRecipe("T-1", "weekly", 1, { afterCompletion: true }).steps,
+        "next-popup",
+      );
+      expect(settleAt(steps)).toBe(-1);
+    });
+
+    it("contributes no control to the pre-commit audit (it sets nothing)", () => {
+      const steps = forShape(
+        makeRepeatingRecipe("T-1", "yearly", 1, {
+          yearly: { month: 8, day: 20 },
+          next: "2026-08-20",
+        }).steps,
+        "next-popup",
+      );
+      const audit = steps.find((s) => s.primitive === "audit-dialog");
+      expect(audit?.audit?.controls.some((c) => c.label.includes("absorb"))).toBe(false);
+    });
   });
 
   it("Ends / interval / checkbox controls are shape-INDEPENDENT (they did not move)", () => {

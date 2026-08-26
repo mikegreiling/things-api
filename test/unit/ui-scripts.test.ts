@@ -22,6 +22,7 @@ import {
   axSetDateTimeScript,
   axSetGroupNumberScript,
   axSetRowFieldScript,
+  axSettleOccurrencesScript,
   axSetValueScript,
   axSheetOpenScript,
   axTypeTextScript,
@@ -296,6 +297,45 @@ describe("axSelectNextOccurrenceScript — the 3.23 Next: occurrence menu", () =
   it("reads the pop-up back and refuses a value that is not the clicked item", () => {
     expect(script).toContain("set shown to (value of pu) as text");
     expect(script).toContain("if shown is not clickedTitle then");
+  });
+
+  // NEXTPOP1: "not one of them" is ambiguous on its own — it reads the same
+  // whether the rule genuinely cannot produce the date or the menu belonged to a
+  // DIFFERENT rule (a recompute the drive cancelled). The refusal therefore names
+  // the pop-up's own value and the head of the list it searched.
+  it("reports the menu it actually searched, so a miss is self-diagnosing", () => {
+    expect(script).toContain("set opener to (value of pu) as text");
+    expect(script).toContain('which opened on \\"" & opener & "\\" and led with: " & sample');
+  });
+});
+
+describe("axSettleOccurrencesScript — the Next: pop-up's async recompute (NEXTPOP1)", () => {
+  const script = axSettleOccurrencesScript("pop up button 2 of group 1");
+
+  it("samples the control first, then waits for it to MOVE", () => {
+    expect(script).toContain("set wasValue to (value of pop up button 2 of group 1) as text");
+    expect(script).toContain("if curValue is not wasValue then return");
+  });
+
+  it("exits early on the change and is BOUNDED when there is nothing to absorb", () => {
+    // 1200ms budget at a 100ms poll — ~3x the 0.4s recompute measured on 3.23
+    expect(script).toContain("repeat 12 times");
+    expect(script).toContain("delay 0.1");
+    expect(script).toContain('return "unchanged: " & wasValue');
+  });
+
+  it("touches nothing — it is a wait, not a setter", () => {
+    expect(script).not.toContain("click");
+    expect(script).not.toContain("keystroke");
+  });
+
+  // `before`/`after`/`now` are AppleScript's own keywords: the first cut of this
+  // step used `set before to …` and did not COMPILE, which surfaces only as a
+  // mid-dialog drive failure. test/unit/ui-script-syntax.test.ts osacompiles every
+  // generated script on macOS; this keeps the specific trap named where the script
+  // is written.
+  it("avoids AppleScript's reserved positional keywords as variable names", () => {
+    expect(script).not.toMatch(/\bset (before|after|now) to\b/);
   });
 });
 

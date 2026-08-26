@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { COMMANDS } from "../../src/write/commands.ts";
+import type { CompiledInvocation } from "../../src/write/vectors/types.ts";
 import { emptyPreState } from "../../src/write/pre-state.ts";
 import { escapeAppleScript } from "../../src/write/vectors/applescript.ts";
 
@@ -504,5 +505,95 @@ describe("Shortcuts vector goldens (S02 / scf P3b)", () => {
         token: TOKEN,
       }),
     ).toThrow(/cannot be compiled/);
+  });
+});
+
+/**
+ * THE SINGLE-SHIFT LOCK (NEXTPOP1).
+ *
+ * `next` means the requested first-occurrence START in every params bag, at
+ * every layer — that is what `--when` means to a caller. A DEADLINED rule
+ * anchors the Repeat dialog on the DEADLINE (YANCH1 #493), so the date the
+ * "Next:" control must carry is `next + startDaysEarlier`. That conversion is
+ * the COMPILE's, and the compile's alone.
+ *
+ * It used to happen in the promote orchestrators as well, which handed the op a
+ * bag whose `next` was already a DUE date. Everything downstream that shifts —
+ * `assessOffRuleFirst`, reached through `assertRepeatRule` in preRead — then
+ * shifted a second time, and a deadlined MONTHLY promote was refused before it
+ * ran, quoting a date the caller never asked for (measured in-lab: `--when
+ * 2026-08-06 --deadline 2026-08-20` → "a first occurrence on 2026-08-20 would
+ * not hold"). These cases pin the shift to ONE application on every verb that
+ * drives the dialog: the double-shifted date is asserted ABSENT, not merely the
+ * right date asserted present.
+ */
+const nextValue = (inv: CompiledInvocation) =>
+  inv.recipe?.steps.find((s) => s.primitive === "select-next-occurrence")?.value;
+
+describe("the deadline shift lands EXACTLY once, in the compile (NEXTPOP1)", () => {
+  /** START 2026-08-06, offset 14 → the dialog's "Next:" must read 2026-08-20. */
+  const START = "2026-08-06";
+  const DUE = "2026-08-20";
+  /** What a SECOND application of the same offset would produce. */
+  const DOUBLE = "2026-09-03";
+
+  const deadlined = {
+    frequency: "yearly",
+    interval: 1,
+    yearly: { month: 8, day: 20 },
+    next: START,
+    deadline: true,
+    startDaysEarlier: 14,
+  } as const;
+
+  it("todo.make-repeating drives the DUE date, not the double-shifted one", () => {
+    const inv = COMMANDS["todo.make-repeating"].compile(
+      { uuid: "TODO-1", ...deadlined },
+      "ui",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    expect(nextValue(inv)).toBe(DUE);
+    expect(inv.payload).not.toContain(DOUBLE);
+  });
+
+  it("project.make-repeating drives the same date through its own recipe", () => {
+    const pre = emptyPreState();
+    pre.projectRepeat = { kind: "area", containerReveal: "AREA-1", title: "Quarterly review" };
+    const inv = COMMANDS["project.make-repeating"].compile(
+      { uuid: "PROJ-1", ...deadlined },
+      "ui",
+      pre,
+      { token: TOKEN },
+    );
+    expect(nextValue(inv)).toBe(DUE);
+    expect(inv.payload).not.toContain(DOUBLE);
+  });
+
+  it("todo.reschedule-repeat — the verb that always shifted — is unchanged", () => {
+    const inv = COMMANDS["todo.reschedule-repeat"].compile(
+      { uuid: "TODO-1", ...deadlined },
+      "ui",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    expect(nextValue(inv)).toBe(DUE);
+    expect(inv.payload).not.toContain(DOUBLE);
+  });
+
+  it("a NON-deadlined rule is not shifted at all (the offset is the deadline's)", () => {
+    const inv = COMMANDS["todo.make-repeating"].compile(
+      {
+        uuid: "TODO-1",
+        frequency: "yearly",
+        interval: 1,
+        yearly: { month: 8, day: 6 },
+        next: START,
+      },
+      "ui",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    expect(nextValue(inv)).toBe(START);
   });
 });

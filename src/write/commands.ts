@@ -1979,10 +1979,41 @@ function uiDrive(recipe: UiRecipe): CompiledInvocation {
 export { assertRepeatRule };
 
 /**
+ * The recipe extras for a MAKE-REPEATING drive: {@link ruleExtras} with the
+ * "Next:" drive date deadline-adjusted, exactly as {@link reschedRuleExtras}
+ * does for a reschedule.
+ *
+ * ONE MEANING FOR `next`, ONE PLACE THAT SHIFTS IT (NEXTPOP1). `next` is the
+ * requested first-occurrence START — what `--when` means to a caller — in every
+ * params bag, at every layer. A DEADLINED rule anchors the dialog on the
+ * DEADLINE (YANCH1 #493), so the date the "Next:" control must carry is
+ * `next + startDaysEarlier`; that conversion belongs to the compile, where the
+ * dialog is, and nowhere else.
+ *
+ * It used to happen upstream too: the promote orchestrators shifted `next`
+ * before handing the bag to this op, so the SAME field meant a START coming from
+ * a caller and a DUE date coming from a composite. Everything downstream that
+ * shifts — `assessOffRuleFirst`, via `assertRepeatRule` in preRead — then shifted
+ * a second time, and a deadlined MONTHLY promote was refused before it ran with
+ * a message about a date the caller never asked for (`--deadline 2026-08-20`
+ * + `--when 2026-08-06` → "a first occurrence on 2026-08-20 would not hold",
+ * measured in-lab). The orchestrators now pass `--when` through unshifted.
+ */
+function makeRuleExtras(params: RepeatRuleParams): RepeatRuleExtras {
+  const base = ruleExtras(params);
+  const drive = deadlineDriveNext(params);
+  return drive !== undefined ? { ...base, next: drive } : base;
+}
+
+/**
  * The extended-vocabulary fields of a rule as a recipe `extras` bag, including
  * ONLY the keys that are present (exactOptionalPropertyTypes: never set an
  * optional field to undefined). A bare `{ uuid, frequency, interval }` yields
  * `{}`, so the recipe drives exactly the certified two-control path.
+ *
+ * `next` is copied through VERBATIM — a START. Every compile that drives the
+ * dialog wraps this with its own deadline shift ({@link makeRuleExtras},
+ * {@link reschedRuleExtras}); this function never shifts (NEXTPOP1).
  */
 function ruleExtras(params: RepeatRuleParams): RepeatRuleExtras {
   return {
@@ -2027,9 +2058,9 @@ function reschedEffParams(params: RepeatRuleParams): RepeatRuleParams {
  * `--when` is the scheduled START, but a deadlined rule anchors on the DEADLINE,
  * so the dialog's "Next:" field is driven with `when + startDaysEarlier` and the
  * app back-shifts the instance start to `--when`. The expectedDelta keeps the RAW
- * `params.next` (the cursor asserts the START). make/add-repeating apply this shift
- * upstream (promote-clone.ts) and pass an already-adjusted rule, so only the
- * reschedule compile needs it here.
+ * `params.next` (the cursor asserts the START). {@link makeRuleExtras} is the
+ * make/add-repeating twin of this — the shift lands in the compile on every verb
+ * that drives the dialog, and nowhere upstream of it (NEXTPOP1).
  */
 function reschedRuleExtras(params: RepeatRuleParams): RepeatRuleExtras {
   const base = ruleExtras(reschedEffParams(params));
@@ -2102,7 +2133,7 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
   compile(params, vector) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
     return uiDrive(
-      makeRepeatingRecipe(params.uuid, params.frequency, params.interval, ruleExtras(params)),
+      makeRepeatingRecipe(params.uuid, params.frequency, params.interval, makeRuleExtras(params)),
     );
   },
 };
@@ -2424,7 +2455,7 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
         tax.title,
         params.frequency,
         params.interval,
-        ruleExtras(params),
+        makeRuleExtras(params),
       ),
     );
   },
