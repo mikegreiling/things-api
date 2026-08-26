@@ -1893,9 +1893,9 @@ export function registerWriteCommands(program: Command): void {
               "keyboard shortcuts on a selected heading row and nowhere else, so this drives the " +
               "app — enable it once with `things config set ui-enabled true` and pass " +
               "--dangerously-drive-gui. It moves one heading one slot at a time, re-reading the " +
-              "order after each step. Refuses when the project holds a completed or canceled " +
-              "heading (the rows are addressed by position, which an archived heading makes " +
-              "ambiguous).",
+              "order after each step. Completed and canceled headings are not shown in the " +
+              "project view, so they are skipped over and keep their place in the list; naming " +
+              "one as a heading to move or as an anchor is refused.",
           ),
       ),
     ),
@@ -3052,8 +3052,9 @@ export function registerWriteCommands(program: Command): void {
               "EARLIEST one's current slot; --start/--end/--before/--after position the block. A " +
               "Today/Evening member also has an index slot in its container, so a set sharing BOTH " +
               "axes is ambiguous — pass --in to say which. HEADINGS: same-project heading " +
-              "re-ranking runs the native heading-block wire; an archived heading is reorderable " +
-              "but repositioning it brings it back to open (disclosed). AREAS: this drives the " +
+              "re-ranking drives the local Things app (keyboard shortcuts on the heading row) " +
+              "and covers the open headings only — a completed or canceled heading is not shown " +
+              "in the project view, so it is skipped over and cannot be moved. AREAS: this drives the " +
               "local Things app (sidebar drag). `things area reorder` and `things project " +
               "move-heading` remain as kind-specific spellings.",
           )

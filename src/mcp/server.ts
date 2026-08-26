@@ -3347,9 +3347,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "assembles the named items as a block at the EARLIEST one's current slot; start/end/" +
         "before/after position the block. A Today or This Evening member also holds a slot in its " +
         "container, so a set coherent on BOTH axes is ambiguous — pass `in` to name the axis. " +
-        "HEADINGS: same-project heading re-ranking runs the native heading-block wire (children " +
-        "follow); an archived heading is reorderable but repositioning it brings it back to open " +
-        "(disclosed in the result). AREAS: this drives the local Things app (sidebar drag) and " +
+        "HEADINGS: same-project heading re-ranking drives the local Things app (keyboard " +
+        "shortcuts on the heading row; children follow) and must be turned on the same way as " +
+        "areas below. It covers the open headings only — a completed or canceled heading is not " +
+        "shown in the project view, so it is stepped over and cannot be moved or used as an " +
+        "anchor. AREAS: this drives the local Things app (sidebar drag) and " +
         "must be turned on with `things config set ui-enabled true` plus dangerously_drive_gui; " +
         "the areas' projects and to-dos are untouched. Ordering the Today, Inbox, or Someday " +
         "lists, or a project's to-dos, must first be enabled once via `things config set " +

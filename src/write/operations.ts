@@ -267,9 +267,10 @@ export interface HeadingAddParams {
  *
  * GUI-driven (CHORDMH1): the app offers heading order only as keyboard chords on
  * a selected heading row, so this drives the Things window — it needs
- * `ui.enabled` plus the `--dangerously-drive-gui` acknowledgement, and it
- * refuses when the project holds a completed/canceled heading (the row addresses
- * are positional, and an archived heading makes every position ambiguous).
+ * `ui.enabled` plus the `--dangerously-drive-gui` acknowledgement. Completed and
+ * canceled headings are invisible to it: they render no row in the project view,
+ * so the plan's positions count only the open headings (CHORDMH2) and naming an
+ * archived heading as a movee or an anchor is refused.
  */
 export interface MoveHeadingParams {
   project: ContainerRef;

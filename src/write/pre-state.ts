@@ -321,8 +321,16 @@ export function emptyPreState(): PreState {
  * after moving `headings` (an ordered block) to the requested placement. The
  * block lands contiguously in selection order; every other heading keeps its
  * relative order. Children follow their heading on the wire (scf P1). Illegal
- * requests (unknown/duplicated movee, an anchor that is a movee or absent)
- * collect problems and leave the order unchanged.
+ * requests (unknown/duplicated movee, an anchor that is a movee or absent,
+ * an archived movee or anchor) collect problems and leave the order unchanged.
+ *
+ * The order this computes is the LIVE (`status = 0`) heading order — the order
+ * the project view actually renders, and therefore the order the chord vector's
+ * positional row addressing walks (CHORD2 cell 7a′). An archived heading holds
+ * its slot in the `index` axis but is invisible to both, so it appears in
+ * neither `current`, `targetOrder` nor `untouched`, and no assertion is made
+ * about its rank: the live rows are renumbered around it over time and its own
+ * drift among them is harmless because nothing renders it.
  */
 export function computeHeadingMovePre(
   db: DatabaseSync,
@@ -336,11 +344,20 @@ export function computeHeadingMovePre(
       `SELECT uuid, status FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
     )
     .all(projectUuid) as { uuid: string; status: number }[];
-  const current = rows.map((r) => r.uuid);
+  // THE RENDERED ORDER IS THE DB ORDER FILTERED TO `status = 0` (CHORD2 cell 7a′).
   // Archived = the heading is completed/canceled (any closed status). All lifecycle
   // classes — open, archived-unswept, archived-swept — sit in this ONE index axis
-  // (HEADSORT, read-shape v2 R5).
-  const archived = rows.filter((r) => r.status !== 0).map((r) => r.uuid);
+  // (HEADSORT, read-shape v2 R5), but only the OPEN ones render as content rows: an
+  // archived heading does not render, takes no ordinal in the positional
+  // `select-heading-row` walk (the walk enumerates the live headings and then
+  // NOMATCHes), and a live heading's ±1 chord skips straight over its slot in one
+  // dispatch, leaving the archived row's own `index` unwritten. So the plan's
+  // ordinals must enumerate the LIVE headings and nothing else — keeping archived
+  // rows in `current` would put every ordinal in the plan one out of step with the
+  // walk's per archived heading, and THAT mismatch (not the rendering) was the real
+  // hazard the pre-CHORD2 whole-project refusal stood in for.
+  const current = rows.filter((r) => r.status === 0).map((r) => r.uuid);
+  const archived = new Set(rows.filter((r) => r.status !== 0).map((r) => r.uuid));
   const problems: string[] = [];
   const currentSet = new Set(current);
   const movees = new Set<string>();
@@ -349,28 +366,31 @@ export function computeHeadingMovePre(
     movees.add(h);
   }
   if (headings.length === 0) problems.push("no headings given");
+  // An ARCHIVED heading is still refused as a MOVEE — it renders no row, so there
+  // is no ordinal to select it by and no chord can reach it. Its presence in the
+  // project is no longer an obstacle (it is simply absent from the walk), but
+  // naming one as the thing to move is unsatisfiable.
   for (const h of headings) {
-    if (!currentSet.has(h)) problems.push(`${h} is not a heading of this project`);
-  }
-  // ARCHIVED HEADINGS FENCE THE WHOLE PROJECT. The chord vector addresses a
-  // heading row POSITIONALLY — the Nth selectable row in the rendered project
-  // view whose to-do readback is empty (HEADCERT1) — and that ordinal is only
-  // the database's `index` ordinal if the view renders every heading the
-  // database holds. Whether Things renders a COMPLETED/CANCELED heading in the
-  // project view is not measured, so one anywhere in the project makes every
-  // ordinal in the plan unvouchable. Refuse the whole move rather than chord a
-  // row we cannot name (harness.md §AX-drive scrutiny, over-caution direction).
-  if (archived.length > 0) {
-    problems.push(
-      `this project has ${archived.length} completed/canceled heading(s) (${archived.join(", ")}), ` +
-        "and heading order is driven by selecting rows positionally in the project view — an " +
-        "archived heading makes every position ambiguous",
-    );
+    if (archived.has(h)) {
+      problems.push(
+        `${h} is a completed/canceled heading — it is not shown in the project view, so there ` +
+          "is no row to select and no chord can move it",
+      );
+    } else if (!currentSet.has(h)) {
+      problems.push(`${h} is not a heading of this project`);
+    }
   }
   let anchor: string | null = null;
   if ("before" in placement || "after" in placement) {
     anchor = "before" in placement ? placement.before : placement.after;
-    if (!currentSet.has(anchor)) {
+    if (archived.has(anchor)) {
+      // Same reason, from the other side: an unrendered heading has no slot for a
+      // live heading to be placed relative to.
+      problems.push(
+        `anchor heading ${anchor} is completed/canceled — an archived heading holds no ` +
+          "position in the project view to place another heading against",
+      );
+    } else if (!currentSet.has(anchor)) {
       problems.push(`anchor heading ${anchor} is not a heading of this project`);
     }
     if (movees.has(anchor)) {
