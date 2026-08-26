@@ -62,6 +62,7 @@ import {
   convertToProjectRecipe,
   dissolveHeadingRecipe,
   headingConvertToProjectRecipe,
+  moveHeadingChordRecipe,
   moveHeadingToProjectRecipe,
   makeRepeatingRecipe,
   createNextCopyRecipe,
@@ -1896,9 +1897,18 @@ const headingAdd: CommandSpec<"project.add-heading"> = {
   },
 };
 
+/**
+ * project.move-heading — within-project heading order, on the ARROW-CHORD ui
+ * vector (CHORDMH1, on the HEADORD1 law). Things 3.23 left the private reorder
+ * command declared and inert, which took heading order offline entirely; the
+ * replacement is the app's own keyboard affordance (⌘↑/⌘↓/⌘⌥↑/⌘⌥↓ on a selected
+ * heading row), driven as a verified closed loop by src/write/vectors/ui-chord.ts.
+ * This is the ONE reorder that leaves the `privateReorderIsNoOp` range — every
+ * other scope still routes through its own gate.
+ */
 const projectMoveHeading: CommandSpec<"project.move-heading"> = {
   op: "project.move-heading",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-HEADING-ORDER"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-HEADING-ORDER", "H-UI-DRIVE"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.destProject = resolveProject(db, params.project);
@@ -1906,24 +1916,43 @@ const projectMoveHeading: CommandSpec<"project.move-heading"> = {
     return pre;
   },
   expectedDelta(pre) {
-    // The reorder wire re-ranks the FULL heading list; verify the whole target
-    // order (strictly ascending "index"). Children follow their heading (scf
-    // P1), so no per-child assertion is needed.
-    return { mode: "ordering", key: "index", sequence: pre.headingMove?.targetOrder ?? [] };
+    const move = pre.headingMove;
+    return {
+      mode: "ordering",
+      key: "index",
+      // The full end state: every heading of the project, strictly ascending.
+      sequence: move?.targetOrder ?? [],
+      // RRF1: the headings the caller did NOT name must hold their EXACT prior
+      // rank — a chord is a single-row write, and this is what proves the one
+      // that landed was the row the plan addressed (a heading row exposes no
+      // title to read the selection back through).
+      unchanged: move?.untouched ?? [],
+      // Children follow their heading through an intact FK, un-renumbered and
+      // un-touched (no userModificationDate bump — that is what `frozen` adds).
+      frozen: (move?.children ?? []).map((c) => ({
+        uuid: c.uuid,
+        assert: [{ field: "heading.uuid", equals: c.heading }],
+      })),
+      ...(move?.targetOrder[0] !== undefined && { subject: move.targetOrder[0] }),
+    };
   },
-  compile(_params, vector, pre) {
-    // The same native private-reorder wire the old `reorder --scope headings`
-    // used (experimental — gated by allow-experimental + the sdef canary),
-    // fed the computed full order.
-    if (vector !== "applescript") unsupportedVector(this.op, vector);
-    // #V11: send the MINIMAL front-cluster wire, not the full order — an archived
-    // heading that need not move stays out of it (untouched, HEADSORT H-UNSWEPT);
-    // any archived heading the target FORCES in (pre.headingMove.reopened) is
-    // reopened and disclosed. NEVER put un-targeted rows into the wire.
-    const order = pre.headingMove?.wire ?? [];
-    return osa(
-      `${PRIVATE_REORDER_COMMAND} project id ${q(pre.destProject?.resolved?.uuid ?? "")} ` +
-        `with ids ${q(order.join(","))}`,
+  compile(params, vector, pre) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const move = pre.headingMove;
+    if (move === null || move.problems.length > 0) {
+      // The membership/anchor/archived refusals are surfaced by H-HEADING-ORDER
+      // before compile; reaching here with one means the guard was bypassed.
+      throw new Error(
+        `project.move-heading: ${move === null ? "no heading move computed (guard bypassed?)" : move.problems.join("; ")}`,
+      );
+    }
+    // The movee set is EXACTLY what the caller named — never derived from the
+    // untouched set, which fences a different (smaller) thing: a bystander whose
+    // POSITION shifts is still a bystander no chord may move.
+    return uiDrive(
+      moveHeadingChordRecipe(pre.destProject?.resolved?.uuid ?? "", move.targetOrder, [
+        ...params.headings,
+      ]),
     );
   },
 };

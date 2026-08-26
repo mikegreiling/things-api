@@ -1585,15 +1585,6 @@ export async function runMutation<K extends OperationKind>(
         );
         if (offRule?.kind === "honored") warnings.push(offRule.disclosure.message);
       }
-      // #V11 heading-reorder disclosure: re-ranking an archived heading also
-      // un-archives it (status→open). Never silent — name every reopened heading.
-      if (pre.headingMove !== null && pre.headingMove.reopened.length > 0) {
-        warnings.push(
-          "re-ranking these archived heading(s) brought them back to open " +
-            `(un-archived): ${pre.headingMove.reopened.join(", ")} — repositioning an ` +
-            "archived heading reopens it; their children stay resolved",
-        );
-      }
       if (vector.id === "ui") {
         warnings.push(
           "this change was applied by driving the local Things app through the Accessibility API",

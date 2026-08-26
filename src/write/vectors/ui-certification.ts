@@ -51,7 +51,8 @@ export interface CertificationEntry {
 export const UI_CERTIFICATION_PROFILE =
   "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + UIC7b + HEADCERT1 + HEADXPROJ + DISS1 in-VM (Things 3.22.11) + " +
   "UIC8 promote-via-clone compounds in-VM (golden-v2 / Things 3.22.12) + RDLG2 recipe re-point + " +
-  "HXPC1 heading-ellipsis/Move-picker paths in-VM (golden-v4 / Things 3.23) — on-device pending";
+  "HXPC1 heading-ellipsis/Move-picker paths in-VM (golden-v4 / Things 3.23) + " +
+  "CHORDMH1 heading-order arrow chords in-VM (golden-v4 / Things 3.23) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": {
@@ -118,6 +119,27 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     // mutation). docs/lab/hxpc1-picker-assert.md.
     status: "lab-certified",
     evidence: ["HEADXPROJ", "HXPC1"],
+  },
+  "project.move-heading": {
+    // HEADORD1 (2026-08-25, headord1-lab, Things 3.23 / golden-v4) discovered and
+    // characterised the affordance: ⌘↑/⌘↓ = ±1 slot, ⌘⌥↑/⌘⌥↓ = to top/bottom on a
+    // selected heading row; a single-row `index` rewrite with no sibling renumber
+    // and children untouched behind their FK; a chord with nowhere to go declined
+    // with zero delta and one alert beep; System Events modifiers frontmost-only,
+    // `CGEventPostToPid` background-capable.
+    //
+    // CHORDMH1 (2026-08-25, chordmh1-lab, Things 3.23 / golden-v4) certified the
+    // SHIPPED op. Its delivery gate re-measured the whole gesture with Things
+    // never activated at all — `open -g` reveal, pure-AX row select, pid-posted
+    // chord — and Finder frontmost at every stage, so the op ships BACKGROUND
+    // delivery with no `activate` step (the least-disruptive tier any ordering op
+    // has reached). The certification arms drove the production CLI over
+    // 3-heading fixtures: ±1 up, ±1 down, to-top, to-bottom, a multi-hop, the
+    // already-in-position no-op, the dry run, and the ungated call — children
+    // byte-identical on every arm, sibling indexes byte-identical, zero beeps on
+    // the normal paths. docs/lab/chordmh1-move-heading-build.md.
+    status: "lab-certified",
+    evidence: ["HEADORD1", "CHORDMH1"],
   },
   "project.dissolve-heading": {
     // DISS1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Delete recipe ran

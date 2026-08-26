@@ -180,6 +180,22 @@ export type UiPrimitive =
    */
   | "drag-reorder"
   /**
+   * Reorder a project's HEADINGS with the arrow chords (CHORDMH1). Things has no
+   * menu item, context-menu item or AX action for heading order — the affordance
+   * is four bare keybindings on a selected heading row: ⌘↑/⌘↓ move it one slot,
+   * ⌘⌥↑/⌘⌥↓ move it to the top/bottom (HEADORD1). The driver selects the row
+   * with the pure-AX positional primitive and posts one chord at a time straight
+   * to the Things process, reading the heading order back out of the DATABASE
+   * after each — the only oracle a bare keybinding offers. Every chord is
+   * computed from that read (never fired speculatively: a chord the app declines
+   * costs the user an alert beep), and every chord must move exactly the intended
+   * heading exactly one slot with no other row's `index` and no child row
+   * touched, or the drive stops. Background-capable with no focus steal — the
+   * whole gesture runs with Things behind the user's frontmost app. See
+   * src/write/vectors/ui-chord.ts.
+   */
+  | "chord-reorder"
+  /**
    * Select a PROJECT as a content-table ROW by matching its title, purely via
    * AX (UIC4-a): the content table's `AXSelectedRows` is settable, so the
    * driver walks the table's rows, sets each as the selection, and reads back
@@ -401,6 +417,8 @@ export interface UiStep {
   activateFallback?: boolean;
   /** drag-reorder only: the sidebar move the drag driver performs. */
   drag?: import("./ui-drag.ts").SidebarDragSpec;
+  /** chord-reorder only: the heading order the chord driver steps the project into. */
+  chord?: import("./ui-chord.ts").HeadingChordSpec;
   /**
    * set-datetime only: WHICH of the dialog's date areas to drive (ANCH2). The
    * driver selects deterministically — `reminder` = the only time-bearing area;

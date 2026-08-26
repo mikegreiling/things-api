@@ -279,6 +279,26 @@ export type DeltaSpec =
        * `userModificationDate` are captured pre-op and compared post-op.
        */
       frozen?: { uuid: string; assert: FieldAssertion[] }[];
+      /**
+       * The UNTOUCHED-SIBLINGS law (RRF1), for a re-rank that rewrites only the
+       * rows it names: these uuids must read back with the EXACT rank they were
+       * captured at, not merely in the right relative order. `sequence` alone
+       * cannot express it — it asserts an ordering, and a protocol that
+       * renumbers every row to achieve that ordering satisfies it.
+       *
+       * Its case is `project.move-heading` on the chord vector, whose whole
+       * claim is that a move is a single-row `index` write: the moved heading
+       * gets a new index slotted between its new neighbours and NOTHING else in
+       * the project is renumbered (HEADORD1 §2). Listing every heading the
+       * caller did NOT name turns that claim into a post-op assertion, so a
+       * chord that landed on the wrong row — the one thing a positional
+       * heading-row selection cannot rule out by readback — fails the delta
+       * instead of passing on a coincidentally-correct order.
+       *
+       * Each uuid must also appear in `capture` (or `sequence`, which it
+       * defaults to) so its pre-op rank is recorded.
+       */
+      unchanged?: string[];
     }
   /** Area/tag property updates (TMArea/TMTag rows aren't tasks). */
   | { mode: "entity-updated"; entity: "area" | "tag"; uuid: string; assert: FieldAssertion[] };
@@ -966,8 +986,17 @@ export function evaluateDelta(
         observed[`${f.uuid}.umd`] = postUmd;
         if (!pass || !umdSilent) frozenOk = false;
       }
+      // RRF1 untouched-siblings law: every listed row must hold the EXACT rank it
+      // was captured at. A row whose pre-rank was never captured cannot be judged,
+      // so it fails closed (the spec is required to list it in `capture`).
+      let unchangedOk = true;
+      for (const uuid of spec.unchanged ?? []) {
+        const now = reader.rankOf(uuid, spec.key);
+        observed[`${uuid}.rank`] = now;
+        if (!(uuid in preRanks) || preRanks[uuid] !== now) unchangedOk = false;
+      }
       return {
-        satisfied: sorted && frozenOk,
+        satisfied: sorted && frozenOk && unchangedOk,
         movement: moved,
         assertedMovement: moved,
         observed,

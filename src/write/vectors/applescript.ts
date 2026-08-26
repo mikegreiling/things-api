@@ -208,16 +208,6 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     evidence: ["P10b:b2"],
     notes: "`set status … to open` — reopens the heading only; children stay resolved",
   },
-  "project.move-heading": {
-    support: "yes",
-    disruption: 0,
-    validation: "validated",
-    evidence: ["scf:P1", "O06"],
-    experimental: true,
-    notes:
-      "`_private_experimental_ reorder` on the project's heading rows (scf P1 — children " +
-      "follow their heading); the full computed order is sent as the wire list",
-  },
   reorder: {
     support: "partial",
     disruption: 0,
@@ -244,7 +234,9 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
       "(un-headed children only, O06), inbox (unscheduled to-dos, A6/P8a), someday (loose " +
       "someday to-dos, two-call anchor protocol, P8b); area also reorders PROJECTS (O14, " +
       "same-type requests only); evening and top-level projects are bounce-only (O03, P8e). " +
-      "A project's heading rows reorder via `project move-heading`",
+      "A project's heading rows are NOT reachable here at all — no reorder spelling addresses a " +
+      "heading (HEADORD-b) — they reorder through `project move-heading`, which drives the app's " +
+      "own heading-order key chords (ui vector, CHORDMH1)",
   },
 };
 

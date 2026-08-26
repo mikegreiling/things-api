@@ -40,6 +40,7 @@ import type {
   WeekdayOrdinal,
   YearlyAnchor,
 } from "../operations.ts";
+import type { HeadingChordSpec } from "./ui-chord.ts";
 import type { SidebarPlacement } from "./ui-drag.ts";
 import type { DialogAuditControl, UiRecipe, UiStep } from "./types.ts";
 
@@ -240,6 +241,65 @@ export function convertToProjectRecipe(
  * DB effect (UI2-d / HEADCERT1): the heading uuid dies, a new type=1 project is
  * promoted into the parent project's area, its children reparent (heading→NULL).
  */
+/**
+ * Reorder a project's HEADINGS with the arrow chords (CHORDMH1, on the HEADORD1
+ * law). Things exposes heading order through four bare keybindings and nothing
+ * else — no menu item, no context-menu item, no AX action anywhere carries the
+ * equivalent — so the recipe has no element to press: it reveals the project,
+ * confirms the content table is there, and hands the whole move to the chord
+ * driver, which selects each heading positionally and posts one verified chord
+ * at a time (src/write/vectors/ui-chord.ts).
+ *
+ * NO `activate` step, deliberately. The reveal is a background `open -g`, the
+ * row selection is pure System Events, and the chord is posted to the Things
+ * PROCESS rather than to the focused surface — so the entire gesture runs with
+ * Things behind whatever the user is looking at. Measured end to end on Things
+ * 3.23 / golden-v4 with Finder frontmost at every stage and Things never
+ * activated at all (docs/lab/chordmh1-move-heading-build.md §1).
+ *
+ * `needsWindowReachability` is set even though no sheet opens: the heading rows
+ * only exist in a rendered project view, so a locked screen or a full-screen
+ * Space must refuse (SESSGATE) rather than post chords at a window nothing can
+ * read back.
+ */
+export function moveHeadingChordRecipe(
+  projectUuid: string,
+  targetOrder: string[],
+  movees: string[],
+): UiRecipe {
+  const spec: HeadingChordSpec = {
+    projectUuid,
+    targetOrder,
+    movees,
+    tablePath: PROJECT_CONTENT_TABLE,
+  };
+  return {
+    op: "project.move-heading",
+    targetUuid: spec.projectUuid,
+    needsWindowReachability: true,
+    steps: [
+      {
+        primitive: "reveal",
+        label: "reveal the project in Things (things:///show?id=<project>)",
+        value: spec.projectUuid,
+      },
+      {
+        // Canaried: if the project view's content table is not there, the drive
+        // refuses before a single chord is posted.
+        primitive: "resolve",
+        label: "confirm the project view's content table is present",
+        path: PROJECT_CONTENT_TABLE,
+        addressing: "title",
+      },
+      {
+        primitive: "chord-reorder",
+        label: `reorder ${spec.movees.length} heading(s) with the arrow chords`,
+        chord: spec,
+      },
+    ],
+  };
+}
+
 export function headingConvertToProjectRecipe(projectUuid: string, ordinal: number): UiRecipe {
   return {
     op: "project.promote-heading",
