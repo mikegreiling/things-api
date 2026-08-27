@@ -232,17 +232,25 @@ describe("doctor environment & automation sections", () => {
     expect(report?.audit).toEqual({ orphanedIntents: 0, newestOrphanIntent: null });
   });
 
-  it("reports the on-disk URL-scheme state and proxy-shortcut presence", () => {
+  it("reports the URL-scheme standing and proxy-shortcut presence", () => {
     fixture = buildFixtureDb();
     const { report } = diagnose(fixture.path, {
       environment: fixedTracker(null, TUPLE_A),
-      availability: {
-        plistPath: fixture.path, // any readable file; extract seam decides
-        extract: () => "0",
-        listShortcuts: () => "things-proxy-find-items\n",
+      availability: { listShortcuts: () => "things-proxy-find-items\n" },
+      capability: {
+        // A standing that reaches the container, then a plist whose extract
+        // seam answers "off" — no host file and no plutil spawn.
+        readStanding: () => ({
+          mode: "direct-fda",
+          detail: "test",
+          remediation: [],
+          host: { bundleId: null, name: "this terminal" },
+        }),
+        readPrefsPlist: () => Buffer.from("irrelevant — the extract seam decides"),
+        extractUriSchemeEnabled: () => "0",
       },
     });
-    expect(report?.availability.urlScheme.enabled).toBe(false);
+    expect(report?.availability.urlScheme.mode).toBe("disabled");
     expect(report?.availability.urlScheme.detail).toContain("Enable Things URLs");
     expect(report?.availability.shortcuts.present).toEqual(["things-proxy-find-items"]);
     expect(report?.availability.shortcuts.missing).toHaveLength(5);

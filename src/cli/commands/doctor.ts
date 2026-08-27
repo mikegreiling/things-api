@@ -107,18 +107,15 @@ function permissionLines(report: DiagnoseReport): string[] {
     },
     {
       vector: "url-scheme",
-      state:
-        report.availability.urlScheme.enabled === true
-          ? "enabled"
-          : report.availability.urlScheme.enabled === false
-            ? "disabled"
-            : "unknown",
+      // The mode IS the state word — enabled / disabled / never-asked /
+      // unreadable — so the four verdicts read distinctly here. Only `enabled`
+      // dispatches; the other two readable ones are refused before dispatch,
+      // and `unreadable` is let through and judged by the verify (URLEN1, #611).
+      state: report.availability.urlScheme.mode,
       // No TCC class at all: `open -g things:///…` is a LaunchServices dispatch.
+      // The only authorization is the app's own.
       provenance: "none needed — the app's own 'Enable Things URLs' setting",
-      next:
-        report.availability.urlScheme.enabled === true
-          ? []
-          : ["turn on Things ▸ Settings ▸ General ▸ Enable Things URLs"],
+      next: report.availability.urlScheme.remediation,
     },
     {
       vector: "shortcuts",
@@ -346,11 +343,11 @@ export function registerDoctor(program: Command): void {
               report.automation.status === "granted" ? "" : ` — ${report.automation.detail}`
             }`,
             `url scheme:  ${
-              report.availability.urlScheme.enabled === true
+              report.availability.urlScheme.mode === "enabled"
                 ? "enabled"
-                : report.availability.urlScheme.enabled === false
-                  ? "DISABLED"
-                  : "unknown"
+                : report.availability.urlScheme.mode === "unreadable"
+                  ? "unknown"
+                  : report.availability.urlScheme.mode.toUpperCase()
             } — ${report.availability.urlScheme.detail}`,
             `shortcuts:   ${report.availability.shortcuts.present.length}/${
               report.availability.shortcuts.present.length +

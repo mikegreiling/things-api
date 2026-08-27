@@ -6,6 +6,7 @@
  * changed environment tuple makes the permission theories far more likely.
  * Hints are ADVISORY — the verified pipeline result stays the ground truth.
  */
+import type { UrlSchemeCapabilityMode } from "../capability.ts";
 import { describeEnvironmentChanges, type EnvironmentChange } from "./environment.ts";
 import type { VectorId } from "./vectors/types.ts";
 
@@ -105,12 +106,28 @@ export function classifyVerifyFailure(input: {
   reason: "timeout" | "mismatch" | "silent-noop" | "collateral";
   vector: VectorId;
   /**
-   * The on-disk 'Enable Things URLs' state (availability.ts); null when not
-   * determinable. NOT inferred from the auth token — the token persists in
-   * TMSettings while the feature is off (Phase 21b), so a populated token
-   * never implies the scheme is enabled.
+   * Where Things' own "Enable Things URLs" authorization stands (capability.ts),
+   * or **null when the vector does not deliver URLs at all** — in which case the
+   * theory cannot apply and is not even evaluated.
+   *
+   * That null is not a convenience. Like the gate, this is keyed on the
+   * vector's `dispatchesUrls` DECLARATION rather than on its id, because engine
+   * tests substitute fakes under the `url-scheme` id: an id-keyed lookup made
+   * the shipped default read the DEVELOPER's own Things preferences, so a
+   * pipeline test passed on a workstation whose setting is on and failed in CI,
+   * where nothing is readable and every silent no-op was blamed on this.
+   *
+   * NOT inferred from the auth token either — the token persists in TMSettings
+   * while the feature is off (Phase 21b), so a populated token never implies
+   * the scheme is enabled.
+   *
+   * In the shipped pipeline the pre-dispatch gate has already refused
+   * `disabled` and `never-asked`, so the value that reaches here is normally
+   * `enabled` or `unreadable`. `unreadable` is the case this hint exists for: a
+   * host that cannot read the setting cannot be gated on it, so the theory is
+   * offered after the fact instead.
    */
-  urlSchemeEnabled: boolean | null;
+  urlScheme: UrlSchemeCapabilityMode | null;
   /**
    * Whether Things was ALREADY running when this write's preflight ran. False
    * means the pipeline had to background-launch it for this write: a residual
@@ -123,16 +140,19 @@ export function classifyVerifyFailure(input: {
   environmentChanges: EnvironmentChange[];
 }): FailureHint | null {
   if (
-    input.vector === "url-scheme" &&
-    (input.reason === "silent-noop" || input.reason === "timeout") &&
-    input.urlSchemeEnabled === false
+    input.urlScheme !== null &&
+    input.urlScheme !== "enabled" &&
+    (input.reason === "silent-noop" || input.reason === "timeout")
   ) {
     return {
       likelyCause: "feature-disabled",
       hint:
-        "'Enable Things URLs' is off (Things > Settings > General) — the app holds URL " +
-        "commands behind an enable dialog instead of executing them, so the write never " +
-        "lands. Turn the setting on and retry.",
+        "Things may not be authorized to act on URL commands. When 'Enable Things URLs' " +
+        "(Things > Settings > General) is off, the app puts a 'Things URL Scheme' alert on its " +
+        "own window and holds the command there instead of running it — so a command sent with " +
+        "nobody at the machine reads exactly like this. Check that setting on the machine " +
+        "running Things: if an alert is waiting, clicking Enable runs the held command, which " +
+        "means this write can still land on its own. Verify the item's state before resending.",
     };
   }
   if (!input.appWasRunning && (input.reason === "silent-noop" || input.reason === "timeout")) {

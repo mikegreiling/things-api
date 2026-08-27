@@ -1,5 +1,6 @@
 /**
- * The write gate (Articles I + II) and the GUI gate (Article IV) —
+ * The write gate (Articles I + II), the GUI gate (Article IV), and the
+ * URL-scheme gate (Things' own authorization; URLEN1, #611) —
  * docs/design/permissions-doctrine.md.
  *
  * The AppleScript vector sends a real Apple Event, and on a machine macOS has
@@ -16,7 +17,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
-import type { UiCapability, WriteCapability } from "../../src/capability.ts";
+import type { UiCapability, UrlSchemeCapability, WriteCapability } from "../../src/capability.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
@@ -372,6 +373,153 @@ describe("GUI-driving missing blocks BEFORE the Accessibility tree is touched", 
       {
         ...deps(silentFake, capability({ mode: "direct-granted" })),
         uiCapability: () => uiVerdict({ mode: "config-disabled", remediation: ["nope"] }),
+      },
+      "todo.delete",
+      { uuid },
+    );
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
+  });
+});
+
+// ── The URL-scheme gate (URLEN1, #611) ───────────────────────────────────────
+//
+// Not a macOS consent class at all — `open -g things:///…` is a LaunchServices
+// dispatch. The authorization is the APP's: Settings ▸ General ▸ "Enable Things
+// URLs". MEASURED (URLEN1, golden-v4 / Things 3.23), and this is what makes a
+// pre-dispatch gate necessary rather than merely tidy: when the setting is off,
+// or has never been answered, Things puts a "Things URL Scheme" alert SHEET on
+// its own window and PARKS the command behind it. `open` still exits 0, nothing
+// changes, and the caller learns about it only when the verify window expires —
+// which is exactly the `verify-failed:silent-noop` #611 reported. With nobody
+// at the machine the sheets simply stack, one per dispatched command.
+
+function urlVerdict(over: Partial<UrlSchemeCapability>): UrlSchemeCapability {
+  return {
+    mode: "enabled",
+    detail: "Things ▸ Settings ▸ General ▸ Enable Things URLs is on",
+    remediation: [],
+    host: HOST,
+    ...over,
+  };
+}
+
+/** A fake that DECLARES it dispatches URLs (what the real url-scheme vector sets). */
+function fakeUrlVector(uuid: string): { vector: WriteVector; calls: CompiledInvocation[] } {
+  const calls: CompiledInvocation[] = [];
+  return {
+    calls,
+    vector: {
+      // As with the GUI cells: deliberately NOT the "url-scheme" id, because the
+      // gate keys on the DECLARATION and `todo.delete` compiles for applescript.
+      id: "applescript",
+      matrix: MATRIX,
+      dispatchesUrls: true,
+      async execute(invocation): Promise<ExecuteResult> {
+        calls.push(invocation);
+        fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(uuid);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    },
+  };
+}
+
+async function dispatchUrl(urlScheme: UrlSchemeCapability): Promise<{
+  result: Awaited<ReturnType<typeof runMutation>>;
+  calls: CompiledInvocation[];
+}> {
+  const uuid = seedTodo(fixture.db, { title: "a synthetic to-do" });
+  const { vector, calls } = fakeUrlVector(uuid);
+  const result = await runMutation(
+    {
+      ...deps(vector, capability({ mode: "direct-granted" })),
+      urlSchemeCapability: () => urlScheme,
+    },
+    "todo.delete",
+    { uuid },
+  );
+  return { result, calls };
+}
+
+describe("'Enable Things URLs' off blocks BEFORE the URL is dispatched", () => {
+  it("an explicitly disabled app refuses, naming the exact Settings path", async () => {
+    const { result, calls } = await dispatchUrl(
+      urlVerdict({
+        mode: "disabled",
+        detail:
+          "Things ▸ Settings ▸ General ▸ Enable Things URLs is off — the app puts URL " +
+          "commands in an alert on its own window and holds them there instead of running them",
+        remediation: ["turn on Things ▸ Settings ▸ General ▸ Enable Things URLs, then retry"],
+      }),
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.likelyCause).toBe("feature-disabled");
+      expect(result.detail).toContain("delivered as a Things URL");
+      expect(result.remediation).toContain("Enable Things URLs");
+    }
+    expect(calls, "no URL may be opened once the app has said no").toHaveLength(0);
+  });
+
+  it("never-asked refuses too — the whole point is to keep the app's OWN alert off an unattended screen", async () => {
+    const { result, calls } = await dispatchUrl(
+      urlVerdict({
+        mode: "never-asked",
+        detail: "nobody has answered Things' own 'Things URL Scheme' dialog on this machine",
+        remediation: ["turn on Things ▸ Settings ▸ General ▸ Enable Things URLs, then retry"],
+      }),
+    );
+    expect(result.kind).toBe("blocked");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the refusal is audited as an environment block, not as a failed write", async () => {
+    await dispatchUrl(urlVerdict({ mode: "disabled", remediation: ["turn it on"] }));
+    expect(auditRecords.length).toBeGreaterThan(0);
+    expect(JSON.stringify(auditRecords)).toContain("environment");
+  });
+
+  it("enabled dispatches normally", async () => {
+    const { result, calls } = await dispatchUrl(urlVerdict({}));
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("UNREADABLE dispatches — a state we cannot read is not a refusal", async () => {
+    // The deliberate asymmetry with the app-control gate, where an unknown
+    // standing IS refused: there, resolving the unknown means sending the Apple
+    // Event that raises the dialog. Here, dispatching costs nothing on the
+    // machines this verdict actually occurs on, and the verify plus its
+    // likely-cause hint carry the failure if the app turns out to be off.
+    const { result, calls } = await dispatchUrl(
+      urlVerdict({ mode: "unreadable", detail: "the preferences file could not be read" }),
+    );
+    expect(result.kind).not.toBe("blocked");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a vector that does NOT declare dispatchesUrls is never URL-gated", async () => {
+    // Same lesson as its two siblings: the gate keys on the DECLARATION, so a
+    // fake substituted into an engine test never inherits the state of the
+    // developer's own Things install. (The id stays "applescript" here because
+    // `todo.delete` has no url-scheme compilation at all — which is itself the
+    // point: the id is not what arms the gate.)
+    const uuid = seedTodo(fixture.db, { title: "a synthetic to-do" });
+    const calls: CompiledInvocation[] = [];
+    const silentFake: WriteVector = {
+      id: "applescript",
+      matrix: MATRIX,
+      async execute(invocation): Promise<ExecuteResult> {
+        calls.push(invocation);
+        fixture.db.prepare("UPDATE TMTask SET trashed = 1 WHERE uuid = ?").run(uuid);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const result = await runMutation(
+      {
+        ...deps(silentFake, capability({ mode: "direct-granted" })),
+        urlSchemeCapability: () => urlVerdict({ mode: "disabled", remediation: ["turn it on"] }),
       },
       "todo.delete",
       { uuid },

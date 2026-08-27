@@ -25,9 +25,12 @@ import {
   readAllowed,
   readCapability,
   uiCapability,
+  urlSchemeCapability,
   writeCapability,
+  type CapabilityDeps,
   type ReadCapability,
   type UiCapability,
+  type UrlSchemeCapability,
   type WriteCapability,
 } from "./capability.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
@@ -50,10 +53,8 @@ import {
 } from "./write/vectors/ui-certification.ts";
 import {
   readShortcutProxies,
-  readUrlSchemeEnabled,
   type AvailabilityDeps,
   type ShortcutsState,
-  type UrlSchemeState,
 } from "./write/availability.ts";
 import {
   createEnvironmentTracker,
@@ -297,8 +298,8 @@ export interface DiagnoseReport {
     reason: string;
   };
   availability: {
-    /** On-disk 'Enable Things URLs' state (group-container plist; Phase 21b). */
-    urlScheme: UrlSchemeState;
+    /** Things' own 'Enable Things URLs' authorization (capability.ts; URLEN1). */
+    urlScheme: UrlSchemeCapability;
     /** Which proxy shortcuts are installed (the Shortcuts surface's prerequisites). */
     shortcuts: ShortcutsState;
   };
@@ -361,6 +362,8 @@ export interface DiagnoseOptions {
   accessibilityProbeDeps?: AccessibilityProbeDeps;
   environment?: EnvironmentTracker;
   availability?: AvailabilityDeps;
+  /** Test seams for the prompt-free capability verdicts (capability.ts). */
+  capability?: CapabilityDeps;
   /** Test seams for the sync-health section (clock, process check, WAL/plist readers). */
   syncHealth?: SyncHealthDeps;
   /**
@@ -595,7 +598,12 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
             "intended for a dedicated always-on Mac, see docs/setup.md)",
       },
       availability: {
-        urlScheme: readUrlSchemeEnabled(options.availability),
+        // Reuses the read standing already established above rather than
+        // re-deriving it, so doctor asks the machine once.
+        urlScheme: urlSchemeCapability({
+          readStanding: () => capability.read,
+          ...options.capability,
+        }),
         shortcuts: readShortcutProxies(options.availability),
       },
       recurrence: scanRecurrenceRules(conn.db),

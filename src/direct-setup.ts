@@ -46,6 +46,12 @@
  *     Settings toggle and the `tccutil` re-arm and leaves the choice to the human.
  *  c. SHORTCUTS. The bundled proxies that carry the operations no other surface
  *     can perform. An install sheet per missing shortcut; no macOS consent.
+ *  d. THINGS URLS. The odd one out: not a macOS grant at all, but Things' own
+ *     Settings ▸ General ▸ "Enable Things URLs". It raises nothing and cannot be
+ *     flipped from here, so this leg only DETECTS and instructs — and it earns
+ *     its place because the off state is otherwise invisible: the app parks
+ *     every URL command in an alert on its own window rather than running it
+ *     (URLEN1, #611), which a fresh install hits on its very first write.
  *
  * There is deliberately NO Accessibility leg: GUI-driving is helpers-only
  * (Article IV), so when `ui.enabled` is set this ceremony says so and points at
@@ -72,9 +78,11 @@ import {
   hostApp,
   hostDisplayName,
   readCapability,
+  urlSchemeCapability,
   writeCapability,
   type CapabilityDeps,
   type ReadCapability,
+  type UrlSchemeCapability,
 } from "./capability.ts";
 import { loadConfig } from "./config.ts";
 import { locateThingsDb } from "./db/locate.ts";
@@ -123,7 +131,7 @@ export class ContainerOpenTimedOut extends Error {
 /** The key that picks Full Disk Access over the session grant at the read leg. */
 const FDA_CHOICE_KEY = "f";
 
-export type SetupLeg = "read-access" | "app-control" | "shortcuts";
+export type SetupLeg = "read-access" | "app-control" | "shortcuts" | "url-scheme";
 
 /**
  * Where a leg stands. `pending` is a HUMAN-pace outcome (a toggle not yet
@@ -177,6 +185,8 @@ export interface DirectSetupDeps extends CapabilityDeps {
   openShortcut?: (file: string) => void;
   /** The installed proxy-shortcut census (availability.ts). */
   shortcutProxies?: () => ShortcutsState;
+  /** Things' own 'Enable Things URLs' standing, for leg (d) (capability.ts). */
+  urlSchemeStanding?: () => UrlSchemeCapability;
   automationTimeoutMs?: number;
 }
 
@@ -562,6 +572,44 @@ function shortcutsLeg(deps: DirectSetupDeps): SetupStep {
   };
 }
 
+// ── Leg (d): Things' own URL authorization ───────────────────────────────────
+
+/**
+ * The one leg that raises NOTHING. Things' "Enable Things URLs" is the app's own
+ * switch, not a macOS grant: there is no dialog for this ceremony to provoke and
+ * nothing it can flip on the human's behalf. What it can do is SAY SO — because
+ * the state is silent from every other angle. MEASURED (URLEN1): with the
+ * setting off, or never answered, the app puts a "Things URL Scheme" alert on
+ * its own window and PARKS the command behind it, so an unattended write reads
+ * as a silent no-op minutes later (#611). A fresh install has never answered it,
+ * which is precisely when someone is running this ceremony.
+ *
+ * So the leg reports `pending` and names the toggle; the closing line then
+ * carries it as outstanding work and a rerun re-checks it. Settings panes are
+ * not deep-linkable the way System Settings panes are — `things:///preferences`
+ * is not a route (RESID1) — so the copy names the path instead of opening it.
+ */
+function urlSchemeLeg(deps: DirectSetupDeps): SetupStep {
+  const base = { leg: "url-scheme" as const, label: "Things URLs" };
+  const progress = deps.progress ?? (() => {});
+  const standing = (deps.urlSchemeStanding ?? (() => urlSchemeCapability(deps)))();
+  if (standing.mode === "enabled") {
+    progress("things urls: on");
+    return { ...base, state: "granted", alreadySatisfied: true, detail: standing.detail };
+  }
+  if (standing.mode === "unreadable") {
+    // Nothing to report and nothing to ask for: this machine cannot see the
+    // setting, so claiming it is unset would be a guess.
+    return { ...base, state: "skipped", alreadySatisfied: false, detail: standing.detail };
+  }
+  progress(
+    "things urls: OFF — turn on Things ▸ Settings ▸ General ▸ Enable Things URLs, then rerun. " +
+      "Until it is on, Things holds URL commands in an alert on its own window instead of " +
+      "running them",
+  );
+  return { ...base, state: "pending", alreadySatisfied: false, detail: standing.detail };
+}
+
 // ── The ceremony ─────────────────────────────────────────────────────────────
 
 /**
@@ -576,6 +624,11 @@ function promptLabel(leg: SetupLeg, hostName: string): string {
       return "app control of Things";
     case "shortcuts":
       return "one install sheet per missing shortcut";
+    case "url-scheme":
+      // Unreachable in practice: this leg raises nothing, so it is never put in
+      // `outstanding` — the list this function labels. The case exists because
+      // the union must be covered, not because anything prints it.
+      return "nothing — the Things URLs setting is flipped by hand";
   }
 }
 
@@ -592,9 +645,10 @@ function listPhrase(items: string[]): string {
  * strict mode they are never printed; the upfront banner's count stands alone.
  * `{host}` is filled with the detected host app's display name. The read leg is
  * absent because it is a CHOICE rather than an announcement — see
- * {@link readAccessChoice}.
+ * {@link readAccessChoice}; the url-scheme leg is absent because it raises
+ * nothing there is anything to explain in advance of.
  */
-const PROMPT_EXPLAINERS: Record<Exclude<SetupLeg, "read-access">, string[]> = {
+const PROMPT_EXPLAINERS: Record<Exclude<SetupLeg, "read-access" | "url-scheme">, string[]> = {
   "app-control": [
     "Next: permission to control the Things app.",
     '  A macOS dialog will appear: "{host}" wants access to control "Things" — click Allow.',
@@ -629,6 +683,7 @@ export interface SetupSurvey {
   host: { bundleId: string | null; name: string };
   read: ReadCapability;
   write: ReturnType<typeof writeCapability>;
+  urlScheme: UrlSchemeCapability;
   shortcutsMissing: string[];
   /** The legs that WOULD put something on screen. Empty means a rerun asks nothing. */
   outstanding: SetupLeg[];
@@ -644,6 +699,7 @@ export function surveySetup(deps: DirectSetupDeps = {}): SetupSurvey {
   const read = readCapability({}, deps);
   const write = writeCapability(deps);
   const shortcuts = (deps.shortcutProxies ?? readShortcutProxies)();
+  const urlScheme = (deps.urlSchemeStanding ?? (() => urlSchemeCapability(deps)))();
   const outstanding: SetupLeg[] = [];
   if (read.mode !== "direct-fda" && read.mode !== "session-grant" && read.mode !== "helpers") {
     outstanding.push("read-access");
@@ -651,10 +707,14 @@ export function surveySetup(deps: DirectSetupDeps = {}): SetupSurvey {
   // A recorded refusal raises nothing (the dialog is spent), so it is not counted.
   if (write.mode === "direct-unknown") outstanding.push("app-control");
   if (shortcuts.missing.length > 0) outstanding.push("shortcuts");
+  // The URL-scheme leg is deliberately NOT added to `outstanding`: that list is
+  // "dialogs this ceremony is about to raise", and this leg raises none. It is
+  // reported as a step and carried by the closing line instead.
   return {
     host: { bundleId: host.bundleId, name: hostDisplayName(deps) },
     read,
     write,
+    urlScheme,
     shortcutsMissing: [...shortcuts.missing],
     outstanding,
   };
@@ -700,7 +760,7 @@ function runCeremony(deps: DirectSetupDeps): DirectSetupResult {
   const wizard = deps.wizard ?? createWizard();
   const willRaise = new Set(outstanding);
   /** Explain a leg's dialog and let the human pace it — wizard mode only. */
-  const brief = (leg: Exclude<SetupLeg, "read-access">): void => {
+  const brief = (leg: Exclude<SetupLeg, "read-access" | "url-scheme">): void => {
     if (willRaise.has(leg)) {
       wizard.explain(PROMPT_EXPLAINERS[leg].map((line) => line.replaceAll("{host}", hostName)));
     }
@@ -715,7 +775,14 @@ function runCeremony(deps: DirectSetupDeps): DirectSetupResult {
   brief("app-control");
   const appControlStep = appControlLeg(withProgress);
   brief("shortcuts");
-  const steps: SetupStep[] = [readStep, appControlStep, shortcutsLeg(withProgress)];
+  const steps: SetupStep[] = [
+    readStep,
+    appControlStep,
+    shortcutsLeg(withProgress),
+    // Last, and never briefed: it raises nothing, so there is no dialog to
+    // explain one leg ahead (Article V) — it only reports and instructs.
+    urlSchemeLeg(withProgress),
+  ];
   const uiEnabled = loadConfig(env).ui.enabled;
   if (uiEnabled) {
     progress(

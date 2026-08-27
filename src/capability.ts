@@ -57,9 +57,13 @@
  * already read that file. Where the row cannot be read the verdict is an honest
  * "unknown", which the write gate refuses on rather than resolving with a dialog.
  */
+import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig } from "./config.ts";
+import { readContainerFileSync } from "./deputy/files.ts";
 import { deputyRouting, deputyRoutesDb, helpersExpected } from "./deputy/routing.ts";
 import { type TargetWake, wakeSystemEvents } from "./deputy/wake.ts";
 import {
@@ -115,6 +119,24 @@ export type UiCapabilityMode =
   /** The deputy answers but the `--gui` tier is incomplete. */
   | "tier-incomplete";
 
+/**
+ * Where Things' OWN in-app authorization for the URL scheme stands (URLEN1).
+ *
+ * This is not a macOS consent class at all — `open -g things:///…` is a
+ * LaunchServices dispatch that needs no grant. The gate is the app's: Settings
+ * ▸ General ▸ "Enable Things URLs", recorded as `uriSchemeEnabled` in the
+ * group-container preferences plist. Three states, all measured.
+ */
+export type UrlSchemeCapabilityMode =
+  /** `uriSchemeEnabled = 1` — URL commands execute. */
+  | "enabled"
+  /** `uriSchemeEnabled = 0` — the app drops URL MUTATIONS with no dialog at all. */
+  | "disabled"
+  /** No key: nobody has answered the app's first-use dialog on this machine. */
+  | "never-asked"
+  /** The plist cannot be reached prompt-free — never resolved by dispatching. */
+  | "unreadable";
+
 /** How app automation may be delivered, if at all. */
 export type WriteCapabilityMode =
   /** The deputy is onboarded; Apple Events are sent under the helper identity. */
@@ -144,6 +166,7 @@ export interface Capability<Mode> {
 export type ReadCapability = Capability<ReadCapabilityMode>;
 export type WriteCapability = Capability<WriteCapabilityMode>;
 export type UiCapability = Capability<UiCapabilityMode>;
+export type UrlSchemeCapability = Capability<UrlSchemeCapabilityMode>;
 
 /** True when this verdict permits opening the live container. */
 export function readAllowed(capability: ReadCapability): boolean {
@@ -153,6 +176,21 @@ export function readAllowed(capability: ReadCapability): boolean {
 /** True when this verdict permits driving the Things window. */
 export function uiAllowed(capability: UiCapability): boolean {
   return capability.mode === "helpers" || capability.mode === "direct-escape";
+}
+
+/**
+ * True when a URL-scheme MUTATION may be dispatched.
+ *
+ * `unreadable` is permissive, and deliberately so — the asymmetry with the
+ * write gate is the point. There, an unknown standing is refused because
+ * resolving it means sending the Apple Event that IS the dialog. Here,
+ * dispatching costs nothing on a machine whose answer is already "enabled",
+ * which is every settled machine; only the two states we have positively READ
+ * as not-enabled are refused. What catches the unreadable case instead is the
+ * read-after-write verify plus its likely-cause hint (src/write/failure-hints.ts).
+ */
+export function urlSchemeAllowed(capability: UrlSchemeCapability): boolean {
+  return capability.mode === "enabled" || capability.mode === "unreadable";
 }
 
 /** True when app automation may be dispatched. */
@@ -202,6 +240,15 @@ export interface CapabilityDeps extends HostAccessDeps {
   automationAuthValue?: (client: string, target: string) => number | null;
   /** Resolve a running app's display name from its bundle id (LaunchServices). */
   lookupAppName?: (bundleId: string) => string | null;
+  /**
+   * The read standing {@link urlSchemeCapability} consults before it touches
+   * the group container. Defaults to a live {@link readCapability} call.
+   */
+  readStanding?: () => ReadCapability;
+  /** Raw bytes of the Things group-container preferences plist. Throws when unreachable. */
+  readPrefsPlist?: () => Buffer;
+  /** Pull `uriSchemeEnabled` out of those bytes. Throws when the key is absent. */
+  extractUriSchemeEnabled?: (plistBytes: Buffer) => string;
 }
 
 // ── The prompt-free probes ───────────────────────────────────────────────────
@@ -656,6 +703,145 @@ export function uiCapability(deps: CapabilityDeps = {}): UiCapability {
   };
 }
 
+// ── URL-scheme capability (Things' own in-app authorization) ─────────────────
+
+/**
+ * Where the app records the answer. MEASURED (URLEN1, Things 3.23): this is the
+ * ONLY home — the un-TCC'd user domain `~/Library/Preferences/
+ * com.culturedcode.ThingsMac.plist` carries window frames and Sparkle keys and
+ * nothing else, under any spelling of the name, so there is no consent-free
+ * copy to prefer. The authoritative one lives inside the group container.
+ */
+const THINGS_PREFS_PLIST = join(
+  "Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac",
+  "Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist",
+);
+
+/**
+ * Read standings that ALREADY cover the Things group container, so opening a
+ * file inside it adds no consent class that is not already settled.
+ *
+ * `explicit-db` is deliberately absent: a caller-supplied database path says
+ * nothing about the container, and opening it to find out is the "try it and
+ * see" the Article I corollary forbids. Such a caller gets `unreadable`, which
+ * is permissive — exactly the right direction for a path outside the doctrine.
+ */
+const CONTAINER_REACHABLE: ReadonlySet<ReadCapabilityMode> = new Set<ReadCapabilityMode>([
+  "helpers",
+  "direct-fda",
+  "session-grant",
+]);
+
+function extractUriSchemeEnabledDefault(plistBytes: Buffer): string {
+  return execFileSync("plutil", ["-extract", "uriSchemeEnabled", "raw", "-o", "-", "--", "-"], {
+    input: plistBytes,
+    encoding: "utf8",
+    timeout: 5000,
+  });
+}
+
+/** The one line every not-enabled verdict ends with. */
+const URL_SETTINGS_PATH = "Things ▸ Settings ▸ General ▸ Enable Things URLs";
+
+/**
+ * Has Things been authorized to act on `things:///` commands, and how do we know?
+ *
+ * Stateless per invocation, like every other verdict here: the setting is the
+ * user's to flip at any moment, and a cached "yes" would be a stored onboarding
+ * flag by another name. The common case costs one file read plus one `plutil`.
+ *
+ * WHY THIS IS GATED ON THE READ STANDING. The plist lives inside the Things
+ * group container, which is the same `kTCCServiceSystemPolicyAppData` class as
+ * the database — so the open is itself what would raise the app-data modal on a
+ * machine that holds no standing. This function therefore never opens it
+ * speculatively: it asks {@link readCapability} first and reports `unreadable`
+ * unless the container is already reachable (helpers, FDA, or a live session
+ * grant). Where the helpers are serving, the read rides the reader's own
+ * security-scoped bookmark over the container, so the prefs plist is inside the
+ * granted subtree and no host grant is involved at all.
+ *
+ * MEASURED, all three states (URLEN1, golden-v4 / Things 3.23):
+ *
+ *  - `1` — URL mutations execute.
+ *  - `0` — every mutating verb (`add`, token-bearing `update`, the `json`
+ *    batch) is dropped in TOTAL SILENCE: zero row delta, no dialog, no window
+ *    of any kind, and nothing to wait for. Navigation URLs (`things:///show`)
+ *    still work, so this gate covers mutations only.
+ *  - absent — nobody has answered the app's own first-use "Things URL Scheme"
+ *    dialog (Cancel / Enable). The dispatched request PARKS behind that dialog
+ *    rather than being dropped, which is what #611 saw: with nobody at the
+ *    machine, the verify window expired and the write reported a silent no-op.
+ */
+export function urlSchemeCapability(deps: CapabilityDeps = {}): UrlSchemeCapability {
+  const host = hostApp(deps);
+  const standing = (deps.readStanding ?? (() => readCapability({}, deps)))();
+  if (!CONTAINER_REACHABLE.has(standing.mode)) {
+    return {
+      mode: "unreadable",
+      detail:
+        "the app's preferences are inside the Things data folder, which this process has no " +
+        `standing to open (${standing.mode}) — whether ${URL_SETTINGS_PATH} is on is unknown`,
+      remediation: [],
+      host,
+    };
+  }
+  let bytes: Buffer;
+  try {
+    bytes = (
+      deps.readPrefsPlist ?? (() => readContainerFileSync(join(homedir(), THINGS_PREFS_PLIST)))
+    )();
+  } catch {
+    return {
+      mode: "unreadable",
+      detail: `the app's preferences file could not be read — whether ${URL_SETTINGS_PATH} is on is unknown`,
+      remediation: [],
+      host,
+    };
+  }
+  let raw: string;
+  try {
+    raw = (deps.extractUriSchemeEnabled ?? extractUriSchemeEnabledDefault)(bytes).trim();
+  } catch {
+    // The file was readable and carries no such key. An unparseable file lands
+    // here too, and that is the safe direction: the refusal names a setting the
+    // human can flip, and flipping it rewrites the file and clears the verdict.
+    return {
+      mode: "never-asked",
+      detail:
+        "nobody has answered Things' own 'Things URL Scheme' dialog on this machine — the app " +
+        "holds the first URL command behind it, and a command dispatched now waits there " +
+        "instead of running",
+      remediation: [
+        `turn on ${URL_SETTINGS_PATH}, then retry`,
+        "or send one `things:///` command while you are at the machine and click Enable",
+      ],
+      host,
+    };
+  }
+  if (raw === "1" || raw === "true") {
+    return { mode: "enabled", detail: `${URL_SETTINGS_PATH} is on`, remediation: [], host };
+  }
+  if (raw === "0" || raw === "false") {
+    return {
+      mode: "disabled",
+      detail:
+        `${URL_SETTINGS_PATH} is off — the app puts URL commands in an alert on its own ` +
+        "window and holds them there instead of running them",
+      remediation: [`turn on ${URL_SETTINGS_PATH}, then retry`],
+      host,
+    };
+  }
+  // A shape we have never seen. Reporting it verbatim beats guessing which way
+  // the app would read it, and `unreadable` lets the write proceed and be judged
+  // by the verify rather than refused on a value nobody has measured.
+  return {
+    mode: "unreadable",
+    detail: `the app records an unrecognized value for ${URL_SETTINGS_PATH} (${raw})`,
+    remediation: [],
+    host,
+  };
+}
+
 /** Thrown when GUI-driving is refused for want of capability (Article IV). */
 export class UiCapabilityError extends Error {
   readonly remediation: string[];
@@ -665,6 +851,20 @@ export class UiCapabilityError extends Error {
       `the Things window cannot be driven: ${capability.detail}. ${capability.remediation.join("; ")}.`,
     );
     this.name = "UiCapabilityError";
+    this.remediation = capability.remediation;
+    this.capability = capability;
+  }
+}
+
+/** Thrown when a URL-scheme mutation is refused for want of the app's own authorization. */
+export class UrlSchemeCapabilityError extends Error {
+  readonly remediation: string[];
+  readonly capability: UrlSchemeCapability;
+  constructor(capability: UrlSchemeCapability) {
+    super(
+      `Things will not act on URL commands: ${capability.detail}. ${capability.remediation.join("; ")}.`,
+    );
+    this.name = "UrlSchemeCapabilityError";
     this.remediation = capability.remediation;
     this.capability = capability;
   }

@@ -29,7 +29,7 @@ Reads open the Things database directly, read-only, WAL-aware. Things does **not
 
 ## Writes — URL-scheme vector *(applies when the write layer lands)*
 
-1. **Enable Things URLs** (OFF by default): Things → Settings → General → **Enable Things URLs**. Required for all URL-based mutation of existing items; without it, updates fail with a modal.
+1. **Enable Things URLs** (OFF by default): Things → Settings → General → **Enable Things URLs**. Required for every URL-delivered mutation, which is most of them. With it off, Things neither runs nor refuses the command — it raises its own "Things URL Scheme" alert and holds the command behind it until somebody answers, so `things setup` checks the setting and every URL write is refused up front rather than left waiting. (Navigation, such as revealing an item, works either way.) `things doctor` reports the state on its `url-scheme` row.
    - The auth token is auto-discovered from the local database — no manual copying.
 2. **A logged-in GUI session is required.** `things:///…` commands are LaunchServices handoffs into the user's Aqua session. SSH-driven writes work *only when that same user is logged into the Mac's GUI*. Fully headless / logged-out operation is unsupported.
 3. **Disruption expectations:** URL commands can launch Things and may bring it to the foreground. The CLI gates these behaviors behind disruption tiers — on a workstation profile, focus-stealing operations require `--allow-disruptive`.

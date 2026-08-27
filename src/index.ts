@@ -406,6 +406,9 @@ export {
   uiCapability,
   UiCapabilityError,
   UI_DIRECT_ESCAPE_ENV,
+  urlSchemeAllowed,
+  urlSchemeCapability,
+  UrlSchemeCapabilityError,
   writeAllowed,
   writeCapability,
   WriteCapabilityError,
@@ -421,6 +424,8 @@ export type {
   ReadCapabilityMode,
   UiCapability,
   UiCapabilityMode,
+  UrlSchemeCapability,
+  UrlSchemeCapabilityMode,
   WriteCapability,
   WriteCapabilityMode,
 } from "./capability.ts";

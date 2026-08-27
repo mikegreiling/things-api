@@ -1,72 +1,12 @@
 /**
- * Static availability signals: the on-disk 'Enable Things URLs' state and
- * proxy-shortcut presence. All external touchpoints (plist file, plutil,
- * `shortcuts list`) go through seams — no host state, no spawns.
+ * Static availability signals: proxy-shortcut presence. The `shortcuts list`
+ * touchpoint goes through a seam — no host state, no spawns. ('Enable Things
+ * URLs' used to live here; it is now `urlSchemeCapability` and is covered by
+ * test/unit/capability-url-scheme.test.ts.)
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import {
-  EXPECTED_PROXIES,
-  readShortcutProxies,
-  readUrlSchemeEnabled,
-} from "../../src/write/availability.ts";
-
-const dir = mkdtempSync(join(tmpdir(), "things-avail-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
-
-function plistFixture(name: string): string {
-  const path = join(dir, name);
-  writeFileSync(path, "irrelevant — the extract seam interprets the bytes");
-  return path;
-}
-
-describe("readUrlSchemeEnabled", () => {
-  it("plist unreadable → null with a check-the-app pointer", () => {
-    const state = readUrlSchemeEnabled({ plistPath: join(dir, "missing.plist") });
-    expect(state.enabled).toBeNull();
-    expect(state.detail).toContain("Settings > General");
-  });
-
-  it("key absent (extract throws) → null: the toggle was never set", () => {
-    const state = readUrlSchemeEnabled({
-      plistPath: plistFixture("no-key.plist"),
-      extract: () => {
-        throw new Error("No value at that key path");
-      },
-    });
-    expect(state.enabled).toBeNull();
-    expect(state.detail).toContain("never been toggled");
-  });
-
-  it("value 1 → enabled", () => {
-    const state = readUrlSchemeEnabled({
-      plistPath: plistFixture("on.plist"),
-      extract: () => "1\n",
-    });
-    expect(state.enabled).toBe(true);
-  });
-
-  it("value 0 → disabled, detail names the setting", () => {
-    const state = readUrlSchemeEnabled({
-      plistPath: plistFixture("off.plist"),
-      extract: () => "0\n",
-    });
-    expect(state.enabled).toBe(false);
-    expect(state.detail).toContain("Enable Things URLs");
-  });
-
-  it("unexpected value → null, value surfaced", () => {
-    const state = readUrlSchemeEnabled({
-      plistPath: plistFixture("odd.plist"),
-      extract: () => "banana",
-    });
-    expect(state.enabled).toBeNull();
-    expect(state.detail).toContain("banana");
-  });
-});
+import { EXPECTED_PROXIES, readShortcutProxies } from "../../src/write/availability.ts";
 
 describe("readShortcutProxies", () => {
   it("splits present/missing against the expected six", () => {

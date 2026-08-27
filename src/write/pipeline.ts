@@ -24,13 +24,16 @@ import {
 import { namedProjectClause, taskMembershipClause, type ResolvedScope } from "../read/scope.ts";
 import { evaluateScope } from "./scope-guard.ts";
 import { isThingsRunning } from "./automation-probe.ts";
-import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
+import { readShortcutProxies, type ShortcutsState } from "./availability.ts";
 import {
   uiAllowed,
   uiCapability as uiCapabilityDefault,
+  urlSchemeAllowed,
+  urlSchemeCapability as urlSchemeCapabilityDefault,
   writeAllowed,
   writeCapability as writeCapabilityDefault,
   type UiCapability,
+  type UrlSchemeCapability,
   type WriteCapability,
 } from "../capability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
@@ -368,8 +371,11 @@ export interface WriteDeps {
   sdefProbe?: () => boolean;
   /** Consent-churn tripwire: tuple recorded per verified mutation (client wires the default). */
   environment?: EnvironmentTracker;
-  /** Seam: on-disk 'Enable Things URLs' state for failure attribution (availability.ts). */
-  urlSchemeEnabled?: () => boolean | null;
+  /**
+   * Seam: prompt-free "Enable Things URLs" standing, for the URL gate AND for
+   * failure attribution when that gate let the write through (capability.ts).
+   */
+  urlSchemeCapability?: () => UrlSchemeCapability;
   /** Seam: installed Things proxy shortcuts, for the pre-dispatch availability gate (availability.ts). */
   shortcutProxies?: () => ShortcutsState;
   /** Seam: prompt-free app-automation standing, for the write gate (capability.ts). */
@@ -690,6 +696,15 @@ export async function runMutation<K extends OperationKind>(
   options: WriteOptions = {},
 ): Promise<MutationResult> {
   const startedAt = deps.now?.() ?? new Date();
+  // Things' own "Enable Things URLs" standing, read at most ONCE per mutation
+  // and shared by the two places that want it: the pre-dispatch URL gate (5c)
+  // and, when that gate let the write through on an `unreadable` verdict, the
+  // failure attribution at the end. Memoized within this one invocation only —
+  // across invocations it is re-derived like every other capability, because
+  // the human can flip the setting between two commands.
+  let urlStanding: UrlSchemeCapability | undefined;
+  const urlSchemeStanding = (): UrlSchemeCapability =>
+    (urlStanding ??= (deps.urlSchemeCapability ?? urlSchemeCapabilityDefault)());
   // 0. STRUCTURAL parameter check (#580) — FIRST, before uuid-prefix resolution
   // and before anything reads the params: an untyped caller (MCP
   // `run_operation`'s `params` pass-through, a JavaScript caller handing over
@@ -1113,7 +1128,38 @@ export async function runMutation<K extends OperationKind>(
       }
     }
 
-    // 5c. THE WRITE GATE (docs/design/permissions-doctrine.md, Articles I+II).
+    // 5c. THE URL-SCHEME GATE (URLEN1, #611). Things has its own switch for the
+    // URL scheme — Settings ▸ General ▸ "Enable Things URLs" — and both of its
+    // not-enabled states are invisible to the caller at dispatch time: an app
+    // told no discards the command in total silence, and an app nobody has
+    // answered the first-use "Things URL Scheme" dialog for PARKS the command
+    // behind that dialog. In each case `open -g` exits 0, nothing happens, and
+    // the verify reports a silent no-op long afterwards. The state is on disk
+    // and readable prompt-free, so it is read here and a not-enabled app is
+    // refused before anything is dispatched — which also keeps the app's own
+    // modal off an unattended screen. Keyed on the vector's DECLARATION, never
+    // on its id, for the same reason as the two gates below.
+    if (vector.dispatchesUrls === true && vector.simulates !== true) {
+      const capability = urlSchemeStanding();
+      if (!urlSchemeAllowed(capability)) {
+        audit({
+          result: blockedCode({ reason: "environment" }),
+          vector: vector.id,
+          disruption: effectiveTier,
+          invocation: invocation.redactedPayload,
+        });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          likelyCause: "feature-disabled",
+          detail: `this operation is delivered as a Things URL, and ${capability.detail}`,
+          remediation: capability.remediation.join("; "),
+        };
+      }
+    }
+
+    // 5d. THE WRITE GATE (docs/design/permissions-doctrine.md, Articles I+II).
     // The AppleScript vector sends a real Apple Event, and on a machine macOS
     // has no consent record for, that event IS the dialog. So the standing is
     // established prompt-free first — the deputy's own handshake when it is
@@ -1677,7 +1723,14 @@ export async function runMutation<K extends OperationKind>(
       classifyVerifyFailure({
         reason: outcome.kind,
         vector: vector.id,
-        urlSchemeEnabled: (deps.urlSchemeEnabled ?? (() => readUrlSchemeEnabled().enabled))(),
+        // Keyed on the DECLARATION, exactly like gate 5c: a vector that opens
+        // no URL cannot have failed for want of the app's URL authorization,
+        // and asking would import the host's own Things settings into every
+        // fake-vector engine test. For one that does, gate 5c already refused
+        // every state we could POSITIVELY read as not-enabled, so what reaches
+        // here is `enabled` or `unreadable` — the latter being exactly the case
+        // the hint exists for.
+        urlScheme: vector.dispatchesUrls === true ? urlSchemeStanding().mode : null,
         appWasRunning: appRunning,
         environmentChanges: envChanges,
       }),
