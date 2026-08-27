@@ -1258,6 +1258,16 @@ Explicitly-disabled and never-answered behave **identically** — same sheet, sa
 
 **Automation note.** A caller cannot distinguish "the app did nothing" from "the app is holding this and may do it later", so a failed URL write must never be blindly resent. The state IS readable ahead of time (`uriSchemeEnabled`), which is what makes a pre-dispatch refusal possible; ours now refuses before opening any URL. Evidence: [lab/urlen1-url-enable.md](lab/urlen1-url-enable.md) §3–§4.
 
+## 24. Things 3.23.1: an open modal sheet (the Repeat dialog) GATES Things Cloud sync entirely — mutations queue locally, unannounced, until the sheet is dismissed (field-measured, 2026-08-27, Things 3.23.1 build 32301502 / macOS 15.4.1)
+
+**What happens.** While a Repeat sheet is open on the main window, Things Cloud sync does not run: local mutations (URL-scheme adds/completes) land in the database and render in local views, but the sync-attempt timestamp stops advancing and nothing reaches other devices — even after the app is foregrounded. Dismissing the sheet releases the queued sync immediately.
+
+**Evidence (controlled A/B, field rig).** With no sheet open, a background URL-scheme write synced normally (so "background writes don't wake sync" is falsified — background writes DO wake sync). With the Repeat sheet open, writes landed locally while the last-sync-attempt timestamp stayed ~17 minutes stale across a 4-minute observation window, matching the last foreground time; foregrounding did not release it; dismissing the sheet did, immediately. Observed on a second device (iPhone, live connection) as the mutations simply never arriving.
+
+**Why it bites.** A sheet can be left standing invisibly — an aborted automation drive, or a user walking away mid-dialog — and every device silently diverges until someone notices. Nothing in the UI indicates sync is being held. Pairs badly with the sheet behaviors already on record: sheets stack and swallow ⌘Q/⌘W/Escape routing (§23's alert-sheet family), so an unattended machine can hold a sheet for days.
+
+**Status.** Field-measured on the maintainer's second machine (synthetic A/B probe artifacts); not yet golden-certified — the two-device certification cell rides the next durable-account sitting (a single-device local signature via the sync-attempt timestamp may corroborate sooner). Consumer-side mitigation shipped in the CLI: stranded-sheet cleanup and the sheet-gates-sync warning ride issue #620.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
