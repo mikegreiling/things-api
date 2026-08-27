@@ -1250,7 +1250,7 @@ Four properties make this hazardous for automation, each measured on a force-kil
 1. **The sender learns nothing.** `open -g things:///add?title=…` exits 0. No row appears, no error is written anywhere, and there is no state to poll — a read-after-write verify simply times out and reports a silent no-op. This is the whole of [#611](https://github.com/mikegreiling/things-api/issues/611): a fresh machine, all macOS grants held, a write that reported `verify-failed:silent-noop`.
 2. **The alert is a SHEET, not a window.** It hangs off the main window, so it is absent from `AXChildren` of the application element. Any modal oracle built on a window census — including this project's own disruption tier — cannot see it. (Our first two probe phases were fooled by exactly this and recorded "silent drop, no dialog" before the AX dumps overturned it.)
 3. **The command applies LATE.** Pressing **Enable** runs the held command — one measured cell landed a to-do that had been dispatched ~60 s earlier — and flips `uriSchemeEnabled` to `1`. So a mutation an automated caller has already reported as failed can still take effect at an arbitrary later moment, whenever a human walks past. Pressing **Cancel** discards it and leaves the switch off.
-4. **They stack, one per command, and nothing self-dismisses.** Three consecutive URLs produced three nested sheets. While any is standing, the app declines `⌘,`, `⌘W` and Escape (beeping at each) and will not quit gracefully.
+4. **They stack, one per command, and nothing self-dismisses.** Three consecutive URLs produced three nested sheets. While any is standing, the app declines `⌘,`, `⌘W` and Escape (beeping at each) and will not quit gracefully. *(MODALX1, 2026-08-27, measured the stacking shape: each new alert is a nested `AXSheet` CHILD of the sheet below it, not a sibling on the window — so a census that reads only a window's own `sheet 1` sees one of three — and dismissal is strictly **LIFO**, innermost first, one Escape per level. A URL alert can also stack on top of an unrelated modal such as the Repeat dialog, which makes the URL scheme the only path measured that can raise a sheet past a standing one. [lab/modalx1-open-sheet-matrix.md](lab/modalx1-open-sheet-matrix.md) §6.)*
 
 Explicitly-disabled and never-answered behave **identically** — same sheet, same park, same late-apply — and differ only in the key's reading (`0` vs absent). Navigation URLs are exempt: `things:///show?id=today` works normally with the switch off, adding no sheet.
 
@@ -1267,6 +1267,41 @@ Explicitly-disabled and never-answered behave **identically** — same sheet, sa
 **Why it bites.** A sheet can be left standing invisibly — an aborted automation drive, or a user walking away mid-dialog — and every device silently diverges until someone notices. Nothing in the UI indicates sync is being held. Pairs badly with the sheet behaviors already on record: sheets stack and swallow ⌘Q/⌘W/Escape routing (§23's alert-sheet family), so an unattended machine can hold a sheet for days.
 
 **Status.** Field-measured on the maintainer's second machine (synthetic A/B probe artifacts); not yet golden-certified — the two-device certification cell rides the next durable-account sitting (a single-device local signature via the sync-attempt timestamp may corroborate sooner). Consumer-side mitigation shipped in the CLI: stranded-sheet cleanup and the sheet-gates-sync warning ride issue #620.
+
+> *Addendum (MODALX1, 2026-08-27, golden-v4 / Things 3.23): the single-device shortcut is CLOSED, so the two-device cell is the only route. `BSSyncronyMetadata` holds **0 rows** until an account is attached, and Things emits no `com.culturedcode.*` os_log subsystem, so an account-less clone has neither the timestamp nor a log substitute — this campaign did **not** corroborate the gate. It does bound it: a `things:///add` dispatched with a sheet standing had its row committed locally in **~1 s**, unchanged from the control, so whatever the sheet gates is strictly downstream of the local commit. [lab/modalx1-open-sheet-matrix.md](lab/modalx1-open-sheet-matrix.md) §9.*
+
+## 25. Things 3.23: a standing modal sheet EMPTIES the app's top-level AppleScript collections — so `delete` reports an item that does not exist while the database holds it open (MODALX1, 2026-08-27, golden-v4 / Things 3.23 build 32300036)
+
+While any modal sheet is up — the Repeat dialog is the one measured, opened by `Items ▸ Repeat…` — Things' scripting dictionary keeps answering, but its **top-level element lists report zero members**. Matched probes either side of the sheet, one clone, one pass:
+
+| AppleScript | no sheet | sheet standing | after dismissal |
+|---|---|---|---|
+| `count to dos` | 35 | **0** | 34 |
+| `count projects` | 6 | **0** | 6 |
+| `count (every to do)` | 35 | **0** | 34 |
+| `get name of first to do` | a title | **`-1719` Can't get to do 1. Invalid index** | a title |
+| `count areas` | 2 | 2 | 2 |
+| `count to dos of list "Inbox"` / `"Today"` | 12 / 8 | 12 / 8 | 11 / 8 |
+| `exists to do id X` · `get name of to do id X` | true · title | **true · title** | true · title |
+
+So the emptying is precisely scoped: **top-level collections only.** List-scoped collections, `areas`, and every by-id access are untouched, and the app is not "busy" in any general sense — `count windows` and `get version` answer instantly throughout.
+
+The damaging consequence is that **`delete` re-resolves its argument through the app-level element list**, which is empty. On a row the database shows plainly untrashed:
+
+```
+tell application "Things3" to exists to do id "4otK…"   --> true
+tell application "Things3" to get name of to do id "4otK…"  --> "MODALX1-m1-deletee"
+tell application "Things3" to delete (to do id "4otK…")
+    --> error -1728: Things3 got an error: Can’t get to do id "4otK…".
+```
+
+Every other mutation form on that same row, in the same state, **succeeds**: `set notes`, `set status … to completed`, `make new to do`, and even `move to do id X to list "Trash"` — which trashes the item the `delete` just claimed did not exist. Dismiss the sheet and the identical `delete` call on the identical uuid returns exit 0. This also **corrects** the broader law recorded at [VMQ1 §5](lab/vmq1-probe-closeout.md) ("an open modal blocks AS object-model mutations app-wide"): mutation is not what is blocked; collection resolution is.
+
+Two smaller behaviors in the same state, both measured: the **menu bar's items become un-enumerable**, not merely disabled (`click menu item "Repeat…" of menu "Items"` → `-1728 Can't get menu item`, and reading its `enabled` property errors outright); and a **keyboard chord aimed past the sheet raises an alert beep** (`⌘⌫` and `⌘⇧⌫` each produced exactly one) while an Escape, a URL, an Apple event and a Shortcuts run all fail silently.
+
+**Expected:** an app that answers `exists to do id X` with `true` and hands back that item's name should not then refuse to delete it for want of an object it just resolved. Either the collections should stay populated behind a sheet, or scripting should refuse coherently (a single "busy, a dialog is open" error) rather than presenting an empty database to some accessors and a full one to others.
+
+**Automation note.** `-1728 Can't get <kind> id "…"` against a uuid the database shows present is, on this evidence, a reliable fingerprint of a modal sheet standing somewhere in Things — including a sheet a *previous* automated drive stranded. It is exactly the "ghost clone" symptom reported in [#620](https://github.com/mikegreiling/things-api/issues/620), and there is no second cause to look for. Evidence: [lab/modalx1-open-sheet-matrix.md](lab/modalx1-open-sheet-matrix.md) §2.
 
 ## Suggested report to Cultured Code
 
