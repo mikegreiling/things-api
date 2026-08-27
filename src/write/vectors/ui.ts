@@ -43,6 +43,7 @@ import { certificationOf } from "./ui-certification.ts";
 import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import {
+  AX_DIALOG_SHELL_SNIPPET,
   describeFocusOwner,
   readUiState,
   SYNC_GATE_WARNING,
@@ -803,11 +804,45 @@ on aqPad2(n)
   return s
 end aqPad2
 
+on aqStamp(d)
+  return ((year of d) as text) & "-" & my aqPad2((month of d) as integer) & "-" & my aqPad2(day of d)
+end aqStamp
+
+on aqRelative(s)
+  -- The first-occurrence control renders NEAR dates RELATIVELY — "Today" for the
+  -- current day — and a relative word can never be string-compared against a
+  -- typed ISO date (#625: make-repeating --when <today> refused its own correct
+  -- write, every time, because the audit compared "2026-07-05" against "Today").
+  -- Resolve the word against the app's own clock, the same way the selector
+  -- already does, rather than rebuilding the app's display string.
+  set rightNow to current date
+  if s is "Today" then return my aqStamp(rightNow)
+  if s is "Tomorrow" then return my aqStamp(rightNow + 86400)
+  if s is "Yesterday" then return my aqStamp(rightNow - 86400)
+  -- A weekday-only rendering names a day inside the coming week; anything
+  -- further out is rendered as a date, so the search is bounded at 7 days and a
+  -- word that resolves to nothing falls through to the date parse (and, failing
+  -- that, to a fail-closed mismatch — never a guess).
+  set wdNames to {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+  repeat with i from 1 to 7
+    if s is (item i of wdNames) then
+      repeat with k from 1 to 7
+        set cand to rightNow + (k * 86400)
+        if ((weekday of cand) as text) is (item i of wdNames) then return my aqStamp(cand)
+      end repeat
+    end if
+  end repeat
+  return missing value
+end aqRelative
+
 on aqYMD(t)
-  -- Occurrence-pop-up titles are LOCALIZED ("Sun, Jul 12, 2026"), so the match is
-  -- made by PARSING the title to a date and comparing calendar components — never
-  -- by rebuilding the app's display string (the axSelectNextOccurrenceScript law).
+  -- Occurrence-pop-up titles are LOCALIZED ("Sun, Jul 12, 2026") and, for near
+  -- dates, RELATIVE ("Today") — so the match is made by RESOLVING the title to a
+  -- calendar date and comparing components, never by rebuilding the app's
+  -- display string (the axSelectNextOccurrenceScript law).
   set s to t as text
+  set rel to my aqRelative(s)
+  if rel is not missing value then return rel
   try
     set d to date s
     return ((year of d) as text) & "-" & my aqPad2((month of d) as integer) & "-" & my aqPad2(day of d)
@@ -1618,18 +1653,7 @@ end tell`;
  */
 export function axCancelDialogScript(): string {
   return `${SE}
-  set shellRef to missing value
-  try
-    -- positional-ok: the one attached sheet a window can present, resolved
-    -- exactly as the read-only census resolves it.
-    set shellRef to sheet 1 of (first window whose subrole is "AXStandardWindow")
-  end try
-  if shellRef is missing value then
-    try
-      set dws to (windows whose subrole is "AXUnknown" and size is not {40, 40})
-      if (count of dws) > 0 then set shellRef to item 1 of dws
-    end try
-  end if
+${AX_DIALOG_SHELL_SNIPPET}
   if shellRef is missing value then return "NO-DIALOG"
   if not (exists button "Cancel" of shellRef) then return "NO-CANCEL"
   click button "Cancel" of shellRef
@@ -1744,6 +1768,9 @@ function oursToDismiss(kind: UiSheetKind, expected: UiSheetKind | null): boolean
   return kind === "repeat" || kind === "move-picker";
 }
 
+/** How many stacked dialogs the cleanup will unwind before falling to the next rung. */
+const MAX_DISMISS_ROUNDS = 4;
+
 /** Press the dialog's own Cancel button (element-addressed, background-safe). */
 async function pressCancel(run: UiRunner): Promise<boolean> {
   const res = await run(
@@ -1808,12 +1835,17 @@ async function clearDialog(
   }
   const kind = readable ? { sheetKind: census.sheetKind } : {};
 
-  // 1. Its own Cancel button.
+  // 1. Its own Cancel button — repeated while a STACK unwinds, because dialogs
+  //    nest and dismiss strictly LIFO (MODALX1 §6), re-reading between presses
+  //    so a dialog that is not ours stops the loop rather than being clicked.
   if (readable) {
-    if (await pressCancel(run)) {
+    for (let i = 0; i < MAX_DISMISS_ROUNDS; i += 1) {
+      if (!(await pressCancel(run))) break;
       const after = await readUiState(run, STEP_TIMEOUT_MS);
-      if (after !== null && after.inspectable && !after.sheetOpen) {
-        return { state: "dismissed", how: "cancel-button", ...kind, ...owner };
+      if (after === null || !after.inspectable) break;
+      if (!after.sheetOpen) return { state: "dismissed", how: "cancel-button", ...kind, ...owner };
+      if (!oursToDismiss(after.sheetKind, expected)) {
+        return { state: "foreign", sheetKind: after.sheetKind, ...owner };
       }
     }
   }
@@ -2977,6 +3009,26 @@ async function drive(
     }
   }
 
+  // 0¾. OPEN-DIALOG PRECONDITION (MODALX1 §3/§4, issue #620). A dialog already
+  //      standing when a drive starts is not ours and cannot be driven around:
+  //      it disables the menu bar (so a menu recipe's canary would miss and
+  //      guess at why), and it SWALLOWS the chord recipes' key events, which
+  //      pass their canary happily and then move nothing. The census says so
+  //      directly, for every recipe, before anything is pressed — and a dialog
+  //      standing here also means the app is ignoring scripted changes app-wide
+  //      and holding Things Cloud sync, which is the operator's real problem.
+  const startState = await readUiState(rawRun, STEP_TIMEOUT_MS);
+  if (startState !== null && startState.inspectable && startState.sheetOpen) {
+    return refusal(
+      `ui preflight refused: a dialog is already open in Things (${startState.sheetKind}${
+        startState.sheetDepth > 1 ? `, on top of ${startState.sheetDepth - 1} more` : ""
+      }), most likely left over from an earlier command or opened by hand. While one is open the ` +
+        "app disables its menu bar, ignores keyboard input aimed at anything else, and " +
+        `${SYNC_GATE_WARNING}. Dismiss it in Things (click Cancel, or press Escape with Things in ` +
+        "front), then run the same command again. Nothing was pressed.",
+    );
+  }
+
   // 1. Recipe canary: resolve every statically-reachable element (now that the
   //    target is selected). A miss refuses the whole drive before anything is
   //    pressed. (This is also the localization check: English titles must resolve.)
@@ -3376,6 +3428,11 @@ export function createUiVector(
       }
       return drive(invocation.recipe, tracedRun, aux, budgetMs, reachCache);
     },
+    // Pre-seed dialog seam for the promote orchestrators (MODALX1, #620): a
+    // composite's FIRST leg mints a row through the URL scheme, which sails
+    // straight past an open dialog — and every AppleScript leg after it then
+    // fails, leaving a copy behind. The orchestrator asks this BEFORE it seeds.
+    probeUiState: () => readUiState(tracedRun, STEP_TIMEOUT_MS),
     // Pre-seed gate seam for the promote orchestrators (SESSGATE, #480): probe the
     // live session BEFORE they seed a row, so a locked/full-screen session refuses
     // with zero mutation. Present regardless of `enabled` (the orchestrator has

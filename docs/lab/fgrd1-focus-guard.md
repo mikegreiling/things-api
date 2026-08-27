@@ -2,9 +2,9 @@
 
 **Version stamp:** `things-lab-golden-v4` · Things **3.23** (CFBundleVersion **32300036**) · macOS **15.7.7** · databaseVersion **27** · guest clock pinned **2026-07-05 12:00** and never rolled (trial wall 2026-07-18) · one disposable airgapped clone, destroyed on teardown. Immutable snapshot per the [harness](harness.md) version-stamping policy.
 
-Driver: [`lab/scripts/research-fgrd1.sh`](../../lab/scripts/research-fgrd1.sh) (`setup` / `ship` / `cells` / `cells2` / `cells3` / `teardown`). Every cell ran through the **production CLI** built from this branch and shipped into the guest (`dist/` + node + commander), with both lab escapes exported (`THINGS_API_UI_DIRECT=1 THINGS_API_WRITE_DIRECT=1`). Fixtures are fully synthetic (`FGRD1 alpha…golf`) plus the golden's own `LAB-AREA-A`.
+Driver: [`lab/scripts/research-fgrd1.sh`](../../lab/scripts/research-fgrd1.sh) (`setup` / `ship` / `cells` / `cells2` / `cells3` / `cells4` / `cells5` / `teardown`). Every cell ran through the **production CLI** built from this branch and shipped into the guest (`dist/` + node + commander), with both lab escapes exported (`THINGS_API_UI_DIRECT=1 THINGS_API_WRITE_DIRECT=1`). Fixtures are fully synthetic (`FGRD1 alpha…golf`) plus the golden's own `LAB-AREA-A`.
 
-**Beep sentinel: 0 / 0 / 0** across the three passes (allowed 0, clean each time).
+**Beep sentinel: 0 across every pass** (five passes, allowed 0, clean each time).
 
 ---
 
@@ -112,7 +112,58 @@ R3 records an honest ordering fact: at CLI level the READ gate speaks first (*"t
 
 ---
 
-## 7. What this campaign does NOT establish
+## 7. P2 — the composite refuses BEFORE it seeds, and −1728 is named
+
+Second pass, fresh clone, after [MODALX1](modalx1-open-sheet-matrix.md) landed its guard requirements. With a Repeat dialog standing (opened by hand) and the shipped CLI:
+
+```
+$ things todo make-repeating <uuid> --frequency daily --interval 2 --dangerously-drive-gui --json
+EXIT=4  blocked:environment
+  "a dialog is already open in Things, and while one is open the app ignores changes like this
+   one and stops sending anything to Things Cloud — nothing was created"
+  remediation: dismiss the dialog … ; `things ui-state` shows what is open
+      rows titled '<fixture>': before=1  after=1     <- NO copy minted
+      the original: trashed=0                        <- untouched
+```
+
+That is the gap MODALX1 measured, closed: the composite's clone leg rides the URL scheme, which an open dialog does not touch, so it used to LAND and then strand a copy when every AppleScript leg after it failed. The census is asked before the seed, and only a POSITIVE sighting refuses (an unreadable census proceeds — the drive's own precondition is the backstop).
+
+The same standing dialog, through `things todo delete`:
+
+```
+verify-failed:silent-noop … Can’t get to do id "…" (-1728)
+likelyCause: "modal-open"
+remediation: "…what it says about an item that IS there whenever a dialog is open somewhere in
+              the app … Run `things ui-state` … dismiss it … nothing was changed."
+```
+
+and after dismissal the identical command returns `ok`. The error code that meant nothing now names its one cause.
+
+## 8. D — `--when <today>` (issue #625), and what was hiding behind it
+
+The matrix, weekly rules on a clock pinned to Sunday 2026-07-05:
+
+| `--when` | before | after |
+|---|---|---|
+| `2026-07-05` (today) | **exit 3** — the audit refused its own correct write | **ok** |
+| `2026-07-06` (tomorrow) | ok | ok |
+| `2026-07-12` (+7d) | ok | ok |
+| `2026-09-22` (far) | ok | ok |
+
+**The audit's comparator was string-matching a rendered value.** Measured (cell N): with the clock on a Sunday and a weekly-Sunday rule, the first-occurrence control's value IS the word `Today`, and its menu offers `Today, Sun, Jul 12, 2026, Sun, Jul 19, 2026, …, More…` — so the pre-commit audit compared `"2026-07-05"` against `"Today"` and aborted the drive it had just performed correctly. The comparator now RESOLVES the app's relative renderings against the app's own clock (Today / Tomorrow / Yesterday / a weekday name inside the coming week), the same way the selector already resolves them, and falls through to the existing date parse — and to a fail-closed mismatch — for anything else.
+
+**Fixing that exposed a second false negative, and it is #508's shape one case over.** With the audit passing, the today case still failed: *"the series was created but its first occurrence landed on 2026-07-12, not the requested 2026-07-05"*. The database says otherwise:
+
+```
+template   icStart=2026-07-12  next=2026-07-12  instanceCreationCount=1
+instance   startDate=2026-07-05                      <- the requested occurrence, materialized
+```
+
+Committing a rule whose first occurrence is TODAY makes the app materialize that occurrence immediately and ADVANCE the cursor to the next slot. The post-drive check read only the cursor, so it reported a wrong phase on a series that landed exactly as asked. It now accepts either oracle — the cursor naming the requested date, OR a materialized instance sitting on it — and still refuses when nothing sits on the requested day. Re-run on fresh fixtures: 4/4 `ok`, the today case with its instance on 2026-07-05, **0 beeps**.
+
+*(Worth a maintainer's ruling: `rt1_instanceCreationStartDate` is documented in this codebase as "the app-materialized first occurrence", and for a same-day rule it is not — it is the NEXT slot. That is app behavior, recorded here rather than in the oddities register, which this campaign did not own.)*
+
+## 9. What this campaign does NOT establish
 
 - **The original 1002 keystroke failure is still unreproduced.** Nothing here recreates it; the hardening makes its *shape* impossible to reach silently (a refusal, named, with nothing typed) rather than explaining that particular afternoon.
 - **The sync gate is cited, not re-measured here.** The open-dialog Things Cloud gate is the maintainer's field A/B (an airgapped clone has no account to sync). The census and the copy report it; [oddities](../things-app-oddities.md) owns the evidence entry.

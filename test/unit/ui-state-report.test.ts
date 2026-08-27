@@ -58,7 +58,7 @@ describe("readUiStateReport", () => {
   it("reports an open dialog and the sync consequence it carries", async () => {
     const report = await readUiStateReport({
       capability: allowed,
-      read: async () => state(),
+      read: async () => state({ kind: "repeat" }),
     });
     expect(report.available).toBe(true);
     expect(report.state?.sheetKind).toBe("repeat");
@@ -95,7 +95,10 @@ describe("readUiStateReport", () => {
 
 describe("uiStateLines", () => {
   it("renders the four facts, the census evidence, and the sync warning", async () => {
-    const report = await readUiStateReport({ capability: allowed, read: async () => state() });
+    const report = await readUiStateReport({
+      capability: allowed,
+      read: async () => state({ kind: "repeat" }),
+    });
     const text = uiStateLines(report).join("\n");
     expect(text).toContain("── Window state ──");
     expect(text).toContain("frontmost:   Things3 (Things)");

@@ -1933,3 +1933,80 @@ describe("make-repeating — rollback after a failed promote (#620)", () => {
     expect(res.detail).toContain("Things Cloud");
   });
 });
+
+// ============================================ the pre-seed OPEN-DIALOG gate (#620)
+//
+// MODALX1 measured the gap: a composite's first leg rides the URL scheme, which
+// an open dialog does not touch, so the disposable copy LANDS — and then every
+// AppleScript leg after it fails with -1728, leaving that copy in the user's
+// lists. The orchestrator asks before it seeds.
+describe("make-repeating — the pre-seed open-dialog gate (#620)", () => {
+  /** A ui vector whose only job here is to answer the census. */
+  function uiVectorWithDialog(open: boolean): WriteVector {
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    const { simulates: _simulates, ...rest } = sim;
+    return {
+      ...rest,
+      id: "ui",
+      drivesGui: true,
+      probeUiState: async () => ({
+        thingsRunning: true,
+        thingsFrontmost: true,
+        frontmostApp: "Things3",
+        sheetOpen: open,
+        sheetKind: open ? ("repeat" as const) : ("none" as const),
+        sheetForm: open ? ("attached" as const) : ("none" as const),
+        sheetDepth: open ? 1 : 0,
+        sheetControls: open ? "cb:2 pu:1 bt:2 gp:1 tf:0" : null,
+        focusOwner: { app: "Things3", role: "AXTextField", subrole: null },
+        inspectable: true,
+      }),
+    };
+  }
+
+  const GRANTED_UI: UiCapability = {
+    mode: "helpers",
+    detail: "the helpers hold GUI access",
+    remediation: [],
+    host: { bundleId: null, name: "test-host" },
+  };
+  /** deps whose GUI standing is INJECTED — no test ever reads the host's TCC state. */
+  const gateDeps = (open: boolean): WriteDeps => ({
+    ...deps([vector, uiVectorWithDialog(open)]),
+    config: { ...CONFIG, ui: { enabled: true } },
+    uiCapability: () => GRANTED_UI,
+  });
+
+  it("refuses with ZERO mutation — no copy is minted — when a dialog is standing", async () => {
+    const src = seedTodo(fixture.db, { title: "Gate fixture", start: "active" });
+    const before = fixture.db
+      .prepare("SELECT count(*) AS n FROM TMTask WHERE title = 'Gate fixture'")
+      .get() as { n: number };
+    const res = await runMakeRepeatingTodo(
+      gateDeps(true),
+      { uuid: src, frequency: "daily", interval: 1, afterCompletion: true },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind !== "blocked") throw new Error("expected blocked");
+    expect(res.detail).toContain("a dialog is already open in Things");
+    expect(res.detail).toContain("Things Cloud");
+    expect(res.remediation).toContain("things ui-state");
+    // The whole point: nothing was created and the original never moved.
+    const after = fixture.db
+      .prepare("SELECT count(*) AS n FROM TMTask WHERE title = 'Gate fixture'")
+      .get() as { n: number };
+    expect(after.n).toBe(before.n);
+    expect(row(src)?.["trashed"]).toBe(0);
+  });
+
+  it("proceeds when the census reports a clear screen", async () => {
+    const src = seedTodo(fixture.db, { title: "Clear fixture", start: "active" });
+    const res = await runMakeRepeatingTodo(
+      gateDeps(false),
+      { uuid: src, frequency: "daily", interval: 1, afterCompletion: true },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).not.toBe("blocked");
+  });
+});

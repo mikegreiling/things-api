@@ -164,6 +164,31 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
     }
   }
   if (!deps.config.ui.enabled) return null;
+  // 1½. AN OPEN DIALOG, before the seed (MODALX1, issue #620). This is the gap
+  // the field incident fell into twice over: the clone leg rides the URL scheme,
+  // which an open dialog does not touch, so it LANDS — and then the trash leg,
+  // the promote and the cleanup are all AppleScript, all refused with `-1728`,
+  // leaving a copy of the user's to-do in their lists. Measured in-lab: with a
+  // dialog standing, the compound mutates and then fails for a reason it could
+  // have read up front. A census that cannot be read proceeds (the drive's own
+  // precondition is the backstop); only a POSITIVE sighting refuses.
+  const dialogVector = deps.vectors.find((v) => v.probeUiState !== undefined);
+  if (dialogVector?.probeUiState !== undefined) {
+    const state = await dialogVector.probeUiState();
+    if (state !== null && state.inspectable && state.sheetOpen) {
+      return {
+        kind: "blocked",
+        op,
+        reason: "environment",
+        detail:
+          "a dialog is already open in Things, and while one is open the app ignores changes " +
+          "like this one and stops sending anything to Things Cloud — nothing was created",
+        remediation:
+          "dismiss the dialog in Things (click Cancel, or press Escape with Things in front), " +
+          "then run the same command again; `things ui-state` shows what is open",
+      };
+    }
+  }
   const ui = deps.vectors.find((v) => v.probeReachability !== undefined);
   if (ui?.probeReachability === undefined) return null;
   const verdict = await ui.probeReachability();
@@ -509,6 +534,41 @@ function landedFirstStart(
 ): IsoDate | null {
   if (!afterCompletion) return firstOccurrenceOf(deps.db, templateUuid);
   return instanceUuid === null ? null : instanceStartDate(deps.db, instanceUuid);
+}
+
+/**
+ * Was the requested first occurrence honored? (#508's oracle, extended for the
+ * SAME-DAY case — issue #625.)
+ *
+ * A fixed series is normally read off the template's cursor. But when the
+ * requested first occurrence is TODAY, the app materializes that occurrence
+ * immediately on commit and ADVANCES the cursor to the next slot — measured on
+ * 3.23 (FGRD1 §8: `--when <today>` on a weekly rule left the template's cursor
+ * and next-date on the FOLLOWING week with `instanceCreationCount = 1`, while a
+ * live instance sat on today). Reading only the cursor there reports a
+ * `verify-failed:mismatch` on a series that landed exactly as asked — the same
+ * false-negative shape as #508, one case over. So the check accepts EITHER
+ * oracle: the cursor naming the requested date, or a materialized instance
+ * SITTING on it. An instance dated the requested day is proof by construction;
+ * nothing else can put one there.
+ */
+export function firstOccurrenceHonored(
+  deps: WriteDeps,
+  args: {
+    templateUuid: string;
+    instanceUuid: string | null;
+    expectedIso: IsoDate;
+    afterCompletion: boolean;
+  },
+): { honored: boolean; landed: IsoDate | null } {
+  const landed = landedFirstStart(deps, args.templateUuid, args.instanceUuid, args.afterCompletion);
+  // An after-completion series with no materialized instance is UNVERIFIABLE
+  // (the create delta already proved the series landed) — never a mismatch.
+  if (args.afterCompletion && landed === null) return { honored: true, landed };
+  if (landed === args.expectedIso) return { honored: true, landed };
+  const instanceIso =
+    args.instanceUuid === null ? null : instanceStartDate(deps.db, args.instanceUuid);
+  return { honored: instanceIso === args.expectedIso, landed };
 }
 
 /**
@@ -1035,10 +1095,13 @@ async function makeRepeatingViaClone(
     // (#508) — see landedFirstStart; an unverifiable after-completion series skips.
     const afterCompletion = effParams.afterCompletion === true;
     if (expectedStartIso !== undefined) {
-      const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
-      if (!(afterCompletion && landed === null) && landed !== expectedStartIso) {
-        return nextMismatch(op, templateUuid, expectedStartIso, landed);
-      }
+      const first = firstOccurrenceHonored(deps, {
+        templateUuid,
+        instanceUuid,
+        expectedIso: expectedStartIso,
+        afterCompletion,
+      });
+      if (!first.honored) return nextMismatch(op, templateUuid, expectedStartIso, first.landed);
     }
 
     const warnings: string[] = [
@@ -1298,9 +1361,13 @@ async function addRepeatingViaCreate(
     // series verifies against its materialized instance, and skips when it has none.
     const afterCompletion = effRuleWithReminder.afterCompletion === true;
     if (expectedStartIso !== undefined) {
-      const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
-      if (!(afterCompletion && landed === null) && landed !== expectedStartIso)
-        return nextMismatch(op, templateUuid, expectedStartIso, landed);
+      const first = firstOccurrenceHonored(deps, {
+        templateUuid,
+        instanceUuid,
+        expectedIso: expectedStartIso,
+        afterCompletion,
+      });
+      if (!first.honored) return nextMismatch(op, templateUuid, expectedStartIso, first.landed);
     }
 
     const warnings: string[] = [

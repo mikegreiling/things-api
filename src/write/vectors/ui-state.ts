@@ -51,6 +51,57 @@ export type UiSheetKind = "none" | "repeat" | "move-picker" | "other";
 /** How the dialog presents: attached to the standard window, or detached (Things backgrounded). */
 export type UiSheetForm = "none" | "attached" | "detached";
 
+/** How deep a stack of dialogs the walk will follow before giving up. */
+const MAX_SHEET_DEPTH = 6;
+
+/**
+ * Resolve the dialog IN FRONT — the innermost of a stack — and record how deep
+ * the stack goes. Written as a snippet because the census and the dismissal must
+ * agree on which dialog they mean, to the element.
+ *
+ * Sheets STACK (MODALX1 §6, golden-v4 / 3.23): a dialog raised while another is
+ * standing becomes an `AXSheet` CHILD of the one below it, not a sibling on the
+ * window — measured with two `things:///add` URL-consent alerts nesting inside a
+ * Repeat sheet — and dismissal is strictly LIFO. So a census that reads only the
+ * window's own `sheet 1` sees the bottom of the stack and misidentifies what
+ * actually owns the screen, and a dismissal aimed there presses a button behind
+ * a modal. Both walk to the top instead.
+ *
+ * Runs inside a `tell process "Things3"` block; leaves `shellRef` (or
+ * `missing value`), `sheetForm` and `sheetDepth` bound.
+ */
+export const AX_DIALOG_SHELL_SNIPPET = `		set shellRef to missing value
+		set sheetForm to "none"
+		set sheetDepth to 0
+		try
+			-- positional-ok: the one attached sheet a window can present, which is
+			-- the BOTTOM of any stack; the walk below climbs to the top.
+			set shellRef to sheet 1 of (first window whose subrole is "AXStandardWindow")
+			set sheetForm to "attached"
+			set sheetDepth to 1
+		end try
+		if shellRef is missing value then
+			try
+				set dws to (windows whose subrole is "AXUnknown" and size is not {40, 40})
+				if (count of dws) > 0 then
+					set shellRef to item 1 of dws
+					set sheetForm to "detached"
+					set sheetDepth to 1
+				end if
+			end try
+		end if
+		if shellRef is not missing value then
+			repeat ${MAX_SHEET_DEPTH} times
+				set nested to missing value
+				try
+					if (exists sheet 1 of shellRef) then set nested to sheet 1 of shellRef
+				end try
+				if nested is missing value then exit repeat
+				set shellRef to nested
+				set sheetDepth to sheetDepth + 1
+			end repeat
+		end if`;
+
 /** Who owns keyboard focus. Role only — never the element's value or title (see PRIVACY). */
 export interface UiFocusOwner {
   /** The frontmost application's process name (e.g. "Things3"). */
@@ -70,8 +121,16 @@ export interface UiState {
   frontmostApp: string | null;
   /** Is a modal sheet / detached editor open in Things? */
   sheetOpen: boolean;
+  /** What the dialog IN FRONT is — the innermost of a stack (see {@link AX_DIALOG_SHELL_SNIPPET}). */
   sheetKind: UiSheetKind;
   sheetForm: UiSheetForm;
+  /**
+   * How many dialogs are stacked (0 when none, 1 for the ordinary case). Sheets
+   * nest as children of the sheet below and dismiss strictly LIFO, so a depth
+   * above 1 means one dismissal is not enough — and that the thing in front is
+   * NOT the dialog a drive opened (MODALX1 §6).
+   */
+  sheetDepth: number;
   /**
    * The open dialog's control census — role COUNTS only, the evidence behind
    * `sheetKind` (e.g. `cb:2 pu:1 bt:2 gp:1 tf:0`). Null when no dialog is open.
@@ -112,6 +171,7 @@ set canInspect to true
 set thingsRunning to false
 set sheetForm to "none"
 set sheetKind to "none"
+set sheetDepth to 0
 set census to ""
 tell application "System Events"
 	try
@@ -135,22 +195,7 @@ tell application "System Events"
 end tell
 if thingsRunning then
 	tell application "System Events" to tell process "${THINGS_PROCESS}"
-		set shellRef to missing value
-		try
-			-- positional-ok: an EXISTENCE read over the one attached sheet a window
-			-- can present. Nothing is addressed through it and nothing is written.
-			set shellRef to sheet 1 of (first window whose subrole is "AXStandardWindow")
-			set sheetForm to "attached"
-		end try
-		if shellRef is missing value then
-			try
-				set dws to (windows whose subrole is "AXUnknown" and size is not {40, 40})
-				if (count of dws) > 0 then
-					set shellRef to item 1 of dws
-					set sheetForm to "detached"
-				end if
-			end try
-		end if
+${AX_DIALOG_SHELL_SNIPPET}
 		if shellRef is not missing value then
 			set nCb to -1
 			set nPu to -1
@@ -191,7 +236,7 @@ if thingsRunning then
 		end if
 	end tell
 end if
-return "front=" & frontName & linefeed & "running=" & thingsRunning & linefeed & "form=" & sheetForm & linefeed & "kind=" & sheetKind & linefeed & "census=" & census & linefeed & "role=" & focusRole & linefeed & "subrole=" & focusSub & linefeed & "inspectable=" & canInspect`;
+return "front=" & frontName & linefeed & "running=" & thingsRunning & linefeed & "form=" & sheetForm & linefeed & "depth=" & sheetDepth & linefeed & "kind=" & sheetKind & linefeed & "census=" & census & linefeed & "role=" & focusRole & linefeed & "subrole=" & focusSub & linefeed & "inspectable=" & canInspect`;
 }
 
 /**
@@ -218,6 +263,7 @@ export function parseUiState(stdout: string): UiState | null {
   const role = fields.get("role") ?? "";
   const subrole = fields.get("subrole") ?? "";
   const census = fields.get("census") ?? "";
+  const depth = Number(fields.get("depth") ?? "0");
   return {
     thingsRunning: fields.get("running") === "true",
     thingsFrontmost: frontmostApp === THINGS_PROCESS,
@@ -225,6 +271,7 @@ export function parseUiState(stdout: string): UiState | null {
     sheetOpen: sheetKind !== "none",
     sheetKind,
     sheetForm,
+    sheetDepth: Number.isFinite(depth) ? depth : 0,
     sheetControls: census === "" ? null : census,
     focusOwner:
       frontmostApp === null ? null : { app: frontmostApp, role, subrole: subrole || null },
@@ -286,7 +333,10 @@ export function describeUiState(state: UiState): string {
         : state.sheetKind === "move-picker"
           ? `the Move… picker is open (${state.sheetForm})`
           : `an unrecognized dialog is open in Things (${state.sheetForm})`;
-  return `${front}; ${sheet}`;
+  // A stack means the thing in front is sitting ON another dialog, and each one
+  // has to be dismissed in turn (MODALX1 §6).
+  const stacked = state.sheetDepth > 1 ? `, on top of ${state.sheetDepth - 1} more` : "";
+  return `${front}; ${sheet}${stacked}`;
 }
 
 /**

@@ -292,7 +292,7 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     expect(sel?.script).toContain("My Project");
   });
 
-  it("dismisses an open dialog and reports partial state when no row selects to the title (NOMATCH)", async () => {
+  it("sends NOTHING on cleanup when the drive had not opened a dialog yet (NOMATCH)", async () => {
     const { run, commands } = mockRunner((c) => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "select-row") return ok("NOMATCH");
@@ -301,10 +301,12 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     const res = await createUiVector(config(), run).execute(invocation(recipe()));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("no content-table row selected");
-    // The audited cleanup ladder closes an open dialog with its OWN Cancel
-    // button (issue #620) — an element press, never a keystroke into whatever
-    // happens to own the screen.
-    expect(commands.some((c) => c.script?.includes('button "Cancel"'))).toBe(true);
+    // The row selection fails BEFORE any dialog is opened, so the audited
+    // cleanup finds nothing open and sends nothing at all — no Escape into
+    // whatever happens to own the screen, which is the whole point (issue #620).
+    expect(res.stderr).toContain("No dialog was left open");
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    expect(commands.some((c) => c.primitive === "dismiss-dialog")).toBe(false);
     // Nothing past the selection ran — no menu press.
     expect(commands.some((c) => c.primitive === "press" && c.script?.includes("menu item"))).toBe(
       false,

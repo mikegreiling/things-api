@@ -23,6 +23,35 @@ describe("classifyTransportFailure", () => {
     expect(hint?.hint).toContain("Automation");
   });
 
+  // The #620 "ghost clone": Things answers "no such item" for a row that is
+  // perfectly present whenever a modal dialog is standing (MODALX1 §2.1 — an
+  // open sheet empties the app's top-level scripting collections). The one
+  // error code that means it, mapped to the one thing that fixes it.
+  it("maps -1728 Can't get to do id to an open dialog, not a missing item", () => {
+    const hint = classifyTransportFailure({
+      vector: "applescript",
+      stderr: 'execution error: Things3 got an error: Can’t get to do id "ABC". (-1728)',
+      timedOut: false,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("modal-open");
+    expect(hint?.hint).toContain("a dialog is open");
+    expect(hint?.hint).toContain("things ui-state");
+    expect(hint?.hint).toContain("Things Cloud");
+    expect(hint?.hint).toContain("nothing was changed");
+  });
+
+  it("leaves the same code alone on a non-AppleScript vector", () => {
+    expect(
+      classifyTransportFailure({
+        vector: "url-scheme",
+        stderr: 'Can’t get to do id "ABC". (-1728)',
+        timedOut: false,
+        environmentChanges: [],
+      }),
+    ).toBeNull();
+  });
+
   it("maps a transport deadline kill to permission-pending", () => {
     const hint = classifyTransportFailure({
       vector: "applescript",

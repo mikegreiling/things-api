@@ -373,6 +373,127 @@ if [ "$CMD" = "cells3" ]; then
   exit 0
 fi
 
+# =================================================================== cells4
+# D — the relative-date comparator (#625) and the open-dialog PRECONDITION
+# (MODALX1's #620 guard requirement). Both are corrections to code this campaign
+# already certified, so they get their own pass on a fresh clone.
+if [ "$CMD" = "cells4" ]; then
+  load_session
+  note "=============================================================="
+  note "CELLS4 start $(date +%H:%M:%S)"
+  lab_ssh "$IP" '~/labh/beep-sentinel.sh reset' </dev/null >/dev/null
+
+  dismiss() {
+    front Things3
+    lab_ssh "$IP" 'osascript -e '\''tell application "System Events" to tell process "Things3" to key code 53'\'' >/dev/null 2>&1; sleep 1; true' </dev/null
+    KIND=$(cli ui-state --json 2>/dev/null | python3 -c 'import sys,json; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["data"]["state"]["sheetKind"])' 2>/dev/null)
+    note "  dismiss → sheetKind=$KIND"
+  }
+  dismiss
+
+  # ---- D: --when today / tomorrow / +7d / far (the #625 matrix) -------------
+  # The guest clock is pinned to 2026-07-05, so "today" is that date.
+  drive_when() {
+    # drive_when <label> <title> <iso>
+    lab_ssh "$IP" "~/labh/beep-sentinel.sh mark \"D $1\"" </dev/null >/dev/null
+    lab_ssh "$IP" "open -g 'things:///add?title=FGRD1%20$2'; sleep 3" </dev/null
+    local U
+    U=$(gq "SELECT uuid FROM TMTask WHERE title='FGRD1 $2' AND trashed=0 LIMIT 1")
+    front Things3
+    cli todo make-repeating "$U" --frequency weekly --interval 1 --when "$3" --dangerously-drive-gui --verify-timeout 90000 --json > "$OUT/d-$1.json" 2>"$OUT/d-$1.err"
+    local CODE=$?
+    local OK ICS
+    OK=$(python3 -c 'import sys,json;d=json.load(open(sys.argv[1]));print(d.get("ok"))' "$OUT/d-$1.json" 2>/dev/null)
+    ICS=$(gq "SELECT count(*) FROM TMTask WHERE title='FGRD1 $2' AND rt1_recurrenceRule IS NOT NULL")
+    note "D $1 (--when $3): exit=$CODE ok=$OK template=$ICS"
+    if [ "$OK" != "True" ]; then
+      note "   detail: $(python3 -c 'import sys,json;d=json.load(open(sys.argv[1]));print(str(d.get("error",{}).get("message"))[:400])' "$OUT/d-$1.json" 2>/dev/null)"
+    fi
+    dismiss
+  }
+  drive_when today hotel 2026-07-05
+  drive_when tomorrow india 2026-07-06
+  drive_when plus7 juliett 2026-07-12
+  drive_when far kilo 2026-09-22
+
+  # What does the control actually RENDER for each of those? (The census the
+  # comparator has to satisfy — measured, not assumed.)
+  lab_ssh "$IP" "open -g 'things:///add?title=FGRD1%20lima'; sleep 3" </dev/null
+  LIMA=$(gq "SELECT uuid FROM TMTask WHERE title='FGRD1 lima' AND trashed=0 LIMIT 1")
+  front Things3
+  lab_ssh "$IP" "open -g 'things:///show?id=$LIMA'; sleep 3" </dev/null
+  front Things3
+  axq 'tell application "System Events" to tell process "Things3" to click menu item "Repeat…" of menu "Items" of menu bar 1' >/dev/null
+  sleep 2
+  axq 'tell application "System Events" to tell process "Things3" to click pop up button 1 of sheet 1 of (first window whose subrole is "AXStandardWindow")' >/dev/null
+  sleep 1
+  axq 'tell application "System Events" to tell process "Things3" to click menu item "weekly" of menu 1 of pop up button 1 of sheet 1 of (first window whose subrole is "AXStandardWindow")' >/dev/null
+  sleep 1
+  RENDER=$(axq 'tell application "System Events" to tell process "Things3" to return name of every menu item of menu 1 of pop up button 2 of group 1 of sheet 1 of (first window whose subrole is "AXStandardWindow")')
+  note "D render: the Next pop-up offers → $(echo "$RENDER" | head -c 400)"
+  esc
+  dismiss
+
+  # ---- P2: the open-dialog PRECONDITION ------------------------------------
+  lab_ssh "$IP" '~/labh/beep-sentinel.sh mark "P2 precondition"' </dev/null >/dev/null
+  lab_ssh "$IP" "open -g 'things:///add?title=FGRD1%20mike'; sleep 3" </dev/null
+  MIKE=$(gq "SELECT uuid FROM TMTask WHERE title='FGRD1 mike' AND trashed=0 LIMIT 1")
+  BEFORE_ROWS=$(gq "SELECT count(*) FROM TMTask WHERE title='FGRD1 mike'")
+  front Things3
+  lab_ssh "$IP" "open -g 'things:///show?id=$MIKE'; sleep 3" </dev/null
+  front Things3
+  axq 'tell application "System Events" to tell process "Things3" to click menu item "Repeat…" of menu "Items" of menu bar 1' >/dev/null
+  sleep 2
+  cli todo make-repeating "$MIKE" --frequency daily --interval 2 --dangerously-drive-gui --verify-timeout 60000 --json > "$OUT/p2.json" 2>"$OUT/p2.err"
+  note "P2 composite with a dialog standing: exit=$? out=$(head -c 700 "$OUT/p2.json")"
+  note "P2 rows titled 'FGRD1 mike': before=$BEFORE_ROWS after=$(gq "SELECT count(*) FROM TMTask WHERE title='FGRD1 mike'") (expect NO copy minted)"
+  note "P2 mike trashed=$(gq "SELECT trashed FROM TMTask WHERE uuid='$MIKE'") (expect 0)"
+  # The -1728 hint, on the same standing dialog.
+  cli todo delete "$MIKE" --json > "$OUT/p2-delete.json" 2>&1
+  note "P2 delete with the dialog standing: $(head -c 700 "$OUT/p2-delete.json")"
+  dismiss
+  cli todo delete "$MIKE" --json > "$OUT/p2-delete2.json" 2>&1
+  note "P2 the SAME delete once dismissed: $(head -c 300 "$OUT/p2-delete2.json")"
+
+  lab_ssh "$IP" '~/labh/beep-sentinel.sh assert --json ~/labh/beeps4.json --name fgrd1-4' </dev/null >"$OUT/beeps4.txt" 2>&1
+  note "BEEPS4: $(tail -10 "$OUT/beeps4.txt")"
+  note "CELLS4 done $(date +%H:%M:%S)"
+  exit 0
+fi
+
+# =================================================================== cells5
+# N — what the "Next:" control actually OFFERS and RENDERS for a same-day first
+# occurrence. #625's fix moved the today case past the audit; this measures what
+# is left, so the remaining failure is attributed rather than guessed at.
+if [ "$CMD" = "cells5" ]; then
+  load_session
+  note "=============================================================="
+  note "CELLS5 start $(date +%H:%M:%S)"
+  SHEET='sheet 1 of (first window whose subrole is "AXStandardWindow")'
+  lab_ssh "$IP" "open -g 'things:///add?title=FGRD1%20november'; sleep 3" </dev/null
+  NOV=$(gq "SELECT uuid FROM TMTask WHERE title='FGRD1 november' AND trashed=0 LIMIT 1")
+  front Things3
+  lab_ssh "$IP" "open -g 'things:///show?id=$NOV'; sleep 3" </dev/null
+  front Things3
+  axq 'tell application "System Events" to tell process "Things3" to click menu item "Repeat…" of menu "Items" of menu bar 1' >/dev/null
+  sleep 2
+  axq "tell application \"System Events\" to tell process \"Things3\" to click pop up button 1 of $SHEET" >/dev/null
+  sleep 1
+  axq "tell application \"System Events\" to tell process \"Things3\" to click menu item \"weekly\" of menu 1 of pop up button 1 of $SHEET" >/dev/null
+  sleep 2
+  note "N value of Next: [$(axq "tell application \"System Events\" to tell process \"Things3\" to return (value of pop up button 2 of group 1 of $SHEET) as text")]"
+  note "N weekday pop-up: [$(axq "tell application \"System Events\" to tell process \"Things3\" to return (value of pop up button 3 of group 1 of $SHEET) as text")]"
+  axq "tell application \"System Events\" to tell process \"Things3\" to click pop up button 2 of group 1 of $SHEET" >/dev/null
+  sleep 1
+  note "N menu offers: $(axq "tell application \"System Events\" to tell process \"Things3\" to return name of every menu item of menu 1 of pop up button 2 of group 1 of $SHEET" | head -c 400)"
+  esc
+  sleep 1
+  esc
+  note "N census: $(cli ui-state --json | tail -1 | head -c 200)"
+  note "CELLS5 done $(date +%H:%M:%S)"
+  exit 0
+fi
+
 # ================================================================= teardown
 if [ "$CMD" = "teardown" ]; then
   tart stop "$VM" >/dev/null 2>&1 || true

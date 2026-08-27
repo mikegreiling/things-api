@@ -61,7 +61,7 @@ describe("ui-state census script", () => {
 
 describe("parseUiState", () => {
   it("reads the healthy Repeat-dialog census", () => {
-    const state = parseUiState(censusStdout(healthyScreen()));
+    const state = parseUiState(censusStdout(healthyScreen({ kind: "repeat" })));
     expect(state).not.toBeNull();
     expect(state?.thingsFrontmost).toBe(true);
     expect(state?.frontmostApp).toBe("Things3");
@@ -111,7 +111,11 @@ describe("readUiState", () => {
 
   it("parses a successful read", async () => {
     const state = await readUiState(
-      async () => ({ ok: true, stdout: censusStdout(healthyScreen()), stderr: "" }),
+      async () => ({
+        ok: true,
+        stdout: censusStdout(healthyScreen({ kind: "repeat" })),
+        stderr: "",
+      }),
       100,
     );
     expect(state?.sheetKind).toBe("repeat");
@@ -136,8 +140,11 @@ describe("describeFocusOwner / describeUiState", () => {
   });
 
   it("summarizes the two facts a caller needs", () => {
-    expect(describeUiState(screenState({}))).toBe(
+    expect(describeUiState(screenState({ kind: "repeat" }))).toBe(
       "Things is frontmost; the Repeat dialog is open (attached)",
+    );
+    expect(describeUiState(screenState({ kind: "repeat", depth: 3 }))).toBe(
+      "Things is frontmost; the Repeat dialog is open (attached), on top of 2 more",
     );
     expect(describeUiState(screenState({ front: "Safari", kind: "none" }))).toBe(
       "Safari is frontmost; no dialog is open in Things",
@@ -147,7 +154,7 @@ describe("describeFocusOwner / describeUiState", () => {
 
 describe("judgeFocusGuard — the verdict matrix", () => {
   it("allows the hop when Things is frontmost and the dialog is the expected one", () => {
-    expect(judgeFocusGuard(screenState({}), "repeat", "type 1")).toBeNull();
+    expect(judgeFocusGuard(screenState({ kind: "repeat" }), "repeat", "type 1")).toBeNull();
   });
 
   it("allows the hop when no dialog kind is expected yet", () => {

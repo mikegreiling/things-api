@@ -29,6 +29,7 @@ import {
   rescheduleRepeatRecipe,
 } from "../../src/write/vectors/ui-recipes.ts";
 import {
+  axAuditDialogScript,
   axSetGroupNumberScript,
   createUiVector,
   type UiCommand,
@@ -1011,10 +1012,12 @@ describe("ui driver — mouse-hybrid click-element (NATIVE1 primitive)", () => {
     const res = await vector.execute(invocation(clickRecipe(10)));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("did not appear");
-    // A click DID post (the first one), then the audited cleanup closed
-    // whatever opened — with its own Cancel button (issue #620).
+    // A click DID post (the first one), then the audited cleanup ran and — the
+    // census showing nothing open — sent NOTHING at all (issue #620: no blind
+    // Escape into whatever is in front, ever).
     expect(commands.some((c) => c.primitive === "click-point")).toBe(true);
-    expect(commands.some((c) => c.script?.includes('button "Cancel"'))).toBe(true);
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    expect(res.stderr).toContain("No dialog was left open");
   });
 
   it("canaries a static mouse target and refuses before any click when it is missing", async () => {
@@ -1467,6 +1470,12 @@ describe("ui driver — the per-step focus guard (#620)", () => {
       op: "todo.make-repeating",
       targetUuid: "TODO-1",
       steps: [
+        {
+          primitive: "press",
+          label: "open the dialog",
+          path: `menu item "Repeat…" of menu "Items" of menu bar 1`,
+          addressing: "title",
+        },
         { primitive: "key", label: "first keystroke", keys: "down" },
         { primitive: "key", label: "second keystroke", keys: "return" },
       ],
@@ -1486,18 +1495,19 @@ describe("ui driver — the per-step focus guard (#620)", () => {
     expect(commands.filter((c) => c.primitive === "key").length).toBe(1);
   });
 
-  it("does NOT guard element-addressed hops — no census, no cost, works backgrounded", async () => {
+  it("does NOT guard element-addressed hops — one census for the whole drive, backgrounded", async () => {
     // pauseRepeat is menu presses only: System Events delivers those to the
-    // element named whether or not Things is in front.
+    // element named whether or not Things is in front. The ONE census is the
+    // drive's open-dialog precondition, not a per-step guard.
     const { run, commands } = mockRunner(
       (c) => (c.primitive === "resolve" ? ok("true") : ok()),
-      healthyScreen({ front: "Finder", kind: "none" }),
+      healthyScreen({ front: "Finder", opens: "none" }),
     );
     const res = await createUiVector(config(true), run).execute(
       invocation(pauseRepeatRecipe("TODO-1")),
     );
     expect(res.exitCode).toBe(0);
-    expect(commands.some(isCensus)).toBe(false);
+    expect(commands.filter(isCensus).length).toBe(1);
   });
 });
 
@@ -1571,8 +1581,14 @@ describe("ui driver — the audited cleanup ladder (#620)", () => {
   };
 
   it("re-activates Things and RE-AUDITS before pressing anything when another app is in front", async () => {
-    const screen = healthyScreen({ front: "Finder", dismissable: true });
-    const { run, commands } = mockRunner(answers, screen);
+    const screen = healthyScreen({ dismissable: true });
+    const { run, commands } = mockRunner((c) => {
+      // Another app takes the screen the moment the dialog is up.
+      if (c.primitive === "press" && c.script?.includes("of menu bar 1") === true) {
+        screen.front = "Finder";
+      }
+      return answers(c);
+    }, screen);
     const res = await createUiVector(config(true), run).execute(invocation(failingRecipe()));
     expect(res.exitCode).toBe(1);
     // The dialog was closed by its own Cancel button — which needs no focus at
@@ -1586,7 +1602,7 @@ describe("ui driver — the audited cleanup ladder (#620)", () => {
     // Something unrecognized is in front of Things: not ours to dismiss.
     const { run, commands } = mockRunner(
       answers,
-      healthyScreen({ kind: "other", dismissable: true }),
+      healthyScreen({ opens: "other", dismissable: true }),
     );
     const res = await createUiVector(config(true), run).execute(invocation(failingRecipe()));
     expect(res.exitCode).toBe(1);
@@ -1597,9 +1613,88 @@ describe("ui driver — the audited cleanup ladder (#620)", () => {
   });
 
   it("reports NO dialog left open when the screen shows none", async () => {
-    const { run, commands } = mockRunner(answers, healthyScreen({ kind: "none" }));
+    const { run, commands } = mockRunner(answers, healthyScreen({ opens: "none" }));
     const res = await createUiVector(config(true), run).execute(invocation(failingRecipe()));
     expect(res.stderr).toContain("No dialog was left open");
     expect(commands.some((c) => c.primitive === "dismiss-dialog")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// The OPEN-DIALOG precondition (MODALX1 §3/§4 → issue #620). A dialog already
+// standing when a drive starts is not ours: it disables the menu bar and
+// swallows keyboard input, and — the part a driver cannot see — it makes the
+// app ignore scripted changes app-wide and holds Things Cloud sync.
+// ===========================================================================
+describe("ui driver — a drive refuses to start with a dialog already open (#620)", () => {
+  it("refuses before pressing anything, naming the dialog and the sync consequence", async () => {
+    const { run, commands } = mockRunner(
+      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      healthyScreen({ kind: "repeat", depth: 1 }),
+    );
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("a dialog is already open in Things");
+    expect(res.stderr).toContain("Things Cloud");
+    expect(res.stderr).toContain("Nothing was pressed");
+    // The preamble ran (reveal selects the target); nothing was actuated.
+    expect(commands.some((c) => c.primitive === "press")).toBe(false);
+  });
+
+  it("names the stack when dialogs are piled up (they dismiss one at a time)", async () => {
+    const { run } = mockRunner(
+      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      healthyScreen({ kind: "other", depth: 3 }),
+    );
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.stderr).toContain("on top of 2 more");
+  });
+
+  it("proceeds when the screen is clear", async () => {
+    const { run } = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.exitCode).toBe(0);
+  });
+});
+
+// The #625 comparator: the dialog renders near dates RELATIVELY, and the audit
+// used to string-compare those renderings against the typed ISO date — so
+// `make-repeating --when <today>` refused its own correct write, every time.
+const auditScript = (): string =>
+  axAuditDialogScript({
+    shell: "sheet 1 of window 1",
+    group: "group 1 of sheet 1 of window 1",
+    controls: [
+      {
+        kind: "occurrence-popup",
+        label: "first occurrence",
+        path: "pop up button 2 of group 1 of sheet 1 of window 1",
+        expected: ["2026-07-05"],
+      },
+    ],
+  });
+
+describe("pre-commit audit — relative date renderings (#625)", () => {
+  it("resolves the app's relative words against its own clock, never by string match", () => {
+    const s = auditScript();
+    expect(s).toContain('if s is "Today" then return my aqStamp(rightNow)');
+    expect(s).toContain('if s is "Tomorrow" then return my aqStamp(rightNow + 86400)');
+    // A weekday-only rendering is resolved inside the coming week — bounded, so
+    // a word that means something else cannot silently produce a date.
+    expect(s).toContain("repeat with k from 1 to 7");
+    expect(s).toContain("weekday of cand");
+  });
+
+  it("still parses absolute renderings, and still fails closed on an unknown one", () => {
+    const s = auditScript();
+    // The relative resolver runs FIRST, then the existing date parses.
+    expect(s.indexOf("aqRelative")).toBeLessThan(s.indexOf("set d to date s"));
+    expect(s).toContain("return missing value");
   });
 });

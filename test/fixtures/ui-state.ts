@@ -19,7 +19,15 @@ export interface FakeScreen {
   /** The frontmost application's process name. */
   front: string;
   thingsRunning: boolean;
+  /** What is open RIGHT NOW. Drives start with nothing open (the precondition). */
   kind: UiSheetKind;
+  /**
+   * What a MENU-BAR press raises — the app opening the recipe's dialog. `none`
+   * models a recipe whose menu press opens nothing (a plain menu action).
+   */
+  opens: UiSheetKind;
+  /** How many dialogs are stacked (the census's `depth`). */
+  depth: number;
   form: UiSheetForm;
   census: string;
   role: string;
@@ -30,12 +38,18 @@ export interface FakeScreen {
   dismissable: boolean;
 }
 
-/** Things frontmost, its Repeat dialog open, everything readable. */
+/**
+ * Things frontmost, NOTHING open, everything readable — the state a drive is
+ * allowed to start from (issue #620's open-dialog precondition). Pressing a
+ * menu-bar item raises `opens`, the way the app does.
+ */
 export function healthyScreen(overrides: Partial<FakeScreen> = {}): FakeScreen {
   return {
     front: "Things3",
     thingsRunning: true,
-    kind: "repeat",
+    kind: "none",
+    opens: "repeat",
+    depth: 0,
     form: "attached",
     census: "cb:2 pu:1 bt:2 gp:1 tf:0",
     role: "AXTextField",
@@ -47,12 +61,14 @@ export function healthyScreen(overrides: Partial<FakeScreen> = {}): FakeScreen {
 }
 
 export function censusStdout(s: FakeScreen): string {
+  const open = s.kind !== "none";
   return [
     `front=${s.front}`,
     `running=${s.thingsRunning}`,
-    `form=${s.kind === "none" ? "none" : s.form}`,
+    `form=${open ? s.form : "none"}`,
+    `depth=${open ? Math.max(1, s.depth) : 0}`,
     `kind=${s.kind}`,
-    `census=${s.kind === "none" ? "" : s.census}`,
+    `census=${open ? s.census : ""}`,
     `role=${s.role}`,
     `subrole=${s.subrole}`,
     `inspectable=${s.inspectable}`,
@@ -76,17 +92,33 @@ export function screenAnswer(screen: FakeScreen, c: UiCommand): UiRunResult | nu
   if (isCensusCommand(c)) {
     return { ok: true, stdout: censusStdout(screen), stderr: "" };
   }
+  // A menu-bar press is how a recipe raises its dialog; the test's own answer
+  // still decides whether the press "succeeded".
+  if (c.primitive === "press" && script.includes("of menu bar 1") && screen.kind === "none") {
+    screen.kind = screen.opens;
+    if (screen.opens !== "none") screen.depth = Math.max(1, screen.depth);
+    return null;
+  }
+  const close = (): void => {
+    if (!screen.dismissable) return;
+    screen.depth = Math.max(0, screen.depth - 1);
+    if (screen.depth === 0) screen.kind = "none";
+  };
   if (script.includes('button "Cancel"')) {
     if (screen.kind === "none") return { ok: true, stdout: "NO-DIALOG", stderr: "" };
-    if (screen.dismissable) screen.kind = "none";
+    close();
     return { ok: true, stdout: "OK", stderr: "" };
   }
   if (script.includes("key code 53")) {
-    if (screen.dismissable) screen.kind = "none";
+    close();
     return { ok: true, stdout: "", stderr: "" };
   }
   if (script.includes("reopen")) {
-    if (screen.dismissable) screen.kind = "none";
+    // The window goes, and the whole stack with it.
+    if (screen.dismissable) {
+      screen.kind = "none";
+      screen.depth = 0;
+    }
     return { ok: true, stdout: "OK", stderr: "" };
   }
   if (script.includes('tell application "Things3" to activate')) {

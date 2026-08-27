@@ -629,6 +629,18 @@ export interface WriteVector {
    */
   probeReachability?: () => Promise<import("./session-reachability.ts").ReachabilityVerdict>;
   /**
+   * ui vector ONLY: read the window/focus census (read-only — no click, no
+   * keystroke, no activation), so a composite ORCHESTRATOR can refuse BEFORE it
+   * seeds a row when a dialog is already standing in Things (MODALX1, issue
+   * #620). Measured: the seed leg rides the URL scheme, which an open dialog
+   * does not touch, so the copy lands and then every AppleScript leg after it
+   * fails with `-1728` — the compound mutates for a reason it could have known
+   * up front. Null means the state could not be read; the caller proceeds (the
+   * drive's own precondition is the backstop). Absent on the real transport
+   * vectors and the simulator.
+   */
+  probeUiState?: () => Promise<import("./ui-state.ts").UiState | null>;
+  /**
    * The bench-harness SIMULATOR vector (src/write/vectors/simulator.ts). It
    * presents under a real {@link VectorId} but applies mutations via SQL from
    * the structured `invocation.op`/`opParams`, never from a compiled payload.
