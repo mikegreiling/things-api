@@ -39,6 +39,7 @@ import {
   HELPERS_BUNDLE_ID,
   READER_LAUNCHD_LABEL,
   DEPUTY_PROTOCOL_VERSION,
+  type AutomationPermission,
   type DeputyHello,
   type DeputyOsaResult,
   DeputyRequestError,
@@ -58,6 +59,7 @@ import {
   readerTokenPath,
   READER_TOKEN_ENV,
 } from "./protocol.ts";
+import { type TargetWake, wakeSystemEvents } from "./wake.ts";
 
 /**
  * Where the LaunchAgent plists live. THINGS_API_LAUNCH_AGENTS_DIR overrides
@@ -847,6 +849,12 @@ export interface OnboardDeps {
    * before the wizard existed.
    */
   wizard?: Wizard;
+  /**
+   * Start a dormant System Events and re-read its standing, so the upfront
+   * banner counts the dialogs that are really coming. Default: ./wake.ts,
+   * probing through this ceremony's own channel.
+   */
+  wakeSystemEvents?: (probe: () => AutomationPermission | undefined) => TargetWake;
   /** Is `ui-enabled` already on? Default: the stored config. */
   uiEnabled?: () => boolean;
   /** Turn `ui-enabled` on after a successful GUI tier. Default: the config file. */
@@ -1271,12 +1279,14 @@ function outstandingPrompts(
   hello: DeputyHello,
   reader: ReaderStanding,
   tier: OnboardTier,
+  /** System Events' standing AFTER any wake — never the raw handshake value. */
+  systemEvents: AutomationPermission | undefined,
 ): OnboardLeg[] {
   const outstanding: OnboardLeg[] = [];
   if (reader === "needs-panel") outstanding.push("reader-read-grant");
   if (willRaiseAutomationDialog(hello.automation?.things)) outstanding.push("automation-things");
   if (tier === "gui") {
-    if (willRaiseAutomationDialog(hello.automation?.systemEvents)) {
+    if (willRaiseAutomationDialog(systemEvents)) {
       outstanding.push("automation-system-events");
     }
     if (hello.axTrusted !== true) outstanding.push("accessibility");
@@ -1362,10 +1372,30 @@ function runOnboardCeremony(
         `note: the installed helpers are v${hello.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} — rebuild with \`bash scripts/build-helpers.sh\` and rerun \`things helpers setup\` for the full ceremony`,
       );
     }
+    // A dormant System Events is settled BEFORE the count, never counted as a
+    // dialog (#610). macOS reaps the agent when it is idle and the ask-false
+    // determination has no answer for a target that is down, so `not-running`
+    // says nothing about the grant — starting it (a background launch, not an
+    // Apple event) is what makes the standing readable, and only then can the
+    // banner promise the right number of dialogs.
+    let systemEvents = hello.automation?.systemEvents;
+    if (tier === "gui" && systemEvents === "not-running") {
+      progress(
+        "automation → System Events: the target was asleep — starting it to read its standing",
+      );
+      const wake = (deps.wakeSystemEvents ?? ((probe) => wakeSystemEvents(env, { probe })))(() => {
+        try {
+          return channel.hello().automation?.systemEvents;
+        } catch {
+          return undefined;
+        }
+      });
+      systemEvents = wake.standing;
+    }
     // Size the sitting BEFORE raising anything, so whoever started this knows
     // whether they have to stay at the screen.
     const reader = readerStanding(env, deps.readerProbe ?? (() => readerProbeDefault(env)));
-    outstanding = outstandingPrompts(hello, reader, tier);
+    outstanding = outstandingPrompts(hello, reader, tier, systemEvents);
     progress(
       outstanding.length === 0
         ? "nothing to raise — every permission the helpers need is already on record"
@@ -1425,7 +1455,7 @@ function runOnboardCeremony(
             script: 'tell application "System Events" to name of first process',
             settingsName: "System Events",
           },
-          hello.automation?.systemEvents,
+          systemEvents,
           refreshAutomation("systemEvents"),
           automationTimeoutMs,
           progress,

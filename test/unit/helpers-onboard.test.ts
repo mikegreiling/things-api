@@ -400,7 +400,7 @@ describe("automation legs", () => {
     expect(stateOf(result, "automation-things")).toBe("denied");
   });
 
-  it("asks a target macOS reports as not-running (the event launches it)", () => {
+  it("asks a target that stays down after a wake (the event launches it)", () => {
     installReader();
     runGui(
       stubChannel({
@@ -409,9 +409,88 @@ describe("automation legs", () => {
           automation: { things: "granted", systemEvents: "not-running" },
         },
       }),
+      { wakeSystemEvents: () => ({ standing: "not-running", detail: "it did not come up" }) },
     );
     const scripts = requests.filter((r) => r["verb"] === "osascript").map((r) => r["script"]);
     expect(scripts).toEqual(['tell application "System Events" to name of first process']);
+  });
+});
+
+/**
+ * THE ANNOUNCEMENT MUST NOT OVER-PROMISE (issue #610). A dormant System Events
+ * is a liveness fact, not an outstanding consent: the ceremony starts the
+ * target and re-reads its standing BEFORE it counts the dialogs, so a machine
+ * that already holds the grant is told the truth — nothing to raise — instead
+ * of being promised a dialog that never appears.
+ */
+describe("a dormant System Events at the banner", () => {
+  it("is woken before the count, and a held grant is announced as nothing to raise", () => {
+    installReader();
+    let probes = 0;
+    const result = runGui(
+      stubChannel({
+        hello: {
+          axTrusted: true,
+          automation: { things: "granted", systemEvents: "not-running" },
+        },
+      }),
+      {
+        wakeSystemEvents: (probe) => {
+          probes += 1;
+          // The ceremony hands its OWN channel to the wake, so the re-read runs
+          // over the connection it already holds.
+          expect(probe()).toBe("not-running");
+          return { standing: "granted", detail: "started on demand" };
+        },
+      },
+    );
+    expect(probes).toBe(1);
+    const banner = progress.find((line) => line.includes("raise")) ?? "";
+    expect(banner).toContain("nothing to raise");
+    expect(stateOf(result, "automation-system-events")).toBe("granted");
+    // The leg is SKIPPED: no event is sent to a target macOS already trusts us with.
+    expect(requests.filter((r) => r["verb"] === "osascript")).toHaveLength(0);
+    expect(progress.join("\n")).toContain("the target was asleep");
+  });
+
+  it("counts the dialog when the woken target turns out never to have been asked", () => {
+    installReader();
+    runGui(
+      stubChannel({
+        hello: {
+          axTrusted: true,
+          automation: { things: "granted", systemEvents: "not-running" },
+        },
+      }),
+      { wakeSystemEvents: () => ({ standing: "unknown", detail: "started on demand" }) },
+    );
+    const banner = progress.find((line) => line.includes("raise")) ?? "";
+    expect(banner).toContain("about to raise 1 macOS consent dialog");
+    expect(banner).toContain("app control for System Events");
+    // And the leg really is run — the wake resolved liveness, not the grant.
+    const scripts = requests.filter((r) => r["verb"] === "osascript").map((r) => r["script"]);
+    expect(scripts).toEqual(['tell application "System Events" to name of first process']);
+  });
+
+  it("is left asleep under the base tier — the wake belongs to the tier that needs it", () => {
+    installReader();
+    let woke = 0;
+    run(
+      stubChannel({
+        hello: {
+          axTrusted: true,
+          automation: { things: "granted", systemEvents: "not-running" },
+        },
+      }),
+      {
+        wakeSystemEvents: () => {
+          woke += 1;
+          return { standing: "granted", detail: "started on demand" };
+        },
+      },
+      { gui: false },
+    );
+    expect(woke).toBe(0);
   });
 });
 

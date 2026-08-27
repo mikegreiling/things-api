@@ -82,6 +82,10 @@ function permissionLines(report: DiagnoseReport): string[] {
     switch (ui.mode) {
       case "helpers":
         return "deputy TCC Accessibility + System Events (Things API Helper)";
+      // The grants may well be held — they just cannot be read while the target
+      // they name is down, so this is a liveness row, not an absent-grant one.
+      case "target-unreachable":
+        return "unreadable — System Events is not running";
       case "direct-escape":
         return "the lab's direct escape (not consumer surface)";
       default:

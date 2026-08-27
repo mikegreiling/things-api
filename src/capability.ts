@@ -61,6 +61,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig } from "./config.ts";
 import { deputyRouting, deputyRoutesDb, helpersExpected } from "./deputy/routing.ts";
+import { type TargetWake, wakeSystemEvents } from "./deputy/wake.ts";
 import {
   fdaGranted,
   type HostAccessDeps,
@@ -109,6 +110,8 @@ export type UiCapabilityMode =
   | "config-disabled"
   /** No deputy answers, so there is no identity that could hold the grants. */
   | "helpers-missing"
+  /** System Events is down and would not start — a liveness fault, not a grant one. */
+  | "target-unreachable"
   /** The deputy answers but the `--gui` tier is incomplete. */
   | "tier-incomplete";
 
@@ -183,6 +186,13 @@ export interface CapabilityDeps extends HostAccessDeps {
     axTrusted: boolean | undefined;
     systemEvents: string | undefined;
   } | null;
+  /**
+   * Start System Events and re-read its Automation standing, for the one state
+   * where the handshake reports liveness instead of authorization
+   * (`not-running`). Prompt-free — see ./deputy/wake.ts for why the launch must
+   * come before the determination.
+   */
+  wakeSystemEvents?: () => TargetWake;
   /** Is GUI-driving switched on in config (`ui-enabled`)? */
   uiEnabled?: () => boolean;
   /**
@@ -556,7 +566,11 @@ function deputyGuiStandingDefault(
  *
  * Every answer is prompt-free: the config key is a file read, and the deputy's
  * `hello` carries `AXIsProcessTrusted()` plus its own `AEDeterminePermission`
- * verdict for System Events.
+ * verdict for System Events. The one state that needs more than a read is a
+ * DORMANT System Events, which macOS reaps whenever it has been idle: the
+ * target is started in the background — never by sending it an event — and the
+ * determination re-read, so `not-running` resolves to the truth instead of
+ * masquerading as a missing grant (./deputy/wake.ts).
  */
 export function uiCapability(deps: CapabilityDeps = {}): UiCapability {
   const env = deps.env ?? process.env;
@@ -591,6 +605,30 @@ export function uiCapability(deps: CapabilityDeps = {}): UiCapability {
       host,
     };
   }
+  // LIVENESS BEFORE AUTHORIZATION (#610). System Events is an on-demand agent
+  // macOS reaps when idle, and the ask-false determination cannot answer for a
+  // target that is down — so the deputy's `not-running` describes the PROCESS,
+  // not the grant, and treating it as a missing grant sends a fully onboarded
+  // machine back through onboarding. Start it (a background launch raises no
+  // dialog; waking it with an Apple event would), then re-read the
+  // determination. Only after that is the standing an authorization fact.
+  let systemEvents = standing.systemEvents;
+  let wake: TargetWake | null = null;
+  if (systemEvents === "not-running") {
+    wake = (deps.wakeSystemEvents ?? (() => wakeSystemEvents(env)))();
+    systemEvents = wake.standing;
+  }
+  if (wake !== null && (systemEvents === undefined || systemEvents === "not-running")) {
+    return {
+      mode: "target-unreachable",
+      detail: `System Events is not running and ${wake.detail} — the Things window is driven through it`,
+      remediation: [
+        'start it with `open -g -a "System Events"`, then rerun this command',
+        "or log out and back in — System Events is a macOS component of your login session",
+      ],
+      host,
+    };
+  }
   const missing: string[] = [];
   if (standing.axTrusted !== true) {
     missing.push(
@@ -599,8 +637,8 @@ export function uiCapability(deps: CapabilityDeps = {}): UiCapability {
         : "Accessibility",
     );
   }
-  if (standing.systemEvents !== "granted") {
-    missing.push(`automation → System Events (${standing.systemEvents ?? "unknown"})`);
+  if (systemEvents !== "granted") {
+    missing.push(`automation → System Events (${systemEvents ?? "unknown"})`);
   }
   if (missing.length === 0) {
     return {
