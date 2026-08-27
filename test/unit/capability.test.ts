@@ -421,6 +421,100 @@ describe("uiCapability", () => {
     expect(verdict.detail).toContain("rebuild");
   });
 
+  /**
+   * LIVENESS IS NOT AUTHORIZATION (issue #610). macOS reaps System Events when
+   * it has been idle, and the ask-false determination has no answer for a
+   * target that is down — so `not-running` is a fact about the process. The
+   * verdict starts it and re-reads the determination before it decides
+   * anything, and a wake that does not take refuses on LIVENESS, never by
+   * sending a fully onboarded machine back through onboarding.
+   */
+  describe("a dormant System Events", () => {
+    const dormant = { axTrusted: true, systemEvents: "not-running" };
+
+    it("is woken, and a held grant then reads as granted", () => {
+      let woke = 0;
+      const verdict = uiCapability(
+        guiDeps({
+          deputyGuiStanding: () => dormant,
+          wakeSystemEvents: () => {
+            woke += 1;
+            return { standing: "granted", detail: "started on demand" };
+          },
+        }),
+      );
+      expect(woke).toBe(1);
+      expect(verdict.mode).toBe("helpers");
+      expect(uiAllowed(verdict)).toBe(true);
+    });
+
+    it("refuses as a MISSING GRANT when the woken target reports a refusal", () => {
+      const verdict = uiCapability(
+        guiDeps({
+          deputyGuiStanding: () => dormant,
+          wakeSystemEvents: () => ({ standing: "denied", detail: "started on demand" }),
+        }),
+      );
+      expect(verdict.mode).toBe("tier-incomplete");
+      expect(verdict.detail).toContain("automation → System Events (denied)");
+      expect(verdict.remediation.join(" ")).toContain("things helpers setup --gui");
+    });
+
+    it("refuses as a MISSING GRANT when the woken target was never asked", () => {
+      const verdict = uiCapability(
+        guiDeps({
+          deputyGuiStanding: () => dormant,
+          wakeSystemEvents: () => ({ standing: "unknown", detail: "started on demand" }),
+        }),
+      );
+      expect(verdict.mode).toBe("tier-incomplete");
+      expect(verdict.detail).toContain("automation → System Events (unknown)");
+    });
+
+    it("refuses on LIVENESS when the wake does not take — no onboarding, no permission talk", () => {
+      const verdict = uiCapability(
+        guiDeps({
+          deputyGuiStanding: () => dormant,
+          wakeSystemEvents: () => ({
+            standing: "not-running",
+            detail: "it did not come up within 5s of being started",
+          }),
+        }),
+      );
+      expect(verdict.mode).toBe("target-unreachable");
+      expect(uiAllowed(verdict)).toBe(false);
+      expect(verdict.detail).toContain("System Events is not running");
+      expect(verdict.detail).not.toMatch(/permission|grant|denied/i);
+      const next = verdict.remediation.join(" ");
+      expect(next).toContain("System Events");
+      expect(next).not.toContain("things helpers setup");
+    });
+
+    it("refuses on LIVENESS when the deputy goes silent during the wake", () => {
+      const verdict = uiCapability(
+        guiDeps({
+          deputyGuiStanding: () => dormant,
+          wakeSystemEvents: () => ({ standing: undefined, detail: "it did not come up within 5s" }),
+        }),
+      );
+      expect(verdict.mode).toBe("target-unreachable");
+    });
+
+    it("is left alone when the target is already up — a live target needs no launch", () => {
+      let woke = 0;
+      const verdict = uiCapability(
+        guiDeps({
+          wakeSystemEvents: () => {
+            woke += 1;
+            return { standing: "granted", detail: "started on demand" };
+          },
+        }),
+      );
+      expect(woke).toBe(0);
+      expect(verdict.mode).toBe("helpers");
+    });
+  });
+
   it("honors the lab's documented escape — and only when ui-enabled is also on", () => {
     const escape = { [UI_DIRECT_ESCAPE_ENV]: "1" };
     const granted = uiCapability(
