@@ -25,6 +25,7 @@ import { projectMakeRepeatingRecipe } from "../../src/write/vectors/ui-recipes.t
 import { createUiVector, type UiCommand, type UiRunResult } from "../../src/write/vectors/ui.ts";
 import type { CompiledInvocation, UiRecipe, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
+import { censusStdout, healthyScreen, isCensusCommand } from "../fixtures/ui-state.ts";
 import { seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
@@ -114,8 +115,12 @@ function runnerFor(opts: {
   blindAfterFail?: boolean;
 }): (c: UiCommand, t: number) => Promise<UiRunResult> {
   let rowFailed = false;
+  // No dialog is open in this recipe's failure: the row selection dies before
+  // the sheet exists. The census (issue #620) says exactly that.
+  const screen = healthyScreen({ kind: "none" });
   return async (c) => {
     if (isProbe(c)) return ok(rowFailed && opts.blindAfterFail === true ? AX_BLIND : REACHABLE);
+    if (isCensusCommand(c)) return ok(censusStdout(screen));
     if (isSheetProbe(c)) return ok("false");
     if (c.primitive === "select-row") {
       rowFailed = true;

@@ -1831,3 +1831,105 @@ describe("a promote whose drive never confirmed is reconciled, not re-run", () =
     expect(templateCount()).toBe(1);
   });
 });
+
+// ============================================ the failed-promote rollback (#620)
+//
+// make-repeating is not atomic: it trashes the original and mints a disposable
+// copy BEFORE the GUI promote runs. When the promote does not land, both are
+// ours to clean up — and the field incident showed both halves failing in the
+// worst way: the restored original came back in the Inbox with no schedule (the
+// only scriptable restore does exactly that, E15), and the disposable copy
+// survived in the user's lists.
+describe("make-repeating — rollback after a failed promote (#620)", () => {
+  /** The simulator, but the GUI promote leg is a clean no-op (nothing lands). */
+  function promoteNoopVector(opts: { cleanupDeleteFails?: boolean } = {}): WriteVector {
+    const sim = createSimulatorVector(fixture.path, { now: () => NOW });
+    let deletes = 0;
+    return {
+      ...sim,
+      async execute(inv) {
+        if (inv.op === "todo.make-repeating") return { exitCode: 0, stdout: "", stderr: "" };
+        if (inv.op === "todo.delete") {
+          deletes += 1;
+          // The FIRST delete is the compound's own trash-the-original leg; the
+          // SECOND is the cleanup removing the disposable copy. Only the
+          // cleanup is failed here — the shape of an app ignoring scripted
+          // changes because a dialog is stranded in front of it.
+          if (opts.cleanupDeleteFails === true && deletes > 1) {
+            return { exitCode: 1, stdout: "", stderr: "delete failed (injected)" };
+          }
+        }
+        return sim.execute(inv);
+      },
+    };
+  }
+
+  const rowOf = (uuid: string): Record<string, unknown> | undefined =>
+    fixture.db.prepare("SELECT * FROM TMTask WHERE uuid = ?").get(uuid) as
+      | Record<string, unknown>
+      | undefined;
+
+  const cloneOf = (title: string, srcUuid: string): Record<string, unknown> | undefined =>
+    fixture.db.prepare("SELECT * FROM TMTask WHERE title = ? AND uuid != ?").get(title, srcUuid) as
+      | Record<string, unknown>
+      | undefined;
+
+  it("restores the original AND puts back its area and schedule", async () => {
+    const area = seedArea(fixture.db, "Home");
+    const src = seedTodo(fixture.db, {
+      title: "Rollback fixture A",
+      start: "active",
+      area,
+      startDate: "2026-07-05",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(promoteNoopVector()),
+      { uuid: src, frequency: "daily", interval: 1, afterCompletion: true },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    const restored = rowOf(src);
+    expect(restored?.["trashed"]).toBe(0);
+    // A scripted restore lands a to-do in the Inbox with no schedule; the
+    // rollback puts both back.
+    expect(restored?.["area"]).toBe(area);
+    expect(restored?.["startDate"]).not.toBeNull();
+    if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
+    expect(res.detail).toContain("restored from the Trash");
+    expect(res.detail).toContain("restored");
+  });
+
+  it("moves the disposable copy to the Trash instead of leaving it in the user's lists", async () => {
+    const src = seedTodo(fixture.db, { title: "Rollback fixture B", start: "active" });
+    const res = await runMakeRepeatingTodo(
+      deps(promoteNoopVector()),
+      { uuid: src, frequency: "daily", interval: 1, afterCompletion: true },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    const clone = cloneOf("Rollback fixture B", src);
+    expect(clone).toBeDefined();
+    expect(clone?.["trashed"]).toBe(1);
+    if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
+    expect(res.detail).toContain("disposable copy");
+    expect(res.detail).toContain("moved to the Trash");
+  });
+
+  it("names the copy's uuid, the exact command, and the open-dialog cause when the cleanup cannot land", async () => {
+    const src = seedTodo(fixture.db, { title: "Rollback fixture C", start: "active" });
+    const res = await runMakeRepeatingTodo(
+      deps(promoteNoopVector({ cleanupDeleteFails: true })),
+      { uuid: src, frequency: "daily", interval: 1, afterCompletion: true },
+      { ...GUI, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    const clone = cloneOf("Rollback fixture C", src);
+    expect(clone?.["trashed"]).toBe(0); // the cleanup delete was refused
+    if (res.kind !== "verify-failed") throw new Error("expected verify-failed");
+    expect(res.detail).toContain(`things todo delete ${String(clone?.["uuid"])}`);
+    // The one cause worth naming: a dialog left open makes the app ignore
+    // scripted changes app-wide — and holds Things Cloud sync with them.
+    expect(res.detail).toContain("dismiss it first");
+    expect(res.detail).toContain("Things Cloud");
+  });
+});

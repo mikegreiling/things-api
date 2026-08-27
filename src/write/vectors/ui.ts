@@ -42,10 +42,19 @@ import {
 import { certificationOf } from "./ui-certification.ts";
 import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
+import {
+  describeFocusOwner,
+  readUiState,
+  SYNC_GATE_WARNING,
+  THINGS_PROCESS,
+  type UiSheetKind,
+  type UiState,
+} from "./ui-state.ts";
 import type {
   CompiledInvocation,
   ExecuteResult,
   RepeatDialogShape,
+  UiClearOutcome,
   UiPrimitive,
   UiRecipe,
   UiStep,
@@ -111,7 +120,14 @@ export type UiCommandPrimitive =
   | "sidebar-drag"
   | "sidebar-held-drag"
   /** One modifier-bearing key event pair posted straight at the Things process (ui-chord.ts). */
-  | "chord-post";
+  | "chord-post"
+  /**
+   * The cleanup ladder's first rung: press the open dialog's own Cancel button
+   * (issue #620). Its own primitive rather than a `press` so a recipe's
+   * actuations and the cleanup's are never confused — in a trace, in a test, or
+   * in the completed-steps trail.
+   */
+  | "dismiss-dialog";
 
 /** A single primitive dispatch — one stable shape per primitive. */
 export interface UiCommand {
@@ -339,6 +355,37 @@ on rfField(c, rowLabel, tol)
   end tell
 end rfField`;
 
+/**
+ * The IN-SCRIPT half of the per-step focus guard (issue #620).
+ *
+ * A synthetic keystroke is not addressed at an element — System Events hands it
+ * to whatever application owns the screen at that instant. So every script that
+ * types re-asserts, in the same osascript hop that will do the typing, that
+ * Things is still frontmost; the drive-level census (see {@link guardedRun})
+ * runs a moment earlier and cannot close the last few milliseconds. The
+ * assertion FAILS CLOSED and names the application that owns the screen
+ * instead — never the contents of its window.
+ *
+ * This is the cheapest possible check: one System Events property read, no
+ * sleeps, no polling (UI-automation determinism doctrine).
+ */
+export const AX_FOCUS_GUARD_HANDLERS = `on fgFrontApp()
+	set frontName to ""
+	try
+		tell application "System Events" to set frontName to (name of first application process whose frontmost is true) as text
+	end try
+	return frontName
+end fgFrontApp
+
+on fgAssertFront(what)
+	set f to my fgFrontApp()
+	if f is "${THINGS_PROCESS}" then return true
+	if f is "" then
+		error "refused to " & what & ": the frontmost application could not be read, so there is no proof the keystrokes would reach Things — nothing was typed"
+	end if
+	error "refused to " & what & ": " & f & " is frontmost, not Things — a keystroke goes to whatever owns the screen, so nothing was typed"
+end fgAssertFront`;
+
 /** resolve-element: does the element exist right now? Returns "true"/"false". */
 export function axResolveScript(path: string): string {
   return `${SE} to return (exists (${path}))`;
@@ -383,15 +430,30 @@ export function axPressScript(path: string): string {
  * so a retry starts from a clean field without ⌘A. Fail-closed (an `error`, i.e.
  * a transport failure the pipeline re-verifies) if it never holds — the
  * create/reschedule delta's rule assertion is the final DB-level authority.
+ *
+ * READ-BACK FIRST (issue #620 item 7): a field that ALREADY holds the requested
+ * value is left alone and the script returns {@link OK_ALREADY} — the whole
+ * keystroke class disappears for the defaults, which is most drives (the field
+ * incident died typing interval `1` into a field already showing `1`). The skip
+ * is proven by TWO reads a settle apart, because the one way a matching value
+ * can go stale is the UIC7 re-layout revert, which lands within that window; and
+ * whatever this decides, the pre-commit audit ({@link axAuditDialogScript})
+ * re-reads every control through its own address before the OK press, so a
+ * wrongly-skipped field cannot commit.
  */
 export function axSetValueScript(path: string, value: string, attempts = 3): string {
   const v = escapeAppleScript(value);
   const n = Math.max(1, Math.trunc(attempts));
-  return `${SE}
+  return `${AX_FOCUS_GUARD_HANDLERS}
+
+${SE}
   set tf to (${path})
+${alreadyHoldsBlock("tf", v)}
   repeat ${n} times
+    my fgAssertFront("type \\"${v}\\" into the field")
     set focused of tf to true
     delay 0.15
+${focusedAssertBlock("tf", v)}
     keystroke "${v}"
     delay 0.1
     key code 48
@@ -403,6 +465,47 @@ export function axSetValueScript(path: string, value: string, attempts = 3): str
   end repeat
   error "field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
+}
+
+/**
+ * What a typing primitive returns when it typed NOTHING because the field
+ * already held the requested value (issue #620 item 7). Distinct from "OK" so
+ * the drive can disclose the skip — and so a lab cell can assert that no
+ * keystroke hop fired.
+ */
+export const OK_ALREADY = "OK-ALREADY";
+
+/**
+ * The read-back-first skip: two reads a settle apart, no keystroke either way.
+ * Shared verbatim by all three typing primitives so the law is one shape.
+ */
+function alreadyHoldsBlock(ref: string, escapedValue: string): string {
+  return `  set v0 to ""
+  try
+    set v0 to ((value of ${ref}) as text)
+  end try
+  if v0 is "${escapedValue}" then
+    delay 0.3
+    set v1 to ""
+    try
+      set v1 to ((value of ${ref}) as text)
+    end try
+    if v1 is "${escapedValue}" then return "${OK_ALREADY}"
+  end if`;
+}
+
+/**
+ * The element half of the focus guard: after asking for focus, PROVE the field
+ * took it before typing. A field that will not accept focus (the dialog is
+ * rebuilding, another sheet stole it) would otherwise receive the keystrokes
+ * somewhere else entirely.
+ */
+function focusedAssertBlock(ref: string, escapedValue: string): string {
+  return `    set gotFocus to false
+    try
+      set gotFocus to (focused of ${ref}) as boolean
+    end try
+    if not gotFocus then error "refused to type \\"${escapedValue}\\": the field did not take keyboard focus, so the keystrokes would have gone somewhere else"`;
 }
 /**
  * set-group-number: drive ONE of the Repeat dialog's two numeric fields —
@@ -451,13 +554,18 @@ export function axSetGroupNumberScript(
   const tol = Math.max(1, Math.trunc(rowTolerance));
   return `${AX_CADENCE_HANDLERS}
 
+${AX_FOCUS_GUARD_HANDLERS}
+
 ${SE}
   set g to (${groupPath})
   my cgSettle(g)
   set tf to my cgField(g, "${target}", ${tol})
+${alreadyHoldsBlock("tf", v)}
   repeat ${n} times
+    my fgAssertFront("type \\"${v}\\" into the ${target} field")
     set focused of tf to true
     delay 0.15
+${focusedAssertBlock("tf", v)}
     keystroke "${v}"
     delay 0.1
     key code 48
@@ -504,12 +612,17 @@ export function axSetRowFieldScript(
   const tol = Math.max(1, Math.trunc(rowTolerance));
   return `${AX_CADENCE_HANDLERS}
 
+${AX_FOCUS_GUARD_HANDLERS}
+
 ${SE}
   set c to (${containerPath})
   set tf to my rfField(c, "${label}", ${tol})
+${alreadyHoldsBlock("tf", v)}
   repeat ${n} times
+    my fgAssertFront("type \\"${v}\\" into the \\"${label}\\" field")
     set focused of tf to true
     delay 0.15
+${focusedAssertBlock("tf", v)}
     keystroke "${v}"
     delay 0.1
     key code 48
@@ -1145,7 +1258,10 @@ ${SE}
         delay 0.3
       end repeat
       if not (exists menu item wantVal of menu 1 of pu) then
-        key code 53
+        -- No Escape here (issue #620): a keystroke reaches whatever owns the
+        -- screen, and this error path is exactly when that is least certain.
+        -- The open menu is left for the driver's audited cleanup, which is the
+        -- ONE place an Escape is decided.
         error "converge-weekdays: the weekday pop-up offers no item \\"" & wantVal & "\\" (the app may not be in English)"
       end if
       click menu item wantVal of menu 1 of pu
@@ -1302,9 +1418,16 @@ return "OK"`;
 export function axActivateScript(): string {
   return `tell application "Things3" to activate`;
 }
-/** key: a space-separated keystroke spec (e.g. "down down return"). */
+/**
+ * key: a space-separated keystroke spec (e.g. "down down return").
+ *
+ * Frontmost-guarded in-script (issue #620): `key code`/`keystroke` reach
+ * whatever application owns the screen, so the script refuses — naming that
+ * application — rather than firing keys into someone else's window.
+ */
 export function axKeyScript(keys: string): string {
   const KEY_CODES: Record<string, number> = { return: 36, escape: 53, down: 125, up: 126, tab: 48 };
+  const spec = keys.trim();
   const lines = keys
     .split(/\s+/)
     .filter((k) => k !== "")
@@ -1313,7 +1436,12 @@ export function axKeyScript(keys: string): string {
         ? `key code ${KEY_CODES[k]}`
         : `keystroke "${escapeAppleScript(k)}"`,
     );
-  return `tell application "System Events" to tell process "Things3"\n  ${lines.join("\n  ")}\nend tell`;
+  return `${AX_FOCUS_GUARD_HANDLERS}
+
+my fgAssertFront("send the keystrokes \\"${escapeAppleScript(spec)}\\"")
+tell application "System Events" to tell process "Things3"
+  ${lines.join("\n  ")}
+end tell`;
 }
 /**
  * type-text: send literal text to whatever control holds focus (HXPC1). The
@@ -1329,7 +1457,10 @@ export function axKeyScript(keys: string): string {
  * be committed. One stable command shape.
  */
 export function axTypeTextScript(text: string): string {
-  return `${SE}
+  return `${AX_FOCUS_GUARD_HANDLERS}
+
+my fgAssertFront("type into the focused field")
+${SE}
   keystroke "${escapeAppleScript(text)}"
 end tell`;
 }
@@ -1453,9 +1584,57 @@ export function axPickerRowFrameScript(pickerPath: string, title: string): strin
 end tell`;
 }
 
-/** The abort keystroke sent to dismiss a half-open sheet/popover on failure. */
+/**
+ * The abort keystroke, sent ONLY from the audited cleanup ladder (issue #620)
+ * and only once that ladder has proven Things owns the screen. It is scoped to
+ * the Things process for readability, but scoping is not what makes it safe —
+ * a synthetic key goes to whatever is frontmost, which is why the script
+ * carries the same in-script frontmost assertion every other keystroke does.
+ */
 export function axAbortScript(): string {
-  return `tell application "System Events" to key code 53`; // Escape
+  return `${AX_FOCUS_GUARD_HANDLERS}
+
+my fgAssertFront("dismiss the open dialog with Escape")
+${SE}
+  key code 53
+end tell`;
+}
+
+/**
+ * Dismiss the open dialog by PRESSING ITS OWN CANCEL BUTTON (issue #620).
+ *
+ * Preferred over Escape wherever it works, for two independent reasons: an
+ * AXPress is addressed at an ELEMENT, so it cannot leak into another
+ * application the way a keystroke can, and it works while Things is in the
+ * BACKGROUND — the cleanup never has to steal the user's focus to undo its own
+ * half-finished dialog. The button is addressed by its pinned English title,
+ * exactly like every other selector in this vector, and the dialog shell is
+ * resolved the same two ways the census resolves it (attached sheet, or the
+ * detached editor window Things presents when it is not frontmost).
+ *
+ * Returns "OK" after pressing, or a diagnostic ("NO-DIALOG" / "NO-CANCEL") the
+ * ladder falls through on — it never claims a dismissal; the caller re-reads
+ * the census to decide that.
+ */
+export function axCancelDialogScript(): string {
+  return `${SE}
+  set shellRef to missing value
+  try
+    -- positional-ok: the one attached sheet a window can present, resolved
+    -- exactly as the read-only census resolves it.
+    set shellRef to sheet 1 of (first window whose subrole is "AXStandardWindow")
+  end try
+  if shellRef is missing value then
+    try
+      set dws to (windows whose subrole is "AXUnknown" and size is not {40, 40})
+      if (count of dws) > 0 then set shellRef to item 1 of dws
+    end try
+  end if
+  if shellRef is missing value then return "NO-DIALOG"
+  if not (exists button "Cancel" of shellRef) then return "NO-CANCEL"
+  click button "Cancel" of shellRef
+  return "OK"
+end tell`;
 }
 
 /**
@@ -1523,51 +1702,190 @@ async function sheetStillOpen(run: UiRunner): Promise<boolean> {
 
 /**
  * The outcome of clearing a half-open dialog after a failed drive:
- *   - "dismissed"     — Escape dismissed it and the (AX-reachable) sheet probe
- *                       CONFIRMED it gone;
- *   - "cleared-blind" — the session was AX-blind (locked / off-Space), so Escape
- *                       and the sheet probe are untrustworthy; the PROVEN
+ *   - "none"          — the census found no dialog open (nothing to clear);
+ *   - "dismissed"     — it is gone, and a fresh census CONFIRMED that;
+ *   - "cleared-blind" — the session was AX-blind (locked / off-Space), so no
+ *                       census and no keystroke can be trusted; the PROVEN
  *                       app-level close+reopen ran to clear it (cannot be
  *                       AX-confirmed, but the maneuver works blind — SESSGATE);
- *   - "may-remain"    — a reachable but stubborn sheet that Escape would not
- *                       dismiss (fail-closed: warn it may still be open).
+ *   - "foreign"       — a dialog is open that this drive did not open, so it was
+ *                       LEFT ALONE (a cleanup must never dismiss the dialog the
+ *                       person at the keyboard opened after our failure);
+ *   - "may-remain"    — ours, and nothing in the ladder would close it
+ *                       (fail-closed: report it precisely, with the sync gate).
  */
-type ClearResult = { state: "dismissed" | "cleared-blind" | "may-remain" };
+export type ClearOutcome = UiClearOutcome;
+
+export interface ClearResult {
+  state: ClearOutcome;
+  /** How it was closed, for the trace and the disclosure. */
+  how?: "cancel-button" | "escape" | "window-close";
+  /** What the census identified as open at cleanup time. */
+  sheetKind?: UiSheetKind;
+  /** Who owned the screen when the cleanup started, when it was not Things. */
+  focusOwner?: string;
+}
 
 /**
- * Clear a half-open sheet/popover a failed drive left behind — HONESTLY (SESSGATE
- * #480 fix; supersedes the old verifiedAbort, whose AX-blind sheet probe returned
- * "gone" it could not actually see, letting the still-open modal freeze the
- * app-wide AppleScript mutations the caller then attempted — the auto-trash
- * silent-noop). Escape first; then:
- *   - AX-BLIND (a not-reachable probe): Escape may never have reached the sheet
- *     and the sheet probe cannot see it, so run the app-level close+reopen that
- *     works blind (it takes the stuck sheet with the window). Reported as
- *     "cleared-blind" — never falsely "confirmed gone".
- *   - REACHABLE: the sheet probe is trustworthy — confirm the dismissal (retry
- *     Escape once), and if it will not go, warn "may remain".
+ * Is the dialog the census found OURS to dismiss? `expected` is the kind this
+ * drive was observed driving (latched from the census the drive itself ran). A
+ * kind that does not match is left strictly alone: between our failure and this
+ * cleanup, the person at the keyboard may have opened something of their own,
+ * and dismissing it would be a mutation nobody asked for.
+ *
+ * With nothing latched (a drive that failed before any dialog was observed) the
+ * two kinds this vector's recipes actually open are still treated as ours —
+ * they are the dialogs our own steps would have opened — while an unrecognized
+ * modal never is.
  */
-async function clearDialog(run: UiRunner): Promise<ClearResult> {
-  const escape = (): Promise<UiRunResult> =>
-    run({ primitive: "key", label: "abort (Escape)", script: axAbortScript() }, STEP_TIMEOUT_MS);
-  await escape();
-  const reach = await probeSessionReachability(run, STEP_TIMEOUT_MS);
-  if (!reach.reachable) {
-    // Cannot trust Escape or the sheet probe while AX-blind — use the proven
-    // app-level maneuver, which clears a stuck sheet without the Accessibility tree.
+function oursToDismiss(kind: UiSheetKind, expected: UiSheetKind | null): boolean {
+  if (kind === "none") return false;
+  if (expected !== null) return kind === expected;
+  return kind === "repeat" || kind === "move-picker";
+}
+
+/** Press the dialog's own Cancel button (element-addressed, background-safe). */
+async function pressCancel(run: UiRunner): Promise<boolean> {
+  const res = await run(
+    {
+      primitive: "dismiss-dialog",
+      label: "dismiss the open dialog (its Cancel button)",
+      script: axCancelDialogScript(),
+    },
+    STEP_TIMEOUT_MS,
+  );
+  return res.ok && res.stdout.trim() === "OK";
+}
+
+/**
+ * Clear a half-open dialog a failed drive left behind — AUDITED at every rung
+ * (issue #620; supersedes the unconditional Escape, which was measured firing
+ * into a foreign application's modal while the Things sheet it was meant for
+ * stayed open all night).
+ *
+ * The ladder, cheapest and least disruptive first, re-reading the census after
+ * every rung so nothing is ever CLAIMED to be dismissed:
+ *
+ *   0. census. No dialog + a reachable session → nothing to do. A dialog that
+ *      is not ours → left alone, reported.
+ *   1. press the dialog's own CANCEL button — element-addressed, so it needs
+ *      neither focus nor the frontmost slot, and it cannot leak into another
+ *      app. This is the rung that clears the ordinary case.
+ *   2. Escape, but only from a state where Things demonstrably owns the screen:
+ *      if it does not, RE-ACTIVATE Things, RE-AUDIT, and only then send it.
+ *   3. the app-level close+reopen (SESSGATE) — the maneuver that works with no
+ *      Accessibility tree at all, and the documented recovery for the app-wide
+ *      AppleScript freeze a stuck sheet imposes (oddities §9cc), which is what
+ *      makes a caller's follow-up cleanup mutations land again.
+ *
+ * `expected` is the dialog kind this drive was observed driving; see
+ * {@link oursToDismiss}.
+ */
+async function clearDialog(
+  run: UiRunner,
+  expected: UiSheetKind | null = null,
+): Promise<ClearResult> {
+  const census = await readUiState(run, STEP_TIMEOUT_MS);
+  const owner =
+    census !== null && !census.thingsFrontmost ? { focusOwner: describeFocusOwner(census) } : {};
+  const readable = census !== null && census.inspectable;
+
+  // 0. A clean, readable "no dialog" — but only trustworthy on a session whose
+  //    windows are AX-visible at all: a locked screen / full-screen Space
+  //    enumerates ZERO windows, so the census would report "no dialog" for a
+  //    sheet that is very much open (SESSGATE). Confirm before believing it.
+  if (readable && census.sheetOpen === false) {
+    const reach = await probeSessionReachability(run, STEP_TIMEOUT_MS);
+    if (reach.reachable) return { state: "none" };
+    // AX-blind: System Events enumerates zero windows for EVERY app, so the
+    // census cannot see a sheet that is open — and equally cannot confirm one
+    // is gone. Run the blind-proof maneuver and report it as unconfirmed.
+    return closeReopenRung(run, expected, owner, true);
+  }
+  // 0b. A dialog someone else opened — never touched.
+  if (readable && !oursToDismiss(census.sheetKind, expected)) {
+    return { state: "foreign", sheetKind: census.sheetKind, ...owner };
+  }
+  const kind = readable ? { sheetKind: census.sheetKind } : {};
+
+  // 1. Its own Cancel button.
+  if (readable) {
+    if (await pressCancel(run)) {
+      const after = await readUiState(run, STEP_TIMEOUT_MS);
+      if (after !== null && after.inspectable && !after.sheetOpen) {
+        return { state: "dismissed", how: "cancel-button", ...kind, ...owner };
+      }
+    }
+  }
+
+  // 2. Escape — from a state where Things owns the screen, re-activating and
+  //    RE-AUDITING first when it does not (never a blind key into the unknown).
+  let front = readable && census.thingsFrontmost;
+  if (readable && !front) {
     await run(
       {
-        primitive: "resolve",
-        label: "clear a stuck dialog (close the Things window and reopen it)",
-        script: axCloseReopenActivateScript(),
+        primitive: "activate",
+        label: "bring Things forward to dismiss its dialog",
+        script: axActivateScript(),
       },
       STEP_TIMEOUT_MS,
     );
-    return { state: "cleared-blind" };
+    const reaudit = await readUiState(run, STEP_TIMEOUT_MS);
+    if (reaudit !== null && reaudit.inspectable) {
+      if (!reaudit.sheetOpen)
+        return { state: "dismissed", how: "cancel-button", ...kind, ...owner };
+      if (!oursToDismiss(reaudit.sheetKind, expected)) {
+        return { state: "foreign", sheetKind: reaudit.sheetKind, ...owner };
+      }
+      front = reaudit.thingsFrontmost;
+    }
   }
-  if (!(await sheetStillOpen(run))) return { state: "dismissed" };
-  await escape(); // one retry
-  return { state: (await sheetStillOpen(run)) ? "may-remain" : "dismissed" };
+  if (front) {
+    await run(
+      { primitive: "key", label: "abort (Escape)", script: axAbortScript() },
+      STEP_TIMEOUT_MS,
+    );
+    const after = await readUiState(run, STEP_TIMEOUT_MS);
+    if (after !== null && after.inspectable && !after.sheetOpen) {
+      return { state: "dismissed", how: "escape", ...kind, ...owner };
+    }
+  }
+
+  // 3. The blind-proof maneuver, last: it discards the half-entered dialog with
+  //    the window, and unwedges the app-wide AppleScript freeze with it.
+  return closeReopenRung(run, expected, owner);
+}
+
+/**
+ * The final rung: close+reopen the Things window, then re-audit if we can.
+ * `blind` says the session itself is AX-blind, in which case NOTHING the census
+ * reports afterwards is evidence — the outcome is honestly unconfirmed.
+ */
+async function closeReopenRung(
+  run: UiRunner,
+  expected: UiSheetKind | null,
+  owner: { focusOwner?: string },
+  blind = false,
+): Promise<ClearResult> {
+  await run(
+    {
+      primitive: "resolve",
+      label: "clear a stuck dialog (close the Things window and reopen it)",
+      script: axCloseReopenActivateScript(),
+    },
+    STEP_TIMEOUT_MS,
+  );
+  if (blind) return { state: "cleared-blind", how: "window-close", ...owner };
+  const after = await readUiState(run, STEP_TIMEOUT_MS);
+  if (after === null || !after.inspectable) {
+    return { state: "cleared-blind", how: "window-close", ...owner };
+  }
+  if (!after.sheetOpen) return { state: "dismissed", how: "window-close", ...owner };
+  return {
+    state: oursToDismiss(after.sheetKind, expected) ? "may-remain" : "foreign",
+    sheetKind: after.sheetKind,
+    ...owner,
+  };
 }
 
 /**
@@ -1859,6 +2177,16 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
 }
 
 /**
+ * Read the live window/focus census through the shipped dispatch seam — the
+ * transport behind the `ui-state` diagnostic (src/ui-state.ts) and, in tests,
+ * behind any injected runner. READ-ONLY: the census clicks nothing, types
+ * nothing, and changes no state; see src/write/vectors/ui-state.ts.
+ */
+export function readLiveUiState(run: UiRunner = defaultRun): Promise<UiState | null> {
+  return readUiState(run, STEP_TIMEOUT_MS);
+}
+
+/**
  * Wrap the dispatch seam so every osascript hop is recorded. The last-dispatched
  * step is noted on the in-flight-write marker (so a SIGTERM/SIGINT can name it,
  * even with tracing off), and — when tracing is on — a `ui-dispatch` start/end
@@ -1890,6 +2218,189 @@ function tracingRun(inner: UiRunner): UiRunner {
     }));
     return res;
   };
+}
+
+/**
+ * PRIMITIVE CLASSIFICATION for the per-step guard (issue #620). What decides a
+ * primitive's class is HOW macOS routes its effect, not what it looks like:
+ *
+ *   - KEYSTROKE-CLASS — System Events `keystroke` / `key code`. The event is
+ *     handed to whatever application owns the screen, so these need Things
+ *     frontmost AND the dialog we opened still in front. The element half of
+ *     the guard (did the field actually take focus?) is asserted in-script, in
+ *     the same hop as the typing.
+ *   - POINTER-CLASS — mouse synthesis through the global HID event tap
+ *     (`CGEventPost(kCGHIDEventTap)`). It posts at the FOREGROUND surface
+ *     (NATIVE1-e: `CGEventPostToPid` is inert for Things' hit-testing), so a
+ *     click while another app is frontmost lands in that app's window. Frontmost
+ *     is required; focus is not (a click sets its own).
+ *   - Everything else is ELEMENT-ADDRESSED — `click <element>`, `set value`,
+ *     `set focused`, the ObjC `AXUIElementSetAttributeValue` date writes, and
+ *     every read. System Events delivers those to the element named, whether or
+ *     not the app is frontmost, so guarding them would only add a hop and
+ *     forbid perfectly good background work.
+ *   - `chord-post` is deliberately NOT guarded: it posts its key event with
+ *     `CGEventPostToPid`, which addresses the PROCESS rather than the focused
+ *     surface — the whole point of the heading-reorder gesture is that it runs
+ *     with Things in the background and the user's focus untouched (HEADORD1
+ *     1h2a, CHORDMH1). A frontmost guard there would break a certified op.
+ */
+const KEYSTROKE_CLASS: ReadonlySet<UiCommandPrimitive> = new Set<UiCommandPrimitive>([
+  "key",
+  "type-text",
+  "set-value",
+  "set-group-number",
+  "set-row-field",
+]);
+
+const POINTER_CLASS: ReadonlySet<UiCommandPrimitive> = new Set<UiCommandPrimitive>([
+  "click-point",
+  "sidebar-drag",
+  "sidebar-held-drag",
+  "sidebar-scroll",
+]);
+
+/** What the drive has observed about the dialog it is driving (see {@link oursToDismiss}). */
+interface SheetLatch {
+  sheet: UiSheetKind | null;
+}
+
+/**
+ * Judge one guard reading. Returns null to proceed, or the refusal sentence —
+ * which always names who owns the screen, because that is the one fact the
+ * person reading it cannot recover after the fact.
+ *
+ * Exported for the unit matrix: every branch here is a fail-closed decision
+ * about synthetic input, and each one is worth a test.
+ */
+export function judgeFocusGuard(
+  state: UiState | null,
+  expectedSheet: UiSheetKind | null,
+  label: string,
+): string | null {
+  const refuse = (why: string): string => `refused to run "${label}": ${why}`;
+  if (state === null) {
+    return refuse(
+      "the window and focus state could not be read, so there is no proof the input would reach " +
+        "Things — nothing was sent",
+    );
+  }
+  if (!state.inspectable) {
+    return refuse(
+      `${describeFocusOwner(state)}. Input sent now would go to it, not to Things — nothing was ` +
+        "sent. Answer or dismiss the system dialog, then run the same command again",
+    );
+  }
+  if (!state.thingsFrontmost) {
+    return refuse(
+      `${describeFocusOwner(state)}, so the input would go there instead of to Things — nothing ` +
+        "was sent. Leave Things in front while it is being driven, then run the same command again",
+    );
+  }
+  if (expectedSheet !== null && state.sheetKind !== expectedSheet) {
+    return refuse(
+      `the dialog this command opened is no longer the one in front (expected ${expectedSheet}, ` +
+        `found ${state.sheetKind}) — it was closed or replaced while the command was running, so ` +
+        "nothing was sent",
+    );
+  }
+  return null;
+}
+
+/**
+ * Wrap the dispatch seam with the PER-STEP FOCUS GUARD (issue #620): before
+ * every focus-routed hop, one cheap read-only census decides whether the input
+ * can legitimately be delivered, and a violation ABORTS THE STEP rather than
+ * typing into the void. Element-addressed hops pass straight through, so the
+ * cost is paid only where it buys something.
+ *
+ * A closed loop, not a sleep: the census is a deterministic read of the live
+ * state, taken immediately before the hop, and the in-script assertions close
+ * the remaining milliseconds (UI-automation determinism doctrine; the #595
+ * pre-commit audit and BEEP1 shape-settle are the same pattern).
+ */
+function guardedRun(inner: UiRunner, latch: SheetLatch): UiRunner {
+  return async (command, timeoutMs) => {
+    if (!KEYSTROKE_CLASS.has(command.primitive) && !POINTER_CLASS.has(command.primitive)) {
+      return inner(command, timeoutMs);
+    }
+    const state = await readUiState(inner, STEP_TIMEOUT_MS);
+    // The dialog invariant applies to keystroke-class hops only: a pointer hop
+    // is aimed at a frame it resolved a moment ago and fails closed on its own
+    // if that frame moved.
+    const expected = KEYSTROKE_CLASS.has(command.primitive) ? latch.sheet : null;
+    const guardRefusal = judgeFocusGuard(state, expected, command.label);
+    if (guardRefusal !== null) {
+      trace(() => ({
+        phase: "focus-guard",
+        event: "refused",
+        primitive: command.primitive,
+        label: command.label,
+        frontmost: state?.frontmostApp ?? null,
+        sheetKind: state?.sheetKind ?? null,
+        inspectable: state?.inspectable ?? false,
+      }));
+      return { ok: false, stdout: "", stderr: guardRefusal };
+    }
+    if (state !== null && state.sheetOpen && latch.sheet === null) latch.sheet = state.sheetKind;
+    return inner(command, timeoutMs);
+  };
+}
+
+/** How a dialog is named in a disclosure — behavior, not chrome. */
+function dialogNoun(kind: UiSheetKind | undefined): string {
+  switch (kind) {
+    case "repeat":
+      return "the repeat dialog";
+    case "move-picker":
+      return "the move-to-project chooser";
+    default:
+      return "a dialog";
+  }
+}
+
+/**
+ * The cleanup disclosure (issue #620). Every branch states what is TRUE of the
+ * app right now, and — whenever a dialog may still be open — that Things Cloud
+ * sync is held until someone dismisses it, which is the consequence a caller
+ * cannot see and would otherwise discover hours later on another device.
+ */
+export function describeCleanup(clear: ClearResult): string {
+  const owner = clear.focusOwner === undefined ? "" : ` (${clear.focusOwner} when cleanup started)`;
+  switch (clear.state) {
+    case "none":
+      return "No dialog was left open in Things.";
+    case "dismissed":
+      return `${
+        clear.how === "cancel-button"
+          ? `${dialogNoun(clear.sheetKind)} was closed with its own Cancel button`
+          : clear.how === "escape"
+            ? `${dialogNoun(clear.sheetKind)} was dismissed with Escape`
+            : `${dialogNoun(clear.sheetKind)} was cleared by closing and reopening the Things window`
+      }, confirmed closed${owner}.`;
+    case "cleared-blind":
+      return (
+        "Things had no window reachable on the current screen (the Mac may be locked, or a" +
+        " full-screen app is covering the desktop), so the open dialog could not be confirmed" +
+        " through the on-screen layer — the Things window was closed and reopened to clear it," +
+        " discarding any partially-entered rule. Unlock the Mac or leave the full-screen app" +
+        " before retrying."
+      );
+    case "foreign":
+      return (
+        `A dialog is open in Things that this command did not open (${dialogNoun(clear.sheetKind)}),` +
+        ` so it was left exactly as it is${owner}. Dismiss it yourself when you are ready — and note` +
+        ` that ${SYNC_GATE_WARNING}.`
+      );
+    case "may-remain":
+      return (
+        `WARNING: ${dialogNoun(clear.sheetKind)} may still be open in Things${owner} — neither its` +
+        " Cancel button, nor Escape, nor closing and reopening the window would clear it. Dismiss" +
+        " it in Things (click Cancel, or press Escape with Things in front) before retrying: a" +
+        ` leftover dialog also disables the menu bar, so the next attempt would refuse. Also note` +
+        ` that ${SYNC_GATE_WARNING}.`
+      );
+  }
 }
 
 /** The element paths the preflight canary resolves (static steps only). */
@@ -2324,11 +2835,19 @@ function auditFailureText(res: UiRunResult): string {
 
 async function drive(
   recipe: UiRecipe,
-  run: UiRunner,
+  rawRun: UiRunner,
   aux: UiDriveAux,
   budgetMs: number = DEFAULT_UI_DRIVE_BUDGET_MS,
   reachCache: ReachabilityProbeCache = createReachabilityCache(),
 ): Promise<ExecuteResult> {
+  // Every step below dispatches through the PER-STEP FOCUS GUARD (issue #620);
+  // the latch records the dialog this drive is observed driving, so the cleanup
+  // ladder can tell our own half-open dialog from one the user opened after us.
+  const latch: SheetLatch = { sheet: null };
+  const run = guardedRun(rawRun, latch);
+  // The cleanup ladder audits for itself (it is what decides whether a keystroke
+  // may be sent at all), so it runs OUTSIDE the guard.
+  const clearNow = (): Promise<ClearResult> => clearDialog(rawRun, latch.sheet);
   const done: string[] = [];
   // The overall-drive WATCHDOG (TRACE1 #487). A drive can outlast the caller's
   // own timeout on a slow production database (large + Things-Cloud syncing
@@ -2346,7 +2865,7 @@ async function drive(
     // modal behind (#485), then report honestly. The outcome is UNCERTAIN: a rule
     // whose OK press was mid-commit could still land — the pipeline re-verifies
     // and shapes the final result accordingly.
-    const clear = await clearDialog(run);
+    const clear = await clearNow();
     trace(() => ({
       phase: "watchdog",
       budgetMs,
@@ -2389,20 +2908,7 @@ async function drive(
     stepTimedOut = false,
   ): ExecuteResult => {
     const base = `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}.`;
-    const cleanup =
-      clear === undefined
-        ? ""
-        : clear.state === "dismissed"
-          ? " The open sheet/popover was dismissed (Escape, confirmed gone)."
-          : clear.state === "cleared-blind"
-            ? " Things had no window reachable on the current screen (the Mac may be locked, or a" +
-              " full-screen app is covering the desktop), so the open dialog could not be confirmed" +
-              " through the on-screen layer — the Things window was closed and reopened to clear it," +
-              " discarding any partially-entered rule. Unlock the Mac or leave the full-screen app" +
-              " before retrying."
-            : " WARNING: a sheet or popover may still be open in Things — Escape did not dismiss it." +
-              " Dismiss it manually before retrying (a leftover sheet disables the menu bar and will" +
-              " make the next drive's preflight fail).";
+    const cleanup = clear === undefined ? "" : ` ${describeCleanup(clear)}`;
     // #512: name an environment failure as one. A cleanup that had to run BLIND
     // is direct evidence the session went AX-blind mid-drive; a step killed by
     // its own deadline is the window not answering. Either way the app was not
@@ -2518,7 +3024,7 @@ async function drive(
     // control whose CLASS changed, and only the matching one runs.
     if (step.onlyShape !== undefined) {
       if (dialogShape === null) {
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(step.label, SHAPE_UNPROBED, clear);
       }
       if (step.onlyShape !== dialogShape) continue;
@@ -2527,12 +3033,12 @@ async function drive(
     // introduced, and the weekday-row base index).
     if (step.shaped !== undefined) {
       if (dialogShape === null) {
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(step.label, SHAPE_UNPROBED, clear);
       }
       const override = step.shaped[dialogShape];
       if (override === undefined) {
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(
           step.label,
           `this step has no drive for the "${dialogShape}" Repeat dialog (recipe bug)`,
@@ -2557,7 +3063,7 @@ async function drive(
       );
       if (!ok) {
         // the abort keystroke must land (and be verified) before returning the partial-state report
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(step.label, "the expected element never appeared within the timeout", clear);
       }
       done.push(step.label);
@@ -2597,7 +3103,7 @@ async function drive(
       const effective = await resolveStepPath(step, run);
       if (effective === null) {
         // dismiss whatever opened (and verify) before reporting
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(
           step.label,
           "none of its expected element shapes resolved (neither the attached sheet nor the " +
@@ -2617,7 +3123,7 @@ async function drive(
       const res = await run(command, STEP_TIMEOUT_MS);
       const verdict = res.stdout.trim();
       if (!res.ok || (verdict !== "next-popup" && verdict !== "legacy")) {
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(
           step.label,
           res.ok
@@ -2643,7 +3149,7 @@ async function drive(
       const res = await run(command, STEP_TIMEOUT_MS);
       if (!res.ok || res.stdout.trim() !== "OK") {
         // clear any transient state (and verify) before reporting
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         const noMatch =
           step.primitive === "select-heading-row"
             ? "the project view exposed no selectable heading row at the target position — the " +
@@ -2674,7 +3180,7 @@ async function drive(
       const verdict = res.stdout.trim();
       if (!res.ok || verdict !== "OK") {
         // clear any transient state (and verify) before reporting
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(
           step.label,
           res.ok
@@ -2700,7 +3206,7 @@ async function drive(
       // the dialog through the standard clean-abort path, so nothing is committed.
       const outcome = await driveDialogAudit(step, run, dialogShape);
       if (!outcome.ok) {
-        const clear = await clearDialog(run);
+        const clear = await clearNow();
         return partial(step.label, outcome.why ?? "the pre-commit dialog audit failed", clear);
       }
       done.push(step.label);
@@ -2715,7 +3221,7 @@ async function drive(
       const outcome = await driveClickElement(step, run);
       if (!outcome.ok) {
         // clear whatever the click opened (honest cleanup) before reporting
-        const clear = outcome.needsAbort === true ? await clearDialog(run) : undefined;
+        const clear = outcome.needsAbort === true ? await clearNow() : undefined;
         return partial(step.label, outcome.why ?? "the click failed", clear);
       }
       done.push(step.label);
@@ -2727,9 +3233,7 @@ async function drive(
       // clear the half-open sheet/popover (honest — never claim an unconfirmed
       // dismissal) before reporting partial state
       const clear =
-        step.primitive !== "reveal" && step.primitive !== "activate"
-          ? await clearDialog(run)
-          : undefined;
+        step.primitive !== "reveal" && step.primitive !== "activate" ? await clearNow() : undefined;
       return partial(
         step.label,
         res.timedOut === true ? "the step timed out" : res.stderr.trim() || "the step failed",
@@ -2737,7 +3241,10 @@ async function drive(
         res.timedOut === true,
       );
     }
-    done.push(step.label);
+    // A typing primitive that found the field ALREADY holding the requested
+    // value typed nothing at all (issue #620 item 7) — disclosed, so the trail
+    // says what the drive did rather than what it intended.
+    done.push(res.stdout.trim() === OK_ALREADY ? `${step.label} (already set)` : step.label);
   }
   return {
     exitCode: 0,

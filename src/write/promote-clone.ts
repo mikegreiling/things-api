@@ -39,6 +39,7 @@ import type {
   ProjectAddRepeatingParams,
   RepeatRuleParams,
   TodoAddRepeatingParams,
+  TodoMoveParams,
 } from "./operations.ts";
 import { replayIfApplied } from "./opid.ts";
 import {
@@ -216,6 +217,164 @@ async function cleanupSeed(
     ? { detail: `${(promote as { detail: string }).detail} — ${cleanupNote}` }
     : {};
 }
+
+/**
+ * Put a restored to-do back where it was (issue #620, field report M1).
+ *
+ * The ONLY scriptable restore-from-Trash is `move <to-do> to list "Inbox"`
+ * (E15) — and it does exactly that: the row lands in the INBOX, DE-SCHEDULED
+ * (`start=0, startDate=NULL`), with its project/heading link severed. That is
+ * the GUI's "Put Back" affordance's poorer scripted cousin, and it is why a
+ * failed promote handed back a to-do sitting unscheduled in the Inbox instead
+ * of where its owner left it. Everything else about the row survives (title,
+ * notes, tags, deadline, reminder byte), so the repair is exactly two writes:
+ * its container, then its schedule.
+ *
+ * Best-effort and fully disclosed: each half reports whether it landed, and a
+ * to-do that lived under a HEADING is returned to the owning project with the
+ * heading placement named as not restored — there is nothing to guess at.
+ * Returns the sentence describing what happened.
+ */
+async function reassertTodoPlacement(
+  deps: WriteDeps,
+  src: Todo,
+  options: WriteOptions,
+  txnId: string,
+): Promise<string> {
+  const landed: string[] = [];
+  const missed: string[] = [];
+
+  const projectUuid = src.project?.uuid ?? src.headingProject?.uuid ?? null;
+  const areaUuid = src.area?.uuid ?? null;
+  const move: TodoMoveParams | null =
+    projectUuid !== null
+      ? { uuid: src.uuid, project: { uuid: projectUuid } }
+      : areaUuid !== null
+        ? { uuid: src.uuid, area: { uuid: areaUuid } }
+        : null;
+  if (move !== null) {
+    const res = await runMutation(deps, "todo.move", move, legOptions(options, txnId));
+    const where = projectUuid !== null ? "its project" : "its area";
+    (res.kind === "ok" ? landed : missed).push(where);
+  }
+  if (src.heading !== null) missed.push("its position under a heading");
+
+  // The schedule. `evening` is only expressible for TODAY (the app has no other
+  // evening slot), so a stale evening marker degrades to its date.
+  const todayIso = localToday(deps.now?.() ?? new Date(), deps.zone);
+  const when =
+    src.derived.evening === true && src.startDate === todayIso
+      ? "evening"
+      : src.startDate !== null
+        ? src.startDate
+        : src.derived.start === "someday"
+          ? "someday"
+          : src.derived.start === "active"
+            ? "anytime"
+            : null;
+  if (when !== null) {
+    const res = await runMutation(
+      deps,
+      "todo.update",
+      { uuid: src.uuid, when },
+      legOptions(options, txnId),
+    );
+    (res.kind === "ok" ? landed : missed).push(`its "when" (${when})`);
+  }
+
+  if (landed.length === 0 && missed.length === 0) return "it was already in the Inbox, unscheduled";
+  const ok = landed.length > 0 ? `${landed.join(" and ")} restored` : "";
+  const bad =
+    missed.length > 0
+      ? `${ok === "" ? "" : ", but "}${missed.join(" and ")} could not be restored — set ${
+          missed.length > 1 ? "them" : "it"
+        } yourself`
+      : "";
+  return `a scripted restore returns a to-do to the Inbox with no schedule, so ${ok}${bad}`;
+}
+
+/**
+ * Undo a failed make-repeating's OWN two mutations (issue #620).
+ *
+ * The compound trashes the original and mints a disposable copy before the
+ * promote runs, so a promote that does not land leaves two artifacts. Both are
+ * ours, so both are cleaned up here rather than described to the caller as
+ * homework: the original is restored AND put back where it was
+ * ({@link reassertTodoPlacement}), and the disposable copy is moved to the
+ * Trash — the same ratified reasoning as the add-repeating seed auto-trash
+ * (2026-08-15, issue #480): our artifact, recreatable verbatim, and the Trash
+ * is recoverable.
+ *
+ * When a step does NOT land, the report names the row and the command that
+ * finishes the job — and names the likeliest reason, because there is exactly
+ * one that matters here: a dialog still open in Things makes the app ignore
+ * scripted changes app-wide (docs/things-app-oddities.md §9cc) and holds Things
+ * Cloud sync with them. That is the mechanism behind the field report's
+ * "AppleScript could not get that to-do ID" on a row the database showed
+ * perfectly present.
+ */
+async function rollBackFailedPromote(
+  deps: WriteDeps,
+  kind: "todo" | "project",
+  ids: { srcUuid: string; cloneUuid: string; src: Todo | Project },
+  options: WriteOptions,
+  txnId: string,
+): Promise<string> {
+  const expectedType = kind === "project" ? "project" : "to-do";
+  const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
+  const restored = await runMutation(
+    deps,
+    restoreOp,
+    { uuid: ids.srcUuid },
+    legOptions(options, txnId),
+  );
+  let originalNote: string;
+  if (restored.kind === "ok") {
+    // A project restore flips the row in place and keeps its area, schedule and
+    // children exactly as they were (P06) — only the to-do restore relocates.
+    const placement =
+      ids.src.type === "to-do" ? await reassertTodoPlacement(deps, ids.src, options, txnId) : null;
+    originalNote =
+      `the original ${expectedType} (uuid ${ids.srcUuid}) was restored from the Trash` +
+      (placement === null ? "" : ` — ${placement}`);
+  } else {
+    originalNote =
+      `the original ${expectedType} (uuid ${ids.srcUuid}) could NOT be restored from the Trash — ` +
+      `restore it with \`things ${kind} restore ${ids.srcUuid}\`${DISMISS_FIRST}`;
+  }
+  const cloneNote = await trashDisposableCopy(deps, kind, ids.cloneUuid, options, txnId);
+  return `the promote did not land. ${originalNote}; ${cloneNote}`;
+}
+
+/**
+ * Move the compound's own disposable copy to the Trash and say what happened.
+ * Shared by every failure path that has minted one, so a caller is never left
+ * holding a duplicate of their own to-do with no instruction.
+ */
+async function trashDisposableCopy(
+  deps: WriteDeps,
+  kind: "todo" | "project",
+  cloneUuid: string,
+  options: WriteOptions,
+  txnId: string,
+): Promise<string> {
+  const trashOp: OperationKind = kind === "project" ? "project.delete" : "todo.delete";
+  const trashed = await runMutation(deps, trashOp, { uuid: cloneUuid }, legOptions(options, txnId));
+  return trashed.kind === "ok"
+    ? `the disposable copy this command made (uuid ${cloneUuid}) was moved to the Trash`
+    : `the disposable copy this command made (uuid ${cloneUuid}) is still in your lists and ` +
+        `could NOT be removed — remove it with \`things ${kind} delete ${cloneUuid}\`${DISMISS_FIRST}`;
+}
+
+/**
+ * The one remediation a stranded dialog needs, appended wherever a cleanup
+ * mutation fails: while a dialog is open, Things ignores scripted changes
+ * app-wide AND stops sending anything to Things Cloud.
+ */
+const DISMISS_FIRST =
+  ". If a dialog is still open in Things, dismiss it first (click Cancel, or press Escape with " +
+  "Things in front): while one is open the app ignores changes like this and stops sending " +
+  "changes to Things Cloud";
 
 /**
  * Pick the rule fields (frequency/interval + calendar anchors + deadline offset)
@@ -668,6 +827,11 @@ async function makeRepeatingViaClone(
   // Bound after the existence guard so the composite body (a hoisted function,
   // where TypeScript cannot carry the narrowing) still sees a plain string.
   const srcTitle = src.title;
+  // Same reason as srcTitle: the type guard above proved this is the to-do or
+  // project the caller named, but the narrowing does not survive into the
+  // hoisted composite body. The failure rollback reads its placement from here
+  // (captured BEFORE the trash, which is the only moment it is knowable).
+  const srcEntity = src as Todo | Project;
 
   // ANCH2 (issue #476): the app's Repeat dialog HAS a "Next:" first-occurrence
   // field; its default is the today-anchored next match, but it is editable and
@@ -821,15 +985,17 @@ async function makeRepeatingViaClone(
       ),
     );
     if (trash.kind !== "ok") {
+      // The original never moved, so there is nothing to restore — but the
+      // disposable copy exists and is ours to clean up (issue #620).
+      const cloneNote = await trashDisposableCopy(deps, kind, cloneUuid, options, txnId);
       return {
         ...trash,
         op,
         ...("detail" in trash
           ? {
               detail:
-                `${trash.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
-                `original ${srcUuid} could not be moved to the Trash, so it was NOT promoted; trash ` +
-                "the clone and retry",
+                `${trash.detail} — the original ${srcUuid} could not be moved to the Trash, so it ` +
+                `was NOT promoted and is unchanged; ${cloneNote}`,
             }
           : {}),
       } as MutationResult;
@@ -842,29 +1008,20 @@ async function makeRepeatingViaClone(
         ? await promoteProjectViaGui(deps, rule, legOptions(options, txnId, "ui"))
         : await runMutation(deps, "todo.make-repeating", rule, legOptions(options, txnId, "ui"));
     if (promote.kind !== "ok") {
-      // The clone persists but was not promoted; best-effort ROLL BACK the trash so
-      // the original is not stranded in the Trash.
-      const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
-      const rolledBack = await runMutation(
+      // The clone persists but was not promoted. Undo our own two mutations, in
+      // the order that leaves the least behind (issue #620) — see
+      // {@link rollBackFailedPromote}.
+      const rollNote = await rollBackFailedPromote(
         deps,
-        restoreOp,
-        { uuid: srcUuid },
-        legOptions(options, txnId),
+        kind,
+        { srcUuid, cloneUuid, src: srcEntity },
+        options,
+        txnId,
       );
-      const rollNote =
-        rolledBack.kind === "ok"
-          ? `the original ${srcUuid} was restored from the Trash`
-          : `the original ${srcUuid} could NOT be restored from the Trash — restore it in the app`;
       return {
         ...promote,
         op,
-        ...("detail" in promote
-          ? {
-              detail:
-                `${promote.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
-                `promote did not land; ${rollNote}. Trash the clone and retry`,
-            }
-          : {}),
+        ...("detail" in promote ? { detail: `${promote.detail} — ${rollNote}` } : {}),
       } as MutationResult;
     }
     const { templateUuid } = discoveryOf(promote);

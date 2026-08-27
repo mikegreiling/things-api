@@ -9,9 +9,12 @@ import {
   diagnose,
   errorEnvelope,
   okEnvelope,
+  readUiStateReport,
+  uiStateLines,
   type DiagnoseReport,
   type DiagnoseResult,
   type EnvelopeMeta,
+  type UiStateReport,
 } from "../../index.ts";
 
 // Back-compat alias for pre-seam consumers of the CLI module.
@@ -163,9 +166,16 @@ function environmentLine(env: DiagnoseReport["environment"]): string {
   );
 }
 
-/** The `── Sync health ──` section: freshness proxies + the cloud last-attempt signal. */
-function syncHealthLines(sh: DiagnoseReport["syncHealth"]): string[] {
-  return [
+/**
+ * The `── Sync health ──` section: freshness proxies + the cloud last-attempt
+ * signal — plus, when the window state was read and found a dialog open, the
+ * one local condition that HOLDS sync no matter how healthy everything else
+ * looks (field-measured; see the open-dialog sync gate in
+ * docs/things-app-oddities.md). Without `--ui-state` the line is absent rather
+ * than guessed at: doctor renders what it knows.
+ */
+function syncHealthLines(sh: DiagnoseReport["syncHealth"], ui?: UiStateReport): string[] {
+  const lines = [
     "── Sync health ──",
     `app:         ${sh.appRunning.verdict}`,
     `wal:         ${sh.wal.verdict}`,
@@ -173,6 +183,13 @@ function syncHealthLines(sh: DiagnoseReport["syncHealth"]): string[] {
     `foreground:  ${sh.lastForeground.verdict}`,
     `cloud:       ${sh.cloud.verdict}`,
   ];
+  if (ui?.state?.sheetOpen === true) {
+    lines.push(
+      "dialog:      a dialog is open in Things, which stops the app sending changes to Things " +
+        "Cloud — anything written on this Mac stays here until it is dismissed",
+    );
+  }
+  return lines;
 }
 
 /** One half's line: liveness, launchd registration, version, signing. */
@@ -304,22 +321,33 @@ export function registerDoctor(program: Command): void {
       "actively test whether the ui vector's Accessibility access is granted and its GUI " +
         "recipe resolves (may show a one-time macOS prompt; skipped when Things is not running)",
     )
+    .option(
+      "--ui-state",
+      "also read what is on the screen: whether a dialog is open in Things and which " +
+        "application owns the keyboard (reads only — nothing is clicked, typed or dismissed)",
+    )
     .action(
-      (opts: {
+      async (opts: {
         json?: boolean;
         db?: string;
         probeAutomation?: boolean;
         probeAccessibility?: boolean;
+        uiState?: boolean;
       }) => {
         const started = Date.now();
         const { report, error, exitCode, meta } = diagnose(opts.db, {
           ...(opts.probeAutomation === true && { probeAutomation: true }),
           ...(opts.probeAccessibility === true && { probeAccessibility: true }),
         });
+        // Opt-in, exactly like the two consent probes above: reading another
+        // app's window state is a granted capability, and doctor renders what
+        // it already knows unless it is asked to go look.
+        const uiState = opts.uiState === true ? await readUiStateReport() : undefined;
         const fullMeta: EnvelopeMeta = { ...meta, elapsedMs: Date.now() - started };
         if (opts.json) {
-          const envelope = report
-            ? okEnvelope("doctor", report, fullMeta)
+          const payload = report === null ? report : { ...report, ...(uiState && { uiState }) };
+          const envelope = payload
+            ? okEnvelope("doctor", payload, fullMeta)
             : errorEnvelope(error ?? { code: "unexpected", message: "no report" }, fullMeta);
           process.stdout.write(`${JSON.stringify(envelope)}\n`);
         } else if (report) {
@@ -369,10 +397,11 @@ export function registerDoctor(program: Command): void {
                     `history; review your recent changes in Things`,
                 ]
               : []),
-            ...syncHealthLines(report.syncHealth),
+            ...syncHealthLines(report.syncHealth, uiState),
             ...permissionLines(report),
             ...helpersLines(report.helpers),
             ...uiVectorLines(report.ui),
+            ...(uiState === undefined ? [] : uiStateLines(uiState)),
           ];
           process.stdout.write(`${lines.join("\n")}\n`);
         } else if (error) {

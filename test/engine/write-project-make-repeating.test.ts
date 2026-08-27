@@ -28,6 +28,7 @@ import type {
 } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject } from "../fixtures/seed.ts";
+import { healthyScreen, screenAnswer, type FakeScreen } from "../fixtures/ui-state.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -249,12 +250,22 @@ describe("projectMakeRepeatingRecipe — shape (UIC4)", () => {
 function invocation(recipe: UiRecipe): CompiledInvocation {
   return { vector: "ui", kind: "ui-drive", payload: "t", redactedPayload: "t", recipe };
 }
-function mockRunner(answer: (c: UiCommand) => UiRunResult): {
+function mockRunner(
+  answer: (c: UiCommand) => UiRunResult,
+  screen: FakeScreen = healthyScreen(),
+): {
   run: (c: UiCommand, t: number) => Promise<UiRunResult>;
   commands: UiCommand[];
+  screen: FakeScreen;
 } {
   const commands: UiCommand[] = [];
-  return { commands, run: async (c) => (commands.push(c), answer(c)) };
+  // The fake SCREEN answers the read-only census and the dismissal rungs
+  // (issue #620) so the per-step focus guard has something true to read.
+  return {
+    commands,
+    screen,
+    run: async (c) => (commands.push(c), screenAnswer(screen, c) ?? answer(c)),
+  };
 }
 const ok = (stdout = ""): UiRunResult => ({ ok: true, stdout, stderr: "" });
 
@@ -281,7 +292,7 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     expect(sel?.script).toContain("My Project");
   });
 
-  it("aborts (Escape) and reports partial state when no row selects to the title (NOMATCH)", async () => {
+  it("dismisses an open dialog and reports partial state when no row selects to the title (NOMATCH)", async () => {
     const { run, commands } = mockRunner((c) => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "select-row") return ok("NOMATCH");
@@ -290,11 +301,14 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     const res = await createUiVector(config(), run).execute(invocation(recipe()));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("no content-table row selected");
-    expect(commands.some((c) => c.primitive === "key" && c.script?.includes("key code 53"))).toBe(
-      true,
-    );
+    // The audited cleanup ladder closes an open dialog with its OWN Cancel
+    // button (issue #620) — an element press, never a keystroke into whatever
+    // happens to own the screen.
+    expect(commands.some((c) => c.script?.includes('button "Cancel"'))).toBe(true);
     // Nothing past the selection ran — no menu press.
-    expect(commands.some((c) => c.primitive === "press")).toBe(false);
+    expect(commands.some((c) => c.primitive === "press" && c.script?.includes("menu item"))).toBe(
+      false,
+    );
   });
 
   it("addresses the DETACHED window form when the attached sheet is absent (backgrounded run)", async () => {

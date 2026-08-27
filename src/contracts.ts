@@ -347,6 +347,7 @@ export type WireOkKind =
   | "project-reopen"
   // Diagnostic / capability payloads — own shapes
   | "doctor"
+  | "ui-state"
   | "capabilities"
   | "config"
   | "legend"

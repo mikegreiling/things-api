@@ -796,6 +796,104 @@ describe("shortcuts routing", () => {
   });
 });
 
+/**
+ * NO SILENT HOST FALLBACK on the osascript seam (issue #620).
+ *
+ * The defect this closes: with the helpers set up and the deputy NOT carrying
+ * traffic, every osascript quietly ran under the HOST process instead — a
+ * different identity with different macOS grants, chosen mid-operation and
+ * announced nowhere. A drive could get its Accessibility clicks through and
+ * then die on the first keystroke, half-way through a dialog.
+ *
+ * The matrix below is the whole rule: expected + inactive REFUSES; not expected
+ * runs direct exactly as before; a ceremony probe may opt back in.
+ */
+describe("osascript seam — the no-silent-fallback refusal (#620)", () => {
+  const REFUSED_EXIT = 126;
+
+  it("REFUSES (never runs direct) when the deputy is expected but not carrying traffic", async () => {
+    // `true` is an explicit instruction to route; no socket exists here.
+    process.env["THINGS_API_HELPERS"] = "true";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const res = await osaExec("return 1", { timeoutMs: 5000 });
+    stderrSpy.mockRestore();
+    expect(res.refused).toBe(true);
+    expect(res.exitCode).toBe(REFUSED_EXIT);
+    expect(res.stdout).toBe("");
+    // Deputy HEALTH copy, plus the one command that inspects it.
+    expect(res.stderr).toMatch(/live, healthy deputy/);
+    expect(res.stderr).toContain("things helpers status");
+    expect(res.stderr).toContain("things helpers restart");
+  });
+
+  it("REFUSES under `auto` once the deputy bundle is installed (installation is the intent)", async () => {
+    delete process.env["THINGS_API_HELPERS"]; // auto
+    markInstalled();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const res = await osaExec("return 1", { timeoutMs: 5000 });
+    stderrSpy.mockRestore();
+    expect(res.refused).toBe(true);
+  });
+
+  it("runs DIRECT under `auto` on a machine with no deputy installed (unchanged behavior)", async () => {
+    delete process.env["THINGS_API_HELPERS"];
+    const res = await osaExec("return 1", { timeoutMs: 5000 });
+    expect(res.refused).toBeUndefined();
+  });
+
+  it("runs DIRECT when the helpers are switched off (unchanged behavior)", async () => {
+    process.env["THINGS_API_HELPERS"] = "false";
+    markInstalled();
+    const res = await osaExec("return 1", { timeoutMs: 5000 });
+    expect(res.refused).toBeUndefined();
+  });
+
+  it("lets a ceremony consent probe opt back into the host path", async () => {
+    process.env["THINGS_API_HELPERS"] = "true";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const res = await osaExec("return 1", { timeoutMs: 5000, hostDirect: "permitted" });
+    stderrSpy.mockRestore();
+    expect(res.refused).toBeUndefined();
+  });
+
+  it("routes normally (no refusal) once the deputy IS active", async () => {
+    await startMock({ osaResult: { exitCode: 0, stdout: "42\n", stderr: "" } });
+    const res = await osaExec("tell app", { timeoutMs: 5000 });
+    expect(res.refused).toBeUndefined();
+    expect(res.stdout).toBe("42\n");
+  });
+
+  it("osaExecSync THROWS an execFileSync-shaped refusal a classifier can read", async () => {
+    process.env["THINGS_API_HELPERS"] = "true";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let caught: ExecShapedError | undefined;
+    try {
+      osaExecSync("count", 5000);
+    } catch (err) {
+      caught = err as ExecShapedError;
+    }
+    stderrSpy.mockRestore();
+    expect(caught?.status).toBe(REFUSED_EXIT);
+    expect(caught?.stderr).toContain("things helpers status");
+    expect(caught?.killed).toBe(false);
+  });
+
+  it("osaExecSync lets the ceremony probes through to the host path", async () => {
+    process.env["THINGS_API_HELPERS"] = "true";
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let caught: ExecShapedError | undefined;
+    try {
+      osaExecSync("count", 5000, { hostDirect: "permitted" });
+    } catch (err) {
+      caught = err as ExecShapedError;
+    }
+    stderrSpy.mockRestore();
+    // It may still fail (no osascript on a CI Linux box, a denied grant on a
+    // Mac) — what matters is that it was ATTEMPTED, not refused by the seam.
+    expect(caught?.status).not.toBe(REFUSED_EXIT);
+  });
+});
+
 describe("container file reads", () => {
   it("routes through the granted reader when active", async () => {
     await startMockReader({});

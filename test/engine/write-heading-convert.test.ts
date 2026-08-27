@@ -16,6 +16,7 @@ import { createUiVector, type UiCommand, type UiRunResult } from "../../src/writ
 import type { CompiledInvocation, UiRecipe } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
+import { healthyScreen, screenAnswer, type FakeScreen } from "../fixtures/ui-state.ts";
 
 let fixture: FixtureDb;
 beforeEach(() => {
@@ -116,12 +117,22 @@ describe("headingConvertToProjectRecipe — shape (HEADCERT1)", () => {
 function invocation(recipe: UiRecipe): CompiledInvocation {
   return { vector: "ui", kind: "ui-drive", payload: "t", redactedPayload: "t", recipe };
 }
-function mockRunner(answer: (c: UiCommand) => UiRunResult): {
+function mockRunner(
+  answer: (c: UiCommand) => UiRunResult,
+  screen: FakeScreen = healthyScreen(),
+): {
   run: (c: UiCommand, t: number) => Promise<UiRunResult>;
   commands: UiCommand[];
+  screen: FakeScreen;
 } {
   const commands: UiCommand[] = [];
-  return { commands, run: async (c) => (commands.push(c), answer(c)) };
+  // The fake SCREEN answers the read-only census and the dismissal rungs
+  // (issue #620) so the per-step focus guard has something true to read.
+  return {
+    commands,
+    screen,
+    run: async (c) => (commands.push(c), screenAnswer(screen, c) ?? answer(c)),
+  };
 }
 const ok = (stdout = ""): UiRunResult => ({ ok: true, stdout, stderr: "" });
 const recipe = (): UiRecipe => headingConvertToProjectRecipe("PROJ-1", 1);
@@ -143,7 +154,7 @@ describe("ui driver — select-heading-row (HEADCERT1)", () => {
     expect(sel?.script).toContain("headingSeen is 1"); // the target ordinal
   });
 
-  it("aborts (Escape) and reports partial state when no heading row exists at the ordinal (NOMATCH)", async () => {
+  it("dismisses an open dialog and reports partial state when no heading row exists at the ordinal (NOMATCH)", async () => {
     const { run, commands } = mockRunner((c) => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "select-heading-row") return ok("NOMATCH");
@@ -152,10 +163,13 @@ describe("ui driver — select-heading-row (HEADCERT1)", () => {
     const res = await createUiVector(config(), run).execute(invocation(recipe()));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("no selectable heading row");
-    expect(commands.some((c) => c.primitive === "key" && c.script?.includes("key code 53"))).toBe(
-      true,
-    );
+    // The audited cleanup ladder closes an open dialog with its OWN Cancel
+    // button (issue #620) — an element press, never a keystroke into whatever
+    // happens to own the screen.
+    expect(commands.some((c) => c.script?.includes('button "Cancel"'))).toBe(true);
     // Nothing past the selection ran — Convert was never pressed.
-    expect(commands.some((c) => c.primitive === "press")).toBe(false);
+    expect(commands.some((c) => c.primitive === "press" && c.script?.includes("Convert"))).toBe(
+      false,
+    );
   });
 });

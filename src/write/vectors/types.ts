@@ -539,6 +539,17 @@ export interface VectorSupport {
 
 export type VectorMatrix = Partial<Record<OperationKind, VectorSupport>>;
 
+/**
+ * How the ui vector's audited cleanup ladder left an open dialog (issue #620):
+ * `none` — nothing was open; `dismissed` — closed, and a fresh read confirmed
+ * it closed; `cleared-blind` — cleared by the window close+reopen on an
+ * AX-blind session, so it cannot be confirmed; `foreign` — a dialog this drive
+ * did not open was found and deliberately LEFT ALONE; `may-remain` — ours, and
+ * nothing in the ladder would close it (the stranded case, which also holds
+ * Things Cloud sync until someone dismisses it).
+ */
+export type UiClearOutcome = "none" | "dismissed" | "cleared-blind" | "foreign" | "may-remain";
+
 export interface ExecuteResult {
   exitCode: number | null;
   stdout: string;
@@ -568,8 +579,8 @@ export interface ExecuteResult {
     elapsedMs: number;
     /** The step the drive was about to run (or running) when the budget blew. */
     lastStep: string;
-    /** How the open dialog was cleaned up (SESSGATE clearDialog outcome). */
-    clear: "dismissed" | "cleared-blind" | "may-remain";
+    /** How the open dialog was cleaned up (the audited cleanup ladder's outcome). */
+    clear: UiClearOutcome;
     /** The local trace file reconstructing the timeline, when tracing is on. */
     tracePath?: string | null;
   };
@@ -597,7 +608,7 @@ export interface ExecuteResult {
      */
     cause: "unreachable" | "unresponsive";
     /** How a half-open sheet was cleaned up, when the drive had opened one. */
-    clear?: "dismissed" | "cleared-blind" | "may-remain";
+    clear?: UiClearOutcome;
     /** What the caller does to make a retry work. */
     remediation: string;
   };

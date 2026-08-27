@@ -551,6 +551,30 @@ export function helpersExpected(env: NodeJS.ProcessEnv = process.env): boolean {
   return rendezvousExists(readerSocketPath(env)) && rendezvousExists(readerTokenPath(env));
 }
 
+/**
+ * Does this machine EXPECT the DEPUTY to carry its app automation?
+ *
+ * The osascript twin of {@link helpersExpected}, and deliberately a SEPARATE
+ * question: each half of the pair is gated on its OWN requisite (reads on the
+ * reader's bookmark grant, automation on the deputy's app-control grant), so a
+ * machine that installed one half is not told it expects the other. `true` is
+ * an explicit instruction; under `auto` the installed deputy bundle (or its
+ * live rendezvous) is the intent signal.
+ *
+ * The no-fallback rule hangs on this (permissions doctrine, Article I; issue
+ * #620): when the deputy is expected but is not carrying traffic, an osascript
+ * REFUSES rather than quietly re-running under the host process's identity —
+ * which is a different identity, with different grants, mid-operation. A
+ * machine with no deputy installed under `auto` is an ordinary direct machine
+ * and is NOT expecting one, so it runs direct exactly as it always has.
+ */
+export function deputyExpected(env: NodeJS.ProcessEnv = process.env): boolean {
+  const mode = loadConfig(env).helpersMode;
+  if (mode === "false") return false;
+  if (mode === "true") return true;
+  return halfInstalled(deputyInstalledBinaryPath(env), deputySocketPath(env), deputyTokenPath(env));
+}
+
 /** Why the reader is not carrying reads (null when it is). */
 export function readerUnavailableReason(env: NodeJS.ProcessEnv = process.env): string | null {
   if (deputyFilesActive(env)) return null;
