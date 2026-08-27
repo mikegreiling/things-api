@@ -17,10 +17,21 @@ export const REMINDER_FORMAT = "HH:mm (24-hour)";
 
 /**
  * Resolution-timestamp value format (`--created-at`/`--completed-at`,
- * `created_at`/`completed_at`): an ISO date or datetime; a bare date normalizes
- * to noon in the effective zone (resolution-timestamp plan §5).
+ * `created_at`/`completed_at`): a date or a datetime whose date and time are
+ * joined by `T` or by a space — both spellings resolve to the same instant. A
+ * bare date normalizes to noon in the effective zone (resolution-timestamp
+ * plan §5).
  */
-export const RESOLUTION_DATE_FORMAT = "ISO date or datetime; a date is noon in the effective zone";
+export const RESOLUTION_DATE_FORMAT =
+  "YYYY-MM-DD, or YYYY-MM-DD HH:mm with T or a space between date and time; a date is noon in the effective zone";
+
+/**
+ * The same grammar as {@link RESOLUTION_DATE_FORMAT}, phrased as the "expected"
+ * half of a refusal ("expected … — received …"). Every layer that parses a
+ * resolution timestamp names the accepted spellings with this one string.
+ */
+export const RESOLUTION_TIMESTAMP_EXPECTED =
+  "a date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:mm or YYYY-MM-DD HH:mm)";
 
 /** How projects, areas, and tags may be referenced. */
 export const REF_FORMAT = "uuid or unique name";

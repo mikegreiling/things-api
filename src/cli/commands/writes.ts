@@ -42,6 +42,7 @@ import {
   outcomeFailed,
   ParamSchemaError,
   ReferenceResolutionError,
+  RESOLUTION_DATE_FORMAT,
   saveConfigKey,
   splitWhenSugar,
   trace,
@@ -1143,11 +1144,11 @@ export function registerWriteCommands(program: Command): void {
         .option("--heading <name>", "existing heading in the destination project")
         .option(
           "--created-at <iso>",
-          "born with this creation timestamp (ISO date or datetime; a date is noon in the effective zone)",
+          `born with this creation timestamp (${RESOLUTION_DATE_FORMAT})`,
         )
         .option(
           "--completed-at <iso>",
-          "born completed (in the Logbook) with this completion timestamp (ISO date or datetime); drop --when/--reminder",
+          `born completed (in the Logbook) with this completion timestamp (${RESOLUTION_DATE_FORMAT}); drop --when/--reminder`,
         )
         .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project")
         .option(
@@ -1292,7 +1293,7 @@ export function registerWriteCommands(program: Command): void {
       .option("--clear-deadline", "remove the deadline")
       .option(
         "--created-at <iso>",
-        "rewrite the creation timestamp (ISO date or datetime; a date is noon in the effective zone); status-safe",
+        `rewrite the creation timestamp (${RESOLUTION_DATE_FORMAT}); status-safe`,
       )
       .option(
         "--completed-at <iso>",
@@ -1353,10 +1354,7 @@ export function registerWriteCommands(program: Command): void {
             '--completed-at sets the completion timestamp (also the "Completed on" stamp for a canceled ' +
             `item), ${stampNote} — a multi-leg sequence, disclosed in the result and --dry-run.`,
         )
-        .option(
-          "--completed-at <iso>",
-          "completion timestamp (ISO date or datetime; a date is noon in the effective zone)",
-        ),
+        .option("--completed-at <iso>", `completion timestamp (${RESOLUTION_DATE_FORMAT})`),
     ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
       const resolution =
         opts["completedAt"] !== undefined ? { completedAt: opts["completedAt"] as string } : {};
@@ -2147,7 +2145,7 @@ export function registerWriteCommands(program: Command): void {
           .option("--heading <title>", "existing heading inside the target project")
           .option(
             "--created-at <iso>",
-            "born with this creation timestamp (ISO date or datetime; a date is noon in the effective zone)",
+            `born with this creation timestamp (${RESOLUTION_DATE_FORMAT})`,
           )
           .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
           .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
@@ -2202,10 +2200,7 @@ export function registerWriteCommands(program: Command): void {
         collect,
         [],
       )
-      .option(
-        "--created-at <iso>",
-        "born with this creation timestamp (ISO date or datetime; a date is noon in the effective zone)",
-      )
+      .option("--created-at <iso>", `born with this creation timestamp (${RESOLUTION_DATE_FORMAT})`)
       .option(
         "--completed-at <iso>",
         "born completed (in the Logbook) with this completion timestamp; cannot seed open child to-dos (§5b)",
@@ -2253,7 +2248,7 @@ export function registerWriteCommands(program: Command): void {
     .option("--clear-deadline", "remove the deadline")
     .option(
       "--created-at <iso>",
-      "rewrite the creation timestamp (ISO date or datetime; a date is noon in the effective zone); status-safe",
+      `rewrite the creation timestamp (${RESOLUTION_DATE_FORMAT}); status-safe`,
     )
     .option(
       "--completed-at <iso>",
@@ -2347,10 +2342,7 @@ export function registerWriteCommands(program: Command): void {
         "--children <policy>",
         "require-resolved (error if open to-dos remain) | auto-cancel (cancel them too)",
       )
-      .option(
-        "--completed-at <iso>",
-        "completion timestamp (ISO date or datetime; a date is noon in the effective zone)",
-      ),
+      .option("--completed-at <iso>", `completion timestamp (${RESOLUTION_DATE_FORMAT})`),
   ).action(
     async (uuid: string, opts: WriteFlagOpts & { children: string } & Record<string, unknown>) => {
       await runWrite(opts, (c) =>
@@ -2490,10 +2482,7 @@ export function registerWriteCommands(program: Command): void {
         "--children <policy>",
         "require-resolved (error if open to-dos remain) | auto-complete (complete them too)",
       )
-      .option(
-        "--completed-at <iso>",
-        "completion timestamp (ISO date or datetime; a date is noon in the effective zone)",
-      ),
+      .option("--completed-at <iso>", `completion timestamp (${RESOLUTION_DATE_FORMAT})`),
   ).action(
     async (uuid: string, opts: WriteFlagOpts & { children: string } & Record<string, unknown>) => {
       await runWrite(opts, (c) =>

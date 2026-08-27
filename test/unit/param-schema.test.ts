@@ -16,6 +16,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { RESOLUTION_TIMESTAMP_EXPECTED } from "../../src/surface-copy.ts";
 import { OPERATION_KINDS } from "../../src/write/operations.ts";
 import {
   PARAM_SCHEMAS,
@@ -238,6 +239,45 @@ describe("field-level refusals", () => {
       monthly: { weekday: "monday", ordinal: 9 },
     });
     expect(badOrdinal).toContain("params.monthly");
+  });
+
+  // #612 ride-along: the registry's timestamp() is the single static choke point
+  // every untyped surface passes through, so BOTH spellings must clear it here
+  // or `--completed-at "YYYY-MM-DD HH:mm"` never reaches the resolver.
+  it("a resolution timestamp accepts the T and the space spelling alike (#612)", () => {
+    for (const op of ["todo.set-dates", "project.set-dates"] as const) {
+      for (const value of [
+        "2026-08-19",
+        "2026-08-19T09:30",
+        "2026-08-19 09:30",
+        "2026-08-19 09:30:45",
+      ]) {
+        expect(
+          validateOperationParams(op, { uuid: "todo-uuid-0001", completedAt: value }),
+          `${op} ${value}`,
+        ).toBeNull();
+      }
+    }
+    expect(
+      validateOperationParams("todo.add", { title: "Sample", createdAt: "2026-08-19 09:30" }),
+    ).toBeNull();
+  });
+
+  it("a malformed resolution timestamp names both accepted spellings (#612)", () => {
+    const detail = validateOperationParams("todo.set-dates", {
+      uuid: "todo-uuid-0001",
+      completedAt: "19/08/2026 09:30",
+    });
+    expect(detail).toContain("params.completedAt");
+    expect(detail).toContain(RESOLUTION_TIMESTAMP_EXPECTED);
+    expect(detail).toContain('received "19/08/2026 09:30"');
+    // Exactly one separator character: a doubled space is not a datetime.
+    expect(
+      validateOperationParams("todo.set-dates", {
+        uuid: "todo-uuid-0001",
+        completedAt: "2026-08-19  09:30",
+      }),
+    ).toContain(RESOLUTION_TIMESTAMP_EXPECTED);
   });
 
   it("a when value keeps the engine's own vocabulary", () => {

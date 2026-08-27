@@ -42,6 +42,7 @@
  * with the batch's own `staticRefError`) — so `$`-prefixed strings pass every
  * plain-string field and every container `uuid`, as they must.
  */
+import { RESOLUTION_TIMESTAMP_EXPECTED } from "../surface-copy.ts";
 import {
   OPERATION_KINDS,
   WEEKDAYS,
@@ -173,7 +174,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // --------------------------------------------------------- shared field specs
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?)?$/;
+/**
+ * A resolution timestamp: a bare date, or a date and a wall-clock time joined by
+ * `T` or by a single space. The space spelling is a first-class alternative, not
+ * a normalization: `resolveResolutionInstant` reads both to the same instant, so
+ * the two layers accept exactly the same set of strings.
+ */
+const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?$/;
 const REMINDER_RE = /^\d{1,2}:\d{2}$/;
 const WHEN_KEYWORDS = ["today", "evening", "anytime", "someday"] as const;
 
@@ -203,10 +210,10 @@ const isoDate = (): FieldSpec =>
   );
 
 const timestamp = (): FieldSpec =>
-  custom("a date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:mm)", (value, path) =>
+  custom(RESOLUTION_TIMESTAMP_EXPECTED, (value, path) =>
     typeof value === "string" && TIMESTAMP_RE.test(value)
       ? null
-      : `${path}: expected a date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:mm) — received ${typeof value === "string" ? `"${value}"` : describeType(value)}`,
+      : `${path}: expected ${RESOLUTION_TIMESTAMP_EXPECTED} — received ${typeof value === "string" ? `"${value}"` : describeType(value)}`,
   );
 
 const reminderTime = (): FieldSpec =>

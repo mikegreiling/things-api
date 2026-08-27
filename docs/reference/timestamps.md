@@ -27,7 +27,7 @@ The **only in-place / at-birth writers of a chosen `creationDate`** are our own 
 | `update … --created-at` | AS `set creation date of <kind> id X` | **in place on a surviving row** | status-safe (never flips status; works open/canceled/completed), **`umd`-silent** (does NOT bump), single-row (no child cascade) — BACKDT B-PROJ-AS.2 / flip2 SCRT |
 | `add … --created-at` | `things:///json` `creation-date` | at row birth | atomic import; born open (or resolved with `--completed-at`) — RESID1 R-JSONPAR cases D/E, BACKDT B-PROJ-JSON.1 |
 
-Both accept an ISO date or datetime; a **date-only** value normalizes to **noon in the effective zone** (json rejects a bare date outright; AS date-literals stamp midnight — BACKDT B-DATEONLY, [timezones.md](timezones.md) §6). URL `creation-date=` is a dead no-op on both kinds (BACKDT table, [oddities](../things-app-oddities.md) §2g).
+Both accept a date (`YYYY-MM-DD`) or a datetime whose date and time are joined by either `T` or a single space (`2026-08-19T09:30` and `2026-08-19 09:30` resolve to the same instant — the two spellings are accepted identically at the parameter schema and at the instant resolver, and neither is rewritten into the other); a **date-only** value normalizes to **noon in the effective zone** (json rejects a bare date outright; AS date-literals stamp midnight — BACKDT B-DATEONLY, [timezones.md](timezones.md) §6). URL `creation-date=` is a dead no-op on both kinds (BACKDT table, [oddities](../things-app-oddities.md) §2g).
 
 ### 1b. The IDENTITY-REPLACEMENT class (the "same item" gets a new date because it is a NEW row)
 

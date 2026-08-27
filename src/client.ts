@@ -577,7 +577,7 @@ export interface ThingsClient {
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /**
-     * Complete a to-do. With `resolution.completedAt` (ISO date or datetime) the
+     * Complete a to-do. With `resolution.completedAt` (a date, or a datetime with a `T` or a space separator) the
      * to-do lands completed and BACKDATED — resolving it first if needed, then
      * an AppleScript completion-date write; a date-only value normalizes to noon
      * in the effective zone (§5). Multi-leg, disclosed in the result / dry-run.
