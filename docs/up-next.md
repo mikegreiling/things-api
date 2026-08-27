@@ -64,8 +64,6 @@ Sections are blocker-classes: **needs-Mike** (a decision, near-zero effort) · *
 
 ## small code — unblocked, low effort
 
-- **`things helpers setup` over-announces a consent dialog when System Events is not running (seen during #582's reinstall, 2026-08-25).** The ceremony printed "about to raise 1 macOS consent dialog — app control for System Events", then resolved `granted` with no dialog and no interaction: when the target app is not running, the pre-check cannot read the existing grant and announces defensively. Doctrine-clean (inside the ceremony) but the copy over-promises. Polish: phrase the announcement conditionally ("up to 1 dialog") or launch System Events first and re-check before announcing.
-
 - **`update --completed-at` writes the ambiguous summary but its path never consults it (#602 flag, 2026-08-25).** `runUpdateDates` has no `replayIfApplied` gate of its own — `client.runUpdate` calls it directly with the caller's `opId`, and the mixed attribute+timestamp patch already records the key TWICE (attribute update + composite summary). Wants its own look: which record the key should ride, then the gate. Not a drive-by.
 
 - **Composite results report the STATUS leg's vector/tier even when the mint ran at ui/3 (CERTSWEEP1, 2026-08-25).** The returned result says `url-scheme`/tier 0 while the audit summary correctly records ui/3 — the caller-facing disclosure understates disruption. Small honesty fix in the composite result assembly (src/write/template-mutation.ts).
