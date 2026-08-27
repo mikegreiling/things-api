@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.19.2 — 2026-08-27
+
 - **Fixed — a note or title longer than Things accepts used to be half-written, and all you were told was that verification failed.** Things does not refuse an over-long field. It stores the beginning of it and drops the rest, cut mid-word, with no error of any kind: the to-do is created, the note is replaced, and what is actually in your database is a fragment of what you sent. The read-after-write here caught the discrepancy — but it could only report that the database had reached a state contradicting the expected one, which tells you neither that a limit exists, nor what it is, nor that the write partly went through and your previous note is already gone.
 
   Over-long values are now refused before anything is sent, and the refusal names the ceiling, the unit it is counted in, and the size you passed. Nothing is dispatched, so nothing is half-written and the existing value is untouched. The measured ceilings: a **notes body holds 10,000 characters** (and, for text built from unusually wide characters like multi-person emoji, 40,000 UTF-16 code units); **titles and names hold 4,000 UTF-16 code units** — to-dos, projects, headings, checklist items, areas and tags alike; and **one command carries at most 100 checklist items**, past which the extras silently never existed. These are Things' own limits, measured against the app, not policy invented here — a field the app does not truncate carries no limit.
