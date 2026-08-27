@@ -80,6 +80,35 @@ A `things:///json` payload whose `creation-date`/`completion-date` carries milli
 
 **ODDS1 re-validation 2026-08-22 (Things 3.23, build 32300036, golden-v4):** Still reproduces — [REPX2](lab/repx2-exception-chooser.md) §5 E4, cited rather than re-run. Note the contrast has SHARPENED on 3.23: `deadline=` is still the silently-guarded field while the `when=` keyword branch now also kills the app on a repeating PROJECT template, where 3.22.11 merely ignored it (§8k, [lab/odds1-323-revalidation.md](lab/odds1-323-revalidation.md) §3.1).
 
+
+### 2j. Every content field is silently TRUNCATED past its ceiling — three ceilings, three units, no error
+
+Hand Things a field value longer than the field's ceiling and it stores a **prefix**. `open` exits 0, no error sheet appears, the row is created or mutated normally, and the only way to discover that half the value is gone is to read it back and compare. Cut mid-word, an over-long note looks exactly like a note.
+
+There are three ceilings, and they disagree with each other on both value and unit:
+
+| field | ceiling | unit | where |
+|---|---|---|---|
+| `notes` (and `append-notes` / `prepend-notes`) | **10,000** *and* **40,000**, whichever binds first | grapheme clusters / UTF-16 code units | the URL scheme only |
+| titles and names — to-do, project, heading, checklist item, area, tag | **4,000** | UTF-16 code units | the app's model, on every vector |
+| checklist items in one dispatch | **100** items | — | the app, on `add`, `update` and `things:///json` alike |
+
+**Reproduce (notes):** `open -g "things:///update?id=<uuid>&auth-token=<t>&notes=<10,001 characters>"`. The to-do's notes hold exactly 10,000. Repeat with 15,000 emoji and 10,000 emoji land — the unit is the user-perceived character, not the byte and not the UTF-16 unit. Repeat with 15,000 `e`+U+0301 pairs and 10,000 pairs land. A regional-indicator flag and an emoji + skin-tone modifier each count as ONE, so the app is counting UAX #29 extended grapheme clusters.
+
+**Reproduce (title):** `open -g "things:///add?title=<4,001 characters>"`. The to-do is created with a 4,000-character title. The same cut happens through AppleScript `set name`, and at 100,000 characters too, so this one is not a transport artifact. Here the unit is UTF-16 code units, NOT clusters: a 2,001-emoji title (4,002 units, 2,001 clusters) is cut to 4,000 units.
+
+**Reproduce (checklist):** `open -g "things:///add?title=X&checklist-items=<101 newline-joined titles>"`. The to-do is created with exactly 100 checklist items; items 101 onward never exist.
+
+**Expected:** an error, or at minimum a documented limit. The URL scheme already knows how to raise an error sheet (§2h, a malformed json date fails the whole command), so silence here is a choice rather than a missing capability.
+
+**Actual:** a partial write that reports success. This is the worst shape a limit can take for an automation client: the caller cannot predict it (the limits are undocumented), cannot detect it from the transport (exit 0), and cannot undo it (the prior value is already gone).
+
+**Not a URL-length problem.** A 1,000,100-character `things:///update` dispatches cleanly and still cuts the notes at exactly 10,000 clusters; padding the same URL with 5,000 more characters of `title` does not move the notes cut. These are field ceilings.
+
+**A related asymmetry worth noting in a report:** the ceiling applies to the URL PARAMETER VALUE, not to the resulting field. An `append-notes` fragment under 10,000 characters joins onto an existing body and the joined result lands whole — a 9,010-character note plus a 3,009-character append stores 12,020 characters. So the app is perfectly willing to hold a note twice the size of the one it refused to accept in one piece, and AppleScript will store 60 KB in a single write. The 10,000 is the URL handler's, not the model's.
+
+*(NOTECAP1, 2026-08-27, Things 3.23 build 32300036, golden-v4 — [docs/lab/notecap1-notes-ceiling.md](lab/notecap1-notes-ceiling.md). Field-observed on Things 3.23.1 first: a diagnostic append took a notes body a little over 10,000 characters and the app kept a prefix cut mid-word, which is [#621](https://github.com/mikegreiling/things-api/issues/621).)*
+
 ---
 
 ### 2d. Reminder times with bare hours 1–11 are silently reinterpreted (am/pm heuristic)

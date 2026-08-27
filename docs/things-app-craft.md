@@ -323,6 +323,19 @@ The moment that occurrence is resolved the app anchors the series and derives a 
 
 The credit is narrow and worth bounding: the row it draws there still carries a live checkbox, and checking it produces the [oddities §18](things-app-oddities.md) stranded copy. The *state modelling* is exactly right; only the affordance on top of it is not. Evidence: [lab/cncac1-after-completion-checkoff.md](lab/cncac1-after-completion-checkoff.md) §7.1/§7.4. Things 3.23.
 
+
+## 7. Truncation that respects the reader, not the buffer
+
+Things caps a URL-scheme `notes` value at 10,000 characters and every title/name at 4,000 UTF-16 code units, and it enforces those caps by storing a prefix rather than refusing the write. The *silence* is a real hazard and is filed as such next door ([oddities §2j](things-app-oddities.md)) — but the CUT ITSELF is careful in a way most implementations are not, and the two facts are worth keeping apart.
+
+**The notes cap is counted in user-perceived characters.** Five payload classes whose byte : scalar : UTF-16 : cluster ratios all differ — cycling digits, U+1F600, `e`+U+0301, a regional-indicator flag pair, and an emoji + skin-tone modifier — each land **exactly 10,000 clusters**, at 10,000 / 39,961 / 29,976 / 79,916 / 79,916 bytes respectively. The naive implementations here are a byte cap (which would cut an emoji note to a quarter of an ASCII one) and a UTF-16 cap (half); Things does neither. The flag and skin-tone rows are the sharp ones: Foundation's older `composedCharacterSequence` enumeration splits both into two units, while UAX #29's extended grapheme cluster keeps each whole — and the measurement says ONE, so the app is on the modern segmentation.
+
+**And the cut lands on a cluster boundary.** Every stored tail ends on a complete sequence: a whole `F0 9F 98 80`, an `e` with its combining acute intact, a whole four-scalar flag. A ten-thousand-character limit implemented as `substring(0, 10000)` over UTF-16 would routinely produce a lone surrogate — invalid UTF-8, a replacement character in every downstream reader, and a note that no longer round-trips through sync. Things never does. The truncation is lossy, which is the complaint; it is not *corrupting*, which is the craft.
+
+**Title truncation is the same discipline in a different unit.** The 4,000 there is UTF-16 code units — so an emoji title stops at 1,993 emoji, 3,999 units — but the cut still backs off to a cluster boundary rather than landing mid-pair, which is exactly why a title can come to rest one unit short of its own ceiling.
+
+The one place the care runs out is the notes body's second ceiling, 40,000 UTF-16 units, which only text with unusually wide clusters can reach. A ZWJ emoji family is one cluster but eleven units, and a 40,006-unit family payload was cut at exactly 40,000 — surrogate-safe (it stopped rather than split 👧) but not cluster-safe, leaving a dangling zero-width joiner. That reads like a buffer bound sitting underneath the character-aware path rather than a second deliberate rule, and it is the one case where the cut can produce a sequence the writer did not write. Evidence: [lab/notecap1-notes-ceiling.md](lab/notecap1-notes-ceiling.md) §2–§4, §8. Things 3.23.
+
 ---
 
 ## Edge cases this project routed through
