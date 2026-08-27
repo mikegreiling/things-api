@@ -290,6 +290,107 @@ describe("field-level refusals", () => {
   });
 });
 
+const ascii = (n: number): string => "x".repeat(n);
+const emoji = (n: number): string => "\u{1F600}".repeat(n);
+const checklist = (n: number): string[] => Array.from({ length: n }, (_, i) => `item ${i}`);
+
+describe("field-length ceilings (#621)", () => {
+  it("notes: 10,000 characters land, 10,001 are refused before dispatch", () => {
+    expect(
+      validateOperationParams("todo.update", { uuid: "todo-uuid-0001", notes: ascii(10_000) }),
+    ).toBeNull();
+    const detail = validateOperationParams("todo.update", {
+      uuid: "todo-uuid-0001",
+      notes: ascii(10_001),
+    });
+    expect(detail).toContain("params.notes");
+    expect(detail).toContain("at most 10,000 characters");
+    expect(detail).toContain("received 10,001");
+  });
+
+  it("notes are measured in CLUSTERS, so an emoji body is not refused at half the ceiling", () => {
+    expect(validateOperationParams("todo.add", { title: "S", notes: emoji(10_000) })).toBeNull();
+  });
+
+  it("an append/prepend FRAGMENT carries the notes ceiling — the join is the app's business", () => {
+    // The wire sends the fragment and Things does the join; the joined RESULT
+    // legitimately exceeds the ceiling (NOTECAP1 V-URL-APPEND-XXL), so only the
+    // fragment is checked.
+    expect(
+      validateOperationParams("todo.update", {
+        uuid: "todo-uuid-0001",
+        appendNotes: ascii(10_000),
+      }),
+    ).toBeNull();
+    expect(
+      validateOperationParams("todo.update", {
+        uuid: "todo-uuid-0001",
+        prependNotes: ascii(10_001),
+      }),
+    ).toContain("params.prependNotes");
+  });
+
+  it("titles: 4,000 UTF-16 code units land, 4,001 are refused — on every title field", () => {
+    expect(validateOperationParams("todo.add", { title: ascii(4_000) })).toBeNull();
+    expect(validateOperationParams("todo.add", { title: ascii(4_001) })).toContain(
+      "at most 4,000 UTF-16 code units",
+    );
+    expect(validateOperationParams("project.add", { title: ascii(4_001) })).toContain(
+      "params.title",
+    );
+    expect(validateOperationParams("area.add", { title: ascii(4_001) })).toContain("4,000");
+    expect(validateOperationParams("tag.add", { title: ascii(4_001) })).toContain("4,000");
+    expect(
+      validateOperationParams("project.add-heading", {
+        project: { uuid: "project-uuid-0001" },
+        title: ascii(4_001),
+      }),
+    ).toContain("4,000");
+  });
+
+  it("titles are measured in UTF-16 UNITS, so 2,001 emoji overrun a 4,000 ceiling", () => {
+    expect(validateOperationParams("todo.add", { title: emoji(2_000) })).toBeNull();
+    expect(validateOperationParams("todo.add", { title: emoji(2_001) })).toContain(
+      "received 4,002",
+    );
+  });
+
+  it("checklist items: 100 land, 101 are refused, and each title carries the title ceiling", () => {
+    expect(
+      validateOperationParams("todo.add", { title: "S", checklistItems: checklist(100) }),
+    ).toBeNull();
+    const tooMany = validateOperationParams("todo.add", {
+      title: "S",
+      checklistItems: checklist(101),
+    });
+    expect(tooMany).toContain("params.checklistItems");
+    expect(tooMany).toContain("at most 100 items");
+    expect(tooMany).toContain("received 101");
+    expect(
+      validateOperationParams("todo.add", { title: "S", checklistItems: [ascii(4_001)] }),
+    ).toContain("params.checklistItems[0]");
+  });
+
+  it("replace-checklist refuses the same count, in both item spellings", () => {
+    const titles = Array.from({ length: 101 }, (_, i) => `item ${i}`);
+    expect(
+      validateOperationParams("todo.replace-checklist", { uuid: "todo-uuid-0001", items: titles }),
+    ).toContain("at most 100 items");
+    expect(
+      validateOperationParams("todo.replace-checklist", {
+        uuid: "todo-uuid-0001",
+        items: titles.map((title) => ({ title })),
+      }),
+    ).toContain("at most 100 items");
+    expect(
+      validateOperationParams("todo.replace-checklist", {
+        uuid: "todo-uuid-0001",
+        items: [{ title: ascii(4_001) }],
+      }),
+    ).toContain("params.items[0].title");
+  });
+});
+
 describe("registry shape", () => {
   it("every spec carries a behavioral description", () => {
     const bare: string[] = [];

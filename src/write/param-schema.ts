@@ -44,6 +44,13 @@
  */
 import { RESOLUTION_TIMESTAMP_EXPECTED } from "../surface-copy.ts";
 import {
+  CHECKLIST_MAX_ITEMS,
+  type LengthLimit,
+  NOTES_LIMITS,
+  TITLE_LIMITS,
+  fieldLengthRefusal,
+} from "./field-limits.ts";
+import {
   OPERATION_KINDS,
   WEEKDAYS,
   type OperationKind,
@@ -80,6 +87,22 @@ export interface FieldSpec {
   values?: readonly string[];
   /** string: reject the empty string. */
   nonEmpty?: boolean;
+  /**
+   * string / stringArray: the field's MEASURED app ceilings
+   * ({@link TITLE_LIMITS} for a title/name, {@link NOTES_LIMITS} for a notes
+   * body). An over-long value is refused HERE rather than dispatched, because
+   * Things accepts one as a silently TRUNCATED PREFIX — the mutation
+   * half-lands and the caller learns only that verification failed (#621,
+   * NOTECAP1). For a string array each element is checked on its own.
+   */
+  limits?: readonly LengthLimit[];
+  /**
+   * stringArray / custom: the measured cap on how many entries ONE dispatch
+   * carries ({@link CHECKLIST_MAX_ITEMS}). Past it Things keeps the first N and
+   * drops the rest silently — the same partial landing an over-long value
+   * produces, one axis over.
+   */
+  maxItems?: number;
   /** number: whole numbers only, and the inclusive bounds. */
   integer?: boolean;
   min?: number;
@@ -90,15 +113,29 @@ export interface FieldSpec {
   reason?: string;
 }
 
+// Things stores an over-long field value as a SILENT TRUNCATED PREFIX rather
+// than refusing it (#621, NOTECAP1), so the measured ceilings ride on the
+// shared constructors — one per field class — rather than a per-field table
+// that could drift out of date. `str` covers every title/name a write carries
+// (4,000 UTF-16 units, an app-model cap present on every vector); `text` covers
+// the free-text notes bodies (10,000 grapheme clusters / 40,000 UTF-16 units,
+// the URL scheme's cap). Neither ceiling is policy: a field the app does not
+// cut carries no limit here.
 const str = (describe = "a non-empty string"): FieldSpec => ({
   kind: "string",
   optional: false,
   nonEmpty: true,
+  limits: TITLE_LIMITS,
   describe,
 });
 
 /** A string field that legitimately accepts "" (free text: notes). */
-const text = (describe = "a string"): FieldSpec => ({ kind: "string", optional: false, describe });
+const text = (describe = "a string"): FieldSpec => ({
+  kind: "string",
+  optional: false,
+  limits: NOTES_LIMITS,
+  describe,
+});
 
 const bool = (describe = "true or false"): FieldSpec => ({
   kind: "boolean",
@@ -118,7 +155,17 @@ const int = (min: number, max: number, describe?: string): FieldSpec => ({
 const strArray = (describe = "an array of non-empty strings"): FieldSpec => ({
   kind: "stringArray",
   optional: false,
+  limits: TITLE_LIMITS,
   describe,
+});
+
+/**
+ * Checklist-item titles: title-class strings, plus the measured 100-item cap
+ * one dispatch carries (identical on `add`, `update` and the json batch).
+ */
+const checklistTitles = (describe = "an array of checklist item titles"): FieldSpec => ({
+  ...strArray(describe),
+  maxItems: CHECKLIST_MAX_ITEMS,
 });
 
 const enumOf = (values: readonly string[]): FieldSpec => ({
@@ -169,6 +216,19 @@ export function describeType(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The refusal for a list longer than one dispatch carries. Shares the shape and
+ * the reasoning of {@link fieldLengthRefusal}: the app takes the prefix and
+ * drops the tail silently, so the caller must be told before anything is sent.
+ */
+function itemCountRefusal(path: string, count: number, max: number): string | null {
+  if (count <= max) return null;
+  return (
+    `${path}: expected at most ${max} items — received ${count}; Things keeps the first ` +
+    `${max} and drops the rest rather than refusing them, so nothing was sent`
+  );
 }
 
 // --------------------------------------------------------- shared field specs
@@ -362,12 +422,16 @@ const checklistItems = (): FieldSpec =>
       if (!Array.isArray(value)) {
         return `${path}: expected an array of checklist items — received ${describeType(value)}`;
       }
+      const tooMany = itemCountRefusal(path, value.length, CHECKLIST_MAX_ITEMS);
+      if (tooMany !== null) return tooMany;
       for (let i = 0; i < value.length; i++) {
         const item = value[i];
         const at = `${path}[${i}]`;
         if (typeof item === "string") {
           if (item.length === 0)
             return `${at}: expected a non-empty title — received an empty string`;
+          const long = fieldLengthRefusal(at, item, TITLE_LIMITS);
+          if (long !== null) return long;
           continue;
         }
         if (!isRecord(item)) {
@@ -378,6 +442,8 @@ const checklistItems = (): FieldSpec =>
         if (typeof item["title"] !== "string" || item["title"].length === 0) {
           return `${at}.title: expected a non-empty string — received ${describeType(item["title"])}`;
         }
+        const longTitle = fieldLengthRefusal(`${at}.title`, item["title"], TITLE_LIMITS);
+        if (longTitle !== null) return longTitle;
         if (item["completed"] !== undefined && typeof item["completed"] !== "boolean") {
           return `${at}.completed: expected true or false — received ${describeType(item["completed"])}`;
         }
@@ -411,13 +477,15 @@ const projectItems = (): FieldSpec =>
       if (typeof item["title"] !== "string" || item["title"].length === 0) {
         return `${at}.title: expected a non-empty string — received ${describeType(item["title"])}`;
       }
+      const longTitle = fieldLengthRefusal(`${at}.title`, item["title"], TITLE_LIMITS);
+      if (longTitle !== null) return longTitle;
       if (kind === "heading") continue;
       const childSpecs: Record<string, FieldSpec> = {
         notes: opt(text()),
         when: opt(whenValue()),
         deadline: opt(isoDate()),
         tags: opt(strArray()),
-        checklistItems: opt(strArray()),
+        checklistItems: opt(checklistTitles()),
       };
       for (const [key, spec] of Object.entries(childSpecs)) {
         const error = checkField(spec, item[key], `${at}.${key}`);
@@ -445,6 +513,9 @@ function checkField(spec: FieldSpec, value: unknown, path: string): string | nul
       if (spec.nonEmpty === true && value.length === 0) {
         return `${path}: expected ${spec.describe} — received an empty string`;
       }
+      if (spec.limits !== undefined) {
+        return fieldLengthRefusal(path, value, spec.limits);
+      }
       return null;
     }
     case "boolean":
@@ -470,6 +541,10 @@ function checkField(spec: FieldSpec, value: unknown, path: string): string | nul
       if (!Array.isArray(value)) {
         return `${path}: expected ${spec.describe} — received ${describeType(value)}`;
       }
+      if (spec.maxItems !== undefined) {
+        const tooMany = itemCountRefusal(path, value.length, spec.maxItems);
+        if (tooMany !== null) return tooMany;
+      }
       for (let i = 0; i < value.length; i++) {
         const el = value[i];
         if (typeof el !== "string") {
@@ -477,6 +552,10 @@ function checkField(spec: FieldSpec, value: unknown, path: string): string | nul
         }
         if (el.length === 0) {
           return `${path}[${i}]: expected a non-empty string — received an empty string`;
+        }
+        if (spec.limits !== undefined) {
+          const detail = fieldLengthRefusal(`${path}[${i}]`, el, spec.limits);
+          if (detail !== null) return detail;
         }
       }
       return null;
@@ -631,7 +710,7 @@ export const PARAM_SCHEMAS: { [K in OperationKind]: OpSchema<K> } = {
     reminder: opt(reminderTime()),
     deadline: opt(isoDate()),
     tags: opt(strArray("an array of tag titles")),
-    checklistItems: opt(strArray("an array of checklist item titles")),
+    checklistItems: opt(checklistTitles()),
     project: opt(container()),
     area: opt(container()),
     heading: opt(str("a heading title inside the destination project")),
@@ -781,7 +860,7 @@ export const PARAM_SCHEMAS: { [K in OperationKind]: OpSchema<K> } = {
     deadline: opt(isoDate()),
     startDaysEarlier: opt(int(0, 366, "a whole number of days ≥ 0")),
     tags: opt(strArray("an array of tag titles")),
-    checklistItems: opt(strArray("an array of checklist item titles")),
+    checklistItems: opt(checklistTitles()),
     project: opt(container()),
     area: opt(container()),
     heading: opt(str("a heading title inside the destination project")),

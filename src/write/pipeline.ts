@@ -64,6 +64,7 @@ import {
   type OperationKind,
   type OperationParamsMap,
 } from "./operations.ts";
+import { describeTruncation } from "./field-limits.ts";
 import { assertOperationParams } from "./param-schema.ts";
 import { computeCompletionContext, type CompletionContext } from "./completion-context.ts";
 import { assessOffRuleFirst } from "./repeat-anchor.ts";
@@ -656,6 +657,31 @@ export function normalizeConsumerWhen(
       `schedule an explicit date (when=${consumerToday}; it lands in that day's section, not ` +
       `This Evening), or set this host's system time zone to the consumer's so the calendars match`,
   };
+}
+
+/**
+ * Read a mismatch as a TRUNCATION when it is one: the app stored a strict
+ * PREFIX of the value it was handed, which is what Things does with an
+ * over-long field rather than refusing it (#621, [field-limits.ts]). A plain
+ * "the database contradicts the expected delta" hides both halves of what
+ * happened — that the write LANDED, and that the item now holds a partial
+ * value — so the specific sentence wins over the generic one.
+ *
+ * The first truncated assertion is the one described; a mutation that
+ * over-ran two fields at once has the same cause and the same remedy.
+ */
+function truncationDetail(
+  delta: DeltaSpec,
+  observed: Record<string, unknown> | null | undefined,
+): string | undefined {
+  // A `gone` delta asserts absence, not field values — nothing to read as a
+  // prefix.
+  if (observed == null || !("assert" in delta)) return undefined;
+  for (const assertion of delta.assert) {
+    const detail = describeTruncation(assertion.field, assertion.equals, observed[assertion.field]);
+    if (detail !== null) return detail;
+  }
+  return undefined;
 }
 
 /**
@@ -1730,6 +1756,12 @@ export async function runMutation<K extends OperationKind>(
           // The collateral verdict carries its own sentence — which field moved,
           // from what to what, and why a retry is not the answer (CGRD1).
           (outcome.collateral !== undefined ? describeCollateral(outcome.collateral) : undefined) ??
+          // A field the app TRUNCATED reads as a plain mismatch, which is the
+          // least useful thing to say about it: the write half-landed and the
+          // item now holds a prefix. Pre-write validation refuses every length
+          // we have measured (field-limits.ts), so reaching here means a ceiling
+          // moved under a newer Things — worth naming precisely (#621).
+          truncationDetail(delta, outcome.observed) ??
           outcome.detail ??
           (outcome.kind === "silent-noop"
             ? "no observable change in the database (the app accepted the command but did nothing)"

@@ -134,6 +134,27 @@ describe("structural parameter refusal (#580)", () => {
     expect(auditRecords).toHaveLength(0);
   });
 
+  it("an over-long notes body is refused with the ceiling, and NOTHING is dispatched (#621)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "T" });
+    const { vector, calls } = fakeVector(() => {});
+    // 10,000 lands; 10,001 does not. The point of refusing is that Things would
+    // have taken the first 10,000 and left the item holding a prefix.
+    await expect(
+      runMutation(deps(vector), "todo.update", { uuid, notes: "x".repeat(10_001) }),
+    ).rejects.toThrow(/params\.notes.*at most 10,000 characters.*received 10,001/s);
+    await expect(
+      runMutation(deps(vector), "todo.add", { title: "x".repeat(4_001) }),
+    ).rejects.toThrow(/params\.title.*at most 4,000 UTF-16 code units/s);
+    await expect(
+      runMutation(deps(vector), "todo.add", {
+        title: "S",
+        checklistItems: Array.from({ length: 101 }, (_, i) => `item ${i}`),
+      }),
+    ).rejects.toThrow(/params\.checklistItems.*at most 100 items/s);
+    expect(calls).toHaveLength(0);
+    expect(auditRecords).toHaveLength(0);
+  });
+
   it("the refusal is a RangeError, so every surface reads it as an input-contract error", async () => {
     const { vector } = fakeVector(() => {});
     const err = await runMutation(deps(vector), "todo.complete", {} as never).catch(
@@ -353,6 +374,56 @@ describe("verification failure classification", () => {
     );
     expect(result.kind).toBe("verify-failed");
     if (result.kind === "verify-failed") expect(result.reason).toBe("mismatch");
+  });
+
+  it("a TRUNCATED field is named as one, not reported as a bare mismatch (#621)", async () => {
+    // Pre-write validation refuses every length we have measured, so this state
+    // is only reachable if a ceiling moves under a newer Things. The backstop
+    // must still say which half landed rather than "the database contradicts
+    // the expected delta".
+    const uuid = seedTodo(fixture.db, { title: "T" });
+    const requested = "a".repeat(9_000);
+    const { vector } = fakeVector((db) => {
+      db.prepare("UPDATE TMTask SET notes = ?, userModificationDate = ? WHERE uuid = ?").run(
+        requested.slice(0, 5_000),
+        NOW_EPOCH,
+        uuid,
+      );
+    });
+    const result = await runMutation(
+      deps(vector),
+      "todo.update",
+      { uuid, notes: requested },
+      { verifyTimeoutMs: 250 },
+    );
+    expect(result.kind).toBe("verify-failed");
+    if (result.kind === "verify-failed") {
+      expect(result.reason).toBe("mismatch");
+      expect(result.detail).toContain("TRUNCATED");
+      expect(result.detail).toContain("5,000 of the 9,000");
+      expect(result.detail).toContain("partial value");
+    }
+  });
+
+  it("a field that moved to an unrelated value stays a plain mismatch", async () => {
+    const uuid = seedTodo(fixture.db, { title: "T", notes: "before" });
+    const { vector } = fakeVector((db) => {
+      db.prepare("UPDATE TMTask SET notes = ?, userModificationDate = ? WHERE uuid = ?").run(
+        "something else entirely",
+        NOW_EPOCH,
+        uuid,
+      );
+    });
+    const result = await runMutation(
+      deps(vector),
+      "todo.update",
+      { uuid, notes: "the requested body" },
+      { verifyTimeoutMs: 250 },
+    );
+    expect(result.kind).toBe("verify-failed");
+    if (result.kind === "verify-failed") {
+      expect(result.detail).not.toContain("TRUNCATED");
+    }
   });
 
   it("transport failure surfaces as verify-failed with the stderr detail", async () => {
