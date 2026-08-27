@@ -64,8 +64,13 @@ import { DatabaseSync } from "node:sqlite";
 
 import { loadConfig } from "./config.ts";
 import { readContainerFileSync } from "./deputy/files.ts";
-import { deputyRouting, deputyRoutesDb, helpersExpected } from "./deputy/routing.ts";
-import { type TargetWake, wakeSystemEvents } from "./deputy/wake.ts";
+import {
+  deputyRouting,
+  deputyRoutesDb,
+  helpersExpected,
+  settleDeputyAutomation,
+} from "./deputy/routing.ts";
+import { type TargetWake, THINGS_BUNDLE_ID, wakeSystemEvents, wakeThings } from "./deputy/wake.ts";
 import {
   fdaGranted,
   type HostAccessDeps,
@@ -87,7 +92,7 @@ export {
 } from "./host-access.ts";
 
 /** The Things application's bundle identifier — the Automation grant's target. */
-export const THINGS_BUNDLE_ID = "com.culturedcode.ThingsMac";
+export { THINGS_BUNDLE_ID } from "./deputy/wake.ts";
 
 /** How reads may reach the live library, if at all. */
 export type ReadCapabilityMode =
@@ -141,6 +146,8 @@ export type UrlSchemeCapabilityMode =
 export type WriteCapabilityMode =
   /** The deputy is onboarded; Apple Events are sent under the helper identity. */
   | "deputy"
+  /** Things is not running, so where the deputy's grant stands cannot be read. */
+  | "deputy-target-dormant"
   /** macOS records an Automation grant for the host app against Things. */
   | "direct-granted"
   /** The lab's documented in-guest escape (see {@link WRITE_DIRECT_ESCAPE_ENV}). */
@@ -231,6 +238,18 @@ export interface CapabilityDeps extends HostAccessDeps {
    * come before the determination.
    */
   wakeSystemEvents?: () => TargetWake;
+  /**
+   * Start Things and re-read its Automation standing — the same liveness step
+   * for the AppleScript vector's own target (#617). Consulted ONLY on the
+   * dispatch path: a survey never launches the user's app.
+   */
+  wakeThings?: () => TargetWake;
+  /**
+   * Report a woken target's real standing back to the routing layer, which
+   * defers its `auto` onboarding gate while Things is closed
+   * (./deputy/routing.ts, {@link settleDeputyAutomation}).
+   */
+  settleDeputyAutomation?: (standing: string | undefined) => void;
   /** Is GUI-driving switched on in config (`ui-enabled`)? */
   uiEnabled?: () => boolean;
   /**
@@ -484,6 +503,29 @@ function classifyAuthValue(value: number | null): "granted" | "denied" | "unknow
 export const WRITE_DIRECT_ESCAPE_ENV = "THINGS_API_WRITE_DIRECT";
 
 /**
+ * What a {@link writeCapability} verdict is FOR — the one thing that decides
+ * whether a dormant Things may be started while the verdict is taken (#617).
+ *
+ * The asymmetry with the GUI preflight is deliberate. System Events is a
+ * headless macOS component nobody sees, so {@link uiCapability} wakes it for
+ * every caller. Things is the user's own app: starting it is visible, so only a
+ * caller that is ABOUT TO DRIVE IT may do so.
+ */
+export interface WriteCapabilityOptions {
+  /**
+   * - `survey` (the default) — `doctor`, the MCP startup bake, `--dry-run`.
+   *   Launches nothing and reports a closed Things as the liveness state
+   *   `deputy-target-dormant`.
+   * - `dispatch` — the write gate and the two setup ceremonies, which are about
+   *   to send Things an Apple Event anyway. A dormant target is started in the
+   *   background first and its standing re-read, which is also what keeps the
+   *   operation at tier 0/1: an Apple Event to a CLOSED Things auto-launches it
+   *   WITH focus steal (A40/A41), a background pre-launch does not.
+   */
+  purpose?: "survey" | "dispatch";
+}
+
+/**
  * May this process drive Things over Apple Events, and on whose authority?
  *
  * The deputy wins when it is onboarded (its own handshake reports the grant it
@@ -492,13 +534,55 @@ export const WRITE_DIRECT_ESCAPE_ENV = "THINGS_API_WRITE_DIRECT";
  * last state is deliberately NOT resolved here: resolving it means sending a
  * real Apple Event, which is what raises the dialog, and Article I reserves
  * that for `things setup`.
+ *
+ * LIVENESS BEFORE AUTHORIZATION (#617). The deputy's `not-running` is the
+ * ask-false determination having no answer for a CLOSED Things — a fact about
+ * the app's process, not about the grant. Two rules follow, and both matter:
+ *
+ *  - while the deputy is standing, that value NEVER falls through to the direct
+ *    host branch. A silent direct engagement would put consent back on the
+ *    terminal (the routing doctrine's no-fallback rule), and on a machine with
+ *    no host record it would refuse a fully onboarded user with "run
+ *    `things setup`" — the #610 false-onboarding loop, one vector over;
+ *  - a `dispatch` caller resolves it by STARTING Things (a background
+ *    LaunchServices dispatch, never an Apple Event) and re-reading the
+ *    standing. Only what comes back is an authorization fact.
  */
-export function writeCapability(deps: CapabilityDeps = {}): WriteCapability {
+export function writeCapability(
+  options: WriteCapabilityOptions = {},
+  deps: CapabilityDeps = {},
+): WriteCapability {
   const env = deps.env ?? process.env;
   const host = hostApp(deps);
-  const deputyThings = (
+  const handshake = (
     deps.deputyAutomation ?? (() => deputyRouting(env).hello?.automation?.things)
   )();
+  let deputyThings = handshake;
+  if (handshake === "not-running") {
+    let wake: TargetWake | null = null;
+    if (options.purpose === "dispatch") {
+      wake = (deps.wakeThings ?? (() => wakeThings(env)))();
+      deputyThings = wake.standing;
+    }
+    if (deputyThings === undefined || deputyThings === "not-running") {
+      return {
+        mode: "deputy-target-dormant",
+        detail:
+          wake === null
+            ? "Things is not running, so app control for it cannot be read — macOS answers for a " +
+              "running app only, and whatever the helpers hold is unreadable while it is down"
+            : `Things is not running and ${wake.detail} — app control for it cannot be read while it is down`,
+        remediation: [
+          "open Things, then rerun this command",
+          `or start it in the background with \`open -g -b ${THINGS_BUNDLE_ID}\``,
+        ],
+        host,
+      };
+    }
+    // A real standing at last: hand it to the routing layer, whose own
+    // onboarding gate deferred on the same non-answer (./deputy/routing.ts).
+    (deps.settleDeputyAutomation ?? settleDeputyAutomation)(deputyThings);
+  }
   if (deputyThings === "granted") {
     return {
       mode: "deputy",

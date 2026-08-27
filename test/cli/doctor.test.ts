@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildProgram } from "../../src/cli/main.ts";
-import { runDoctor } from "../../src/cli/commands/doctor.ts";
+import { permissionLines, runDoctor } from "../../src/cli/commands/doctor.ts";
 import { diagnose, type DiagnoseOptions, type DiagnoseReport } from "../../src/diagnose.ts";
 import type { DeputyHalfStatus, HelpersStatus } from "../../src/deputy/install.ts";
 import { EXPECTED_HELPERS_VERSION } from "../../src/deputy/protocol.ts";
@@ -646,5 +646,67 @@ describe("doctor CLI — helpers section render", () => {
     expect(envelope.data.helpers.mode).toBe("auto");
     expect(envelope.data.helpers.expectedVersion).toBe(EXPECTED_HELPERS_VERSION);
     expect(envelope.data.helpers.status.bundleInstalled).toBe(false);
+  });
+});
+
+/** A report carrying only what the permissions table renders. */
+function reportWith(
+  write: { mode: string; detail: string; remediation: string[] },
+  ui: { mode: string; detail: string; remediation: string[] },
+): DiagnoseReport {
+  const host = { bundleId: "com.mitchellh.ghostty", name: "Ghostty" };
+  return {
+    capability: {
+      read: { mode: "helpers", detail: "served by the reader", remediation: [], host },
+      write: { ...write, host },
+      ui: { ...ui, host },
+    },
+    availability: {
+      urlScheme: { mode: "enabled", detail: "on", remediation: [], host },
+      shortcuts: { present: ["a"], missing: [] },
+    },
+  } as unknown as DiagnoseReport;
+}
+
+/**
+ * The liveness rows in the provenance table (#610, #617). A target that is down
+ * is not a target whose grant is missing, and the table must not let the two
+ * read alike: the state word is the verdict's own, and the provenance says
+ * UNREADABLE rather than "none".
+ */
+describe("doctor — a dormant target renders as liveness, never as an absent grant", () => {
+  it("names the closed app in the applescript row, with no permission remediation", () => {
+    const lines = permissionLines(
+      reportWith(
+        {
+          mode: "deputy-target-dormant",
+          detail: "Things is not running, so app control for it cannot be read",
+          remediation: ["open Things, then rerun this command"],
+        },
+        { mode: "helpers", detail: "the helpers hold them", remediation: [] },
+      ),
+    );
+    const table = lines.join("\n");
+    expect(table).toContain("deputy-target-dormant");
+    expect(table).toContain("unreadable — Things is not running");
+    expect(table).toContain("next: open Things");
+    // The row must never claim the grant is absent — that is a different fact.
+    expect(table).not.toMatch(/applescript\s+deputy-target-dormant\s+none/);
+    expect(table).not.toContain("things setup");
+  });
+
+  it("keeps the System Events row distinct — two targets, two liveness rows", () => {
+    const table = permissionLines(
+      reportWith(
+        { mode: "deputy", detail: "the deputy holds app control", remediation: [] },
+        {
+          mode: "target-unreachable",
+          detail: "System Events is not running",
+          remediation: ['start it with `open -g -a "System Events"`'],
+        },
+      ),
+    ).join("\n");
+    expect(table).toContain("unreadable — System Events is not running");
+    expect(table).toContain("deputy TCC Automation (Things API Helper)");
   });
 });

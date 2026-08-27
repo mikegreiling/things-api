@@ -83,6 +83,7 @@ import {
   type CapabilityDeps,
   type ReadCapability,
   type UrlSchemeCapability,
+  type WriteCapabilityOptions,
 } from "./capability.ts";
 import { loadConfig } from "./config.ts";
 import { locateThingsDb } from "./db/locate.ts";
@@ -437,7 +438,11 @@ function readAccessLeg(
 function appControlLeg(deps: DirectSetupDeps): SetupStep {
   const base = { leg: "app-control" as const, label: "app control" };
   const progress = deps.progress ?? (() => {});
-  const capability = writeCapability(deps);
+  // DISPATCH intent: this leg sends Things a real Apple Event a few lines down,
+  // and an Apple Event to a closed Things launches it WITH focus steal
+  // (A40/A41). Starting it first is both the honest way to read the standing
+  // (#617) and the quieter way to raise the dialog.
+  const capability = writeCapability({ purpose: "dispatch" }, deps);
   const hostName = hostDisplayName(deps);
   if (capability.mode === "deputy") {
     progress("app control: already held by the helpers");
@@ -510,7 +515,7 @@ function appControlLeg(deps: DirectSetupDeps): SetupStep {
     };
   }
   // A zero exit is not believed on its own: re-read what macOS actually records.
-  const after = writeCapability(deps);
+  const after = writeCapability({ purpose: "dispatch" }, deps);
   if (after.mode === "direct-granted" || after.mode === "deputy") {
     progress("app control: granted");
     return { ...base, state: "granted", alreadySatisfied: false, detail: "granted" };
@@ -693,11 +698,21 @@ export interface SetupSurvey {
  * What the ceremony would do, established entirely prompt-free. This is the
  * idempotence check (Article V): it is what lets a rerun skip settled legs, and
  * it is what `--dry-run` reports. Raises nothing, ever.
+ *
+ * `purpose` is the one side effect the survey can be asked for: the ceremony
+ * itself passes `dispatch` so a dormant Things is started before the dialogs
+ * are COUNTED (#617) — otherwise a machine whose app happens to be closed is
+ * told "nothing to raise" and then shown a dialog anyway. `--dry-run` keeps the
+ * default and starts nothing at all, at the cost of not knowing where a closed
+ * app's grant stands; it says so through the write verdict it reports.
  */
-export function surveySetup(deps: DirectSetupDeps = {}): SetupSurvey {
+export function surveySetup(
+  deps: DirectSetupDeps = {},
+  options: WriteCapabilityOptions = {},
+): SetupSurvey {
   const host = hostApp(deps);
   const read = readCapability({}, deps);
-  const write = writeCapability(deps);
+  const write = writeCapability(options, deps);
   const shortcuts = (deps.shortcutProxies ?? readShortcutProxies)();
   const urlScheme = (deps.urlSchemeStanding ?? (() => urlSchemeCapability(deps)))();
   const outstanding: SetupLeg[] = [];
@@ -742,7 +757,7 @@ function runCeremony(deps: DirectSetupDeps): DirectSetupResult {
 
   // Survey prompt-free BEFORE raising anything, so whoever started this knows
   // whether they must stay at the screen (Article V).
-  const survey = surveySetup(withProgress);
+  const survey = surveySetup(withProgress, { purpose: "dispatch" });
   const readBefore = survey.read;
   const outstanding = survey.outstanding;
 

@@ -22,6 +22,7 @@ import {
   WRITE_DIRECT_ESCAPE_ENV,
   type CapabilityDeps,
 } from "../../src/capability.ts";
+import type { TargetWake } from "../../src/deputy/wake.ts";
 
 /** A machine with nothing: no helpers, no FDA, no witnessed grant. */
 function bareMachine(over: Partial<CapabilityDeps> = {}): CapabilityDeps {
@@ -41,6 +42,12 @@ function bareMachine(over: Partial<CapabilityDeps> = {}): CapabilityDeps {
     ...over,
   };
 }
+
+/** A wake that came back with `standing`, shaped like the real primitive's answer. */
+const woken =
+  (standing: string | undefined): (() => TargetWake) =>
+  () =>
+    ({ standing, detail: "started on demand" }) as TargetWake;
 
 beforeEach(() => {
   resetCapabilityForTests();
@@ -247,6 +254,7 @@ describe("ReadCapabilityError", () => {
 describe("writeCapability", () => {
   it("an onboarded deputy wins, and the host's own record is never consulted", () => {
     const cap = writeCapability(
+      {},
       bareMachine({
         deputyAutomation: () => "granted",
         automationAuthValue: () => {
@@ -258,13 +266,13 @@ describe("writeCapability", () => {
   });
 
   it("auth_value 2 is a grant for the host app", () => {
-    const cap = writeCapability(bareMachine({ automationAuthValue: () => 2 }));
+    const cap = writeCapability({}, bareMachine({ automationAuthValue: () => 2 }));
     expect(cap.mode).toBe("direct-granted");
     expect(cap.detail).toContain("com.mitchellh.ghostty");
   });
 
   it("auth_value 0 is a refusal macOS will not re-ask — copy names the toggle AND the re-arm", () => {
-    const cap = writeCapability(bareMachine({ automationAuthValue: () => 0 }));
+    const cap = writeCapability({}, bareMachine({ automationAuthValue: () => 0 }));
     expect(cap.mode).toBe("direct-denied");
     const remediation = cap.remediation.join(" | ");
     expect(remediation).toContain("System Settings");
@@ -272,13 +280,13 @@ describe("writeCapability", () => {
   });
 
   it("no row at all is 'unknown' and points at the ceremony — never at a retry", () => {
-    const cap = writeCapability(bareMachine({ automationAuthValue: () => null }));
+    const cap = writeCapability({}, bareMachine({ automationAuthValue: () => null }));
     expect(cap.mode).toBe("direct-unknown");
     expect(cap.remediation.join(" ")).toContain("things setup");
   });
 
   it("a process with no application identity cannot hold a direct grant at all", () => {
-    const cap = writeCapability(bareMachine({ env: {} }));
+    const cap = writeCapability({}, bareMachine({ env: {} }));
     expect(cap.mode).toBe("direct-unknown");
     expect(cap.detail).toContain("does not descend from an application bundle");
     expect(cap.remediation.join(" ")).toContain("things helpers setup");
@@ -293,7 +301,10 @@ describe("writeCapability", () => {
     const escape = { [WRITE_DIRECT_ESCAPE_ENV]: "1" };
 
     it("resolves the bundle-id-less unknown, and needs no deputy", () => {
-      const cap = writeCapability(bareMachine({ env: escape, deputyAutomation: () => undefined }));
+      const cap = writeCapability(
+        {},
+        bareMachine({ env: escape, deputyAutomation: () => undefined }),
+      );
       expect(cap.mode).toBe("direct-escape");
       expect(writeAllowed(cap)).toBe(true);
       expect(cap.detail).toContain(WRITE_DIRECT_ESCAPE_ENV);
@@ -305,6 +316,7 @@ describe("writeCapability", () => {
       // id is answered from its TCC row, escape or no escape — so the escape
       // can never mask a recorded refusal or invent a grant.
       const denied = writeCapability(
+        {},
         bareMachine({
           env: { ...escape, __CFBundleIdentifier: "com.mitchellh.ghostty" },
           automationAuthValue: () => 0,
@@ -313,6 +325,7 @@ describe("writeCapability", () => {
       expect(denied.mode).toBe("direct-denied");
       expect(writeAllowed(denied)).toBe(false);
       const unknown = writeCapability(
+        {},
         bareMachine({
           env: { ...escape, __CFBundleIdentifier: "com.mitchellh.ghostty" },
           automationAuthValue: () => null,
@@ -325,18 +338,177 @@ describe("writeCapability", () => {
     it("answers to the literal 1 and to nothing else", () => {
       for (const value of ["", "0", "true", "yes"]) {
         expect(
-          writeCapability(bareMachine({ env: { [WRITE_DIRECT_ESCAPE_ENV]: value } })).mode,
+          writeCapability({}, bareMachine({ env: { [WRITE_DIRECT_ESCAPE_ENV]: value } })).mode,
         ).toBe("direct-unknown");
       }
     });
 
     it("does not cross vectors — the ui escape leaves the write verdict alone", () => {
-      const cap = writeCapability(bareMachine({ env: { [UI_DIRECT_ESCAPE_ENV]: "1" } }));
+      const cap = writeCapability({}, bareMachine({ env: { [UI_DIRECT_ESCAPE_ENV]: "1" } }));
       expect(cap.mode).toBe("direct-unknown");
     });
 
     it("an onboarded deputy still wins, so the escape cannot downgrade provenance", () => {
-      const cap = writeCapability(bareMachine({ env: escape, deputyAutomation: () => "granted" }));
+      const cap = writeCapability(
+        {},
+        bareMachine({ env: escape, deputyAutomation: () => "granted" }),
+      );
+      expect(cap.mode).toBe("deputy");
+    });
+  });
+
+  /**
+   * LIVENESS IS NOT AUTHORIZATION, on the write vector's own target (#617).
+   * `not-running` is the deputy's ask-false determination having no answer for
+   * a CLOSED Things — a fact about the app's process. The matrix below is the
+   * whole ruling: a survey reports it and starts nothing; a dispatch starts the
+   * app and re-reads; and in neither case may a standing deputy fall through to
+   * the direct host branch.
+   */
+  describe("a dormant Things", () => {
+    /** The handshake of a helpers machine whose owner has closed the app. */
+    function dormant(over: Partial<CapabilityDeps> = {}): CapabilityDeps {
+      return bareMachine({ deputyAutomation: () => "not-running", ...over });
+    }
+
+    it("a SURVEY reports the liveness state and starts nothing", () => {
+      let woke = 0;
+      const cap = writeCapability(
+        {},
+        dormant({
+          wakeThings: () => {
+            woke += 1;
+            return { standing: "granted", detail: "started on demand" };
+          },
+        }),
+      );
+      expect(woke).toBe(0);
+      expect(cap.mode).toBe("deputy-target-dormant");
+      expect(writeAllowed(cap)).toBe(false);
+    });
+
+    it("the survey's copy is about the app being closed — never a permission", () => {
+      const cap = writeCapability({}, dormant());
+      expect(cap.detail).toContain("Things is not running");
+      expect(cap.detail).not.toMatch(/denied|refus|never asked/i);
+      const next = cap.remediation.join(" ");
+      expect(next).toContain("open Things");
+      expect(next).not.toContain("things setup");
+      expect(next).not.toContain("things helpers setup");
+      expect(next).not.toContain("System Settings");
+    });
+
+    it("a DISPATCH wakes the app, and a held grant then routes through the deputy", () => {
+      let woke = 0;
+      const cap = writeCapability(
+        { purpose: "dispatch" },
+        dormant({
+          wakeThings: () => {
+            woke += 1;
+            return { standing: "granted", detail: "started on demand" };
+          },
+        }),
+      );
+      expect(woke).toBe(1);
+      expect(cap.mode).toBe("deputy");
+      expect(writeAllowed(cap)).toBe(true);
+    });
+
+    it("hands the woken standing to routing, whose own gate deferred on it", () => {
+      const settled: (string | undefined)[] = [];
+      writeCapability(
+        { purpose: "dispatch" },
+        dormant({ wakeThings: woken("granted"), settleDeputyAutomation: (s) => settled.push(s) }),
+      );
+      expect(settled).toEqual(["granted"]);
+    });
+
+    it("a woken REFUSAL is a real grant fact, so the host's own record decides", () => {
+      const cap = writeCapability(
+        { purpose: "dispatch" },
+        dormant({ wakeThings: woken("denied"), automationAuthValue: () => 2 }),
+      );
+      expect(cap.mode).toBe("direct-granted");
+    });
+
+    it("a woken never-asked is a real grant fact too", () => {
+      const cap = writeCapability(
+        { purpose: "dispatch" },
+        dormant({ wakeThings: woken("unknown"), automationAuthValue: () => null }),
+      );
+      expect(cap.mode).toBe("direct-unknown");
+    });
+
+    it("refuses on LIVENESS when the wake does not take — the gate never sees a grant word", () => {
+      const cap = writeCapability(
+        { purpose: "dispatch" },
+        dormant({
+          wakeThings: () => ({
+            standing: "not-running",
+            detail: "it did not come up within 10s of being started",
+          }),
+        }),
+      );
+      expect(cap.mode).toBe("deputy-target-dormant");
+      expect(writeAllowed(cap)).toBe(false);
+      expect(cap.detail).toContain("did not come up within 10s");
+      expect(cap.detail).not.toMatch(/permission|grant is|denied/i);
+    });
+
+    it("refuses on LIVENESS when the deputy goes silent during the wake", () => {
+      const cap = writeCapability(
+        { purpose: "dispatch" },
+        dormant({ wakeThings: woken(undefined) }),
+      );
+      expect(cap.mode).toBe("deputy-target-dormant");
+    });
+
+    /**
+     * THE NO-SILENT-DIRECT-FALLBACK RULE. Both directions of the #617 bug: a
+     * host holding its own historical grant must not be engaged directly while
+     * the helpers stand (the routing doctrine forbids it), and a host with no
+     * record must not be told to run `things setup` for a grant the helpers
+     * already hold.
+     */
+    it("never falls through to the direct host path while the deputy is standing", () => {
+      for (const authValue of [2, 0, null]) {
+        const cap = writeCapability({}, dormant({ automationAuthValue: () => authValue }));
+        expect(cap.mode).toBe("deputy-target-dormant");
+      }
+    });
+
+    it("leaves a machine with no deputy on exactly the logic it had before", () => {
+      // Helpers disabled or absent: the handshake carries no value at all, so
+      // nothing here is reached and the host's TCC row answers as it always has.
+      let woke = 0;
+      const cap = writeCapability(
+        { purpose: "dispatch" },
+        bareMachine({
+          deputyAutomation: () => undefined,
+          automationAuthValue: () => 2,
+          wakeThings: () => {
+            woke += 1;
+            return { standing: "granted", detail: "started on demand" };
+          },
+        }),
+      );
+      expect(woke).toBe(0);
+      expect(cap.mode).toBe("direct-granted");
+    });
+
+    it("never wakes a target that is already up", () => {
+      let woke = 0;
+      const cap = writeCapability(
+        { purpose: "dispatch" },
+        bareMachine({
+          deputyAutomation: () => "granted",
+          wakeThings: () => {
+            woke += 1;
+            return { standing: "granted", detail: "started on demand" };
+          },
+        }),
+      );
+      expect(woke).toBe(0);
       expect(cap.mode).toBe("deputy");
     });
   });

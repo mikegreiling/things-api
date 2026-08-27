@@ -35,6 +35,7 @@ import {
   type UiCapability,
   type UrlSchemeCapability,
   type WriteCapability,
+  type WriteCapabilityOptions,
 } from "../capability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
@@ -378,8 +379,14 @@ export interface WriteDeps {
   urlSchemeCapability?: () => UrlSchemeCapability;
   /** Seam: installed Things proxy shortcuts, for the pre-dispatch availability gate (availability.ts). */
   shortcutProxies?: () => ShortcutsState;
-  /** Seam: prompt-free app-automation standing, for the write gate (capability.ts). */
-  writeCapability?: () => WriteCapability;
+  /**
+   * Seam: prompt-free app-automation standing, for the write gate
+   * (capability.ts). Takes the gate's PURPOSE, so what this dispatch asked for
+   * is observable — `dispatch` (start a closed Things before judging where its
+   * app control stands) or `survey` (report the dormancy; `auto-launch` is off,
+   * and the user's instruction not to start the app is obeyed here too).
+   */
+  writeCapability?: (options: WriteCapabilityOptions) => WriteCapability;
   /** Seam: prompt-free GUI-driving standing, for the Article IV gate (capability.ts). */
   uiCapability?: () => UiCapability;
   now?: () => Date;
@@ -1166,8 +1173,18 @@ export async function runMutation<K extends OperationKind>(
     // onboarded, the host app's Automation record otherwise — and anything
     // short of a grant refuses here, before the app is touched. An unknown
     // standing is NOT resolved by trying: that is what `things setup` is for.
+    //
+    // The one thing that IS resolved here is LIVENESS (#617): with Things
+    // closed the deputy's determination has no answer, and this gate is the
+    // caller with dispatch intent, so it starts the app in the background and
+    // re-reads the standing before judging it. `auto-launch: false` is the
+    // user's instruction not to start Things for a write, so it withholds that
+    // — the verdict then reports the dormancy instead, and step 6 would have
+    // refused a moment later for the same reason.
     if (vector.sendsAppleEvents === true && vector.simulates !== true) {
-      const capability = (deps.writeCapability ?? (() => writeCapabilityDefault()))();
+      const capability = (deps.writeCapability ?? writeCapabilityDefault)({
+        purpose: config.autoLaunch ? "dispatch" : "survey",
+      });
       if (!writeAllowed(capability)) {
         audit({
           result: blockedCode({ reason: "environment" }),

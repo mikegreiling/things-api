@@ -494,6 +494,80 @@ describe("a dormant System Events at the banner", () => {
   });
 });
 
+/**
+ * THE SAME, FOR THE APP ITSELF (issue #617). A closed Things makes the deputy's
+ * determination answer procNotFound, so an onboarded machine whose owner had
+ * simply quit the app was promised an app-control dialog that never came — and
+ * the leg's own Apple Event would have auto-launched the app FRONTMOST
+ * (A40/A41). The ceremony starts it in the background first, then counts.
+ */
+describe("a dormant Things at the banner", () => {
+  it("is woken before the count, and a held grant is announced as nothing to raise", () => {
+    installReader();
+    let probes = 0;
+    const result = run(
+      stubChannel({
+        hello: {
+          axTrusted: true,
+          automation: { things: "not-running", systemEvents: "granted" },
+        },
+      }),
+      {
+        wakeThings: (probe) => {
+          probes += 1;
+          // The ceremony hands its OWN channel to the wake, so the re-read runs
+          // over the connection it already holds.
+          expect(probe()).toBe("not-running");
+          return { standing: "granted", detail: "started on demand" };
+        },
+      },
+    );
+    expect(probes).toBe(1);
+    expect(result.outstanding).toEqual([]);
+    const banner = progress.find((line) => line.includes("raise")) ?? "";
+    expect(banner).toContain("nothing to raise");
+    expect(stateOf(result, "automation-things")).toBe("granted");
+    // The leg is SKIPPED: no event is sent to an app macOS already trusts us with.
+    expect(requests.filter((r) => r["verb"] === "osascript")).toHaveLength(0);
+    expect(progress.join("\n")).toContain("the app was closed");
+  });
+
+  it("counts the dialog when the woken app turns out never to have been asked", () => {
+    installReader();
+    run(
+      stubChannel({
+        hello: {
+          axTrusted: true,
+          automation: { things: "not-running", systemEvents: "granted" },
+        },
+      }),
+      { wakeThings: () => ({ standing: "unknown", detail: "started on demand" }) },
+    );
+    const banner = progress.find((line) => line.includes("raise")) ?? "";
+    expect(banner).toContain("about to raise 1 macOS consent dialog");
+    expect(banner).toContain("app control for Things");
+    const scripts = requests.filter((r) => r["verb"] === "osascript").map((r) => r["script"]);
+    expect(scripts).toEqual(['tell application "Things3" to count of areas']);
+  });
+
+  it("is not woken when the app is already up", () => {
+    installReader();
+    let woke = 0;
+    run(
+      stubChannel({
+        hello: { axTrusted: true, automation: { things: "granted", systemEvents: "granted" } },
+      }),
+      {
+        wakeThings: () => {
+          woke += 1;
+          return { standing: "granted", detail: "started on demand" };
+        },
+      },
+    );
+    expect(woke).toBe(0);
+  });
+});
+
 describe("the accessibility leg", () => {
   it("primes the prompt, opens Settings, and lands granted when the switch flips", () => {
     installReader();

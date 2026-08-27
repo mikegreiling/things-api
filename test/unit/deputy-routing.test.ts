@@ -38,6 +38,7 @@ import {
   helpersRouting,
   readerRouting,
   resetDeputyRoutingForTests,
+  settleDeputyAutomation,
 } from "../../src/deputy/routing.ts";
 
 const TOKEN = "cafe".repeat(16);
@@ -362,6 +363,66 @@ describe("the auto onboarding gate", () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(deputyRouting().reason).toContain("automation → Things: denied");
     stderrSpy.mockRestore();
+  });
+
+  /**
+   * LIVENESS, NOT AUTHORIZATION (#617). `not-running` is what the deputy's
+   * ask-false determination answers for a CLOSED Things, so it says nothing
+   * about the grant — and the owner of a fully onboarded machine quits their
+   * app all the time. Deactivating there would drop that machine onto the
+   * direct path and print a notice claiming a permission is missing. The gate
+   * DEFERS instead, and the write gate settles it once it has woken the app.
+   */
+  describe("auto + a CLOSED Things (the liveness deferral)", () => {
+    it("stays active and says nothing — the app being shut is not a fault", async () => {
+      await startMock({ automation: { things: "not-running", systemEvents: "granted" } });
+      process.env["THINGS_API_HELPERS"] = "auto";
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const routing = deputyRouting();
+      expect(routing.active).toBe(true);
+      expect(routing.reason).toBeNull();
+      expect(noticesFrom(stderrSpy)).toEqual([]);
+      stderrSpy.mockRestore();
+    });
+
+    it("a woken GRANTED settles it, and the handshake is corrected in place", async () => {
+      await startMock({ automation: { things: "not-running", systemEvents: "granted" } });
+      process.env["THINGS_API_HELPERS"] = "auto";
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(deputyRouting().active).toBe(true);
+      settleDeputyAutomation("granted");
+      const routing = deputyRouting();
+      expect(routing.active).toBe(true);
+      expect(routing.hello?.automation?.things).toBe("granted");
+      // Settled: nothing left to prove, so a second call cannot un-route it.
+      settleDeputyAutomation("denied");
+      expect(deputyRouting().active).toBe(true);
+      expect(noticesFrom(stderrSpy)).toEqual([]);
+      stderrSpy.mockRestore();
+    });
+
+    it("a woken REFUSAL deactivates with the notice the gate deferred", async () => {
+      await startMock({ automation: { things: "not-running", systemEvents: "granted" } });
+      process.env["THINGS_API_HELPERS"] = "auto";
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(deputyRouting().active).toBe(true);
+      settleDeputyAutomation("denied");
+      const routing = deputyRouting();
+      expect(routing.active).toBe(false);
+      expect(routing.reason).toContain("automation → Things: denied");
+      expect(noticesFrom(stderrSpy)[0]).toContain("things helpers setup");
+      stderrSpy.mockRestore();
+    });
+
+    it("settling is a no-op where nothing was deferred (mode true never defers)", async () => {
+      await startMock({ automation: { things: "not-running", systemEvents: "granted" } });
+      process.env["THINGS_API_HELPERS"] = "true";
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(deputyRouting().active).toBe(true);
+      settleDeputyAutomation("denied");
+      expect(deputyRouting().active).toBe(true);
+      stderrSpy.mockRestore();
+    });
   });
 
   it("Accessibility and System Events are NOT requisite — only Things gates writes", async () => {
