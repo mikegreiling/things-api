@@ -40,6 +40,17 @@ Two seam notes for the code author:
 
 The `key` primitive exists because the Repeat dialog's frequency **dropdown is picked with keyboard arrows** (`key down` ×N + return), never a second press — a press fires before the popup renders and lands on the control beneath (learned in UI2-i, folded into the recipe).
 
+### The per-step focus guard and the audited cleanup ladder (issue #620)
+
+Two of the primitive classes above are **not addressed at an element at all** — macOS routes them by what owns the screen:
+
+- **keystroke-class** (`key`, `type-text`, and the three field-typing primitives): System Events hands `keystroke`/`key code` to the frontmost application, whichever that is;
+- **pointer-class** (`click-element`'s HID tap, the sidebar drag/scroll): `CGEventPost(kCGHIDEventTap)` posts at the foreground surface (NATIVE1-e).
+
+So each of those hops is preceded by the read-only census (`src/write/vectors/ui-state.ts`): Things must be frontmost, and the dialog this drive opened must still be the one in front. A violation ABORTS the step, naming the application that owns the screen and the focused element's role — it never types into the void. The element half is asserted in the same hop as the typing (`set focused` then *prove* focus before `keystroke`), which is the only way to close the last few milliseconds. Everything else stays unguarded and backgroundable: element-addressed presses and attribute writes are delivered to the element named, and `chord-post` addresses the PROCESS (`CGEventPostToPid`), which is precisely what makes the background heading-reorder gesture possible (HEADORD1).
+
+The abort path uses the same census as its oracle and climbs a ladder, cheapest and least disruptive first: the dialog's **own Cancel button** (element-addressed — no focus, no frontmost slot, cannot leak into another app), then Escape *only* from a state where Things demonstrably owns the screen (re-activate → RE-AUDIT first), then the app-level `close window 1` + `reopen` that works AX-blind and unwedges the app-wide AppleScript freeze an open sheet imposes (SESSGATE; [oddities §9cc](../things-app-oddities.md)). A dialog of a kind this drive was not driving is left strictly alone. Every rung is followed by a fresh census, so a dismissal is never claimed unseen, and a dialog that survives the whole ladder is reported precisely — with the field-measured fact that an open dialog holds Things Cloud sync until it is dismissed. Certified in [FGRD1](../lab/fgrd1-focus-guard.md).
+
 ### Native AXUIElement bindings — DEFERRED follow-up
 
 Driving AX through `osascript`/System Events is the v1 seam because it needs no compiled artifact and reuses the stable-command-shape discipline. A **compiled helper with native AXUIElement bindings** (direct `AXUIElementCopyAttributeValue`/`AXUIElementPerformAction`, no AppleScript hop) is an explicitly **deferred** follow-up: faster, less brittle around AppleScript's System Events quirks, and a cleaner home for background AXPress if it proves out — but it is a codesigned-binary distribution problem (mirrors the roadmap's "compiled `things` binary" TCC-stability item) and is out of scope for shipping the vector. The osascript seam is designed so the driver primitives are the abstraction boundary: swapping in native bindings later is a driver-internal change, not a recipe or op change.

@@ -44,7 +44,10 @@ const PROBE_SCRIPT =
 function defaultRun(script: string, timeoutMs: number): string {
   // Deputy-routed when active (see automation-probe.ts) — in that mode the
   // Accessibility question is about the deputy's grant, the one that matters.
-  return osaExecSync(script, timeoutMs);
+  // With the deputy inactive this probe is the ceremony exemption from the
+  // seam's no-silent-fallback rule (issue #620): its question IS "what does
+  // the calling identity hold?", so the host path is the correct answer.
+  return osaExecSync(script, timeoutMs, { hostDirect: "permitted" });
 }
 
 export function probeAccessibility(deps: AccessibilityProbeDeps = {}): AccessibilityProbeResult {

@@ -43,7 +43,13 @@ import {
   type RepeatRuleExtras,
 } from "../../src/write/vectors/ui-recipes.ts";
 import type { RepeatDialogShape, UiStep } from "../../src/write/vectors/types.ts";
-import { commandForStep } from "../../src/write/vectors/ui.ts";
+import {
+  axAbortScript,
+  axAuditDialogScript,
+  axCancelDialogScript,
+  commandForStep,
+} from "../../src/write/vectors/ui.ts";
+import { axUiStateScript } from "../../src/write/vectors/ui-state.ts";
 
 const DARWIN = process.platform === "darwin";
 
@@ -110,6 +116,53 @@ function everyScript(): { label: string; script: string; lang: string }[] {
         });
       }
     }
+  }
+  // The scripts the DRIVER compiles rather than the recipe: the read-only
+  // census, the cleanup ladder's two dismissals, and the pre-commit audit —
+  // whose occurrence comparison carries the relative-date resolver (#625).
+  for (const extra of [
+    { label: "driver \u00b7 ui-state census", script: axUiStateScript() },
+    { label: "driver \u00b7 dismiss (Cancel)", script: axCancelDialogScript() },
+    { label: "driver \u00b7 abort (Escape)", script: axAbortScript() },
+    {
+      label: "driver \u00b7 pre-commit audit",
+      script: axAuditDialogScript({
+        shell: "sheet 1 of window 1",
+        group: "group 1 of sheet 1 of window 1",
+        controls: [
+          {
+            kind: "popup",
+            label: "frequency",
+            path: "pop up button 1 of sheet 1 of window 1",
+            expected: ["daily"],
+          },
+          {
+            kind: "group-number",
+            label: "interval",
+            numberTarget: "interval",
+            expected: ["3"],
+          },
+          {
+            kind: "occurrence-popup",
+            label: "first occurrence",
+            path: "pop up button 2 of group 1 of sheet 1 of window 1",
+            expected: ["2026-08-20"],
+          },
+          {
+            kind: "checkbox",
+            label: "add reminders",
+            path: "checkbox 1 of sheet 1 of window 1",
+            expected: ["1"],
+          },
+          { kind: "weekdays", label: "weekdays", weekdayBase: 3, expected: ["Monday"] },
+          { kind: "row-field", label: "start earlier", rowLabel: "days earlier", expected: ["14"] },
+        ],
+      }),
+    },
+  ]) {
+    if (seen.has(extra.script)) continue;
+    seen.add(extra.script);
+    out.push({ ...extra, lang: "applescript" });
   }
   return out;
 }

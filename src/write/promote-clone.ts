@@ -39,6 +39,7 @@ import type {
   ProjectAddRepeatingParams,
   RepeatRuleParams,
   TodoAddRepeatingParams,
+  TodoMoveParams,
 } from "./operations.ts";
 import { replayIfApplied } from "./opid.ts";
 import {
@@ -163,6 +164,31 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
     }
   }
   if (!deps.config.ui.enabled) return null;
+  // 1½. AN OPEN DIALOG, before the seed (MODALX1, issue #620). This is the gap
+  // the field incident fell into twice over: the clone leg rides the URL scheme,
+  // which an open dialog does not touch, so it LANDS — and then the trash leg,
+  // the promote and the cleanup are all AppleScript, all refused with `-1728`,
+  // leaving a copy of the user's to-do in their lists. Measured in-lab: with a
+  // dialog standing, the compound mutates and then fails for a reason it could
+  // have read up front. A census that cannot be read proceeds (the drive's own
+  // precondition is the backstop); only a POSITIVE sighting refuses.
+  const dialogVector = deps.vectors.find((v) => v.probeUiState !== undefined);
+  if (dialogVector?.probeUiState !== undefined) {
+    const state = await dialogVector.probeUiState();
+    if (state !== null && state.inspectable && state.sheetOpen) {
+      return {
+        kind: "blocked",
+        op,
+        reason: "environment",
+        detail:
+          "a dialog is already open in Things, and while one is open the app ignores changes " +
+          "like this one and stops sending anything to Things Cloud — nothing was created",
+        remediation:
+          "dismiss the dialog in Things (click Cancel, or press Escape with Things in front), " +
+          "then run the same command again; `things ui-state` shows what is open",
+      };
+    }
+  }
   const ui = deps.vectors.find((v) => v.probeReachability !== undefined);
   if (ui?.probeReachability === undefined) return null;
   const verdict = await ui.probeReachability();
@@ -216,6 +242,164 @@ async function cleanupSeed(
     ? { detail: `${(promote as { detail: string }).detail} — ${cleanupNote}` }
     : {};
 }
+
+/**
+ * Put a restored to-do back where it was (issue #620, field report M1).
+ *
+ * The ONLY scriptable restore-from-Trash is `move <to-do> to list "Inbox"`
+ * (E15) — and it does exactly that: the row lands in the INBOX, DE-SCHEDULED
+ * (`start=0, startDate=NULL`), with its project/heading link severed. That is
+ * the GUI's "Put Back" affordance's poorer scripted cousin, and it is why a
+ * failed promote handed back a to-do sitting unscheduled in the Inbox instead
+ * of where its owner left it. Everything else about the row survives (title,
+ * notes, tags, deadline, reminder byte), so the repair is exactly two writes:
+ * its container, then its schedule.
+ *
+ * Best-effort and fully disclosed: each half reports whether it landed, and a
+ * to-do that lived under a HEADING is returned to the owning project with the
+ * heading placement named as not restored — there is nothing to guess at.
+ * Returns the sentence describing what happened.
+ */
+async function reassertTodoPlacement(
+  deps: WriteDeps,
+  src: Todo,
+  options: WriteOptions,
+  txnId: string,
+): Promise<string> {
+  const landed: string[] = [];
+  const missed: string[] = [];
+
+  const projectUuid = src.project?.uuid ?? src.headingProject?.uuid ?? null;
+  const areaUuid = src.area?.uuid ?? null;
+  const move: TodoMoveParams | null =
+    projectUuid !== null
+      ? { uuid: src.uuid, project: { uuid: projectUuid } }
+      : areaUuid !== null
+        ? { uuid: src.uuid, area: { uuid: areaUuid } }
+        : null;
+  if (move !== null) {
+    const res = await runMutation(deps, "todo.move", move, legOptions(options, txnId));
+    const where = projectUuid !== null ? "its project" : "its area";
+    (res.kind === "ok" ? landed : missed).push(where);
+  }
+  if (src.heading !== null) missed.push("its position under a heading");
+
+  // The schedule. `evening` is only expressible for TODAY (the app has no other
+  // evening slot), so a stale evening marker degrades to its date.
+  const todayIso = localToday(deps.now?.() ?? new Date(), deps.zone);
+  const when =
+    src.derived.evening === true && src.startDate === todayIso
+      ? "evening"
+      : src.startDate !== null
+        ? src.startDate
+        : src.derived.start === "someday"
+          ? "someday"
+          : src.derived.start === "active"
+            ? "anytime"
+            : null;
+  if (when !== null) {
+    const res = await runMutation(
+      deps,
+      "todo.update",
+      { uuid: src.uuid, when },
+      legOptions(options, txnId),
+    );
+    (res.kind === "ok" ? landed : missed).push(`its "when" (${when})`);
+  }
+
+  if (landed.length === 0 && missed.length === 0) return "it was already in the Inbox, unscheduled";
+  const ok = landed.length > 0 ? `${landed.join(" and ")} restored` : "";
+  const bad =
+    missed.length > 0
+      ? `${ok === "" ? "" : ", but "}${missed.join(" and ")} could not be restored — set ${
+          missed.length > 1 ? "them" : "it"
+        } yourself`
+      : "";
+  return `a scripted restore returns a to-do to the Inbox with no schedule, so ${ok}${bad}`;
+}
+
+/**
+ * Undo a failed make-repeating's OWN two mutations (issue #620).
+ *
+ * The compound trashes the original and mints a disposable copy before the
+ * promote runs, so a promote that does not land leaves two artifacts. Both are
+ * ours, so both are cleaned up here rather than described to the caller as
+ * homework: the original is restored AND put back where it was
+ * ({@link reassertTodoPlacement}), and the disposable copy is moved to the
+ * Trash — the same ratified reasoning as the add-repeating seed auto-trash
+ * (2026-08-15, issue #480): our artifact, recreatable verbatim, and the Trash
+ * is recoverable.
+ *
+ * When a step does NOT land, the report names the row and the command that
+ * finishes the job — and names the likeliest reason, because there is exactly
+ * one that matters here: a dialog still open in Things makes the app ignore
+ * scripted changes app-wide (docs/things-app-oddities.md §9cc) and holds Things
+ * Cloud sync with them. That is the mechanism behind the field report's
+ * "AppleScript could not get that to-do ID" on a row the database showed
+ * perfectly present.
+ */
+async function rollBackFailedPromote(
+  deps: WriteDeps,
+  kind: "todo" | "project",
+  ids: { srcUuid: string; cloneUuid: string; src: Todo | Project },
+  options: WriteOptions,
+  txnId: string,
+): Promise<string> {
+  const expectedType = kind === "project" ? "project" : "to-do";
+  const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
+  const restored = await runMutation(
+    deps,
+    restoreOp,
+    { uuid: ids.srcUuid },
+    legOptions(options, txnId),
+  );
+  let originalNote: string;
+  if (restored.kind === "ok") {
+    // A project restore flips the row in place and keeps its area, schedule and
+    // children exactly as they were (P06) — only the to-do restore relocates.
+    const placement =
+      ids.src.type === "to-do" ? await reassertTodoPlacement(deps, ids.src, options, txnId) : null;
+    originalNote =
+      `the original ${expectedType} (uuid ${ids.srcUuid}) was restored from the Trash` +
+      (placement === null ? "" : ` — ${placement}`);
+  } else {
+    originalNote =
+      `the original ${expectedType} (uuid ${ids.srcUuid}) could NOT be restored from the Trash — ` +
+      `restore it with \`things ${kind} restore ${ids.srcUuid}\`${DISMISS_FIRST}`;
+  }
+  const cloneNote = await trashDisposableCopy(deps, kind, ids.cloneUuid, options, txnId);
+  return `the promote did not land. ${originalNote}; ${cloneNote}`;
+}
+
+/**
+ * Move the compound's own disposable copy to the Trash and say what happened.
+ * Shared by every failure path that has minted one, so a caller is never left
+ * holding a duplicate of their own to-do with no instruction.
+ */
+async function trashDisposableCopy(
+  deps: WriteDeps,
+  kind: "todo" | "project",
+  cloneUuid: string,
+  options: WriteOptions,
+  txnId: string,
+): Promise<string> {
+  const trashOp: OperationKind = kind === "project" ? "project.delete" : "todo.delete";
+  const trashed = await runMutation(deps, trashOp, { uuid: cloneUuid }, legOptions(options, txnId));
+  return trashed.kind === "ok"
+    ? `the disposable copy this command made (uuid ${cloneUuid}) was moved to the Trash`
+    : `the disposable copy this command made (uuid ${cloneUuid}) is still in your lists and ` +
+        `could NOT be removed — remove it with \`things ${kind} delete ${cloneUuid}\`${DISMISS_FIRST}`;
+}
+
+/**
+ * The one remediation a stranded dialog needs, appended wherever a cleanup
+ * mutation fails: while a dialog is open, Things ignores scripted changes
+ * app-wide AND stops sending anything to Things Cloud.
+ */
+const DISMISS_FIRST =
+  ". If a dialog is still open in Things, dismiss it first (click Cancel, or press Escape with " +
+  "Things in front): while one is open the app ignores changes like this and stops sending " +
+  "changes to Things Cloud";
 
 /**
  * Pick the rule fields (frequency/interval + calendar anchors + deadline offset)
@@ -350,6 +534,41 @@ function landedFirstStart(
 ): IsoDate | null {
   if (!afterCompletion) return firstOccurrenceOf(deps.db, templateUuid);
   return instanceUuid === null ? null : instanceStartDate(deps.db, instanceUuid);
+}
+
+/**
+ * Was the requested first occurrence honored? (#508's oracle, extended for the
+ * SAME-DAY case — issue #625.)
+ *
+ * A fixed series is normally read off the template's cursor. But when the
+ * requested first occurrence is TODAY, the app materializes that occurrence
+ * immediately on commit and ADVANCES the cursor to the next slot — measured on
+ * 3.23 (FGRD1 §8: `--when <today>` on a weekly rule left the template's cursor
+ * and next-date on the FOLLOWING week with `instanceCreationCount = 1`, while a
+ * live instance sat on today). Reading only the cursor there reports a
+ * `verify-failed:mismatch` on a series that landed exactly as asked — the same
+ * false-negative shape as #508, one case over. So the check accepts EITHER
+ * oracle: the cursor naming the requested date, or a materialized instance
+ * SITTING on it. An instance dated the requested day is proof by construction;
+ * nothing else can put one there.
+ */
+export function firstOccurrenceHonored(
+  deps: WriteDeps,
+  args: {
+    templateUuid: string;
+    instanceUuid: string | null;
+    expectedIso: IsoDate;
+    afterCompletion: boolean;
+  },
+): { honored: boolean; landed: IsoDate | null } {
+  const landed = landedFirstStart(deps, args.templateUuid, args.instanceUuid, args.afterCompletion);
+  // An after-completion series with no materialized instance is UNVERIFIABLE
+  // (the create delta already proved the series landed) — never a mismatch.
+  if (args.afterCompletion && landed === null) return { honored: true, landed };
+  if (landed === args.expectedIso) return { honored: true, landed };
+  const instanceIso =
+    args.instanceUuid === null ? null : instanceStartDate(deps.db, args.instanceUuid);
+  return { honored: instanceIso === args.expectedIso, landed };
 }
 
 /**
@@ -668,6 +887,11 @@ async function makeRepeatingViaClone(
   // Bound after the existence guard so the composite body (a hoisted function,
   // where TypeScript cannot carry the narrowing) still sees a plain string.
   const srcTitle = src.title;
+  // Same reason as srcTitle: the type guard above proved this is the to-do or
+  // project the caller named, but the narrowing does not survive into the
+  // hoisted composite body. The failure rollback reads its placement from here
+  // (captured BEFORE the trash, which is the only moment it is knowable).
+  const srcEntity = src as Todo | Project;
 
   // ANCH2 (issue #476): the app's Repeat dialog HAS a "Next:" first-occurrence
   // field; its default is the today-anchored next match, but it is editable and
@@ -821,15 +1045,17 @@ async function makeRepeatingViaClone(
       ),
     );
     if (trash.kind !== "ok") {
+      // The original never moved, so there is nothing to restore — but the
+      // disposable copy exists and is ours to clean up (issue #620).
+      const cloneNote = await trashDisposableCopy(deps, kind, cloneUuid, options, txnId);
       return {
         ...trash,
         op,
         ...("detail" in trash
           ? {
               detail:
-                `${trash.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
-                `original ${srcUuid} could not be moved to the Trash, so it was NOT promoted; trash ` +
-                "the clone and retry",
+                `${trash.detail} — the original ${srcUuid} could not be moved to the Trash, so it ` +
+                `was NOT promoted and is unchanged; ${cloneNote}`,
             }
           : {}),
       } as MutationResult;
@@ -842,29 +1068,20 @@ async function makeRepeatingViaClone(
         ? await promoteProjectViaGui(deps, rule, legOptions(options, txnId, "ui"))
         : await runMutation(deps, "todo.make-repeating", rule, legOptions(options, txnId, "ui"));
     if (promote.kind !== "ok") {
-      // The clone persists but was not promoted; best-effort ROLL BACK the trash so
-      // the original is not stranded in the Trash.
-      const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
-      const rolledBack = await runMutation(
+      // The clone persists but was not promoted. Undo our own two mutations, in
+      // the order that leaves the least behind (issue #620) — see
+      // {@link rollBackFailedPromote}.
+      const rollNote = await rollBackFailedPromote(
         deps,
-        restoreOp,
-        { uuid: srcUuid },
-        legOptions(options, txnId),
+        kind,
+        { srcUuid, cloneUuid, src: srcEntity },
+        options,
+        txnId,
       );
-      const rollNote =
-        rolledBack.kind === "ok"
-          ? `the original ${srcUuid} was restored from the Trash`
-          : `the original ${srcUuid} could NOT be restored from the Trash — restore it in the app`;
       return {
         ...promote,
         op,
-        ...("detail" in promote
-          ? {
-              detail:
-                `${promote.detail} — the disposable clone (uuid ${cloneUuid}) was created but the ` +
-                `promote did not land; ${rollNote}. Trash the clone and retry`,
-            }
-          : {}),
+        ...("detail" in promote ? { detail: `${promote.detail} — ${rollNote}` } : {}),
       } as MutationResult;
     }
     const { templateUuid } = discoveryOf(promote);
@@ -878,10 +1095,13 @@ async function makeRepeatingViaClone(
     // (#508) — see landedFirstStart; an unverifiable after-completion series skips.
     const afterCompletion = effParams.afterCompletion === true;
     if (expectedStartIso !== undefined) {
-      const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
-      if (!(afterCompletion && landed === null) && landed !== expectedStartIso) {
-        return nextMismatch(op, templateUuid, expectedStartIso, landed);
-      }
+      const first = firstOccurrenceHonored(deps, {
+        templateUuid,
+        instanceUuid,
+        expectedIso: expectedStartIso,
+        afterCompletion,
+      });
+      if (!first.honored) return nextMismatch(op, templateUuid, expectedStartIso, first.landed);
     }
 
     const warnings: string[] = [
@@ -1141,9 +1361,13 @@ async function addRepeatingViaCreate(
     // series verifies against its materialized instance, and skips when it has none.
     const afterCompletion = effRuleWithReminder.afterCompletion === true;
     if (expectedStartIso !== undefined) {
-      const landed = landedFirstStart(deps, templateUuid, instanceUuid, afterCompletion);
-      if (!(afterCompletion && landed === null) && landed !== expectedStartIso)
-        return nextMismatch(op, templateUuid, expectedStartIso, landed);
+      const first = firstOccurrenceHonored(deps, {
+        templateUuid,
+        instanceUuid,
+        expectedIso: expectedStartIso,
+        afterCompletion,
+      });
+      if (!first.honored) return nextMismatch(op, templateUuid, expectedStartIso, first.landed);
     }
 
     const warnings: string[] = [

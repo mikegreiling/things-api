@@ -55,7 +55,13 @@ function defaultRun(script: string, timeoutMs: number): string {
   // Routed through the deputy when it is active: the probe then answers the
   // right question — whether the DEPUTY (the process that sends every
   // AppleEvent in that mode) holds the grant, not this transient CLI process.
-  return osaExecSync(script, timeoutMs);
+  //
+  // `hostDirect: "permitted"` is the ceremony exemption from the seam's
+  // no-silent-fallback rule (issue #620): when the deputy is NOT carrying
+  // traffic, the question this probe asks is precisely "what does the calling
+  // identity hold?", and answering it from the host is the correct behavior.
+  // Refusing would blind the diagnostic someone runs when the deputy is down.
+  return osaExecSync(script, timeoutMs, { hostDirect: "permitted" });
 }
 
 export function probeAutomation(deps: AutomationProbeDeps = {}): AutomationProbeResult {

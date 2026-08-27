@@ -22,6 +22,7 @@ import { registerInstallSkill } from "./commands/install-skill.ts";
 import { registerShowCommands } from "./commands/show.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
+import { registerUiState } from "./commands/ui-state.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
 import { applyUniversalDryRun } from "./dry-run.ts";
@@ -69,6 +70,7 @@ export function buildProgram(): Command {
   registerHelpers(program);
   registerInstallSkill(program);
   registerSnapshot(program);
+  registerUiState(program);
   registerMcp(program);
   // The signpost index + `help [topic]` replace the multi-scroll epilog; the
   // improved excess-argument message names the command and its usage line.

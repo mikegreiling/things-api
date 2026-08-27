@@ -19,6 +19,12 @@ export type LikelyCause =
   | "app-behavior-change"
   /** A GUI drive could not reach the Things window (locked screen / unresponsive app), #512. */
   | "ui-unreachable"
+  /**
+   * A modal dialog is standing in Things, which makes the app answer "no such
+   * item" for rows that are present and hold its Things Cloud sync (#620,
+   * MODALX1). The one cause of `-1728` on a uuid the database shows.
+   */
+  | "modal-open"
   | "schema-drift"
   | "unknown";
 
@@ -29,6 +35,18 @@ export interface FailureHint {
 
 const DENIED = /-1743|not authori[sz]ed to send apple events/i;
 const EVENT_TIMED_OUT = /-1712|event timed out/i;
+/**
+ * `-1728 Can't get <kind> id "…"` on a row the database shows perfectly present.
+ *
+ * This has ONE cause worth naming, and it is not a missing item (MODALX1 §2.1,
+ * golden-v4 / 3.23): a modal dialog standing anywhere in Things EMPTIES the
+ * app's top-level scripting collections — `count to dos` reads 0 — while every
+ * by-id read still answers. AppleScript's `delete` re-resolves its object
+ * specifier through that emptied list, so it raises -1728 for a to-do it can
+ * still `get name of`. Dismiss the dialog and the identical command lands.
+ * This is the whole of the #620 "ghost clone".
+ */
+const CANT_GET_ID = /-1728|can[’']?t get (to do|project|tag|area)( id)?/i;
 
 /**
  * The app macOS attributes an Automation request to — the TERMINAL EMULATOR
@@ -63,6 +81,19 @@ export function classifyTransportFailure(input: {
         "macOS Automation permission for this process (or the app hosting it) is missing or " +
         "was declined. Grant it under System Settings > Privacy & Security > Automation, or " +
         "see docs/setup.md for pre-authorizing headless setups." +
+        environmentSuffix(input.environmentChanges),
+    };
+  }
+  if (input.vector === "applescript" && CANT_GET_ID.test(input.stderr)) {
+    return {
+      likelyCause: "modal-open",
+      hint:
+        "Things answered that it cannot find that item — which is what it says about an item " +
+        "that IS there whenever a dialog is open somewhere in the app: while one stands, Things " +
+        "reports its own lists as empty to scripted callers, so a change addressed by id cannot " +
+        "resolve. It also stops sending changes to Things Cloud until the dialog is dismissed. " +
+        "Run `things ui-state` to see what is open, dismiss it (click Cancel, or press Escape " +
+        "with Things in front), then run the same command again — nothing was changed." +
         environmentSuffix(input.environmentChanges),
     };
   }

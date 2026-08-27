@@ -28,10 +28,17 @@ import {
   pauseRepeatRecipe,
   rescheduleRepeatRecipe,
 } from "../../src/write/vectors/ui-recipes.ts";
-import { createUiVector, type UiCommand, type UiRunResult } from "../../src/write/vectors/ui.ts";
+import {
+  axAuditDialogScript,
+  axSetGroupNumberScript,
+  createUiVector,
+  type UiCommand,
+  type UiRunResult,
+} from "../../src/write/vectors/ui.ts";
 import type { CompiledInvocation, UiRecipe, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedTodo } from "../fixtures/seed.ts";
+import { healthyScreen, screenAnswer, type FakeScreen } from "../fixtures/ui-state.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -90,16 +97,24 @@ function invocation(recipe: UiRecipe): CompiledInvocation {
 }
 
 /** A mock runner recording every command; `answer` decides each result. */
-function mockRunner(answer: (c: UiCommand) => UiRunResult): {
+function mockRunner(
+  answer: (c: UiCommand) => UiRunResult,
+  screen: FakeScreen = healthyScreen(),
+): {
   run: (c: UiCommand, t: number) => Promise<UiRunResult>;
   commands: UiCommand[];
+  screen: FakeScreen;
 } {
   const commands: UiCommand[] = [];
   return {
     commands,
+    screen,
+    // The fake SCREEN answers the read-only census and the dismissal rungs
+    // (issue #620) so the per-step focus guard has something true to read;
+    // everything else is the test's own answer.
     run: async (c) => {
       commands.push(c);
-      return answer(c);
+      return screenAnswer(screen, c) ?? answer(c);
     },
   };
 }
@@ -172,11 +187,14 @@ describe("ui driver — fail-closed", () => {
     const res = await vector.execute(invocation(recipe));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("stopped at");
-    // (d) The dismissal was VERIFIED gone before it was claimed.
-    expect(res.stderr).toContain("dismissed (Escape, confirmed gone)");
-    // The Escape abort keystroke was sent (key code 53).
+    // (d) The dismissal was VERIFIED gone before it was claimed — and it was
+    // done with the dialog's own Cancel button, which needs neither focus nor
+    // the frontmost slot (issue #620).
+    expect(res.stderr).toContain("closed with its own Cancel button, confirmed closed");
+    expect(commands.some((c) => c.script?.includes('button "Cancel"'))).toBe(true);
+    // No keystroke was needed at all, so none was sent.
     expect(commands.some((c) => c.primitive === "key" && c.script?.includes("key code 53"))).toBe(
-      true,
+      false,
     );
   });
 
@@ -200,23 +218,32 @@ describe("ui driver — fail-closed", () => {
         },
       ],
     };
-    // The sheet-open probe keeps reporting the sheet PRESENT after both Escapes.
-    const { run, commands } = mockRunner((c) => {
-      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("true");
-      if (c.primitive === "resolve") return ok("true");
-      if (c.primitive === "wait") return ok("false");
-      return ok();
-    });
+    // A STRANDED dialog: nothing closes it — not its Cancel button, not
+    // Escape, not closing and reopening the window (issue #620).
+    const { run, commands } = mockRunner(
+      (c) => {
+        if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true)
+          return ok("true");
+        if (c.primitive === "resolve") return ok("true");
+        if (c.primitive === "wait") return ok("false");
+        return ok();
+      },
+      healthyScreen({ dismissable: false }),
+    );
     const vector = createUiVector(config(true), run);
     const res = await vector.execute(invocation(recipe));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("may still be open");
-    expect(res.stderr).not.toContain("confirmed gone");
-    // Escape was retried ONCE (two key-code-53 sends).
-    const escapes = commands.filter(
-      (c) => c.primitive === "key" && c.script?.includes("key code 53"),
+    expect(res.stderr).not.toContain("confirmed closed");
+    // Every rung of the ladder was tried, in order, before giving up.
+    expect(commands.some((c) => c.script?.includes('button "Cancel"'))).toBe(true);
+    expect(commands.some((c) => c.primitive === "key" && c.script?.includes("key code 53"))).toBe(
+      true,
     );
-    expect(escapes.length).toBe(2);
+    expect(commands.some((c) => c.script?.includes("reopen"))).toBe(true);
+    // And the report names the consequence the caller cannot see: sync is held
+    // until the dialog is dismissed (field-measured).
+    expect(res.stderr).toContain("Things Cloud");
   });
 
   it("(e) blames a leftover OPEN SHEET first when the canary cannot resolve the menu path", async () => {
@@ -973,7 +1000,7 @@ describe("ui driver — mouse-hybrid click-element (NATIVE1 primitive)", () => {
     expect(commands.some((c) => c.primitive === "click-point")).toBe(false);
   });
 
-  it("dismisses (Escape) and reports partial state when the declared post-click element never appears", async () => {
+  it("dismisses what opened and reports partial state when the declared post-click element never appears", async () => {
     // Frame resolves + click posts, but the asserted popover never shows → abort.
     const { run, commands } = mockRunner((c) => {
       if (c.primitive === "resolve") return ok("true");
@@ -985,10 +1012,12 @@ describe("ui driver — mouse-hybrid click-element (NATIVE1 primitive)", () => {
     const res = await vector.execute(invocation(clickRecipe(10)));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("did not appear");
-    // A click DID post (the first one), then Escape was sent to dismiss whatever opened.
+    // A click DID post (the first one), then the audited cleanup ran and — the
+    // census showing nothing open — sent NOTHING at all (issue #620: no blind
+    // Escape into whatever is in front, ever).
     expect(commands.some((c) => c.primitive === "click-point")).toBe(true);
-    const abort = commands.filter((c) => c.primitive === "key");
-    expect(abort.some((c) => c.script?.includes("key code 53"))).toBe(true);
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    expect(res.stderr).toContain("No dialog was left open");
   });
 
   it("canaries a static mouse target and refuses before any click when it is missing", async () => {
@@ -1242,16 +1271,24 @@ describe("ui driver — session-reachability gate (SESSGATE #480)", () => {
       ],
     };
     let reachCalls = 0;
-    const { run, commands } = mockRunner((c) => {
-      if (isReach(c)) {
-        reachCalls += 1;
-        return ok(reachCalls === 1 ? "1 1 3" : "1 0 0"); // reachable at the gate, locked at cleanup
-      }
-      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
-      if (c.primitive === "resolve") return ok("true");
-      if (c.primitive === "wait") return ok("false"); // the dialog never appears (window went AX-blind)
-      return ok();
-    });
+    const { run, commands } = mockRunner(
+      (c) => {
+        if (isReach(c)) {
+          reachCalls += 1;
+          return ok(reachCalls === 1 ? "1 1 3" : "1 0 0"); // reachable at the gate, locked at cleanup
+        }
+        if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) {
+          return ok("false");
+        }
+        if (c.primitive === "resolve") return ok("true");
+        if (c.primitive === "wait") return ok("false"); // the dialog never appears (window went AX-blind)
+        return ok();
+      },
+      // An AX-blind session exposes nothing to walk, so the census cannot see
+      // the screen either (issue #620) — which is precisely why the ladder must
+      // fall through to the maneuver that works without it.
+      healthyScreen({ inspectable: false, dismissable: false }),
+    );
     const vector = createUiVector(config(true), run);
     const res = await vector.execute(invocation(recipe));
     expect(res.exitCode).toBe(1); // partial-state refusal
@@ -1358,5 +1395,306 @@ describe("ui driver — the measured Repeat-dialog shape fork (RDLG2)", () => {
       (c) => c.primitive === "press" && c.script?.includes("of menu 1 of menu item") === true,
     );
     expect(press?.script).toContain('menu item "Reschedule…"');
+  });
+});
+
+// ===========================================================================
+// The PER-STEP FOCUS GUARD (issue #620). A synthetic keystroke goes to whatever
+// application owns the screen, and a synthesized click lands on whatever is in
+// front — so before every one of those hops the driver reads the screen, and
+// refuses if the input would not reach the dialog it is driving. Element-
+// addressed hops are deliberately NOT guarded: System Events delivers those to
+// the element named, background or not, and guarding them would forbid good
+// work (the background heading chord, for one) for nothing.
+// ===========================================================================
+/** press (element-addressed) → key (keystroke-class). */
+const keyRecipe = (): UiRecipe => ({
+  op: "todo.make-repeating",
+  targetUuid: "TODO-1",
+  steps: [
+    {
+      primitive: "press",
+      label: "open the dialog",
+      path: `menu item "Repeat…" of menu "Items" of menu bar 1`,
+      addressing: "title",
+    },
+    { primitive: "key", label: "confirm with Return", keys: "return" },
+  ],
+});
+
+const isCensus = (c: UiCommand): boolean => c.label === "read the window and focus state";
+
+describe("ui driver — the per-step focus guard (#620)", () => {
+  it("refuses a keystroke hop when another application is frontmost — and NAMES it", async () => {
+    const { run, commands } = mockRunner(
+      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      healthyScreen({ front: "Finder", role: "AXList", kind: "none", dismissable: true }),
+    );
+    const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("Finder is frontmost");
+    expect(res.stderr).toContain("nothing was sent");
+    // The whole point: the keystroke was never dispatched.
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    // …and the guard did read the screen before deciding.
+    expect(commands.some(isCensus)).toBe(true);
+  });
+
+  it("refuses a keystroke hop when a system dialog macOS will not expose owns the screen", async () => {
+    const { run, commands } = mockRunner(
+      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      healthyScreen({ front: "", role: "", inspectable: false, dismissable: false }),
+    );
+    const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("a system dialog owns the screen");
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+  });
+
+  it("refuses a keystroke hop when the screen could not be read at all (fail-closed)", async () => {
+    const commands: UiCommand[] = [];
+    const run = async (c: UiCommand): Promise<UiRunResult> => {
+      commands.push(c);
+      // Every census answers with junk — an unreadable screen.
+      if (c.label === "read the window and focus state") return ok("");
+      return c.primitive === "resolve" ? ok("true") : ok();
+    };
+    const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("could not be read");
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+  });
+
+  it("refuses when the dialog in front is no longer the one this drive opened", async () => {
+    const twoKeys: UiRecipe = {
+      op: "todo.make-repeating",
+      targetUuid: "TODO-1",
+      steps: [
+        {
+          primitive: "press",
+          label: "open the dialog",
+          path: `menu item "Repeat…" of menu "Items" of menu bar 1`,
+          addressing: "title",
+        },
+        { primitive: "key", label: "first keystroke", keys: "down" },
+        { primitive: "key", label: "second keystroke", keys: "return" },
+      ],
+    };
+    const screen = healthyScreen();
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "key" && c.script?.includes("key code 125") === true) {
+        // Between the two hops, the Repeat dialog is replaced by another one.
+        screen.kind = "move-picker";
+      }
+      return c.primitive === "resolve" ? ok("true") : ok();
+    }, screen);
+    const res = await createUiVector(config(true), run).execute(invocation(twoKeys));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("no longer the one in front");
+    // The first keystroke went; the second did not.
+    expect(commands.filter((c) => c.primitive === "key").length).toBe(1);
+  });
+
+  it("does NOT guard element-addressed hops — one census for the whole drive, backgrounded", async () => {
+    // pauseRepeat is menu presses only: System Events delivers those to the
+    // element named whether or not Things is in front. The ONE census is the
+    // drive's open-dialog precondition, not a per-step guard.
+    const { run, commands } = mockRunner(
+      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      healthyScreen({ front: "Finder", opens: "none" }),
+    );
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(commands.filter(isCensus).length).toBe(1);
+  });
+});
+
+// ===========================================================================
+// Read-back first (issue #620 item 7): a field that already holds the target
+// value is left alone. The field incident died typing `1` into a field showing
+// `1` — a keystroke class that never needed to exist for the defaults.
+// ===========================================================================
+describe("ui driver — typing is skipped when the field already holds the value (#620)", () => {
+  it("compiles a read-back-first skip, a frontmost assertion and a focus assertion into the script", () => {
+    const script = axSetGroupNumberScript("group 1", "interval", "1");
+    // Read twice, a settle apart, before deciding — and no keystroke on that path.
+    expect(script).toContain('if v0 is "1" then');
+    expect(script).toContain('if v1 is "1" then return "OK-ALREADY"');
+    // The typing path re-asserts BOTH halves of the guard in the same hop.
+    expect(script).toContain('my fgAssertFront("type \\"1\\" into the interval field")');
+    expect(script).toContain("if not gotFocus then error");
+    // The skip is decided before any focus is taken.
+    expect(script.indexOf("OK-ALREADY")).toBeLessThan(script.indexOf("set focused of tf to true"));
+  });
+
+  it("discloses the skip in the completed-steps trail", async () => {
+    const { run } = mockRunner((c) => {
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "probe-dialog-shape") return ok("next-popup");
+      // The interval field already holds the requested value, so the script
+      // returns without typing.
+      if (c.primitive === "set-group-number") return ok("OK-ALREADY");
+      return ok("OK");
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(makeRepeatingRecipe("TODO-1", "daily", 1)),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("(already set)");
+  });
+});
+
+// ===========================================================================
+// The audited cleanup ladder (issue #620 items 3–4).
+// ===========================================================================
+const failingRecipe = (): UiRecipe => ({
+  op: "todo.make-repeating",
+  targetUuid: "TODO-1",
+  steps: [
+    {
+      primitive: "press",
+      label: "open the dialog",
+      path: `menu item "Repeat…" of menu "Items" of menu bar 1`,
+      addressing: "title",
+    },
+    {
+      primitive: "wait",
+      label: "the Repeat dialog",
+      path: "sheet 1",
+      timeoutMs: 1,
+      dynamic: true,
+    },
+  ],
+});
+
+describe("ui driver — the audited cleanup ladder (#620)", () => {
+  const answers = (c: UiCommand): UiRunResult => {
+    if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+    if (c.primitive === "resolve") return ok("true");
+    if (c.primitive === "wait") return ok("false");
+    return ok();
+  };
+
+  it("re-activates Things and RE-AUDITS before pressing anything when another app is in front", async () => {
+    const screen = healthyScreen({ dismissable: true });
+    const { run, commands } = mockRunner((c) => {
+      // Another app takes the screen the moment the dialog is up.
+      if (c.primitive === "press" && c.script?.includes("of menu bar 1") === true) {
+        screen.front = "Finder";
+      }
+      return answers(c);
+    }, screen);
+    const res = await createUiVector(config(true), run).execute(invocation(failingRecipe()));
+    expect(res.exitCode).toBe(1);
+    // The dialog was closed by its own Cancel button — which needs no focus at
+    // all — so no keystroke was ever aimed at Finder.
+    expect(commands.some((c) => c.primitive === "dismiss-dialog")).toBe(true);
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    expect(res.stderr).toContain("confirmed closed");
+  });
+
+  it("LEAVES ALONE a dialog this drive did not open, and says so with the sync warning", async () => {
+    // Something unrecognized is in front of Things: not ours to dismiss.
+    const { run, commands } = mockRunner(
+      answers,
+      healthyScreen({ opens: "other", dismissable: true }),
+    );
+    const res = await createUiVector(config(true), run).execute(invocation(failingRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("did not open");
+    expect(res.stderr).toContain("Things Cloud");
+    expect(commands.some((c) => c.primitive === "dismiss-dialog")).toBe(false);
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+  });
+
+  it("reports NO dialog left open when the screen shows none", async () => {
+    const { run, commands } = mockRunner(answers, healthyScreen({ opens: "none" }));
+    const res = await createUiVector(config(true), run).execute(invocation(failingRecipe()));
+    expect(res.stderr).toContain("No dialog was left open");
+    expect(commands.some((c) => c.primitive === "dismiss-dialog")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// The OPEN-DIALOG precondition (MODALX1 §3/§4 → issue #620). A dialog already
+// standing when a drive starts is not ours: it disables the menu bar and
+// swallows keyboard input, and — the part a driver cannot see — it makes the
+// app ignore scripted changes app-wide and holds Things Cloud sync.
+// ===========================================================================
+describe("ui driver — a drive refuses to start with a dialog already open (#620)", () => {
+  it("refuses before pressing anything, naming the dialog and the sync consequence", async () => {
+    const { run, commands } = mockRunner(
+      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      healthyScreen({ kind: "repeat", depth: 1 }),
+    );
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("a dialog is already open in Things");
+    expect(res.stderr).toContain("Things Cloud");
+    expect(res.stderr).toContain("Nothing was pressed");
+    // The preamble ran (reveal selects the target); nothing was actuated.
+    expect(commands.some((c) => c.primitive === "press")).toBe(false);
+  });
+
+  it("names the stack when dialogs are piled up (they dismiss one at a time)", async () => {
+    const { run } = mockRunner(
+      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      healthyScreen({ kind: "other", depth: 3 }),
+    );
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.stderr).toContain("on top of 2 more");
+  });
+
+  it("proceeds when the screen is clear", async () => {
+    const { run } = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.exitCode).toBe(0);
+  });
+});
+
+// The #625 comparator: the dialog renders near dates RELATIVELY, and the audit
+// used to string-compare those renderings against the typed ISO date — so
+// `make-repeating --when <today>` refused its own correct write, every time.
+const auditScript = (): string =>
+  axAuditDialogScript({
+    shell: "sheet 1 of window 1",
+    group: "group 1 of sheet 1 of window 1",
+    controls: [
+      {
+        kind: "occurrence-popup",
+        label: "first occurrence",
+        path: "pop up button 2 of group 1 of sheet 1 of window 1",
+        expected: ["2026-07-05"],
+      },
+    ],
+  });
+
+describe("pre-commit audit — relative date renderings (#625)", () => {
+  it("resolves the app's relative words against its own clock, never by string match", () => {
+    const s = auditScript();
+    expect(s).toContain('if s is "Today" then return my aqStamp(rightNow)');
+    expect(s).toContain('if s is "Tomorrow" then return my aqStamp(rightNow + 86400)');
+    // A weekday-only rendering is resolved inside the coming week — bounded, so
+    // a word that means something else cannot silently produce a date.
+    expect(s).toContain("repeat with k from 1 to 7");
+    expect(s).toContain("weekday of cand");
+  });
+
+  it("still parses absolute renderings, and still fails closed on an unknown one", () => {
+    const s = auditScript();
+    // The relative resolver runs FIRST, then the existing date parses.
+    expect(s.indexOf("aqRelative")).toBeLessThan(s.indexOf("set d to date s"));
+    expect(s).toContain("return missing value");
   });
 });
