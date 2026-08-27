@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- TCCDUR1's signing-class discriminator: a Developer-ID-signed,
+       LSUIElement app that reads the Things container with its OWN code.
+       Lab-only — never shipped, never installed on a production host. -->
+  <key>CFBundleIdentifier</key>
+  <string>com.pixelcog.tccdur1-probe</string>
+  <key>CFBundleName</key>
+  <string>TCCDUR1 Probe</string>
+  <key>CFBundleExecutable</key>
+  <string>tccdur1-probe</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>

@@ -1,0 +1,61 @@
+// A SYSTEM-WIDE AX tool (lifted verbatim from research-apdp1.sh). The TCC
+// consent modal belongs to UserNotificationCenter, not to the requesting app,
+// so a per-app AX dump cannot see it: this enumerates every running
+// application that has a window.
+//
+//   osascript -l JavaScript axsys.jxa dump          full census
+//   osascript -l JavaScript axsys.jxa press Allow   AXPress a button by title
+ObjC.import('AppKit'); ObjC.import('ApplicationServices'); ObjC.import('CoreGraphics')
+function attr(el,n){var o=Ref();if($.AXUIElementCopyAttributeValue(el,$(n),o)!==0)return null;return ObjC.castRefToObject(o[0])}
+function sv(el,n){var v=attr(el,n);try{return v?String(v.js):''}catch(e){return ''}}
+function kids(el){var c=attr(el,'AXChildren');if(!c)return[];var a=[];for(var i=0;i<c.count;i++)a.push(c.objectAtIndex(i));return a}
+function flat(el,acc,d){acc.push(el); if(d>18)return acc; var ch=kids(el); for(var i=0;i<ch.length;i++)flat(ch[i],acc,d+1); return acc}
+function frame(el){var p=attr(el,'AXPosition'),z=attr(el,'AXSize');function d(x){if(!x)return null;return ObjC.castRefToObject($.CFCopyDescription(x)).js}
+  var pp=d(p),zz=d(z);var mp=pp&&pp.match(/x:([-0-9.]+) y:([-0-9.]+)/);var mz=zz&&zz.match(/w:([-0-9.]+) h:([-0-9.]+)/)
+  return {x:mp?+mp[1]:null,y:mp?+mp[2]:null,w:mz?+mz[1]:null,h:mz?+mz[2]:null}}
+function line(el,d){
+  var p=['role='+sv(el,'AXRole')]
+  var s=sv(el,'AXSubrole'); if(s)p.push('sub='+s)
+  var t=sv(el,'AXTitle'); if(t)p.push('ttl='+t)
+  var de=sv(el,'AXDescription'); if(de)p.push('desc='+de.slice(0,160))
+  var v=sv(el,'AXValue'); if(v)p.push('val='+String(v).slice(0,240))
+  var f=frame(el); if(f.x!==null)p.push('@['+f.x+','+f.y+' '+f.w+'x'+f.h+']')
+  return Array(d+1).join('  ')+p.join(' | ')}
+function procs(){
+  var out=[], ws=$.NSWorkspace.sharedWorkspace.runningApplications
+  for(var i=0;i<ws.count;i++){var a=ws.objectAtIndex(i)
+    out.push({name:String(a.localizedName.js), bid:a.bundleIdentifier?String(a.bundleIdentifier.js):'', pid:a.processIdentifier})}
+  return out}
+function clickPt(x,y){var pt=$.CGPointMake(x,y)
+  function post(t){$.CGEventPost($.kCGHIDEventTap,$.CGEventCreateMouseEvent($(),t,pt,$.kCGMouseButtonLeft))}
+  post($.kCGEventMouseMoved); delay(0.3); post($.kCGEventLeftMouseDown); delay(0.12); post($.kCGEventLeftMouseUp)}
+function run(argv){
+  var cmd=argv[0]||'dump', want=argv[1]||''
+  var ps=procs(), acc=[]
+  for(var i=0;i<ps.length;i++){
+    var app=$.AXUIElementCreateApplication(ps[i].pid)
+    var wins=kids(app)
+    if(!wins.length) continue
+    if(cmd==='dump'){
+      acc.push('=== PROC '+ps[i].name+' ('+ps[i].bid+') pid='+ps[i].pid+' windows='+wins.length+' ===')
+      for(var w=0;w<wins.length;w++){
+        var all=[]; flat(wins[w],all,0)
+        acc.push('  --- window '+(w+1)+' '+line(wins[w],0).trim()+' ---')
+        for(var k=1;k<all.length && k<200;k++) acc.push('  '+line(all[k],1))
+      }
+      continue
+    }
+    if(cmd==='press'){
+      var all2=[]; for(var w2=0;w2<wins.length;w2++) flat(wins[w2],all2,0)
+      var btns=all2.filter(function(e){return sv(e,'AXRole')==='AXButton'})
+      for(var b=0;b<btns.length;b++){
+        if(sv(btns[b],'AXTitle')===want){
+          var rc=$.AXUIElementPerformAction(btns[b],$('AXPress'))
+          if(rc!==0){var f=frame(btns[b]); clickPt(f.x+f.w/2,f.y+f.h/2); return 'AXPress rc='+rc+' -> CGEvent-clicked "'+want+'" in '+ps[i].name}
+          return 'PRESSED "'+want+'" in '+ps[i].name+' ('+ps[i].bid+' pid='+ps[i].pid+')'
+        }
+      }
+    }
+  }
+  return cmd==='dump' ? (acc.length?acc.join('\n'):'(no process has any window)') : 'NO BUTTON "'+want+'" in any process'
+}
