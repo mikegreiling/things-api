@@ -144,7 +144,17 @@ function outstandingConsent(hello: DeputyHello | null): boolean {
   if (hello.axTrusted === false) return true;
   const automation = hello.automation;
   if (automation === undefined) return false;
-  return automation.things !== "granted" || automation.systemEvents !== "granted";
+  return consentOwed(automation.things) || consentOwed(automation.systemEvents);
+}
+
+/**
+ * `not-running` is the one value that is NOT a standing: with the target down
+ * the ask-false determination has no answer to give, so nothing is owed and no
+ * sitting would settle anything (#610 for System Events, #617 for Things).
+ * Steering a human to a ceremony on it is the false-onboarding loop itself.
+ */
+function consentOwed(standing: string): boolean {
+  return standing !== "granted" && standing !== "not-running";
 }
 
 function buildHelpersReport(configMode: HelpersMode, deps: HelpersReportDeps = {}): HelpersReport {
@@ -400,6 +410,8 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
   // itself opening the container and raising the dialog it is diagnosing.
   const capability = {
     read: readCapability(dbPath !== undefined ? { dbPath } : {}),
+    // SURVEY, so a closed Things is REPORTED (`deputy-target-dormant`) and
+    // never started: doctor diagnoses the machine, it does not rearrange it.
     write: writeCapability(),
     ui: uiCapability(),
   };

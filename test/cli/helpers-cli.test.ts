@@ -211,6 +211,19 @@ describe("helpers status — the auto routing gate", () => {
     expect(out).not.toContain("dormant");
   });
 
+  it("a CLOSED Things is reported as unreadable, never as dormant routing (#617)", async () => {
+    markInstalled();
+    await startMockDeputy({
+      axTrusted: true,
+      automation: { things: "not-running", systemEvents: "granted" },
+    });
+    await run(["helpers", "status"]);
+    const out = stdout.join("");
+    expect(out).toContain("unreadable while Things is not running");
+    expect(out).not.toContain("dormant");
+    expect(out).not.toContain("onboarding incomplete");
+  });
+
   it("stays dormant for helpers too old to report their permission standing", async () => {
     markInstalled();
     await startMockDeputy();

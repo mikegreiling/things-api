@@ -48,7 +48,7 @@ function capabilityLines(capability: DiagnoseReport["capability"]): string[] {
  * whether it could — and this section must never regress that: it renders, it
  * does not probe.
  */
-function permissionLines(report: DiagnoseReport): string[] {
+export function permissionLines(report: DiagnoseReport): string[] {
   const { read, write, ui } = report.capability;
   const hostLabel =
     read.host.bundleId !== null ? `${read.host.name} (${read.host.bundleId})` : read.host.name;
@@ -72,6 +72,11 @@ function permissionLines(report: DiagnoseReport): string[] {
         return "deputy TCC Automation (Things API Helper)";
       case "direct-granted":
         return `host TCC Automation (${hostLabel})`;
+      // The helpers may well hold it — a closed app is simply not a target
+      // macOS will answer for, so this is a liveness row, not an absent-grant
+      // one. Doctor reports it and does NOT start Things to resolve it.
+      case "deputy-target-dormant":
+        return "unreadable — Things is not running";
       case "direct-escape":
         return "the lab's direct escape (not consumer surface)";
       default:

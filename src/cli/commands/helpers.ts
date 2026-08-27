@@ -49,6 +49,11 @@ function missingRequisites(status: HelpersStatus): string[] {
     missing.push("the deputy is not answering");
   } else if (hello.automation === undefined) {
     missing.push("automation → Things (these helpers predate the permission handshake — rebuild)");
+  } else if (hello.automation.things === "not-running") {
+    // NOT a missing requisite (#617): with Things closed macOS has no
+    // determination to give, so this says nothing about the grant. Routing
+    // defers on it and the write gate settles it by starting the app —
+    // {@link routingLine} says so in liveness words.
   } else if (hello.automation.things !== "granted") {
     missing.push(`automation → Things (${hello.automation.things})`);
   }
@@ -70,9 +75,16 @@ function routingLine(status: HelpersStatus): string {
         return "auto — nothing installed, so everything runs direct (things helpers setup to change that)";
       }
       const missing = missingRequisites(status);
-      return missing.length > 0
-        ? `auto — dormant: onboarding incomplete (missing: ${missing.join("; ")}) — things helpers setup`
-        : "auto — routing (onboarded): the installed helpers are used while healthy; a failure is reported, never silent";
+      if (missing.length > 0) {
+        return `auto — dormant: onboarding incomplete (missing: ${missing.join("; ")}) — things helpers setup`;
+      }
+      if (status.deputy.hello?.automation?.things === "not-running") {
+        return (
+          "auto — routing: app control for Things is unreadable while Things is not running; " +
+          "a change starts it in the background and reads it then"
+        );
+      }
+      return "auto — routing (onboarded): the installed helpers are used while healthy; a failure is reported, never silent";
     }
   }
 }

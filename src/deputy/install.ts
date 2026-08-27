@@ -59,7 +59,7 @@ import {
   readerTokenPath,
   READER_TOKEN_ENV,
 } from "./protocol.ts";
-import { type TargetWake, wakeSystemEvents } from "./wake.ts";
+import { type TargetWake, wakeSystemEvents, wakeThings } from "./wake.ts";
 
 /**
  * Where the LaunchAgent plists live. THINGS_API_LAUNCH_AGENTS_DIR overrides
@@ -855,6 +855,13 @@ export interface OnboardDeps {
    * probing through this ceremony's own channel.
    */
   wakeSystemEvents?: (probe: () => AutomationPermission | undefined) => TargetWake;
+  /**
+   * The same for a closed Things (#617), so the banner does not promise an
+   * app-control dialog the helpers already hold — and so the leg's Apple Event
+   * lands on a running app instead of auto-launching it frontmost (A40/A41).
+   * Default: ./wake.ts, probing through this ceremony's own channel.
+   */
+  wakeThings?: (probe: () => AutomationPermission | undefined) => TargetWake;
   /** Is `ui-enabled` already on? Default: the stored config. */
   uiEnabled?: () => boolean;
   /** Turn `ui-enabled` on after a successful GUI tier. Default: the config file. */
@@ -1279,12 +1286,14 @@ function outstandingPrompts(
   hello: DeputyHello,
   reader: ReaderStanding,
   tier: OnboardTier,
+  /** Things' standing AFTER any wake — never the raw handshake value. */
+  automationThings: AutomationPermission | undefined,
   /** System Events' standing AFTER any wake — never the raw handshake value. */
   systemEvents: AutomationPermission | undefined,
 ): OnboardLeg[] {
   const outstanding: OnboardLeg[] = [];
   if (reader === "needs-panel") outstanding.push("reader-read-grant");
-  if (willRaiseAutomationDialog(hello.automation?.things)) outstanding.push("automation-things");
+  if (willRaiseAutomationDialog(automationThings)) outstanding.push("automation-things");
   if (tier === "gui") {
     if (willRaiseAutomationDialog(systemEvents)) {
       outstanding.push("automation-system-events");
@@ -1372,12 +1381,27 @@ function runOnboardCeremony(
         `note: the installed helpers are v${hello.deputyVersion}, this package expects v${EXPECTED_HELPERS_VERSION} — rebuild with \`bash scripts/build-helpers.sh\` and rerun \`things helpers setup\` for the full ceremony`,
       );
     }
-    // A dormant System Events is settled BEFORE the count, never counted as a
-    // dialog (#610). macOS reaps the agent when it is idle and the ask-false
+    // A dormant target is settled BEFORE the count, never counted as a dialog
+    // (#610 for System Events, #617 for Things). macOS reaps the agent when it
+    // is idle and the user closes their own app, and the ask-false
     // determination has no answer for a target that is down, so `not-running`
     // says nothing about the grant — starting it (a background launch, not an
     // Apple event) is what makes the standing readable, and only then can the
-    // banner promise the right number of dialogs.
+    // banner promise the right number of dialogs. For Things the pre-launch
+    // also keeps the leg's own Apple Event from yanking the app frontmost
+    // (A40/A41).
+    let automationThings = hello.automation?.things;
+    if (automationThings === "not-running") {
+      progress("automation → Things: the app was closed — starting it to read its standing");
+      const wake = (deps.wakeThings ?? ((probe) => wakeThings(env, { probe })))(() => {
+        try {
+          return channel.hello().automation?.things;
+        } catch {
+          return undefined;
+        }
+      });
+      automationThings = wake.standing;
+    }
     let systemEvents = hello.automation?.systemEvents;
     if (tier === "gui" && systemEvents === "not-running") {
       progress(
@@ -1395,7 +1419,7 @@ function runOnboardCeremony(
     // Size the sitting BEFORE raising anything, so whoever started this knows
     // whether they have to stay at the screen.
     const reader = readerStanding(env, deps.readerProbe ?? (() => readerProbeDefault(env)));
-    outstanding = outstandingPrompts(hello, reader, tier, systemEvents);
+    outstanding = outstandingPrompts(hello, reader, tier, automationThings, systemEvents);
     progress(
       outstanding.length === 0
         ? "nothing to raise — every permission the helpers need is already on record"
@@ -1435,7 +1459,7 @@ function runOnboardCeremony(
           script: 'tell application "Things3" to count of areas',
           settingsName: "Things3",
         },
-        hello.automation?.things,
+        automationThings,
         refreshAutomation("things"),
         automationTimeoutMs,
         progress,

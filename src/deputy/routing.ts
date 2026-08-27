@@ -31,6 +31,13 @@
  * the half it earned. Accessibility and System Events are NOT requisite: the
  * UI vector is separately double-gated and refuses on its own.
  *
+ * The one answer that gate cannot judge is `not-running`: with Things closed,
+ * macOS has no determination to give, so the value describes the app's PROCESS
+ * and not its grant (#617). Deactivating on it would drop a fully onboarded
+ * machine onto the direct path every time its owner quit the app. That case is
+ * DEFERRED instead — active, `automationUnproven` — and settled by the write
+ * gate, which is the one caller allowed to start the target (./wake.ts).
+ *
  * Fallback is decided at ACTIVATION, never mid-operation: if a helper is
  * expected but unreachable (or speaks a different protocol), the whole process
  * runs direct with one stderr notice — a half-routed operation is worse than
@@ -78,6 +85,14 @@ interface ActiveState {
   client: DeputyAsyncClient;
   /** Memoized `locate` result (undefined = not asked yet this process). */
   dbPathMemo?: string | null;
+  /**
+   * `auto` only: the deputy answered `not-running` for Things, so the onboarding
+   * gate could not be judged — a closed app is a liveness fact, not a missing
+   * grant (#617). The state is active on that deferral and must be settled by
+   * {@link settleDeputyAutomation} once a caller with dispatch intent has woken
+   * the target and re-read the standing.
+   */
+  automationUnproven?: boolean;
 }
 
 interface InactiveState {
@@ -265,6 +280,28 @@ function activate(env: NodeJS.ProcessEnv): RoutingState {
   // PROVE the grant before it carries traffic; `true` is an explicit
   // instruction to route regardless and stays loud on failure.
   const automationThings = helloResult.automation?.things;
+  if (mode === "auto" && automationThings === "not-running") {
+    // LIVENESS, NOT AUTHORIZATION (#617). A closed Things is what makes the
+    // deputy's ask-false determination answer procNotFound, so `not-running`
+    // says nothing about the grant — and a machine whose owner simply quit the
+    // app would be deactivated here, printed a notice claiming a missing
+    // permission, and dropped onto the direct path the helpers exist to end.
+    // The decision is DEFERRED instead: the deputy stays active but UNPROVEN,
+    // and the write gate settles it (wake the target, re-read the standing,
+    // then {@link settleDeputyAutomation}) before anything is dispatched.
+    // Nothing is launched from here — activation happens on every invocation,
+    // including pure reads and `doctor`, and none of those may start the user's
+    // app as a side effect.
+    return {
+      active: true,
+      reason: null,
+      hello: helloResult,
+      token,
+      bridge,
+      client: new DeputyAsyncClient(socketPath),
+      automationUnproven: true,
+    };
+  }
   if (mode === "auto" && automationThings !== "granted") {
     bridge.close();
     // Absent fields = helpers predating the TCC handshake. Not provably
@@ -295,6 +332,50 @@ function activate(env: NodeJS.ProcessEnv): RoutingState {
 export function deputyRouting(env: NodeJS.ProcessEnv = process.env): DeputyRouting {
   state ??= activate(env);
   return state;
+}
+
+/**
+ * Finish the onboarding gate that a dormant Things deferred (#617).
+ *
+ * Called by the write gate with the standing it read AFTER waking the target,
+ * which is the first moment the grant is knowable. `granted` proves the deputy
+ * and the memoized handshake is corrected in place, so every later verdict in
+ * this process reads the truth without waking anything again. Anything else is
+ * the state the activation gate would have refused on: the transports are
+ * closed, the deferred notice is printed, and the process runs direct — because
+ * an event routed to a deputy that lacks the grant just relocates the consent
+ * dialog to a helper nobody is watching.
+ *
+ * A no-op unless a deferral is actually outstanding, so `true` mode (which
+ * never defers) and every non-deputy machine are untouched.
+ */
+export function settleDeputyAutomation(standing: string | undefined): void {
+  const current = state;
+  if (current === null || !current.active || current.automationUnproven !== true) return;
+  if (standing === "granted") {
+    state = {
+      ...current,
+      automationUnproven: false,
+      hello: {
+        ...current.hello,
+        ...(current.hello.automation !== undefined && {
+          automation: { ...current.hello.automation, things: "granted" },
+        }),
+      },
+    };
+    return;
+  }
+  current.bridge.close();
+  current.client.close();
+  notice(
+    true,
+    `the helpers have no app-control permission for Things (${standing ?? "unknown"}), so app automation runs DIRECT — \`things helpers setup\` settles it in one sitting.`,
+  );
+  state = {
+    active: false,
+    reason: `onboarding incomplete (automation → Things: ${standing ?? "unknown"})`,
+    hello: null,
+  };
 }
 
 function activeState(env: NodeJS.ProcessEnv): ActiveState | null {

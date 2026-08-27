@@ -165,6 +165,73 @@ describe("app control missing blocks BEFORE the app is touched", () => {
     expect(calls).toHaveLength(0);
   });
 
+  /**
+   * A CLOSED Things is liveness, not a missing grant (#617). The gate is the
+   * caller with dispatch intent, so it asks for the verdict with the app
+   * STARTED — which means a dormant machine resolves rather than refuses, and
+   * the only way this refusal shape is reached is a wake that did not take.
+   */
+  describe("a dormant Things", () => {
+    it("asks for the verdict with dispatch intent, so the wake happens before judging", async () => {
+      const asked: (string | undefined)[] = [];
+      const uuid = seedTodo(fixture.db, { title: "a synthetic to-do" });
+      const { vector, calls } = fakeAppleScriptVector(uuid);
+      const result = await runMutation(
+        {
+          ...deps(vector, capability({ mode: "deputy" })),
+          writeCapability: (options) => {
+            asked.push(options.purpose);
+            return capability({ mode: "deputy" });
+          },
+        },
+        "todo.delete",
+        { uuid },
+      );
+      expect(asked).toEqual(["dispatch"]);
+      expect(result.kind).not.toBe("blocked");
+      expect(calls).toHaveLength(1);
+    });
+
+    it("obeys `auto-launch: false` — a survey verdict, so the app is never started", async () => {
+      const asked: (string | undefined)[] = [];
+      const uuid = seedTodo(fixture.db, { title: "a synthetic to-do" });
+      const { vector } = fakeAppleScriptVector(uuid);
+      await runMutation(
+        {
+          ...deps(vector, capability({ mode: "deputy" })),
+          config: { ...CONFIG, autoLaunch: false },
+          writeCapability: (options) => {
+            asked.push(options.purpose);
+            return capability({ mode: "deputy" });
+          },
+        },
+        "todo.delete",
+        { uuid },
+      );
+      expect(asked).toEqual(["survey"]);
+    });
+
+    it("a wake that did not take refuses on LIVENESS, with no permission steer", async () => {
+      const { result, calls } = await update(
+        capability({
+          mode: "deputy-target-dormant",
+          detail:
+            "Things is not running and it did not come up within 10s of being started — " +
+            "app control for it cannot be read while it is down",
+          remediation: ["open Things, then rerun this command"],
+        }),
+      );
+      expect(result.kind).toBe("blocked");
+      if (result.kind === "blocked") {
+        expect(result.reason).toBe("environment");
+        expect(result.detail).toContain("Things is not running");
+        expect(result.remediation).toContain("open Things");
+        expect(result.remediation).not.toContain("things setup");
+      }
+      expect(calls, "nothing may be dispatched at a target that is down").toHaveLength(0);
+    });
+  });
+
   it("the refusal is recorded as an environment block, not a failed write", async () => {
     await update(capability({ mode: "direct-unknown", remediation: ["run `things setup`"] }));
     expect(auditRecords.length).toBeGreaterThan(0);

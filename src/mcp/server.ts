@@ -851,6 +851,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   // and gates the tools, and is never re-taken.
   const capability: BakedCapability = options.capability ?? {
     read: readCapability(options.dbPath !== undefined ? { dbPath: options.dbPath } : {}),
+    // SURVEY: starting a server must never start the user's app as a side
+    // effect. A closed Things reads as the liveness state; the write gate wakes
+    // it when a change is actually dispatched (#617).
     write: writeCapability(),
     ui: uiCapability(),
   };
