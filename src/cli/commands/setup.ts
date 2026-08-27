@@ -56,6 +56,14 @@ export function registerSetup(program: Command): void {
       // would ask for and asks nothing.
       if (opts.dryRun === true) {
         const survey = surveySetup();
+        // Leg (d) raises no dialog, so it is absent from `outstanding` — but it
+        // is still work the human must do, and "everything is already in place"
+        // would be a lie on a machine whose URL vector is switched off.
+        const urlsOff =
+          survey.urlScheme.mode === "disabled" || survey.urlScheme.mode === "never-asked";
+        const urlsTail = urlsOff
+          ? " Things URLs is off — no dialog can turn it on, so flip it in Things ▸ Settings ▸ General."
+          : "";
         const lines = [
           `host app:    ${survey.host.name}`,
           `read access: ${survey.read.mode} — ${survey.read.detail}`,
@@ -65,10 +73,16 @@ export function registerSetup(program: Command): void {
               ? "all installed"
               : `missing ${survey.shortcutsMissing.join(", ")}`
           }`,
+          // Leg (d) is reported but never counted in the "would ask for" line
+          // below: it is an app setting, so a real run raises nothing for it.
+          `things urls: ${survey.urlScheme.mode} — ${survey.urlScheme.detail}`,
           "",
-          survey.outstanding.length === 0
-            ? "dry run: everything is already in place — a real run would ask nothing"
-            : `dry run: a real run would ask for ${survey.outstanding.join(", ")} — nothing was asked`,
+          (survey.outstanding.length === 0
+            ? urlsOff
+              ? "dry run: a real run would raise no dialog — nothing was asked."
+              : "dry run: everything is already in place — a real run would ask nothing."
+            : `dry run: a real run would ask for ${survey.outstanding.join(", ")} — nothing was asked.`) +
+            urlsTail,
         ];
         if (opts.json === true) {
           process.stdout.write(

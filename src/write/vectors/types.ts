@@ -656,4 +656,20 @@ export interface WriteVector {
    * imports the developer's own grants into CI).
    */
   drivesGui?: boolean;
+  /**
+   * This vector delivers MUTATIONS through `things:///` URLs, so it is subject
+   * to Things' own in-app authorization — Settings ▸ General ▸ "Enable Things
+   * URLs" (URLEN1, #611). No macOS consent class is involved, but the two
+   * not-enabled states are both silent from the caller's side: an explicitly
+   * disabled app discards the command outright, and an app nobody has answered
+   * the first-use dialog for PARKS the command behind that dialog. Either way
+   * the write reports a silent no-op minutes later, so the pipeline reads the
+   * setting prompt-free and refuses before dispatch instead.
+   *
+   * Set ONLY by {@link import("./url-scheme.ts").createUrlSchemeVector}, for the
+   * same reason as its two siblings above: engine tests substitute fakes under
+   * the real ids, and a fake that opens no URL must not be gated on the state of
+   * the developer's own Things install.
+   */
+  dispatchesUrls?: boolean;
 }

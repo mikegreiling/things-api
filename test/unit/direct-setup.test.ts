@@ -15,9 +15,29 @@ import {
   surveySetup,
   type DirectSetupDeps,
 } from "../../src/direct-setup.ts";
-import { resetCapabilityForTests } from "../../src/capability.ts";
+import {
+  resetCapabilityForTests,
+  type UrlSchemeCapability,
+  type UrlSchemeCapabilityMode,
+} from "../../src/capability.ts";
 import { CeremonyStopped, createWizard } from "../../src/wizard.ts";
 import { makeTempDir } from "../fixtures/temp-dir.ts";
+
+/** An injected "Enable Things URLs" verdict — never this machine's own. */
+function urlStanding(mode: UrlSchemeCapabilityMode): UrlSchemeCapability {
+  return {
+    mode,
+    detail:
+      mode === "enabled"
+        ? "Things ▸ Settings ▸ General ▸ Enable Things URLs is on"
+        : `test standing: ${mode}`,
+    remediation:
+      mode === "enabled" || mode === "unreadable"
+        ? []
+        : ["turn on Things ▸ Settings ▸ General ▸ Enable Things URLs, then retry"],
+    host: { bundleId: "com.mitchellh.ghostty", name: "Ghostty" },
+  };
+}
 
 /**
  * A ceremony wired entirely to stubs. Defaults describe the hardest machine:
@@ -54,6 +74,9 @@ function ceremony(over: Partial<DirectSetupDeps> = {}): DirectSetupDeps {
       missing: ["things-proxy-find-items", "things-proxy-create-heading"],
       detail: "none installed",
     }),
+    // Leg (d) is injected by default so the base ceremony never reads this
+    // developer's own Things preferences; the leg-(d) cells override it.
+    urlSchemeStanding: () => urlStanding("enabled"),
     openContainer: () => {
       throw Object.assign(new Error("EPERM"), { code: "EPERM" });
     },
@@ -249,7 +272,12 @@ describe("leg (a) — read access", () => {
     );
     expect(sent, "app control is still asked for").toBe(1);
     expect(sheets.length, "the install sheets still open").toBeGreaterThan(0);
-    expect(result.steps.map((s) => s.leg)).toEqual(["read-access", "app-control", "shortcuts"]);
+    expect(result.steps.map((s) => s.leg)).toEqual([
+      "read-access",
+      "app-control",
+      "shortcuts",
+      "url-scheme",
+    ]);
   });
 
   it("strict mode provokes the session dialog directly — no choice, no poll", () => {
@@ -399,8 +427,83 @@ describe("exit semantics and the closing line", () => {
 
   it("there is NO Accessibility leg — GUI-driving is helpers-only (Article IV)", () => {
     const result = directSetup(ceremony());
-    expect(result.steps.map((s) => s.leg)).toEqual(["read-access", "app-control", "shortcuts"]);
+    expect(result.steps.map((s) => s.leg)).toEqual([
+      "read-access",
+      "app-control",
+      "shortcuts",
+      "url-scheme",
+    ]);
     expect(JSON.stringify(result)).not.toMatch(/accessibility/i);
+  });
+});
+
+/**
+ * Leg (d) — Things' own "Enable Things URLs" (URLEN1, #611). The only leg that
+ * raises nothing: it is an app setting, not a macOS grant, so there is no
+ * dialog to provoke and nothing the ceremony can flip on the human's behalf. It
+ * earns its place because the off state is otherwise silent — the app parks
+ * every URL command in an alert on its own window rather than running it — and
+ * a fresh install, which is exactly who runs this ceremony, has never answered
+ * it.
+ */
+describe("leg (d) — Things' own URL authorization", () => {
+  it("on → granted and already satisfied", () => {
+    const result = directSetup(ceremony({ urlSchemeStanding: () => urlStanding("enabled") }));
+    const leg = result.steps.find((s) => s.leg === "url-scheme");
+    expect(leg?.state).toBe("granted");
+    expect(leg?.alreadySatisfied).toBe(true);
+  });
+
+  it("off → pending, and the progress line names the exact Settings path", () => {
+    const deps = ceremony({ urlSchemeStanding: () => urlStanding("disabled") });
+    expect(progressOf(deps).join("\n")).toContain(
+      "Things ▸ Settings ▸ General ▸ Enable Things URLs",
+    );
+    expect(
+      directSetup(ceremony({ urlSchemeStanding: () => urlStanding("disabled") })).steps.find(
+        (s) => s.leg === "url-scheme",
+      )?.state,
+    ).toBe("pending");
+  });
+
+  it("never-asked → pending too: a fresh install is the whole point of the leg", () => {
+    const result = directSetup(ceremony({ urlSchemeStanding: () => urlStanding("never-asked") }));
+    expect(result.steps.find((s) => s.leg === "url-scheme")?.state).toBe("pending");
+    expect(result.pending).toBe(true);
+  });
+
+  it("unreadable → skipped: claiming the setting is unset would be a guess", () => {
+    const result = directSetup(ceremony({ urlSchemeStanding: () => urlStanding("unreadable") }));
+    expect(result.steps.find((s) => s.leg === "url-scheme")?.state).toBe("skipped");
+  });
+
+  it("it is NOT counted in the dialog banner — this leg raises nothing", () => {
+    // `outstanding` means "dialogs about to appear". A Settings toggle is not
+    // one, so a machine whose ONLY gap is this leg must still be told that
+    // nothing is going to be raised.
+    const settled: Partial<DirectSetupDeps> = {
+      fdaProbe: () => {},
+      automationAuthValue: () => 2,
+      shortcutProxies: () => ({ present: ["x"], missing: [], detail: "all installed" }),
+      urlSchemeStanding: () => urlStanding("disabled"),
+    };
+    const survey = surveySetup(ceremony(settled));
+    expect(survey.outstanding).toEqual([]);
+    expect(survey.urlScheme.mode).toBe("disabled");
+    expect(progressOf(ceremony(settled)).join("\n")).toContain("nothing to raise");
+  });
+
+  it("its pending state still carries into the closing line, so a rerun is prompted", () => {
+    const result = directSetup(
+      ceremony({
+        fdaProbe: () => {},
+        automationAuthValue: () => 2,
+        shortcutProxies: () => ({ present: ["x"], missing: [], detail: "all installed" }),
+        urlSchemeStanding: () => urlStanding("never-asked"),
+      }),
+    );
+    expect(result.closing).toContain("still outstanding");
+    expect(result.closing).toContain("Things URLs");
   });
 });
 

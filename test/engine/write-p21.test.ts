@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
+import type { UrlSchemeCapability, UrlSchemeCapabilityMode } from "../../src/capability.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
@@ -23,13 +24,23 @@ const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
 let fixture: FixtureDb;
 let auditRecords: AuditRecord[];
 let lockSeq = 0;
-/** On-disk 'Enable Things URLs' state injected into the pipeline (never the host's). */
-let urlSchemeState: boolean | null;
+/** 'Enable Things URLs' standing injected into the pipeline (never the host's). */
+let urlSchemeState: UrlSchemeCapabilityMode;
+
+/** A capability verdict in the injected mode — no host file is ever read. */
+function fakeUrlScheme(): UrlSchemeCapability {
+  return {
+    mode: urlSchemeState,
+    detail: `test standing: ${urlSchemeState}`,
+    remediation: urlSchemeState === "enabled" ? [] : ["turn on Enable Things URLs"],
+    host: { bundleId: null, name: "this terminal" },
+  };
+}
 
 beforeEach(() => {
   fixture = buildFixtureDb();
   auditRecords = [];
-  urlSchemeState = true;
+  urlSchemeState = "enabled";
 });
 afterEach(() => {
   fixture.close();
@@ -84,6 +95,11 @@ function effectVector(
   return {
     id,
     matrix,
+    // The url-scheme stand-in declares what the real one declares, so the URL
+    // gate and the URL failure-attribution theory both engage exactly as they
+    // do in production. Every other id leaves it unset and is untouched by
+    // either — which is the point of keying on the declaration rather than the id.
+    ...(id === "url-scheme" && { dispatchesUrls: true }),
     async execute() {
       effect?.();
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -125,7 +141,7 @@ function deps(vectors: WriteVector[], environment?: EnvironmentTracker): WriteDe
     isAppRunning: () => true,
     ensureRunning: async () => true,
     now: () => NOW,
-    urlSchemeEnabled: () => urlSchemeState,
+    urlSchemeCapability: fakeUrlScheme,
     ...(environment !== undefined && { environment }),
   };
 }
@@ -173,8 +189,11 @@ describe("transport failure attribution", () => {
 });
 
 describe("verification failure attribution", () => {
-  it("url-scheme silent no-op with 'Enable Things URLs' off on disk → feature-disabled", async () => {
-    urlSchemeState = false;
+  it("url-scheme silent no-op with the setting UNREADABLE → feature-disabled", async () => {
+    // The readable not-enabled states never reach verification any more — gate
+    // 5c refuses them before dispatch (test/engine/write-capability-gate). What
+    // survives to the hint is exactly the case the gate cannot judge.
+    urlSchemeState = "unreadable";
     const todo = seedTodo(fixture.db, { title: "noop" });
     const vector = effectVector("url-scheme", URL_MATRIX, null);
     const result = await runMutation(

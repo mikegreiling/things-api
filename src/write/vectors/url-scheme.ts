@@ -193,5 +193,8 @@ export function createUrlSchemeVector(): WriteVector {
     execute(invocation: CompiledInvocation): Promise<ExecuteResult> {
       return openUrl(invocation.payload);
     },
+    // Subject to Things' own "Enable Things URLs" authorization — see
+    // WriteVector.dispatchesUrls.
+    dispatchesUrls: true,
   };
 }

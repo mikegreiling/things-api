@@ -82,7 +82,7 @@ describe("classifyVerifyFailure", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      urlSchemeEnabled: false,
+      urlScheme: "disabled",
       appWasRunning: true,
       environmentChanges: [],
     });
@@ -94,18 +94,60 @@ describe("classifyVerifyFailure", () => {
     const hint = classifyVerifyFailure({
       reason: "timeout",
       vector: "url-scheme",
-      urlSchemeEnabled: false,
+      urlScheme: "disabled",
       appWasRunning: true,
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("feature-disabled");
   });
 
-  it("an unknown on-disk state never claims feature-disabled (Phase 21b: the token is no proxy)", () => {
+  it("never-asked → feature-disabled: the app parks the command behind its own alert (URLEN1)", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      urlSchemeEnabled: null,
+      urlScheme: "never-asked",
+      appWasRunning: true,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("feature-disabled");
+  });
+
+  it("UNREADABLE also earns the hint — this is the case the gate could not refuse on (#611)", () => {
+    const hint = classifyVerifyFailure({
+      reason: "silent-noop",
+      vector: "url-scheme",
+      urlScheme: "unreadable",
+      appWasRunning: true,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("feature-disabled");
+    expect(hint?.hint).toContain("Enable Things URLs");
+    // The parked command can still land when someone clicks Enable, so the copy
+    // must not send the caller straight into a blind resend.
+    expect(hint?.hint).toContain("Verify the item's state before resending");
+  });
+
+  it("a vector that delivers no URLs passes null, and is never blamed on the setting", () => {
+    // The pipeline keys this on the vector's `dispatchesUrls` declaration, not
+    // on its id — the regression CI caught: an id-keyed lookup made the default
+    // read the developer's own Things preferences, so an engine test passed on
+    // a workstation with the setting on and failed in CI, where nothing is
+    // readable and every silent no-op became "feature-disabled".
+    const hint = classifyVerifyFailure({
+      reason: "silent-noop",
+      vector: "applescript",
+      urlScheme: null,
+      appWasRunning: true,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("app-behavior-change");
+  });
+
+  it("null wins even under the `url-scheme` id — a fake there dispatches nothing", () => {
+    const hint = classifyVerifyFailure({
+      reason: "silent-noop",
+      vector: "url-scheme",
+      urlScheme: null,
       appWasRunning: true,
       environmentChanges: [],
     });
@@ -116,7 +158,7 @@ describe("classifyVerifyFailure", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      urlSchemeEnabled: true,
+      urlScheme: "enabled",
       appWasRunning: false,
       environmentChanges: [],
     });
@@ -128,18 +170,18 @@ describe("classifyVerifyFailure", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      urlSchemeEnabled: true,
+      urlScheme: "enabled",
       appWasRunning: false,
       environmentChanges: THINGS_UPDATED,
     });
     expect(hint?.likelyCause).toBe("app-not-running");
   });
 
-  it("the on-disk feature-disabled signal still outranks app-not-running (a definitive on-disk read)", () => {
+  it("the not-authorized signal still outranks app-not-running (a definitive on-disk read)", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      urlSchemeEnabled: false,
+      urlScheme: "disabled",
       appWasRunning: false,
       environmentChanges: [],
     });
@@ -150,7 +192,7 @@ describe("classifyVerifyFailure", () => {
     const hint = classifyVerifyFailure({
       reason: "timeout",
       vector: "url-scheme",
-      urlSchemeEnabled: true,
+      urlScheme: "enabled",
       appWasRunning: true,
       environmentChanges: THINGS_UPDATED,
     });
@@ -162,7 +204,7 @@ describe("classifyVerifyFailure", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      urlSchemeEnabled: true,
+      urlScheme: "enabled",
       appWasRunning: true,
       environmentChanges: [],
     });
@@ -174,7 +216,7 @@ describe("classifyVerifyFailure", () => {
       classifyVerifyFailure({
         reason: "mismatch",
         vector: "applescript",
-        urlSchemeEnabled: true,
+        urlScheme: "enabled",
         appWasRunning: true,
         environmentChanges: [],
       }),

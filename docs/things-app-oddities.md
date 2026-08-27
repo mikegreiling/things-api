@@ -198,6 +198,8 @@ The `uriSchemeAuthenticationToken` in `TMSettings` **stays populated** when "Ena
 
 **ODDS1 re-validation 2026-08-22 (Things 3.23, build 32300036, golden-v4):** **Partially re-validated.** The storage split still holds: `TMSettings.uriSchemeAuthenticationToken` is populated and `uriSchemeEnabled = 1` lives in the group-container preferences plist, not in `TMSettings` (ODDS1-A18). The enable-MODAL half — a URL write while the feature is disabled popping a Cancel/Enable prompt and holding the write pending — was **NOT re-validated** (it needs the Settings toggle driven). [lab/odds1-323-revalidation.md](lab/odds1-323-revalidation.md)
 
+**URLEN1 completion 2026-08-26 (Things 3.23, golden-v4):** the modal half is now re-validated by driving the toggle, and it **corrects one clause above**. The prompt, the hold and the stacking all reproduce — but *"no DB row appears either way"* is wrong for the **Enable** branch: Enable **runs the held command** (a to-do dispatched ~60 s earlier appeared on the press) and flips `uriSchemeEnabled` to `1`; only **Cancel** discards with no row. Three further facts the original entry could not have: the prompt is an **`AXSheet`, not a window** (so a window census cannot see it), a **never-answered** install behaves identically to an explicitly-disabled one, and **navigation** URLs (`things:///show`) are not gated at all. Full characterization and the automation consequences: §23 and [lab/urlen1-url-enable.md](lab/urlen1-url-enable.md).
+
 ### 5i. Single-item permanent delete: no AppleScript/URL surface — Shortcuts hard-deletes with no tombstone
 There is no scripted way to permanently delete ONE item via AppleScript or URL. On an already-trashed to-do, `delete to do id X` errors `-1728` (the delete verb can't re-address a trashed row by bare `to do id`), while `delete (first to do of list "Trash" whose id is X)` and `delete to do id X of list "Trash"` are silent no-ops; `empty trash` is all-or-nothing. **The Shortcuts `Delete Items` action with "Delete Immediately" ON does hard-delete a single row** — but it leaves **NO `TMTombstone`** (row count 1→0, zero tombstones; S-delperm). *(Phase 21b B0/A5 + L5 S-delperm, 2026-07-09)* **Not a Shortcuts defect, and the resurrection worry is overstated — TOMB1 (2026-07-26, [../lab/tomb1-results.md](lab/tomb1-results.md)):** NO delete path writes a `TMTombstone` for an ordinary item — the tombstone is gated by `leavesTombstone=1` (repeating-template lineage only). Ordinary deletions nonetheless **propagate correctly across devices** (a remote hard-delete was observed being applied on a second synced clone, tombstone-lessly) — via the Syncrony change-log, not `TMTombstone`. So this is a design fact (tombstones are a narrow repeating-lineage record), not a data-loss bug.
 
@@ -1229,6 +1231,32 @@ The identical payload minus that one child creates the project and its to-dos no
 **Expected:** either report the rejection (the scheme has no error channel, so at minimum do not exit 0), or create the items that are well-formed. **Actual:** silent total discard, indistinguishable from success.
 
 **Automation note.** CHORD2's cell 6 fixture was built by this payload and the cell ran to completion against an empty project, producing four "no field changed on any surviving row" diffs that looked like real declines. Nothing but the `project=` echo being blank gave it away. Any driver building fixtures through `things:///json` must assert the fixture exists before measuring anything downstream of it. Evidence: [lab/chord2-reorder-laws.md](lab/chord2-reorder-laws.md) §10.
+
+## 23. Things 3.23: a URL command sent to an app whose URL scheme is not enabled is HELD in an alert **sheet** indefinitely — silently to the sender, and it applies LATE (URLEN1, 2026-08-26, golden-v4 / Things 3.23 build 32300036)
+
+Things gates the `things:///` scheme behind its own Settings ▸ General ▸ **"Enable Things URLs"** switch (`uriSchemeEnabled` in the group-container prefs plist). When that switch is off — or has never been answered, which is every fresh install — a mutating URL is **not rejected and not dropped**. The app puts up a "Things URL Scheme" alert and **parks the command behind it**:
+
+```
+role=AXSheet | desc=alert | id=_NS:91
+  AXStaticText  Things URL Scheme
+  AXStaticText  Things has been opened via the URL Scheme. Do you want to enable this
+                feature? You can change it later in Settings → General.
+  AXButton      Cancel  #action-button-2
+  AXButton      Enable  #action-button-1
+```
+
+Four properties make this hazardous for automation, each measured on a force-killed, sheet-free app:
+
+1. **The sender learns nothing.** `open -g things:///add?title=…` exits 0. No row appears, no error is written anywhere, and there is no state to poll — a read-after-write verify simply times out and reports a silent no-op. This is the whole of [#611](https://github.com/mikegreiling/things-api/issues/611): a fresh machine, all macOS grants held, a write that reported `verify-failed:silent-noop`.
+2. **The alert is a SHEET, not a window.** It hangs off the main window, so it is absent from `AXChildren` of the application element. Any modal oracle built on a window census — including this project's own disruption tier — cannot see it. (Our first two probe phases were fooled by exactly this and recorded "silent drop, no dialog" before the AX dumps overturned it.)
+3. **The command applies LATE.** Pressing **Enable** runs the held command — one measured cell landed a to-do that had been dispatched ~60 s earlier — and flips `uriSchemeEnabled` to `1`. So a mutation an automated caller has already reported as failed can still take effect at an arbitrary later moment, whenever a human walks past. Pressing **Cancel** discards it and leaves the switch off.
+4. **They stack, one per command, and nothing self-dismisses.** Three consecutive URLs produced three nested sheets. While any is standing, the app declines `⌘,`, `⌘W` and Escape (beeping at each) and will not quit gracefully.
+
+Explicitly-disabled and never-answered behave **identically** — same sheet, same park, same late-apply — and differ only in the key's reading (`0` vs absent). Navigation URLs are exempt: `things:///show?id=today` works normally with the switch off, adding no sheet.
+
+**Expected:** for a scheme with no error channel, a command the app will not run should be *rejected*, not queued behind a modal that may be answered hours later — or, at minimum, the sheet should be a proper alert the sender's `open` can be told about. Holding an unbounded, invisible queue of pending mutations is the worst of the three options.
+
+**Automation note.** A caller cannot distinguish "the app did nothing" from "the app is holding this and may do it later", so a failed URL write must never be blindly resent. The state IS readable ahead of time (`uriSchemeEnabled`), which is what makes a pre-dispatch refusal possible; ours now refuses before opening any URL. Evidence: [lab/urlen1-url-enable.md](lab/urlen1-url-enable.md) §3–§4.
 
 ## Suggested report to Cultured Code
 
