@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
+import { RESOLUTION_TIMESTAMP_EXPECTED } from "../../src/surface-copy.ts";
 import { resolveResolutionInstant, resolutionDeltaDate } from "../../src/write/commands.ts";
 import type { MutationResult, WriteDeps } from "../../src/write/pipeline.ts";
 import {
@@ -156,8 +157,34 @@ describe("resolution-timestamp normalization (§5)", () => {
     expect(withSecs.getUTCSeconds()).toBe(45);
   });
 
-  it("a malformed value is rejected", () => {
+  // #612 ride-along: `--completed-at "2026-08-19 09:30"` used to be refused for
+  // want of the ISO `T`. The space is now an accepted SPELLING of the same
+  // instant at both layers (the parameter schema and this resolver), so the two
+  // forms are interchangeable everywhere a resolution timestamp is taken.
+  it("a space between date and time reads the same instant as the T spelling (#612)", () => {
+    for (const zone of [undefined, "UTC", "America/Chicago"]) {
+      expect(resolveResolutionInstant("2025-01-15 09:30", zone).getTime()).toBe(
+        resolveResolutionInstant("2025-01-15T09:30", zone).getTime(),
+      );
+      expect(resolveResolutionInstant("2025-01-15 09:30:45", zone).getTime()).toBe(
+        resolveResolutionInstant("2025-01-15T09:30:45", zone).getTime(),
+      );
+    }
+    const spaced = resolveResolutionInstant("2025-01-15 09:30", "UTC");
+    expect(spaced.getUTCHours()).toBe(9);
+    expect(spaced.getUTCMinutes()).toBe(30);
+    expect(resolutionDeltaDate("2025-01-15 09:30")).toBe(resolutionDeltaDate("2025-01-15T09:30"));
+  });
+
+  it("a malformed value is rejected, naming both accepted spellings (#612)", () => {
     expect(() => resolveResolutionInstant("15/01/2025")).toThrow(/invalid timestamp/);
+    // Only ONE separator, and only a space: neither a tab nor a doubled space
+    // is a datetime, and the refusal names the exact grammar it wanted.
+    for (const bad of ["2025-01-15  09:30", "2025-01-15\t09:30", "2025-01-15X09:30"]) {
+      expect(() => resolveResolutionInstant(bad)).toThrow(
+        new RegExp(RESOLUTION_TIMESTAMP_EXPECTED.replace(/[()]/g, "\\$&")),
+      );
+    }
   });
 });
 

@@ -200,14 +200,14 @@ export interface TodoAddParams {
   /** Existing heading inside the target project (placement only). */
   heading?: string;
   /**
-   * Born-backdated creation timestamp (ISO date or datetime). Compiles the add
+   * Born-backdated creation timestamp (a date, or a datetime with a `T` or a space separator). Compiles the add
    * through `things:///json` (the only at-creation backdating surface, P4d) —
    * a date-only value normalizes to noon in the effective zone (§5).
    */
   createdAt?: string;
   /**
    * Born RESOLVED: the created to-do lands completed with this completion
-   * timestamp, straight to the Logbook (P4d). ISO date or datetime; date-only
+   * timestamp, straight to the Logbook (P4d). A date or a datetime (`T` or a space separator); date-only
    * normalizes to noon in the effective zone (§5). Compiles through
    * `things:///json`.
    */
@@ -343,9 +343,9 @@ export interface HeadingUnarchiveParams {
  */
 export interface SetDatesParams {
   uuid: string;
-  /** New completion timestamp (ISO date or datetime); requires a completed row. */
+  /** New completion timestamp (a date, or a datetime with a `T` or a space separator); requires a completed row. */
   completedAt?: string;
-  /** New creation timestamp (ISO date or datetime); status-safe on any row. */
+  /** New creation timestamp (a date, or a datetime with a `T` or a space separator); status-safe on any row. */
   createdAt?: string;
 }
 
@@ -468,7 +468,7 @@ export interface ProjectAddParams {
    */
   items?: ProjectItemSpec[];
   /**
-   * Born-backdated creation timestamp (ISO date or datetime). Compiles through
+   * Born-backdated creation timestamp (a date, or a datetime with a `T` or a space separator). Compiles through
    * `things:///json`; date-only normalizes to noon in the effective zone (§5).
    */
   createdAt?: string;
@@ -476,7 +476,7 @@ export interface ProjectAddParams {
    * Born RESOLVED: the created project lands completed with this completion
    * timestamp, straight to the Logbook (B-PROJ-JSON). Refused when the project
    * carries any OPEN child spec — a completed-project json import silently
-   * reverts to open unless every child is resolved (§5b). ISO date or datetime;
+   * reverts to open unless every child is resolved (§5b). A date or a datetime (`T` or a space separator);
    * date-only normalizes to noon in the effective zone (§5).
    */
   completedAt?: string;
@@ -849,7 +849,7 @@ export interface ProjectAddRepeatingParams extends AddRepeatingRuleFields {
    * (#461); exclusive with `todos`. See {@link ProjectItemSpec}.
    */
   items?: ProjectItemSpec[];
-  /** Born-backdated creation timestamp (ISO date or datetime). */
+  /** Born-backdated creation timestamp (a date, or a datetime with a `T` or a space separator). */
   createdAt?: string;
 }
 
@@ -898,7 +898,7 @@ export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
   area?: ContainerRef;
   /** Existing heading inside the target project (placement only). */
   heading?: string;
-  /** Born-backdated creation timestamp (ISO date or datetime). */
+  /** Born-backdated creation timestamp (a date, or a datetime with a `T` or a space separator). */
   createdAt?: string;
 }
 

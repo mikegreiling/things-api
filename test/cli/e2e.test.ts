@@ -1681,6 +1681,59 @@ describe("cli normalized-form echo + meta.resolvedCommand", () => {
     // The bare plural list form echoes nothing.
     expect(runTty(["areas", "--db", path])).not.toContain("≡ things");
   });
+
+  // #612 ride-along: a field report claimed `things projects <uuid> --json`
+  // omitted the project's task rows. It does not — the plural form delegates to
+  // the SAME action, so the `data` payload is identical and carries every row
+  // (headings, anytime, someday, logbook). Only `meta` differs, by the additive
+  // `resolvedCommand` the synonym announces its normalization with. Pinned here
+  // so a future divergence between the two spellings fails loudly.
+  it("the plural project synonym emits the SAME --json data as the singular show (#612)", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Astro City", index: 1 });
+    const heading = seedHeading(fx.db, { title: "Phase one", project: proj, index: 0 });
+    seedTodo(fx.db, { title: "under heading", project: proj, heading, index: 1 });
+    seedTodo(fx.db, { title: "loose child", project: proj, index: 2 });
+    seedTodo(fx.db, { title: "someday child", project: proj, start: "someday", index: 3 });
+    seedTodo(fx.db, {
+      title: "logged child",
+      project: proj,
+      status: "completed",
+      stopDate: 1,
+      index: 4,
+    });
+    const path = fx.path;
+
+    for (const flags of [[], ["--show-logged"], ["--full"]]) {
+      const singular = JSON.parse(
+        runCli(["project", "show", proj, ...flags, "--json", "--db", path]).stdout,
+      );
+      const plural = JSON.parse(
+        runCli(["projects", proj, ...flags, "--json", "--db", path]).stdout,
+      );
+      expect(plural.kind, flags.join(" ")).toBe("project-view");
+      expect(plural.data, flags.join(" ")).toEqual(singular.data);
+      // The rows really are there (the matrix above would also pass if BOTH
+      // spellings returned nothing).
+      const view = plural.data.view;
+      expect(view.children.anytime.items.map((i: { title: string }) => i.title)).toEqual([
+        "loose child",
+      ]);
+      expect(view.children.someday.items.map((i: { title: string }) => i.title)).toEqual([
+        "someday child",
+      ]);
+      expect(
+        view.headings[0].children.anytime.items.map((i: { title: string }) => i.title),
+      ).toEqual(["under heading"]);
+      // meta differs only by the additive resolvedCommand.
+      expect(plural.meta.resolvedCommand).toBe('things project show "Astro City"');
+      expect(singular.meta.resolvedCommand).toBeUndefined();
+    }
+    // The rendered body matches too (a true synonym, not a reimplementation).
+    expect(runCli(["projects", proj, "--db", path]).stdout).toBe(
+      runCli(["project", "show", proj, "--db", path]).stdout,
+    );
+  });
 });
 
 describe("cli canonical-ref echoes + suggestions render the resolved entity's ref", () => {

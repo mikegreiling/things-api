@@ -11,6 +11,7 @@ import type { Todo } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { manualLogDateEpoch, pendingLogCount } from "../read/log-boundary.ts";
 import { isLooseRef } from "../read/pseudo-area.ts";
+import { RESOLUTION_TIMESTAMP_EXPECTED } from "../surface-copy.ts";
 import type { HazardId } from "./guards.ts";
 import type {
   ContainerRef,
@@ -1621,17 +1622,21 @@ const reorder: CommandSpec<"reorder"> = {
 // ---- resolution-timestamp normalization (§5 of the plan) ------------------
 
 /**
- * Parse an ISO date (`2025-01-15`) OR datetime (`2025-01-15T09:30[:ss]`) and
- * resolve it to a single UTC instant in the effective `zone`. A date-only value
- * lands at NOON in that zone (B-DATEONLY: noon decodes to the intended calendar
- * date in every zone; midnight can slip a day). A datetime is read as wall-clock
- * time in the effective zone. `zone` undefined = the process-local (app host)
- * zone, which for a local CLI run IS the app's own zone.
+ * Parse a date (`2025-01-15`) OR datetime (`2025-01-15T09:30[:ss]`, or the same
+ * value spelled with a space — `2025-01-15 09:30`) and resolve it to a single
+ * UTC instant in the effective `zone`. Both separators are first-class
+ * spellings of the SAME instant: the space form is what a human (or a shell
+ * heredoc) types, the `T` form is what a serializer emits, and neither is
+ * rewritten into the other. A date-only value lands at NOON in that zone
+ * (B-DATEONLY: noon decodes to the intended calendar date in every zone;
+ * midnight can slip a day). A datetime is read as wall-clock time in the
+ * effective zone. `zone` undefined = the process-local (app host) zone, which
+ * for a local CLI run IS the app's own zone.
  */
 export function resolveResolutionInstant(input: string, zone?: string): Date {
   const dateOnly = /^(\d{4}-\d{2}-\d{2})$/.exec(input);
   if (dateOnly !== null) return zonedWallInstant(dateOnly[1] as string, 12, 0, 0, zone);
-  const dt = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(input);
+  const dt = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(input);
   if (dt !== null) {
     return zonedWallInstant(
       dt[1] as string,
@@ -1641,9 +1646,7 @@ export function resolveResolutionInstant(input: string, zone?: string): Date {
       zone,
     );
   }
-  throw new RangeError(
-    `invalid timestamp "${input}" — expected an ISO date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:mm)`,
-  );
+  throw new RangeError(`invalid timestamp "${input}" — expected ${RESOLUTION_TIMESTAMP_EXPECTED}`);
 }
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");

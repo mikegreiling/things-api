@@ -5,7 +5,7 @@
 ## 1. Vocabulary
 
 - **Delete** `things todo backdate` and `things todo add-logged` (and their client/MCP counterparts) outright.
-- **Add two flags, both kinds (to-do AND project), one flag per field:** `--created-at <iso>` and `--completed-at <iso>`, each accepting an ISO date (`2025-01-15`) or datetime (`2025-01-15T09:30`). Date-only normalizes to **noon in the effective zone** (§5).
+- **Add two flags, both kinds (to-do AND project), one flag per field:** `--created-at <iso>` and `--completed-at <iso>`, each accepting a date (`2025-01-15`) or a datetime whose date and time are joined by `T` or by a single space (`2025-01-15T09:30` / `2025-01-15 09:30` — the same instant; #612). Date-only normalizes to **noon in the effective zone** (§5).
 - **No `--canceled-at`.** CC's own canon settles it: the Get Info modal labels the timestamp **"Completed on"** for canceled items and even archived headings (maintainer-verified screenshots 2026-08-05). One field, one flag; each command's help states once that the completion timestamp applies to canceled items too. (Glossary gains this "Completed on" note — §6.)
 
 ## 2. Per-command semantics (identical for to-dos and projects)

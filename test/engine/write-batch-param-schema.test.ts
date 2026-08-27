@@ -226,6 +226,67 @@ describe("the generated parameter-type matrix, through the batch preflight", () 
   });
 });
 
+/**
+ * The retroactive 0.17.0-dev field report (#612), pinned at the shape it was
+ * actually submitted in: a migration batch of ONE `project.add` carrying a
+ * tempId followed by THIRTEEN `todo.add` lines whose container reference was
+ * the bare string `"$proj"`. Under 0.17.0-dev that batch reported ok=14 with a
+ * populated tempIdMapping while every to-do landed in the Inbox — the container
+ * bind was silently dropped. The two cases below are the issue's own checkboxes.
+ */
+describe("#612 — the 0.17.0-dev migration-batch report", () => {
+  it("the 14-op bare-string batch is refused WHOLE, with zero writes and no mapping", async () => {
+    const ops: BatchOp[] = [
+      { op: "project.add", params: { title: "Synthetic Migration" }, tempId: "proj" },
+      ...Array.from({ length: 13 }, (_, i) => ({
+        op: "todo.add" as const,
+        params: { title: `Synthetic migrated ${i + 1}`, project: "$proj" },
+        opId: `migrated-${i + 1}`,
+      })),
+    ];
+    const { results, undoToken, tempIdMapping } = await runBatch(deps(), ops);
+
+    // Nothing ran: the ONE well-formed line is skipped rather than executed,
+    // and all thirteen malformed lines are refused statically.
+    expect(results).toHaveLength(14);
+    expect(results[0]?.outcome.kind).toBe("skipped");
+    expect(results.slice(1).map((r) => r.outcome.kind)).toEqual(Array(13).fill("invalid"));
+    expect(executed).toBe(0);
+    expect(auditRecords).toHaveLength(0);
+    expect(undoToken).toBeUndefined();
+    // No temp id was ever minted, so no "valid tempIdMapping" can imply success.
+    expect(tempIdMapping).toEqual({});
+
+    // Every refusal names its own line's path and steers to the object form.
+    for (const result of results.slice(1)) {
+      const detail = result.outcome.kind === "invalid" ? result.outcome.detail : "";
+      expect(detail).toContain("params.project");
+      expect(detail).toContain("expected a container reference object");
+      expect(detail).toContain("received a string");
+      expect(detail).toContain('{"uuid": "$proj"}');
+    }
+  });
+
+  it('todo.update with {"id": …} is refused naming params.id, and lists uuid', async () => {
+    const { results } = await runBatch(deps(), [
+      {
+        op: "todo.update",
+        params: { id: "todo-uuid-0001", title: "Synthetic new title" },
+      } as unknown as BatchOp,
+    ]);
+    expect(results[0]?.outcome.kind).toBe("invalid");
+    const detail = results[0]?.outcome.kind === "invalid" ? results[0].outcome.detail : "";
+    // The key is named — not swallowed into an internal SQLite bind error.
+    expect(detail).toContain("params.id");
+    expect(detail).toContain('not a parameter of "todo.update"');
+    // …and the accepted set is enumerated, which is where `uuid` is found.
+    expect(detail).toContain("accepted parameters are uuid");
+    expect(detail).not.toContain("SQLite parameter");
+    expect(executed).toBe(0);
+    expect(auditRecords).toHaveLength(0);
+  });
+});
+
 describe("line-level keys", () => {
   it("an unrecognized field on the line refuses the batch", async () => {
     const { results } = await runBatch(deps(), [

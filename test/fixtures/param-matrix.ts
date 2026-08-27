@@ -7,6 +7,7 @@
  * Every value here is synthetic (public repo rule): titles are "Sample …",
  * uuids are literal placeholders, nothing is derived from any real database.
  */
+import { RESOLUTION_TIMESTAMP_EXPECTED } from "../../src/surface-copy.ts";
 import { PARAM_SCHEMAS, type FieldSpec, type ParamSummary } from "../../src/write/param-schema.ts";
 import { OPERATION_KINDS, WEEKDAYS, type OperationKind } from "../../src/write/operations.ts";
 
@@ -18,7 +19,7 @@ import { OPERATION_KINDS, WEEKDAYS, type OperationKind } from "../../src/write/o
 export const CUSTOM_SAMPLES: Record<string, unknown> = {
   "today | evening | anytime | someday | YYYY-MM-DD": "today",
   "a date (YYYY-MM-DD)": "2026-07-20",
-  "a date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:mm)": "2026-07-20",
+  [RESOLUTION_TIMESTAMP_EXPECTED]: "2026-07-20",
   "a time of day (HH:mm, 24-hour)": "09:30",
   [`an array of weekday names (${WEEKDAYS.join(" | ")})`]: ["monday"],
   'a day-of-month anchor {"day": 1–31 | "last"} or an nth-weekday anchor {"weekday": …, "ordinal": 1–5 | "last"}':
