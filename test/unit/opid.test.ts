@@ -107,25 +107,26 @@ describe("findPendingIntent — is this key in flight right now? (#639)", () => 
     expect(findPendingIntent(records, "k", NOW)?.uuid).toBe("RUNNING");
   });
 
-  it("a final of ANY class supersedes the intent before it", () => {
+  it("a final of ANY class supersedes its own attempt's intent", () => {
     for (const result of ["ok", "verify-failed:timeout", "blocked:lock", "unsupported"] as const) {
       const records = [record({ opId: "k", result: "intent" }), record({ opId: "k", result })];
       expect(findPendingIntent(records, "k", NOW), result).toBeUndefined();
     }
   });
 
-  it("supersession is POSITIONAL — an intent and its final share a ts", () => {
-    // Both records carry the same `ts` (both derive from one startedAt), so only
-    // file order can say which came last.
-    const ts = "2026-07-20T11:00:00Z";
+  it("pairing is by ts, NOT by position — the trail is re-sorted before it gets here", () => {
+    // `readAuditRecords` re-sorts by `ts`, so a "the last record wins" rule reads
+    // whatever the sort happened to put last. This is the TORPH1 cell-B shape,
+    // where a composite's intent briefly carried a LATER ts than its own summary
+    // and every finished promote read as permanently in flight.
     const records = [
-      record({ ts, opId: "k", result: "intent" }),
-      record({ ts, opId: "k", result: "ok" }),
+      record({ ts: "2026-07-20T11:00:00Z", opId: "k", result: "ok", uuid: "LANDED" }),
+      record({ ts: "2026-07-20T11:00:00Z", opId: "k", result: "intent" }),
     ];
     expect(findPendingIntent(records, "k", NOW)).toBeUndefined();
   });
 
-  it("a RE-DISPATCHED key is pending again — the trailing intent is the live one", () => {
+  it("a RE-DISPATCHED key is pending again — the unpaired intent is the live one", () => {
     const records = [
       record({ ts: "2026-07-20T10:00:00Z", opId: "k", result: "intent", uuid: "FIRST" }),
       record({ ts: "2026-07-20T10:00:00Z", opId: "k", result: "verify-failed:timeout" }),

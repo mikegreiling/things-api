@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Fixed — retrying a write with the same `--op-id` while the first one is still running no longer runs it twice.** The idempotency key's promise is that resubmitting a command is safe. It was, with one hole big enough to drive a duplicate through: the check for "has this key already been applied?" ran *before* the mutation lock. So a retry fired while the original was still mid-drive — exactly what a caller does when their harness kills the command at a wall-time cap — found nothing in the history (the original had not finished writing it), queued behind the lock, waited for the original to complete, and then executed the whole verb a second time. On a `make-repeating` that means a second clone, a second trashed original, and a second repeating series.
+
+  The check now runs a second time, immediately after the lock is acquired and before anything is dispatched. The retry that waited finds the original's record on the way back in and replays it instead. The cheap pre-lock check is still there as the fast path, so a key that was settled long ago never touches the lock at all. (Issue #639.)
+
+- **New — a write that carries an `--op-id` now says so in the change history *while it is running*, and `things op-result` can tell "still running" from "died halfway".** Previously the two were one answer: `intent-only`, whose explanation had to hedge — "it is still running, or the process died mid-flight" — leaving the caller to guess which, at the exact moment guessing is most expensive.
+
+  A keyed write now records the process that owns it (its pid paired with that process's start time, so a recycled pid cannot impersonate it) before it touches the app. `things op-result <key>` reads that and answers `in-flight` — *still running since 12:04:31, pid 8821; call again in a few seconds, do not re-send* — or `orphaned` — *started 12:04:31, the process that owned it is gone and recorded no outcome*. Multi-leg verbs (the promotes, the template-target status writes, the backdating flip-dance) record one such marker for the whole verb, matching where their key already lives.
+
+  This changes what a resubmission does, too. A key whose original is **still running** is now refused outright, pointing at `things op-result` — rather than queueing behind the lock, which is what used to end in the duplicate above. A key whose holder is **gone** is reconciled the same way a timed-out write already was: the marker carries the assertion the attempt was waiting to see, and that assertion is re-read against current state to decide whether the change is there. Where no assertion could settle it, the resubmission refuses honestly instead of guessing. (Issue #639.)
+
+- **Changed — the backdating flip-dance (`complete`/`cancel`/`update --completed-at`) now holds one lock across its whole sequence** instead of taking one per leg, so another writer can no longer land a change between the "complete" and the "cancel" legs. (Issue #639.)
+
+- **Fixed — `--op-id` on a `clone` of a repeating template was silently dropped.** The key never reached the record the verb writes, so a resubmission deduplicated against nothing and made a second series. It now rides that summary like every other keyed composite. (Issue #639.)
+
 ## 0.19.4 — 2026-08-28
 
 - **BREAKING (output shape) — a successful change now tells you what to do about it, separately from what it did.** Every mutation used to hand back one flat `warnings` list holding everything at once: the step-by-step account of how the app was driven, a sentence explaining the Accessibility API, the plain-language echo of the rule that landed, where undo reaches, placement hints, lab caveats. A successful `make-repeating` returned about ten of them — and then, under `--json`, printed all ten again to stderr underneath the JSON. Nothing in that list said which line, if any, needed you.

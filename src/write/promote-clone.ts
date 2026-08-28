@@ -1006,6 +1006,7 @@ async function makeRepeatingViaClone(
     // exactly as able to reconcile as one that merely timed out.
     {
       options,
+      startedAt,
       txnId,
       uuid: srcUuid,
       requested: effParams as unknown as Record<string, unknown>,
@@ -1342,6 +1343,7 @@ async function addRepeatingViaCreate(
     // presence oracle is what a dead holder's retry reconciles against.
     {
       options,
+      startedAt,
       txnId,
       uuid: null,
       requested: { title, ...effRule },
@@ -1898,6 +1900,7 @@ export async function cloneTemplateViaRepromote(
     },
     {
       options,
+      startedAt,
       txnId,
       uuid: srcUuid,
       requested: { source: srcUuid, title, ...inverse },

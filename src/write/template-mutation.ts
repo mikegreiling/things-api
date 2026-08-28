@@ -488,7 +488,7 @@ export async function runTemplateStatusWrite(
     // the two need different assertions (the ambiguous summary picks the right
     // one later, once the timeout point knows). A holder that dies before that is
     // told so honestly rather than reconciled against a guess.
-    { options, txnId, uuid, requested: { uuid } },
+    { options, startedAt: now, txnId, uuid, requested: { uuid } },
   );
 
   async function statusBody(): Promise<MutationResult> {
@@ -639,7 +639,7 @@ export async function runTemplateExceptionWrite(
     // mints, so a holder that died mid-mint leaves a state where any satisfiable
     // assertion would claim an exception that does not exist. The retry gets the
     // honest `blocked:reconcile` refusal and a pointer at `op-result`.
-    { options, txnId, uuid, requested: { uuid, ...patch } },
+    { options, startedAt: now, txnId, uuid, requested: { uuid, ...patch } },
   );
 
   async function exceptionBody(): Promise<MutationResult> {

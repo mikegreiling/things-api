@@ -26,6 +26,14 @@
  * intent, at the SUMMARY layer: the key addresses the whole verb, so its
  * in-flight marker must too (its legs run with the key stripped and write only
  * their own ordinary M3 intents).
+ *
+ * The shared `ts` is LOAD-BEARING, not incidental. It is what pairs an intent to
+ * its own attempt's final, and that pairing — not record order — is how a reader
+ * decides whether a key is still in flight: `readAuditRecords` re-sorts the trail
+ * by `ts`, so file order does not survive a read. A composite's intent is
+ * therefore stamped with the verb's `startedAt` rather than with the moment it
+ * took the lock; stamping it later sorted it after its own summary and left every
+ * finished promote reading as in flight (TORPH1 cell B).
  */
 import { createHash } from "node:crypto";
 

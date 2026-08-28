@@ -155,6 +155,7 @@ async function runComposite(
   // way, exactly as the ambiguous summary does for a timeout.
   return runLockedComposite(deps, summaryOp, () => danceBody(), {
     options,
+    startedAt,
     txnId,
     uuid,
     requested: { uuid },

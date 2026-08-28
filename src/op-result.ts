@@ -221,35 +221,41 @@ export function opResult(opId: string, options: OpResultOptions = {}): OpResultD
     };
   }
 
-  // Supersession is POSITIONAL, not by timestamp: an intent and its final share a
-  // `ts` (both derive from the same startedAt), and a key re-dispatched after an
-  // ambiguous failure produces intent → final → intent → final. So the last
-  // record for the key is the current truth, and the only thing that makes an
-  // intent "unsuperseded" is being last.
-  const last = matched[matched.length - 1] as AuditRecord;
+  // An intent is superseded by the final of its OWN attempt, paired by `ts` —
+  // both records of one attempt derive from the same `startedAt`, which is the
+  // schema's documented sibling invariant. Deliberately NOT "the last record
+  // wins": `readAuditRecords` RE-SORTS the trail by `ts`, so file order does not
+  // survive the read. `findPendingIntent` (write/opid.ts) applies the identical
+  // rule, so the reporting surface and the dispatch gate can never disagree
+  // about whether a key is in flight.
+  const settled = new Set(matched.filter((r) => r.result !== "intent").map((r) => r.ts));
+  const pending = matched.findLast((r) => r.result === "intent" && !settled.has(r.ts));
 
-  if (last.result !== "intent") {
+  if (pending === undefined) {
+    const finals = matched.filter((r) => r.result !== "intent");
+    const rec = finals[finals.length - 1] as AuditRecord;
     return {
       opId,
       status: "found",
-      op: last.op,
-      result: last.result,
-      uuid: last.uuid,
-      ...(last.occurrence !== undefined && { occurrence: last.occurrence }),
-      observed: last.observed,
-      verify: last.verify,
-      steps: last.steps ?? null,
-      ts: last.ts,
-      durationMs: last.durationMs,
+      op: rec.op,
+      result: rec.result,
+      uuid: rec.uuid,
+      ...(rec.occurrence !== undefined && { occurrence: rec.occurrence }),
+      observed: rec.observed,
+      verify: rec.verify,
+      steps: rec.steps ?? null,
+      ts: rec.ts,
+      durationMs: rec.durationMs,
       tracePath: null,
       holder: null,
-      note: foundNote(last.result, last.uuid),
+      note: foundNote(rec.result, rec.uuid),
     };
   }
 
   // An unsuperseded intent. Its holder decides which of the two very different
   // situations this is — and the caller's next move differs completely between
   // them, which is why the old single hedged answer was worth splitting.
+  const last = pending;
   const tracePath = correlatedTrace(traceDir, last.ts);
   const recorded = last.holder;
   const holder: OpResultHolder | null =

@@ -775,6 +775,14 @@ function truncationDetail(
 export interface CompositeKey {
   /** The caller's write options — the `opId` here is what makes this composite keyed. */
   options: WriteOptions;
+  /**
+   * The verb's start instant — the SAME one its summary will carry, so the two
+   * records share a `ts` exactly as the single-op intent/final pair does (and so
+   * "in flight since T" names when the caller's verb began, not when it reached
+   * the lock). This is also why supersession must be POSITIONAL: with a shared
+   * `ts`, file order is the only thing that says which came last.
+   */
+  startedAt: Date;
   /** The composite's own transaction id, so the intent joins its summary. */
   txnId: string;
   /** The verb's target as far as it is known before the first leg. */
@@ -841,7 +849,7 @@ function appendSummaryIntent(
   const inFlight = result === "intent";
   deps.audit.append({
     v: 1,
-    ts: (deps.now?.() ?? new Date()).toISOString(),
+    ts: keyed.startedAt.toISOString(),
     actor: keyed.options.actor ?? deps.config.actor,
     host: deps.config.host,
     op,

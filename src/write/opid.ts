@@ -117,13 +117,23 @@ export function findOpIdRecord(
 }
 
 /**
- * The UNSUPERSEDED intent for a key, if there is one: an `intent` record with no
- * final record for the same key written after it.
+ * The UNSUPERSEDED intent for a key, if there is one: an `intent` record whose
+ * ATTEMPT never recorded an outcome.
  *
- * "After it" is positional, not by timestamp: an intent and its final share a
- * `ts` (both derive from the same startedAt), and a key can be re-dispatched
- * after an ambiguous failure — intent, final, intent, final. Only the trailing
- * intent of such a sequence is in flight, and only file order distinguishes it.
+ * Supersession pairs an intent to its own final by `ts`, which is the schema's
+ * documented sibling invariant — both records of one attempt derive from the
+ * same `startedAt`, so they carry the same timestamp (`audit/schema.ts`). It is
+ * deliberately NOT "the last record wins": `readAuditRecords` RE-SORTS the trail
+ * by `ts`, so file order does not survive the read, and a composite's intent
+ * (written when it takes the lock) briefly carried a later `ts` than its own
+ * summary (stamped when the verb began) — which sorted the intent last and left
+ * every finished promote looking permanently in flight. Measured in TORPH1
+ * cell B; the fix is this pairing plus stamping a composite's intent with the
+ * verb's own `startedAt`.
+ *
+ * Pairing also handles the RE-DISPATCH shape by construction: a key retried
+ * after an ambiguous failure records intent+final for the first attempt and a
+ * fresh intent for the second, and only the second is unpaired.
  */
 export function findPendingIntent(
   records: AuditRecord[],
@@ -132,15 +142,14 @@ export function findPendingIntent(
 ): AuditRecord | undefined {
   const cutoff = now.getTime() - OPID_LOOKBACK_MS;
   const window = records.slice(-OPID_LOOKBACK_RECORDS);
-  let pending: AuditRecord | undefined;
+  const inWindow = (r: AuditRecord): boolean =>
+    r.opId === opId && new Date(r.ts).getTime() >= cutoff;
+  const settled = new Set<string>();
   for (const r of window) {
-    if (r.opId !== opId) continue;
-    if (new Date(r.ts).getTime() < cutoff) continue;
-    // A final of any class supersedes the intent before it: the attempt got far
-    // enough to record an outcome, so it is no longer in flight.
-    pending = r.result === "intent" ? r : undefined;
+    if (inWindow(r) && r.result !== "intent") settled.add(r.ts); // that attempt finished
   }
-  return pending;
+  // The newest unpaired intent (there is at most one in practice).
+  return window.findLast((r) => inWindow(r) && r.result === "intent" && !settled.has(r.ts));
 }
 
 /**

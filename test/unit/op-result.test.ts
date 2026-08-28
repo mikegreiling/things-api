@@ -195,12 +195,37 @@ describe("opResult — a keyed intent's HOLDER decides in-flight from orphaned (
     expect(r.holder).toBeNull();
   });
 
-  it("a re-dispatched key reads its NEWEST marker, not its oldest", () => {
-    // intent → timeout → intent: the second attempt is the one in flight.
+  it("supersession pairs by ts, so an intent written after its own final still settles", () => {
+    // The TORPH1 cell-B shape: the trail is re-sorted by `ts` before it is read,
+    // so a "last record wins" rule would report this finished op as in flight.
     seed([
-      makeRecord({ opId: "job-again", result: "intent", holder: { pid: 1, start: null } }),
-      makeRecord({ opId: "job-again", result: "verify-failed:timeout" }),
+      makeRecord({ opId: "job-sorted", result: "ok", uuid: "LANDED" }),
       makeRecord({
+        opId: "job-sorted",
+        result: "intent",
+        holder: { pid: process.pid, start: null },
+      }),
+    ]);
+    const r = opResult("job-sorted", { auditDir, traceDir });
+    expect(r.status).toBe("found");
+    expect(r.uuid).toBe("LANDED");
+  });
+
+  it("a re-dispatched key reads its NEWEST attempt, not its settled one", () => {
+    // Attempt 1 (intent + its timeout, sharing a ts) then attempt 2's intent at
+    // its own ts: only the second is unpaired, so only it is in flight.
+    const first = "2026-08-19T12:00:00.000Z";
+    const second = "2026-08-19T12:06:00.000Z";
+    seed([
+      makeRecord({
+        ts: first,
+        opId: "job-again",
+        result: "intent",
+        holder: { pid: 1, start: null },
+      }),
+      makeRecord({ ts: first, opId: "job-again", result: "verify-failed:timeout" }),
+      makeRecord({
+        ts: second,
         opId: "job-again",
         result: "intent",
         holder: { pid: process.pid, start: null },
@@ -208,6 +233,7 @@ describe("opResult — a keyed intent's HOLDER decides in-flight from orphaned (
     ]);
     const r = opResult("job-again", { auditDir, traceDir });
     expect(r.status).toBe("in-flight");
+    expect(r.ts).toBe(second);
     expect(r.holder).toMatchObject({ pid: process.pid, alive: true });
   });
 });
