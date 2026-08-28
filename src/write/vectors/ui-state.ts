@@ -298,7 +298,20 @@ export const THINGS_PROCESS = "Things3";
  */
 export function axUiStateScript(): string {
   return `${UI_STATE_MARKER}
-set frontName to ""
+${CENSUS_BODY}
+
+return ${censusRecord("linefeed")}`;
+}
+
+/**
+ * The census BODY — every probe, leaving its verdict in the AppleScript variables
+ * the record below reads. Split out of {@link axUiStateScript} (DRVLAT1, issue
+ * #633) so the SAME probes can run as the in-script prelude of a keystroke hop
+ * ({@link axFocusGuardPrelude}) rather than as a separate osascript round-trip.
+ * Nothing about the probes, their budgets or their order differs between the two
+ * uses: it is one body, compiled into two scripts.
+ */
+const CENSUS_BODY = `set frontName to ""
 set frontIsThings to false
 set focusRole to ""
 set focusSub to ""
@@ -458,9 +471,91 @@ if not halted then
 			end try
 		end if
 	end if
-end if
+end if`;
 
-return "front=" & frontName & linefeed & "isfront=" & frontIsThings & linefeed & "running=" & thingsRunning & linefeed & "form=" & sheetForm & linefeed & "depth=" & sheetDepth & linefeed & "kind=" & sheetKind & linefeed & "census=" & census & linefeed & "role=" & focusRole & linefeed & "subrole=" & focusSub & linefeed & "inspectable=" & canInspect & linefeed & "stalled=" & stalled & linefeed & "failed=" & failed`;
+/**
+ * The census RECORD, joined by `sep` — `linefeed` for the stand-alone census
+ * script, a single-line separator for the guard prelude's `log` line (a logged
+ * record has to survive as ONE stderr line to be recovered).
+ */
+function censusRecord(sep: string): string {
+  return `"front=" & frontName & ${sep} & "isfront=" & frontIsThings & ${sep} & "running=" & thingsRunning & ${sep} & "form=" & sheetForm & ${sep} & "depth=" & sheetDepth & ${sep} & "kind=" & sheetKind & ${sep} & "census=" & census & ${sep} & "role=" & focusRole & ${sep} & "subrole=" & focusSub & ${sep} & "inspectable=" & canInspect & ${sep} & "stalled=" & stalled & ${sep} & "failed=" & failed`;
+}
+
+/** The stderr line prefix carrying a folded guard's census record. */
+export const GUARD_LOG_PREFIX = "#FGCENSUS ";
+/** The separator joining that record's fields on its single line. */
+export const GUARD_LOG_SEP = " ~|~ ";
+/**
+ * What a folded guard RAISES when it refuses. Deliberately a machine tag rather
+ * than a sentence: the refusal a caller reads is still built by
+ * {@link judgeFocusGuard} in TypeScript, from the census this same hop logged, so
+ * there is exactly ONE place the wording lives and the in-script judgement can
+ * never drift from it.
+ */
+export const GUARD_REFUSED_TAG = "#FGREFUSE";
+
+/**
+ * The census as the IN-SCRIPT PRELUDE of the hop it guards (DRVLAT1, issue #633).
+ *
+ * The per-step focus guard used to be its own osascript round-trip: census hop,
+ * then keystroke hop. That is both a hop of latency per typed control AND a
+ * TOCTOU window — the screen can change between the census that approved the
+ * keystroke and the keystroke itself. Prepending the census to the very script
+ * that types closes both: the probes and the input now run in one process, in
+ * order, with nothing dispatched in between.
+ *
+ * The prelude LOGS its census record (stderr, one line) and then judges it
+ * IN-SCRIPT, raising {@link GUARD_REFUSED_TAG} — a bare tag — when the input must
+ * not be sent. The caller recovers the logged record, parses it into the same
+ * {@link UiState} the stand-alone census yields, and asks {@link judgeFocusGuard}
+ * for the sentence. So the DECISION is made before the keystroke, in-script, and
+ * the WORDING is still single-sourced in TypeScript.
+ *
+ * `expectedSheet` is the dialog the drive has observed itself driving; pass null
+ * where no dialog invariant applies.
+ */
+export function axFocusGuardPrelude(expectedSheet: UiSheetKind | null): string {
+  const critical = CRITICAL_PROBES.map(
+    (p) => `  if stalled contains "${p} " then set fgBad to true
+  if failed contains "${p} " then set fgBad to true`,
+  ).join("\n");
+  const sheetClause =
+    expectedSheet === null
+      ? ""
+      : `\n  if sheetKind is not "${expectedSheet}" then set fgBad to true`;
+  return `${UI_STATE_MARKER}
+${CENSUS_BODY}
+
+log "${GUARD_LOG_PREFIX}" & ${censusRecord(`"${GUARD_LOG_SEP}"`)}
+set fgBad to false
+${critical}
+if not canInspect then set fgBad to true
+if not frontIsThings then set fgBad to true${sheetClause}
+if fgBad then error "${GUARD_REFUSED_TAG}"
+`;
+}
+
+/**
+ * Recover a folded guard's census from the hop's stderr: the parsed state (null
+ * when no record was logged) and the stderr with that line removed, so a failure
+ * message a caller reads never carries the machinery.
+ */
+export function parseGuardLog(stderr: string): { state: UiState | null; stderr: string } {
+  const kept: string[] = [];
+  let record: string | null = null;
+  for (const line of stderr.split(/\r?\n/)) {
+    const at = line.indexOf(GUARD_LOG_PREFIX);
+    if (at >= 0) {
+      record = line.slice(at + GUARD_LOG_PREFIX.length);
+      continue;
+    }
+    kept.push(line);
+  }
+  return {
+    state: record === null ? null : parseUiState(record.split(GUARD_LOG_SEP).join("\n")),
+    stderr: kept.join("\n").trim(),
+  };
 }
 
 /**

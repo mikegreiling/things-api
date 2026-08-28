@@ -1332,6 +1332,27 @@ Two smaller behaviors in the same state, both measured: the **menu bar's items b
 
 **Automation note.** `-1728 Can't get <kind> id "…"` against a uuid the database shows present is, on this evidence, a reliable fingerprint of a modal sheet standing somewhere in Things — including a sheet a *previous* automated drive stranded. It is exactly the "ghost clone" symptom reported in [#620](https://github.com/mikegreiling/things-api/issues/620), and there is no second cause to look for. Evidence: [lab/modalx1-open-sheet-matrix.md](lab/modalx1-open-sheet-matrix.md) §2.
 
+## 26. Things 3.23: a Repeat dialog opened while Things is in the BACKGROUND becomes an un-dismissable detached window — its own Cancel button does nothing, and neither does anything else (DRVLAT1, 2026-08-28, golden-v4 / Things 3.23 build 32300036)
+
+`Items ▸ Repeat…` can be pressed through Accessibility while another application owns the screen — the menu item reports `enabled = true` and the AXPress lands. Things does **not** come forward, and instead of the usual attached `AXSheet` the dialog materialises as a **detached top-level window** (`subrole AXUnknown`, 545×233), which is the documented second form of this dialog ([UIC4-a](lab/ui-vector-research.md)) and which our census identifies correctly (`the Repeat dialog is open (detached)`, control census `cb:2 pu:1 bt:2 gp:1 tf:0`, buttons `OK`/`Cancel`).
+
+Its element-addressed controls work: the frequency pop-up opens and takes a selection, and the interval field accepts keyboard focus. But **nothing dismisses the window.** Measured on one clone, in order, against the same live dialog:
+
+| dismissal attempt | result |
+|---|---|
+| `click button "Cancel"` (AXPress), Things backgrounded | dialog remains |
+| `click button "Cancel"` after `tell application "Things3" to activate` | dialog remains |
+| `click button "Cancel"` after `perform action "AXRaise"` on the window | dialog remains |
+| `key code 53` (Escape) into the process | dialog remains |
+| `⌘W`, then re-activate the app | dialog remains |
+| a synthesized HID click (`CGEventPost`) at the AX-resolved Cancel centre (646, 342; the button reads 611/331, 70×22) | dialog remains |
+
+Activating Things does not re-attach it either — it stays detached, and the census keeps reporting it open after every attempt. Since a standing dialog also empties the app's top-level scripting collections (§25) and holds Things Cloud sync (§24), an editor in this state takes the app's automation surface and its sync down with it, with no scripted way back.
+
+**Expected:** either the dialog should not open at all when the app is not frontmost (the way most modals bring their app forward), or the window it does open should honour its own Cancel button. A dialog that can be opened but not closed by the same interface that opened it is a one-way door.
+
+**Automation note.** The shipped driver never meets this, and that is a deliberate property rather than luck: every dialog recipe ACTIVATES Things before pressing the menu item, so its dialog is always the attached sheet — whose Cancel dismisses reliably, including with another application frontmost ([FGRD1](lab/fgrd1-focus-guard.md) focus-theft cell, re-certified in [DRVLAT1 §7](lab/drvlat1-drive-latency.md)). This is now the recorded reason the activation step exists, alongside the keystroke routing: it is what keeps the drive's abort path reachable. Evidence: [lab/drvlat1-drive-latency.md](lab/drvlat1-drive-latency.md) §5.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

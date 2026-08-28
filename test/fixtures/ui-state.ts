@@ -9,6 +9,10 @@
  * the real app would.
  */
 import {
+  GUARD_LOG_PREFIX,
+  GUARD_LOG_SEP,
+  GUARD_REFUSED_TAG,
+  UI_STATE_LABEL,
   UI_STATE_MARKER,
   type UiSheetForm,
   type UiSheetKind,
@@ -110,7 +114,38 @@ export function censusStdout(s: FakeScreen): string {
 }
 
 export function isCensusCommand(c: UiCommand): boolean {
-  return (c.script ?? "").includes(UI_STATE_MARKER);
+  return (c.script ?? "").includes(UI_STATE_MARKER) && c.label === UI_STATE_LABEL;
+}
+
+/**
+ * A keystroke hop carrying the census as its own PRELUDE (DRVLAT1, issue #633).
+ * The guard is no longer a hop of its own for these: the same probes run inside
+ * the script that types, so the fake screen has to answer them there — logging
+ * the census record the driver reads back, and refusing in-script exactly where
+ * the real prelude would.
+ */
+export function isGuardFoldedCommand(c: UiCommand): boolean {
+  return (c.script ?? "").includes(UI_STATE_MARKER) && c.label !== UI_STATE_LABEL;
+}
+
+/** The census as the folded prelude logs it: one stderr line, one separator. */
+function guardLogLine(screen: FakeScreen): string {
+  return GUARD_LOG_PREFIX + censusStdout(screen).split("\n").join(GUARD_LOG_SEP);
+}
+
+/**
+ * Would the folded prelude refuse on this screen? Mirrors the in-script
+ * judgement (which is a boolean test on the census the prelude just took) —
+ * including the expected-sheet clause, which the generator emits only when the
+ * drive has latched a dialog.
+ */
+function guardWouldRefuse(screen: FakeScreen, script: string): boolean {
+  const CRITICAL = new Set(["running", "frontmost", "dialog"]);
+  if ([...screen.stalled, ...screen.failed].some((p) => CRITICAL.has(p))) return true;
+  if (!screen.inspectable) return true;
+  if (screen.front !== "Things3") return true;
+  const expected = /if sheetKind is not "([a-z-]+)" then set fgBad/.exec(script)?.[1];
+  return expected !== undefined && screen.kind !== expected;
 }
 
 /**
@@ -132,10 +167,34 @@ export function isSheetOpenProbe(c: UiCommand): boolean {
  * close+reopen each close a dismissable dialog and are inert on a stranded one
  * — so a test only has to say what kind of screen it is modelling.
  */
-export function screenAnswer(screen: FakeScreen, c: UiCommand): UiRunResult | null {
+export function screenAnswer(
+  screen: FakeScreen,
+  c: UiCommand,
+  /**
+   * The test's own answer for the ACTION half of a guard-folded keystroke hop
+   * (DRVLAT1). Given it, this fixture plays the whole folded script: census,
+   * in-script judgement, then — only if the guard passed — the action.
+   */
+  answer?: (c: UiCommand) => UiRunResult,
+): UiRunResult | null {
   const script = c.script ?? "";
   if (isCensusCommand(c)) {
     return { ok: true, stdout: censusStdout(screen), stderr: "" };
+  }
+  if (isGuardFoldedCommand(c) && answer !== undefined) {
+    const log = guardLogLine(screen);
+    if (guardWouldRefuse(screen, script)) {
+      // As osascript reports an `error` raised after a `log`: both on stderr.
+      return {
+        ok: false,
+        stdout: "",
+        stderr: `${log}\nexecution error: ${GUARD_REFUSED_TAG} (-2700)`,
+      };
+    }
+    // The guard passed, so the ACTION half runs — through this same fixture (a
+    // keystroke can change the screen) and then the test's own answer.
+    const res = screenAnswer(screen, c) ?? answer(c);
+    return { ...res, stderr: res.stderr === "" ? log : `${log}\n${res.stderr}` };
   }
   // A menu-bar press is how a recipe raises its dialog; the test's own answer
   // still decides whether the press "succeeded".

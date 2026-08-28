@@ -44,10 +44,13 @@ import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import {
   AX_DIALOG_SHELL_SNIPPET,
+  axFocusGuardPrelude,
   CENSUS_TIMEOUT_MS,
   censusUnverifiable,
   describeFocusOwner,
   describeUnprovenProbes,
+  GUARD_REFUSED_TAG,
+  parseGuardLog,
   readUiState,
   SYNC_GATE_WARNING,
   THINGS_PROCESS,
@@ -69,33 +72,46 @@ import type {
 /** GUI driving can stall on an unanswered sheet; give each step headroom. */
 const STEP_TIMEOUT_MS = 15_000;
 /**
- * Poll interval while waiting for a dynamic element (sheet/popover). KEPT at 300ms
- * after the PERF2 audit: the control a mode switch reveals takes ~462ms to appear
- * on the golden (S5b, [docs/lab/perf2-step-latency.md]), which EXCEEDS this
- * interval — so a 300ms poll catches it on its second round; a finer interval
- * would only add osascript hops for a marginal detection gain (UIC6 confirmed).
- */
-const WAIT_POLL_MS = 300;
-/**
- * How long `resolveStepPath` polls a candidate-addressed control before failing
+ * How long a candidate-addressed control is polled for before the step fails
  * closed. The full-vocabulary dialog reveals a pop-up/field a beat AFTER the
  * frequency/Ends switch that precedes it (UIC6: ~250 ms), so the effective-form
- * resolution must poll, not snap once.
+ * resolution must poll, not snap once. Since DRVLAT1 (issue #633) that poll runs
+ * IN-SCRIPT, inside the hop that acts on the control ({@link axCandidatePrelude}),
+ * rather than as its own osascript round-trip per candidate per round.
  */
 const RESOLVE_CANDIDATE_TIMEOUT_MS = 5_000;
 /**
- * Settle after the reveal/activate preamble so the menu bar repopulates for the
- * newly-selected target before the canary reads it (UIC1: the Items ▸ Repeat
- * submenu appears only once a repeating item is selected, and the update is not
- * instantaneous). TRIMMED 1500 → 1000 by the PERF2 audit (S5a,
- * [docs/lab/perf2-step-latency.md]): on a warm running app under DEFAULT macOS
- * animations the menu repopulates in ~92ms median / 116ms max (N=10) — a ~13×
- * margin at 1500. Menu-bar repopulation is a LOCAL UI operation (not a DB-commit /
- * sync-bound one), so it does not scale with DB size the way the OK commit does;
- * 1000ms keeps ~8.6× the golden max as host headroom. Under-margining only ever
- * costs a fail-closed spurious drive refusal (the canary miss), never a bad write.
+ * In-script poll cadence for the element waits the drive folded into their own
+ * hops (DRVLAT1, issue #633). The JS-side poll it replaces was kept at a coarse
+ * 300ms deliberately — it paid a PROCESS SPAWN per round (PERF2 S5b), so a finer
+ * interval bought detection at the price of hops. An in-script poll pays one
+ * addressed `exists` per round, so it can be fine enough that a wait ends when
+ * the element lands rather than at the next 300ms boundary.
  */
-const SETTLE_AFTER_REVEAL_MS = 1000;
+const IN_SCRIPT_POLL_S = 0.05;
+/**
+ * How long the canary and the eligibility assertion poll for the menu bar to
+ * repopulate around the newly-selected target (UIC1: the Items ▸ Repeat submenu
+ * appears only once a matching item is selected, and the update is not
+ * instantaneous).
+ *
+ * This REPLACES the fixed post-preamble settle (DRVLAT1, issue #633). That settle
+ * was 1500ms, trimmed to 1000ms by PERF2 against a measured ~92ms median / 116ms
+ * max menu repopulation (S5a) — i.e. it spent ~900ms of every drive waiting out a
+ * margin, on every host, whether or not the menu was already there. The closed-loop
+ * form is strictly better on both axes: it proceeds the moment the menu answers
+ * (the common case, ~one poll), and it tolerates a host slower than any fixed
+ * settle would have covered. Under-margining still only ever costs a fail-closed
+ * refusal, never a bad write (determinism doctrine; BEEP1 shape-settle precedent).
+ */
+const MENU_SETTLE_TIMEOUT_MS = 4_000;
+/**
+ * Default window for a click's post-condition wait when the step names none.
+ * Every recipe that asserts one sets 5000 explicitly; this only keeps the
+ * in-script poll comfortably INSIDE the hop's own {@link STEP_TIMEOUT_MS}, which
+ * a 15s default would not (the poll would outlive its transport).
+ */
+const WAIT_ASSERT_TIMEOUT_MS = 5_000;
 
 /**
  * A shape-dependent step reached without the dialog having been measured — a
@@ -393,6 +409,90 @@ end fgAssertFront`;
 /** resolve-element: does the element exist right now? Returns "true"/"false". */
 export function axResolveScript(path: string): string {
   return `${SE} to return (exists (${path}))`;
+}
+/**
+ * The AppleScript variable a folded candidate resolution binds the live element
+ * to. Every addressed script takes its target as `(<path>)`, so handing it this
+ * name — with {@link axCandidatePrelude} in front — makes the resolution and the
+ * action ONE hop instead of two (DRVLAT1, issue #633).
+ */
+export const STEP_ELEMENT_REF = "fgStepEl";
+/**
+ * The message a folded candidate resolution raises when NONE of a step's expected
+ * element shapes appeared. Byte-identical to the driver's own wording for the
+ * separate-hop resolution it replaces, so a report reads the same either way.
+ */
+export const CANDIDATES_MISSED =
+  "none of its expected element shapes resolved (neither the attached sheet nor the " +
+  "detached repeat editor window)";
+/**
+ * IN-SCRIPT CANDIDATE RESOLUTION (DRVLAT1, issue #633).
+ *
+ * A candidate-addressed step used to dispatch one `resolve` hop PER CANDIDATE PER
+ * POLL ROUND before the hop that acted on whichever answered — a process spawn
+ * each, on top of a 300ms JS-side poll floor. This prelude does the same work in
+ * the acting hop's own process: it polls the candidates in the SAME priority
+ * order, binds the first that exists to {@link STEP_ELEMENT_REF}, and fails closed
+ * with {@link CANDIDATES_MISSED} when the window elapses with none of them there.
+ *
+ * Collapsing it is also strictly better against TOCTOU: the element the script
+ * acts on is the one it just proved exists, with nothing dispatched in between.
+ */
+export function axCandidatePrelude(
+  paths: string[],
+  timeoutMs: number = RESOLVE_CANDIDATE_TIMEOUT_MS,
+): string {
+  const probes = paths
+    .map(
+      (p) => `    try
+      if (exists (${p})) then set ${STEP_ELEMENT_REF} to (${p})
+    end try
+    if ${STEP_ELEMENT_REF} is not missing value then exit repeat`,
+    )
+    .join("\n");
+  return `set ${STEP_ELEMENT_REF} to missing value
+set fgT0 to (current date)
+${SE}
+  repeat
+${probes}
+    if ((current date) - fgT0) is greater than or equal to ${pollSeconds(timeoutMs)} then exit repeat
+    delay ${IN_SCRIPT_POLL_S}
+  end repeat
+end tell
+if ${STEP_ELEMENT_REF} is missing value then error "${escapeAppleScript(CANDIDATES_MISSED)}"`;
+}
+/**
+ * wait: poll for ANY of the awaited element shapes to appear, IN-SCRIPT (DRVLAT1).
+ * One hop for the whole wait instead of one per candidate per round — which is
+ * what a slow host paid most: the dialog the drive is waiting for is exactly the
+ * thing that is slow when the app is busy. Returns "true", or "false" when the
+ * window elapses with none of them present (the driver's abort path is unchanged).
+ */
+export function axWaitAnyScript(paths: string[], timeoutMs: number): string {
+  const probes = paths
+    .map(
+      (p) => `    try
+      if (exists (${p})) then return "true"
+    end try`,
+    )
+    .join("\n");
+  return `set fgT0 to (current date)
+${SE}
+  repeat
+${probes}
+    if ((current date) - fgT0) is greater than or equal to ${pollSeconds(timeoutMs)} then return "false"
+    delay ${IN_SCRIPT_POLL_S}
+  end repeat
+end tell`;
+}
+/**
+ * A poll window in whole seconds, as the in-script `current date` deadline reads
+ * it (AppleScript dates carry second granularity). Never below 1: a sub-second
+ * window would make a loop that checks its deadline after the FIRST probe into a
+ * single-shot check, which is the race these loops exist to close.
+ */
+function pollSeconds(timeoutMs: number): number {
+  return Math.max(1, Math.round(timeoutMs / 1000));
 }
 /** press: AXPress the element. */
 export function axPressScript(path: string): string {
@@ -976,12 +1076,20 @@ export function axSelectPopupScript(path: string, value: string): string {
  */
 export function axSelectPopupCandidatesScript(path: string, values: string[]): string {
   const list = values.map((v) => `"${escapeAppleScript(v)}"`).join(", ");
+  // The menu is WAITED FOR, not slept on (DRVLAT1, issue #633): the old loop paid
+  // a flat 0.3s after every click before it would look again, so the common case —
+  // one click, menu up in well under that — spent the remainder of the settle
+  // doing nothing. The click cadence is unchanged (one click per round, never a
+  // second click into a menu that is opening — BEEP1); only the looking is finer.
   return `${SE}
   set pu to (${path})
   repeat 20 times
     if (exists menu 1 of pu) then exit repeat
     click pu
-    delay 0.3
+    repeat 6 times
+      if (exists menu 1 of pu) then exit repeat
+      delay ${IN_SCRIPT_POLL_S}
+    end repeat
   end repeat
   repeat with candidate in {${list}}
     if (exists menu item candidate of menu 1 of pu) then
@@ -1430,26 +1538,41 @@ return "NOMATCH"`;
  * naming expected vs observed. Pure System Events + Things scripting, background-
  * capable. One stable command shape per primitive.
  */
-export function axAssertEligibleScript(targetUuid: string, menuItemPath: string): string {
+export function axAssertEligibleScript(
+  targetUuid: string,
+  menuItemPath: string,
+  settleMs: number = MENU_SETTLE_TIMEOUT_MS,
+): string {
   const u = escapeAppleScript(targetUuid);
-  return `set selIds to {}
-tell application "Things3"
-  try
-    set selIds to id of selected to dos
-  end try
-end tell
-if (count of selIds) is 0 then return "NOTSEL no to-do is selected after the reveal (expected ${u}) — the show URL navigated without selecting an eligible row"
-if (count of selIds) is greater than 1 then return "NOTSEL " & (count of selIds) & " to-dos are selected, expected exactly the target ${u}"
-set theId to (item 1 of selIds) as text
-if theId is not "${u}" then return "WRONGSEL the selected to-do is " & theId & ", expected the target ${u}"
-set repEnabled to false
-tell application "System Events" to tell process "Things3"
-  try
-    set repEnabled to enabled of ${menuItemPath}
-  end try
-end tell
-if repEnabled is false then return "DISABLED the target ${u} is selected but its Repeat menu item is disabled (not an eligible row for this action)"
-return "OK"`;
+  return `set t0 to (current date)
+set verdict to my aeCheck()
+repeat until verdict is "OK"
+  if ((current date) - t0) is greater than or equal to ${pollSeconds(settleMs)} then exit repeat
+  delay ${IN_SCRIPT_POLL_S}
+  set verdict to my aeCheck()
+end repeat
+return verdict
+
+on aeCheck()
+  set selIds to {}
+  tell application "Things3"
+    try
+      set selIds to id of selected to dos
+    end try
+  end tell
+  if (count of selIds) is 0 then return "NOTSEL no to-do is selected after the reveal (expected ${u}) — the show URL navigated without selecting an eligible row"
+  if (count of selIds) is greater than 1 then return "NOTSEL " & (count of selIds) & " to-dos are selected, expected exactly the target ${u}"
+  set theId to (item 1 of selIds) as text
+  if theId is not "${u}" then return "WRONGSEL the selected to-do is " & theId & ", expected the target ${u}"
+  set repEnabled to false
+  tell application "System Events" to tell process "Things3"
+    try
+      set repEnabled to enabled of ${menuItemPath}
+    end try
+  end tell
+  if repEnabled is false then return "DISABLED the target ${u} is selected but its Repeat menu item is disabled (not an eligible row for this action)"
+  return "OK"
+end aeCheck`;
 }
 
 /** activate: foreground Things (the fallback preamble step). */
@@ -2492,23 +2615,32 @@ export function judgeFocusGuard(
  * state, taken immediately before the hop, and the in-script assertions close
  * the remaining milliseconds (UI-automation determinism doctrine; the #595
  * pre-commit audit and BEEP1 shape-settle are the same pattern).
+ *
+ * FOLDED for keystroke-class hops (DRVLAT1, issue #633). Those hops are
+ * AppleScript, so the census can be — and now is — the PRELUDE OF THE VERY SCRIPT
+ * THAT TYPES ({@link axFocusGuardPrelude}) rather than a hop of its own. Two
+ * things improve at once: the drive stops paying a process spawn per typed
+ * control, and the TOCTOU window between "the census approved this" and "the
+ * keystroke went out" closes to nothing — no dispatch happens in between, because
+ * there is nothing in between. The judgement is still made BEFORE the keystroke
+ * (in-script, fail-closed) and the sentence a caller reads is still built HERE by
+ * {@link judgeFocusGuard}, from the census that same hop logged, so there remains
+ * exactly one wording of every refusal.
+ *
+ * POINTER-class hops keep the separate census: they dispatch JXA, which cannot
+ * carry an AppleScript prelude.
  */
 function guardedRun(inner: UiRunner, latch: SheetLatch): UiRunner {
   return async (command, timeoutMs) => {
-    if (!KEYSTROKE_CLASS.has(command.primitive) && !POINTER_CLASS.has(command.primitive)) {
+    const keystroke = KEYSTROKE_CLASS.has(command.primitive);
+    if (!keystroke && !POINTER_CLASS.has(command.primitive)) {
       return inner(command, timeoutMs);
     }
-    const state = await readUiState(inner, CENSUS_TIMEOUT_MS);
-    // An inspection that would not answer poisons every later inspection's
-    // credibility, so the cleanup ladder is told once and never asks again
-    // (issue #629).
-    if (state === null || censusUnverifiable(state)) latch.inspectionStalled = true;
     // The dialog invariant applies to keystroke-class hops only: a pointer hop
     // is aimed at a frame it resolved a moment ago and fails closed on its own
     // if that frame moved.
-    const expected = KEYSTROKE_CLASS.has(command.primitive) ? latch.sheet : null;
-    const guardRefusal = judgeFocusGuard(state, expected, command.label);
-    if (guardRefusal !== null) {
+    const expected = keystroke ? latch.sheet : null;
+    const refuse = (state: UiState | null, why: string): UiRunResult => {
       trace(() => ({
         phase: "focus-guard",
         event: "refused",
@@ -2519,9 +2651,46 @@ function guardedRun(inner: UiRunner, latch: SheetLatch): UiRunner {
         inspectable: state?.inspectable ?? false,
         stalled: state?.stalledProbes ?? null,
       }));
-      return { ok: false, stdout: "", stderr: guardRefusal };
+      return { ok: false, stdout: "", stderr: why };
+    };
+    // An inspection that would not answer poisons every later inspection's
+    // credibility, so the cleanup ladder is told once and never asks again
+    // (issue #629).
+    const noteStall = (state: UiState | null): void => {
+      if (state === null || censusUnverifiable(state)) latch.inspectionStalled = true;
+    };
+    // Latched only on a census that APPROVED the hop — a dialog seen while
+    // refusing is, by construction, not the one this drive is driving.
+    const latchSheet = (state: UiState | null): void => {
+      if (state !== null && state.sheetOpen && latch.sheet === null) latch.sheet = state.sheetKind;
+    };
+
+    if (keystroke && command.lang !== "javascript" && typeof command.script === "string") {
+      const res = await inner(
+        { ...command, script: `${axFocusGuardPrelude(expected)}\n${command.script}` },
+        timeoutMs,
+      );
+      const { state, stderr } = parseGuardLog(res.stderr);
+      noteStall(state);
+      if (!res.ok && stderr.includes(GUARD_REFUSED_TAG)) {
+        // The script refused. Re-judge the census it logged for the sentence; a
+        // census too damaged to re-judge still refuses — the hop already did.
+        return refuse(
+          state,
+          judgeFocusGuard(state, expected, command.label) ??
+            `refused to run "${command.label}": the window and focus state could not be read, so ` +
+              "there is no proof the input would reach Things — nothing was sent",
+        );
+      }
+      latchSheet(state);
+      return { ...res, stderr };
     }
-    if (state !== null && state.sheetOpen && latch.sheet === null) latch.sheet = state.sheetKind;
+
+    const state = await readUiState(inner, CENSUS_TIMEOUT_MS);
+    noteStall(state);
+    const guardRefusal = judgeFocusGuard(state, expected, command.label);
+    if (guardRefusal !== null) return refuse(state, guardRefusal);
+    latchSheet(state);
     return inner(command, timeoutMs);
   };
 }
@@ -2610,42 +2779,44 @@ function canaryPaths(recipe: UiRecipe): { path: string; label: string }[] {
   return out;
 }
 
-/**
- * Resolve a step's effective element path. A `pathCandidates` step dispatches
- * against the FIRST candidate that exists (the dialog-form disjunction — attached
- * sheet vs detached AXUnknown window, UIC4-a). The candidates are POLLED over a
- * bounded window because the full-vocabulary controls are REVEALED by the
- * preceding step: switching the frequency pop-up to weekly/monthly/yearly (or
- * ticking Ends=after) re-lays-out the cadence group, and the new pop-up/field
- * lands ~250 ms later (UIC6). A single immediate exists-check races that render
- * and would spuriously fail closed; polling matches the `dynamic` nature these
- * steps already declare. Returns null when none resolve within the window.
- */
-async function resolveStepPath(step: UiStep, run: UiRunner): Promise<string | null> {
-  if (step.pathCandidates === undefined) return step.path ?? null;
-  const candidates = step.pathCandidates;
-  const deadline = Date.now() + (step.timeoutMs ?? RESOLVE_CANDIDATE_TIMEOUT_MS);
-  for (;;) {
-    for (const candidate of candidates) {
-      // candidates are tried in priority order; the first hit wins, so a race would blur which form matched
-      const res = await run(
-        { primitive: "resolve", label: step.label, script: axResolveScript(candidate) },
-        STEP_TIMEOUT_MS,
-      );
-      if (res.ok && res.stdout.trim() === "true") return candidate;
-    }
-    if (Date.now() >= deadline) return null;
-    // the revealed control lands a beat after the mode switch; poll until it does
-    await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
-  }
-}
-
 function refusal(detail: string): ExecuteResult {
   return { exitCode: 1, stdout: "", stderr: detail };
 }
 
-/** Compile one recipe step into its primitive command (no dispatch). */
+/**
+ * Compile one recipe step into its primitive command (no dispatch).
+ *
+ * A CANDIDATE-ADDRESSED step compiles to ONE script that resolves its own element
+ * and then acts on it (DRVLAT1, issue #633): the addressed body is generated
+ * against {@link STEP_ELEMENT_REF} and {@link axCandidatePrelude} is prepended, so
+ * the resolution that used to be a separate `resolve` hop (or several) now rides
+ * the acting hop. Steps whose script is JXA, or that resolve their own target,
+ * are unaffected.
+ */
 export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
+  if (step.primitive === "wait") {
+    // The whole wait is ONE hop: the candidates are polled in-script until one of
+    // them exists or the step's own window elapses (DRVLAT1).
+    const paths = step.pathCandidates ?? [step.path ?? ""];
+    return {
+      primitive: "wait",
+      label: step.label,
+      script: axWaitAnyScript(paths, step.timeoutMs ?? STEP_TIMEOUT_MS),
+    };
+  }
+  if (step.pathCandidates !== undefined && step.path === undefined) {
+    const candidates = step.pathCandidates;
+    const inner = commandForStep({ ...step, path: STEP_ELEMENT_REF }, targetUuid);
+    // Only an AppleScript body can take the AppleScript prelude; a JXA step
+    // (set-datetime, the pointer primitives) resolves its own target anyway.
+    if (inner.lang === "javascript" || typeof inner.script !== "string" || inner.script === "") {
+      return inner;
+    }
+    return {
+      ...inner,
+      script: `${axCandidatePrelude(candidates, RESOLVE_CANDIDATE_TIMEOUT_MS)}\n${inner.script}`,
+    };
+  }
   switch (step.primitive) {
     case "reveal":
       return { primitive: "reveal", label: step.label, url: revealUrl(step.value ?? targetUuid) };
@@ -2744,8 +2915,6 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
           weekdayTitlesOf(step.value ?? ""),
         ),
       };
-    case "wait":
-      return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };
     case "select-row":
       return {
         primitive: "select-row",
@@ -2868,16 +3037,16 @@ async function driveClickElement(
     };
   }
   if (step.assertPath !== undefined) {
-    const ok = await waitForElement(
+    // one hop, polled in-script (DRVLAT1)
+    const res = await run(
       {
         primitive: "wait",
         label: step.assertLabel ?? step.label,
-        script: axResolveScript(step.assertPath),
+        script: axWaitAnyScript([step.assertPath], step.assertTimeoutMs ?? WAIT_ASSERT_TIMEOUT_MS),
       },
-      step.assertTimeoutMs ?? STEP_TIMEOUT_MS,
-      run,
+      STEP_TIMEOUT_MS,
     );
-    if (!ok) {
+    if (!(res.ok && res.stdout.trim() === "true")) {
       return {
         ok: false,
         why: `${step.assertLabel ?? "the expected element"} did not appear after the click`,
@@ -3148,8 +3317,9 @@ async function drive(
     done.push(step.label);
     idx += 1;
   }
-  // Let the selection settle so the menu bar repopulates before the canary reads it.
-  if (idx > 0) await new Promise((r) => setTimeout(r, SETTLE_AFTER_REVEAL_MS));
+  // The menu bar repopulates around the new selection a beat after the preamble
+  // (UIC1). That beat is WAITED OUT IN THE CANARY below, which polls each element
+  // it must resolve — no fixed settle stands here any more (DRVLAT1, issue #633).
 
   // 0½. Session-reachability GATE for dialog-class ops (SESSGATE, #480). A recipe
   //     that opens a sheet on the main window needs that window AX-reachable on
@@ -3196,8 +3366,14 @@ async function drive(
   //    pressed. (This is also the localization check: English titles must resolve.)
   for (const { path, label } of canaryPaths(recipe)) {
     // the canary resolves elements one at a time; a single miss aborts before anything is pressed, so parallelizing would waste work and blur which element failed
+    // POLLED, not snapped: this is where the drive waits out the menu-bar
+    // repopulation the preamble triggered (DRVLAT1 — it replaces the fixed settle).
     const res = await run(
-      { primitive: "resolve", label, script: axResolveScript(path) },
+      {
+        primitive: "resolve",
+        label,
+        script: axWaitAnyScript([path], MENU_SETTLE_TIMEOUT_MS),
+      },
       STEP_TIMEOUT_MS,
     );
     if (!res.ok || res.stdout.trim() !== "true") {
@@ -3267,14 +3443,11 @@ async function drive(
     if (overBudget()) return watchdogResult(step.label);
     if (step.primitive === "wait") {
       // A candidate-addressed wait polls for ANY of its shapes to appear (the
-      // dialog opening as an attached sheet OR a detached AXUnknown window).
+      // dialog opening as an attached sheet OR a detached AXUnknown window) — the
+      // whole poll inside ONE hop (DRVLAT1).
       // steps are strictly sequential: this wait must resolve before the step that acts on the awaited element runs
-      const ok = await waitForAnyElement(
-        step.pathCandidates ?? [step.path ?? ""],
-        step.label,
-        step.timeoutMs ?? STEP_TIMEOUT_MS,
-        run,
-      );
+      const res = await run(commandForStep(step, recipe.targetUuid), STEP_TIMEOUT_MS);
+      const ok = res.ok && res.stdout.trim() === "true";
       if (!ok) {
         // the abort keystroke must land (and be verified) before returning the partial-state report
         const clear = await clearNow();
@@ -3310,23 +3483,11 @@ async function drive(
       done.push(`${step.label} (${outcome.detail})`);
       continue;
     }
-    // Resolve a candidate-addressed step's effective element before dispatch
-    // (the sheet-vs-detached-window disjunction). A miss fails closed.
-    if (step.pathCandidates !== undefined) {
-      // the effective form must be resolved before this step can act on it
-      const effective = await resolveStepPath(step, run);
-      if (effective === null) {
-        // dismiss whatever opened (and verify) before reporting
-        const clear = await clearNow();
-        return partial(
-          step.label,
-          "none of its expected element shapes resolved (neither the attached sheet nor the " +
-            "detached repeat editor window)",
-          clear,
-        );
-      }
-      step = { ...step, path: effective };
-    }
+    // A candidate-addressed step resolves its effective element (the
+    // sheet-vs-detached-window disjunction) INSIDE its own script now — see
+    // commandForStep / axCandidatePrelude. A miss raises CANDIDATES_MISSED there
+    // and lands on this step's ordinary failure path, with the same wording and
+    // the same clean abort it had when the resolution was its own hop (DRVLAT1).
     const command = commandForStep(step, recipe.targetUuid);
     if (step.primitive === "probe-dialog-shape") {
       // MEASURE the dialog (RDLG2) before any shape-dependent control is touched.
@@ -3469,47 +3630,6 @@ async function drive(
     // change-history record stores and `--verbose` renders.
     steps: relocationNote === "" ? [...done] : [relocationNote.trim(), ...done],
   };
-}
-
-async function waitForElement(
-  command: UiCommand,
-  timeoutMs: number,
-  run: UiRunner,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    // polling the same element until it appears is inherently sequential
-    const res = await run(command, STEP_TIMEOUT_MS);
-    if (res.ok && res.stdout.trim() === "true") return true;
-    if (Date.now() >= deadline) return false;
-    // inter-poll delay between sequential existence checks
-    await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
-  }
-}
-
-/** Poll until ANY of the candidate element shapes exists (the sheet-vs-detached-window disjunction). */
-async function waitForAnyElement(
-  paths: string[],
-  label: string,
-  timeoutMs: number,
-  run: UiRunner,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (const path of paths) {
-      // Emitted as the `wait` primitive (not `resolve`) so the command stream a
-      // caller observes is unchanged from the single-path waitForElement.
-      // candidates checked in priority order; the first present shape ends the wait
-      const res = await run(
-        { primitive: "wait", label, script: axResolveScript(path) },
-        STEP_TIMEOUT_MS,
-      );
-      if (res.ok && res.stdout.trim() === "true") return true;
-    }
-    if (Date.now() >= deadline) return false;
-    // inter-poll delay between sequential existence checks
-    await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
-  }
 }
 
 function enabledMatrix(): VectorMatrix {
