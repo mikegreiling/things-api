@@ -95,7 +95,14 @@ describe("ui drive watchdog", () => {
   it("returns a structured watchdog ExecuteResult (with cleanup) once the budget is spent", async () => {
     // A 1ms budget is spent before the first real step; the drive stops at the
     // step boundary, runs the dialog clearance, and reports the budget/step.
-    const run = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    // Each mocked hop costs a couple of real milliseconds — DRVLAT1 removed the
+    // fixed post-preamble settle, so a drive whose every hop answers instantly
+    // can otherwise finish inside a 1ms budget and never reach the boundary.
+    const slow = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    const run = async (c: UiCommand, t: number): Promise<UiRunResult> => {
+      await new Promise((r) => setTimeout(r, 2));
+      return slow(c, t);
+    };
     const vector = createUiVector(config(1), run);
     const res = await vector.execute(invocation(pauseRepeatRecipe("TODO-1")));
     expect(res.timedOut).toBe(true);

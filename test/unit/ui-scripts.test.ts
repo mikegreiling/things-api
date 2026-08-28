@@ -26,7 +26,21 @@ import {
   axSetValueScript,
   axSheetOpenScript,
   axTypeTextScript,
+  axCandidatePrelude,
+  axWaitAnyScript,
+  commandForStep,
+  judgeFocusGuard,
+  CANDIDATES_MISSED,
+  STEP_ELEMENT_REF,
 } from "../../src/write/vectors/ui.ts";
+import {
+  axFocusGuardPrelude,
+  axUiStateScript,
+  GUARD_LOG_PREFIX,
+  GUARD_LOG_SEP,
+  GUARD_REFUSED_TAG,
+  parseGuardLog,
+} from "../../src/write/vectors/ui-state.ts";
 
 describe("axSelectPopupCandidatesScript — plural-safe menu-item resolution (defect (c))", () => {
   const script = axSelectPopupCandidatesScript("pop up button 1 of group 1", ["week", "weeks"]);
@@ -218,7 +232,19 @@ describe("axAssertEligibleScript — reveal-landed-eligible check (ADR1, #480)",
     expect(script).toContain("NOTSEL");
     expect(script).toContain("WRONGSEL");
     expect(script).toContain("DISABLED");
-    expect(script.trimEnd().endsWith('return "OK"')).toBe(true);
+    // The check itself still ends on the single positive verdict …
+    expect(script).toContain('  return "OK"\nend aeCheck');
+  });
+
+  it("POLLS the check until it holds, and returns the LAST verdict when it never does", () => {
+    // DRVLAT1 (#633): the menu bar repopulates around the new selection a beat
+    // after the reveal. That beat used to be a fixed 1000ms settle in the driver,
+    // paid by every drive; it is now waited out HERE, in the assertion's own hop,
+    // which returns the moment the selection is eligible.
+    expect(script).toContain('repeat until verdict is "OK"');
+    expect(script.trimEnd()).toContain("return verdict");
+    // …and a bounded deadline, not an unbounded spin.
+    expect(script).toMatch(/is greater than or equal to \d+ then exit repeat/);
   });
 
   it("requires EXACTLY the target selected (count checks) and the menu item enabled", () => {
@@ -704,5 +730,176 @@ describe("axTypeTextScript — one keystroke, spaces intact (HXPC1)", () => {
     expect(axTypeTextScript("Synthetic Work")).toContain('keystroke "Synthetic Work"');
     // axKeyScript splits its spec on whitespace, which would drop the space.
     expect(axKeyScript("Synthetic Work")).toContain('keystroke "Synthetic"');
+  });
+});
+
+// ===========================================================================
+// DRVLAT1 (issue #633) — the hop COLLAPSE. A step used to dispatch its guard,
+// its element resolution and its action as separate osascript processes; each
+// of those is now a prelude of the ONE script that acts. These pin the shapes,
+// their ORDER (a guard that ran after the input would prove nothing), and the
+// bounded closed loops that replaced the fixed settles.
+// ===========================================================================
+
+describe("axCandidatePrelude — in-script element resolution (DRVLAT1)", () => {
+  const script = axCandidatePrelude(["pop up button 1 of sheet 1", "pop up button 1 of window 2"]);
+
+  it("probes the candidates IN PRIORITY ORDER and binds the first that exists", () => {
+    expect(script.indexOf("sheet 1")).toBeLessThan(script.indexOf("window 2"));
+    expect(script).toContain(`set ${STEP_ELEMENT_REF} to (pop up button 1 of sheet 1)`);
+    expect(script).toContain(`if ${STEP_ELEMENT_REF} is not missing value then exit repeat`);
+  });
+
+  it("POLLS on a bounded deadline (the revealed control lands a beat later, UIC6)", () => {
+    expect(script).toContain("set fgT0 to (current date)");
+    expect(script).toMatch(/is greater than or equal to \d+ then exit repeat/);
+    expect(script).toContain("delay 0.05");
+  });
+
+  it("fails closed with the driver's own wording when none of them appear", () => {
+    expect(script).toContain(`if ${STEP_ELEMENT_REF} is missing value then error`);
+    expect(script).toContain(CANDIDATES_MISSED);
+  });
+});
+
+describe("axWaitAnyScript — the whole wait in one hop (DRVLAT1)", () => {
+  const script = axWaitAnyScript(["sheet 1 of window 1", "window 2"], 5000);
+
+  it("answers true/false rather than erroring — the driver's abort path is unchanged", () => {
+    expect(script).toContain('return "true"');
+    expect(script).toContain('return "false"');
+  });
+
+  it("polls every shape each round, on a bounded deadline", () => {
+    expect(script).toContain("exists (sheet 1 of window 1)");
+    expect(script).toContain("exists (window 2)");
+    expect(script).toContain("is greater than or equal to 5 then");
+  });
+});
+
+describe("commandForStep — a candidate-addressed step compiles to ONE script (DRVLAT1)", () => {
+  const cmd = commandForStep(
+    {
+      primitive: "select-popup",
+      label: "frequency = daily",
+      pathCandidates: ["pop up button 1 of sheet 1", "pop up button 1 of window 2"],
+      value: "daily",
+      dynamic: true,
+      addressing: "title",
+    },
+    "TODO-1",
+  );
+
+  it("resolves BEFORE it acts, in the same script, on the bound reference", () => {
+    const script = cmd.script ?? "";
+    expect(script).toContain(`set pu to (${STEP_ELEMENT_REF})`);
+    expect(script.indexOf(`set ${STEP_ELEMENT_REF} to missing value`)).toBeLessThan(
+      script.indexOf(`set pu to (${STEP_ELEMENT_REF})`),
+    );
+    expect(cmd.primitive).toBe("select-popup");
+  });
+
+  it("a wait step compiles to the polled multi-shape existence read", () => {
+    const wait = commandForStep(
+      {
+        primitive: "wait",
+        label: "the Repeat dialog",
+        pathCandidates: ["sheet 1 of window 1", "window 2"],
+        timeoutMs: 5000,
+        dynamic: true,
+      },
+      "TODO-1",
+    );
+    expect(wait.primitive).toBe("wait");
+    expect(wait.script).toContain('return "false"');
+    expect(wait.script).not.toContain(STEP_ELEMENT_REF);
+  });
+
+  it("leaves a JXA step alone (an AppleScript prelude cannot ride a JXA script)", () => {
+    const dt = commandForStep(
+      {
+        primitive: "set-datetime",
+        label: "reminder = 09:00",
+        value: "time:09:00",
+        dtTarget: "reminder",
+        pathCandidates: ["sheet 1 of window 1"],
+        dynamic: true,
+      },
+      "TODO-1",
+    );
+    expect(dt.lang).toBe("javascript");
+    expect(dt.script).not.toContain(STEP_ELEMENT_REF);
+  });
+});
+
+describe("axFocusGuardPrelude — the census as the keystroke's own prelude (DRVLAT1)", () => {
+  const prelude = axFocusGuardPrelude(null);
+
+  it("runs the SAME census the stand-alone script does", () => {
+    const census = axUiStateScript();
+    for (const probe of ["-- P1 running", "-- P2 frontmost", "-- P3 dialog", "-- P5 focus"]) {
+      expect(census).toContain(probe);
+      expect(prelude).toContain(probe);
+    }
+  });
+
+  it("LOGS the census record on one line, so the driver can re-judge it for the message", () => {
+    expect(prelude).toContain(`log "${GUARD_LOG_PREFIX}"`);
+    expect(prelude).toContain(`"${GUARD_LOG_SEP}"`);
+    expect(prelude).not.toContain("linefeed");
+  });
+
+  it("refuses in-script with a bare TAG — never a sentence (one wording, in TypeScript)", () => {
+    expect(prelude).toContain(`if fgBad then error "${GUARD_REFUSED_TAG}"`);
+    expect(prelude).not.toContain("nothing was sent");
+  });
+
+  it("judges every branch judgeFocusGuard judges: critical probes, inspectable, frontmost", () => {
+    for (const p of ["running", "frontmost", "dialog"]) {
+      expect(prelude).toContain(`if stalled contains "${p} " then set fgBad to true`);
+      expect(prelude).toContain(`if failed contains "${p} " then set fgBad to true`);
+    }
+    expect(prelude).toContain("if not canInspect then set fgBad to true");
+    expect(prelude).toContain("if not frontIsThings then set fgBad to true");
+  });
+
+  it("adds the dialog invariant only once a sheet is latched", () => {
+    expect(prelude).not.toContain("sheetKind is not");
+    expect(axFocusGuardPrelude("repeat")).toContain(
+      'if sheetKind is not "repeat" then set fgBad to true',
+    );
+  });
+});
+
+describe("parseGuardLog — recovering the folded census (DRVLAT1)", () => {
+  it("parses the logged record and strips it out of the message", () => {
+    const record = [
+      "front=Finder",
+      "isfront=false",
+      "running=true",
+      "form=none",
+      "depth=0",
+      "kind=none",
+      "census=",
+      "role=AXList",
+      "subrole=",
+      "inspectable=true",
+      "stalled=",
+      "failed=",
+    ].join(GUARD_LOG_SEP);
+    const { state, stderr } = parseGuardLog(
+      `${GUARD_LOG_PREFIX}${record}\nexecution error: ${GUARD_REFUSED_TAG} (-2700)`,
+    );
+    expect(state?.frontmostApp).toBe("Finder");
+    expect(state?.thingsFrontmost).toBe(false);
+    expect(stderr).toContain(GUARD_REFUSED_TAG);
+    expect(stderr).not.toContain(GUARD_LOG_PREFIX);
+    expect(judgeFocusGuard(state, null, 'type "3" into the field')).toContain(
+      "Finder is frontmost",
+    );
+  });
+
+  it("reports no state at all when nothing was logged (fail-closed for the caller)", () => {
+    expect(parseGuardLog("execution error: boom (-1728)").state).toBeNull();
   });
 });

@@ -48,9 +48,11 @@ import {
   axAuditDialogScript,
   axCancelDialogScript,
   axCancelFrameScript,
+  axSetValueScript,
+  axTypeTextScript,
   commandForStep,
 } from "../../src/write/vectors/ui.ts";
-import { axUiStateScript } from "../../src/write/vectors/ui-state.ts";
+import { axFocusGuardPrelude, axUiStateScript } from "../../src/write/vectors/ui-state.ts";
 
 const DARWIN = process.platform === "darwin";
 
@@ -77,15 +79,12 @@ const FULL: RepeatRuleExtras = {
 };
 
 /**
- * A step's `path` is bound at DRIVE time, once the AX probe has picked whichever
- * of its `pathCandidates` resolves. Bind the first candidate here so the script
- * is generated in the shape it is actually dispatched in — an empty path would
- * make every addressed script a false failure.
+ * A candidate-addressed step compiles to its own in-script resolution prelude
+ * plus the addressed body (DRVLAT1, issue #633), so nothing has to be bound here:
+ * `commandForStep` alone yields exactly the script that is dispatched. This suite
+ * therefore covers the FOLDED shape — prelude, deadline loop and all — which is
+ * the only shape that ever reaches osascript.
  */
-function bindPath(step: UiStep): UiStep {
-  const first = step.pathCandidates?.[0];
-  return first === undefined || step.path !== undefined ? step : { ...step, path: first };
-}
 
 function everyScript(): { label: string; script: string; lang: string }[] {
   const recipes = [
@@ -106,7 +105,7 @@ function everyScript(): { label: string; script: string; lang: string }[] {
   for (const recipe of recipes) {
     for (const shape of ["next-popup", "legacy"] as const) {
       for (const step of forShape(recipe.steps, shape)) {
-        const cmd = commandForStep(bindPath(step), recipe.targetUuid);
+        const cmd = commandForStep(step, recipe.targetUuid);
         if (typeof cmd.script !== "string") continue;
         if (seen.has(cmd.script)) continue;
         seen.add(cmd.script);
@@ -123,6 +122,17 @@ function everyScript(): { label: string; script: string; lang: string }[] {
   // whose occurrence comparison carries the relative-date resolver (#625).
   for (const extra of [
     { label: "driver \u00b7 ui-state census", script: axUiStateScript() },
+    // The FOLDED focus guard: the census prelude compiled in front of the very
+    // keystroke script it guards (DRVLAT1). Both dialog invariants, since the
+    // expected-sheet clause is generated only when one is latched.
+    {
+      label: "driver \u00b7 folded focus guard (no sheet latched) + set-value",
+      script: `${axFocusGuardPrelude(null)}\n${axSetValueScript("text field 1 of sheet 1 of window 1", "3")}`,
+    },
+    {
+      label: "driver \u00b7 folded focus guard (repeat sheet latched) + type-text",
+      script: `${axFocusGuardPrelude("repeat")}\n${axTypeTextScript("Some Project")}`,
+    },
     { label: "driver \u00b7 dismiss (Cancel)", script: axCancelDialogScript() },
     { label: "driver \u00b7 Cancel button frame", script: axCancelFrameScript() },
     { label: "driver \u00b7 abort (Escape)", script: axAbortScript() },
@@ -245,7 +255,9 @@ describe.skipIf(!DARWIN)("every generated AppleScript compiles (NEXTPOP1)", () =
       .filter((r) => r.error !== null)
       .map((r) => `${r.label}\n    ${r.error}`);
     expect(failures).toEqual([]);
-  });
+    // Each script is its own `osacompile` process; the set is large enough that
+    // the default 5s budget is a flake under a loaded parallel run, not a signal.
+  }, 60_000);
 
   // The filter above must never become the reason the suite is green. On a host
   // WITH Things every script is checked, app-addressed ones included.
@@ -259,7 +271,7 @@ describe.skipIf(!DARWIN)("every generated AppleScript compiles (NEXTPOP1)", () =
       .filter((r) => r.error !== null)
       .map((r) => `${r.label}\n    ${r.error}`);
     expect(failures).toEqual([]);
-  });
+  }, 60_000);
 
   // The specific trap that cost a certification pass: proof the guard above has
   // teeth, and a standing note of WHY those variables are named as they are.

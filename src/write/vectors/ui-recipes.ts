@@ -90,8 +90,18 @@ function preamble(targetUuid: string): UiStep[] {
       value: targetUuid,
     },
     {
+      // MEASURED, and it stays (DRVLAT1 §5, issue #633). Background press IS
+      // certified — with Finder frontmost the reveal selects, the Repeat menu
+      // item reads enabled, AXPress opens the dialog and an element-addressed
+      // pop-up drive lands. What does NOT work backgrounded is everything that
+      // needs the screen: a `keystroke` into the interval field goes to whoever
+      // owns it (measured: the field takes focus, the digit never arrives), and
+      // the dialog the app opens in that state is the DETACHED editor, which
+      // resisted every dismissal this project has — its own Cancel, Escape, ⌘W
+      // and a real click at its Cancel frame (oddities §26). So the foreground is
+      // needed both to type and to be able to abort.
       primitive: "activate",
-      label: "bring Things to the foreground (skipped once background press is certified)",
+      label: "bring Things to the foreground (its dialog takes keystrokes only in front)",
       activateFallback: true,
     },
   ];

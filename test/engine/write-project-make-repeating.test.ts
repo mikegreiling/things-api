@@ -19,7 +19,12 @@ import { promoteProjectViaGui } from "../../src/write/make-repeating-project.ts"
 import { runAddRepeatingProject } from "../../src/write/promote-clone.ts";
 import type { WriteDeps, WriteOptions } from "../../src/write/pipeline.ts";
 import { projectMakeRepeatingRecipe } from "../../src/write/vectors/ui-recipes.ts";
-import { createUiVector, type UiCommand, type UiRunResult } from "../../src/write/vectors/ui.ts";
+import {
+  createUiVector,
+  STEP_ELEMENT_REF,
+  type UiCommand,
+  type UiRunResult,
+} from "../../src/write/vectors/ui.ts";
 import type {
   CompiledInvocation,
   UiRecipe,
@@ -264,7 +269,7 @@ function mockRunner(
   return {
     commands,
     screen,
-    run: async (c) => (commands.push(c), screenAnswer(screen, c) ?? answer(c)),
+    run: async (c) => (commands.push(c), screenAnswer(screen, c, answer) ?? answer(c)),
   };
 }
 const ok = (stdout = ""): UiRunResult => ({ ok: true, stdout, stderr: "" });
@@ -313,15 +318,14 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     );
   });
 
-  it("addresses the DETACHED window form when the attached sheet is absent (backgrounded run)", async () => {
-    // Sheet shapes never resolve; the detached AXUnknown shapes do → the driver
-    // dispatches the dialog controls against the detached window.
+  it("carries BOTH dialog forms in the dispatched script, attached sheet first", async () => {
+    // The attached-sheet / detached-window disjunction (UIC4-a) is settled INSIDE
+    // the acting hop since DRVLAT1 (issue #633): the script polls the shapes in
+    // priority order, binds the first that exists, and acts on THAT reference —
+    // so a backgrounded run (detached form) and a foregrounded one dispatch the
+    // same script, and the element cannot change between resolving and acting.
     const { run, commands } = mockRunner((c) => {
-      const s = c.script ?? "";
-      if (c.primitive === "resolve" || c.primitive === "wait") {
-        if (s.includes("AXStandardWindow") && s.includes("sheet")) return ok("false");
-        return ok("true");
-      }
+      if (c.primitive === "resolve" || c.primitive === "wait") return ok("true");
       if (c.primitive === "select-row") return ok("OK");
       if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
@@ -329,8 +333,13 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     const res = await createUiVector(config(), run).execute(invocation(recipe()));
     expect(res.exitCode).toBe(0);
     const popup = commands.find((c) => c.primitive === "select-popup");
-    expect(popup?.script).toContain("AXUnknown");
-    expect(popup?.script).not.toContain("sheet 1");
+    const script = popup?.script ?? "";
+    expect(script).toContain("AXStandardWindow");
+    expect(script).toContain("AXUnknown");
+    // Priority order: the attached sheet is probed before the detached window.
+    expect(script.indexOf("AXStandardWindow")).toBeLessThan(script.indexOf("AXUnknown"));
+    // …and the action addresses what the prelude bound, never a hard-coded shell.
+    expect(script).toContain(`set pu to (${STEP_ELEMENT_REF})`);
   });
 });
 

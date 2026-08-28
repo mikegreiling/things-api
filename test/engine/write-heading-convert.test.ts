@@ -131,7 +131,7 @@ function mockRunner(
   return {
     commands,
     screen,
-    run: async (c) => (commands.push(c), screenAnswer(screen, c) ?? answer(c)),
+    run: async (c) => (commands.push(c), screenAnswer(screen, c, answer) ?? answer(c)),
   };
 }
 const ok = (stdout = ""): UiRunResult => ({ ok: true, stdout, stderr: "" });

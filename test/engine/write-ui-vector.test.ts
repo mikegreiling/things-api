@@ -44,6 +44,7 @@ import {
   screenAnswer,
   type FakeScreen,
 } from "../fixtures/ui-state.ts";
+import { GUARD_REFUSED_TAG, UI_STATE_MARKER } from "../../src/write/vectors/ui-state.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -119,7 +120,7 @@ function mockRunner(
     // everything else is the test's own answer.
     run: async (c) => {
       commands.push(c);
-      return screenAnswer(screen, c) ?? answer(c);
+      return screenAnswer(screen, c, answer) ?? answer(c);
     },
   };
 }
@@ -1429,6 +1430,22 @@ const keyRecipe = (): UiRecipe => ({
 
 const isCensus = (c: UiCommand): boolean => c.label === "read the window and focus state";
 
+/**
+ * A keystroke hop whose script carries the census as its PRELUDE (DRVLAT1,
+ * issue #633). The guard is no longer a hop of its own for these, so "the
+ * keystroke never went" can no longer be shown by the ABSENCE of a command —
+ * the command is dispatched, and the guard inside it decides whether the
+ * `keystroke`/`key code` line is ever reached. What a unit test can prove is the
+ * ORDER (census before input, in one script) and the refusal that came back; the
+ * live proof that nothing is typed is the FGRD1 focus-theft lab cell.
+ */
+function guardsBeforeInput(c: UiCommand): boolean {
+  const s = c.script ?? "";
+  const census = s.indexOf(UI_STATE_MARKER);
+  const input = s.search(/\bkey code \d|\bkeystroke "/);
+  return census >= 0 && input > census;
+}
+
 describe("ui driver — the per-step focus guard (#620)", () => {
   it("refuses a keystroke hop when another application is frontmost — and NAMES it", async () => {
     const { run, commands } = mockRunner(
@@ -1439,10 +1456,16 @@ describe("ui driver — the per-step focus guard (#620)", () => {
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("Finder is frontmost");
     expect(res.stderr).toContain("nothing was sent");
-    // The whole point: the keystroke was never dispatched.
-    expect(commands.some((c) => c.primitive === "key")).toBe(false);
-    // …and the guard did read the screen before deciding.
-    expect(commands.some(isCensus)).toBe(true);
+    // The whole point: the guard ran BEFORE the input, in the same script, and
+    // refused — so no `key code` was ever reached.
+    const key = commands.find((c) => c.primitive === "key");
+    expect(key).toBeDefined();
+    expect(guardsBeforeInput(key as UiCommand)).toBe(true);
+    // …and it cost no census hop of its own: no stand-alone census stands
+    // between the press that opened the dialog and the guarded hop.
+    const pressIdx = commands.findIndex((c) => c.primitive === "press");
+    const keyIdx = commands.indexOf(key as UiCommand);
+    expect(commands.slice(pressIdx, keyIdx).some(isCensus)).toBe(false);
   });
 
   it("refuses a keystroke hop when a system dialog macOS will not expose owns the screen", async () => {
@@ -1453,21 +1476,25 @@ describe("ui driver — the per-step focus guard (#620)", () => {
     const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("a system dialog owns the screen");
-    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    expect(guardsBeforeInput(commands.find((c) => c.primitive === "key") as UiCommand)).toBe(true);
   });
 
   it("refuses a keystroke hop when the screen could not be read at all (fail-closed)", async () => {
     const commands: UiCommand[] = [];
     const run = async (c: UiCommand): Promise<UiRunResult> => {
       commands.push(c);
-      // Every census answers with junk — an unreadable screen.
+      // Every census answers with junk — an unreadable screen. For the FOLDED
+      // guard that means a hop that logs no census record and raises the tag.
       if (c.label === "read the window and focus state") return ok("");
+      if (c.script?.includes(UI_STATE_MARKER) === true) {
+        return { ok: false, stdout: "", stderr: `execution error: ${GUARD_REFUSED_TAG} (-2700)` };
+      }
       return c.primitive === "resolve" ? ok("true") : ok();
     };
     const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("could not be read");
-    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    expect(res.stderr).not.toContain(GUARD_REFUSED_TAG);
   });
 
   it("refuses when the dialog in front is no longer the one this drive opened", async () => {
@@ -1496,8 +1523,13 @@ describe("ui driver — the per-step focus guard (#620)", () => {
     const res = await createUiVector(config(true), run).execute(invocation(twoKeys));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("no longer the one in front");
-    // The first keystroke went; the second did not.
-    expect(commands.filter((c) => c.primitive === "key").length).toBe(1);
+    // Both hops were dispatched; the second refused in-script, before its input.
+    const keys = commands.filter((c) => c.primitive === "key");
+    expect(keys.length).toBe(2);
+    expect(keys.every(guardsBeforeInput)).toBe(true);
+    // The dialog invariant is compiled INTO the guarded script, so it cannot be
+    // checked against a screen that has already moved on.
+    expect(keys[1]?.script).toContain('if sheetKind is not "repeat" then set fgBad to true');
   });
 
   it("does NOT guard element-addressed hops — one census for the whole drive, backgrounded", async () => {
@@ -1550,7 +1582,9 @@ describe("ui driver — a stalled window-state inspection (#629)", () => {
       run: async (c) => {
         commands.push(c);
         if (isSheetOpenProbe(c)) return ok(screen.kind === "none" ? "false" : "true");
-        return screenAnswer(screen, c) ?? (c.primitive === "resolve" ? ok("true") : ok());
+        const own = (cmd: UiCommand): UiRunResult =>
+          cmd.primitive === "resolve" ? ok("true") : ok();
+        return screenAnswer(screen, c, own) ?? own(c);
       },
     };
   }
@@ -1561,18 +1595,19 @@ describe("ui driver — a stalled window-state inspection (#629)", () => {
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("the window state inspection timed out");
     expect(res.stderr).toContain("treating the dialog as unverifiable");
-    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+    // The hop went out carrying its guard; the guard refused before the input.
+    const key = commands.find((c) => c.primitive === "key");
+    expect(guardsBeforeInput(key as UiCommand)).toBe(true);
   });
 
   it("goes STRAIGHT to the semantic Cancel — it does not re-run the inspection that just stalled", async () => {
     const { run, commands } = stalledRunner(stalledScreen());
     await createUiVector(config(true), run).execute(invocation(keyRecipe()));
-    // Two censuses at most: the drive's open-dialog precondition and the
-    // guard's own. The cleanup adds NONE — that is the 56s the field lost.
-    expect(commands.filter(isCensus).length).toBeLessThanOrEqual(2);
-    const guardIdx = commands.findIndex((c) => c.label === "confirm with Return");
+    // ONE census: the drive's open-dialog precondition. The per-step guard rides
+    // its own hop's script now, and the cleanup adds NONE — that is the 56s the
+    // field lost.
+    expect(commands.filter(isCensus).length).toBe(1);
     const cancelIdx = commands.findIndex((c) => c.script?.includes('button "Cancel"') === true);
-    expect(guardIdx).toBe(-1); // the keystroke never dispatched
     expect(cancelIdx).toBeGreaterThan(-1);
     // Nothing inspects after the cleanup starts.
     expect(commands.slice(cancelIdx).some(isCensus)).toBe(false);
