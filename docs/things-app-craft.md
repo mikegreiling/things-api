@@ -63,6 +63,29 @@ Dismissing an overdue-deadline nag does not set a boolean "dismissed" flag — i
 
 Converting a to-do into a project doesn't discard the to-do's checklist (which a project can't hold) — it **promotes each checklist item into a real child to-do** of the new project, in order, and carries the notes across. Nothing the user typed is dropped in the transform; a flat checklist becomes a structured project the moment it outgrows a single to-do. (The row itself is an identity replacement — new project uuid, conversion-wall-clock creationDate — so external references to the old to-do dangle, the one caveat.) Evidence: [lab/srcfate-reconciliation-sweep.md](lab/srcfate-reconciliation-sweep.md) (CVT: 2 checklist items → 2 child to-dos, `TMChecklistItem` consumed, notes preserved). Things 3.22.12, golden-v2.
 
+### 2f. Undo restores the record, not just the effect — so an undone edit leaves no trace on the changes timeline
+
+`userModificationDate` is the key the app's own *changes* ordering and every third-party "what moved recently" query sort on. An undo has a choice about it, and the lazy answer is defensible: reverse the fields, stamp `umd = now`, and let the undo appear in history as its own event. Things takes the other one. Measured on ordinary to-dos, on two structurally different edit classes:
+
+```
+complete (checkbox click), then ⌘Z
+  status    0 -> 3 -> 0
+  stopDate  NULL -> 1783253395.11078 -> NULL
+  umd       1783253326.578821 -> 1783253395.111023 -> 1783253326.578821
+
+Edit ▸ Delete (move to trash), then ⌘Z
+  trashed   0 -> 1 -> 0
+  umd       1783253900.707706 -> 1783253967.728970 -> 1783253900.707706
+```
+
+The value that comes back is the **stored float, digit for digit** — not `floor()` of it, not a value a second away — and both are durable across a relaunch, netting to *no field changed on any surviving row* against the pre-gesture snapshot. The app is not computing a compensating edit; it is putting the row back. §6j found the same thing on a repeat template (where it also restored the recurrence blob's original bytes); this is the general case, on the rows a user actually touches.
+
+What that buys the user is subtle and worth naming: an accidental completion, undone, does not push the item to the top of everything that sorts by recency, and does not queue a spurious change for the sync layer to carry to every other device. The undo is invisible *downstream*, which is exactly what "that didn't happen" ought to mean.
+
+It is also the behavior our own `--preserve-modified` undo mirrors, which is the reason to have measured it: the flag's whole purpose is a write that stays off that timeline, and the symmetric restore on undo is not a convenience we invented — it is what the app does to itself. The one difference is resolution, and it falls on the safe side: our restore goes through AppleScript `set modification date`, whose `date` type has no sub-second, so we land on `floor(umd0)` — always ≤ the app's value, the direction that keeps a restored row from re-surfacing in a `changes --since` query.
+
+Evidence: [lab/umdz1-undo-umd.md](lab/umdz1-undo-umd.md) §2–§3 (and §1 for the bound: a URL-scheme write never enters this undo stack at all, so the parity has to be mirrored rather than delegated to). Things 3.23, golden-v4.
+
 ---
 
 ## 3. Cross-surface consistency and deep idempotency

@@ -1375,6 +1375,36 @@ The discriminator that makes this a finding rather than an absence: the third ar
 
 Evidence: [lab/reanch2-url-deadline-reminder.md](lab/reanch2-url-deadline-reminder.md) §3–§4. The shipped op is built around it: our series re-anchor dispatches the date and NOTHING else.
 
+## 28. Things 3.23: Undo covers what you did to an item but not what you typed into it — a rename you just committed cannot be undone, while a completion or a trash can (UMDZ1, 2026-08-28, golden-v4 / Things 3.23 build 32300036)
+
+The app's Undo is genuinely good where it applies — it restores the *record*, `userModificationDate` included ([craft §2f](things-app-craft.md), [§6j](things-app-craft.md)). What is surprising is where it does not apply. Measured on three ordinary to-dos on one clone, each gesture bracketed by a full 41-column row snapshot:
+
+| gesture | `Edit ▸ Undo` immediately after | ⌘Z |
+|---|---|---|
+| check the row's checkbox (complete) | **enabled** | full inverse, `umd` rewound exactly |
+| `Edit ▸ Delete` (move to trash) | **enabled** | full inverse, `umd` rewound exactly |
+| open the row, ⌘A, type a new title, close it | **disabled** | *(no field changed on any surviving row)* |
+
+The rename is not lost in some buffer — it is committed: `title` and `userModificationDate` both move the moment the card closes. From that instant there is nothing to undo, and the menu says so.
+
+The reason is visible one step earlier. **A field edit is not written to the database until the card closes.** While the card is open the stored title is still the old one and `umd` has not moved, and the `Undo` that *is* enabled there is the standard text-editor undo working on an in-memory buffer — pressing it discards the typing and the row never changes. So the edit is only ever in two states: reversible-but-unwritten, and written-but-irreversible. There is no moment at which a committed rename can be taken back.
+
+```
+title in the DB while the card is open:  UMDZ1-U1BC-OPEN     <- still the ORIGINAL
+UMD [after typing, card still open] = 1783253772.379627      <- unmoved
+Edit menu (card open, title edited):  Undo enabled=true      <- the TEXT EDITOR's undo
+
+… close the card …
+  CHANGED 9hLLdSgG.title:                UMDZ1-U1B-TITLE -> UMDZ1-U1B-RENAMED
+  CHANGED 9hLLdSgG.userModificationDate: 1783253146.371502 -> 1783253225.0769858
+Edit menu (after the rename):  Undo enabled=false            <- nothing to undo
+⌘Z:  (no field changed on any surviving row)
+```
+
+**Expected:** a committed field edit should join the same undo stack the state changes use — the machinery already exists and already does the harder version of the job (it restores timestamps byte-exactly). A user who renames the wrong to-do, or pastes over a title, currently has no undo at all, while the same user who *completes* the wrong to-do does. The asymmetry is invisible until it is needed.
+
+Evidence: [lab/umdz1-undo-umd.md](lab/umdz1-undo-umd.md) §4–§5.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

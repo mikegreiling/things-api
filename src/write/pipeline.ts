@@ -1819,7 +1819,8 @@ export async function runMutation<K extends OperationKind>(
       // and a row whose umd did not rise needs no restore (a silent op — no-op).
       // Best-effort: a failed restore is disclosed per row, never fatal (the
       // mutation already stands). The captured pre-values ride the audit record
-      // when the flag is active (enables a future symmetric undo).
+      // when the flag is active, which is what the symmetric undo restores from
+      // (undo.ts, keyed on `preModDates`).
       let preserve: { restored: number; failures: PreserveModifiedFailure[] } | null = null;
       let preModDatesAudit: PreModDates | undefined;
       if (options.preserveModified === true) {
