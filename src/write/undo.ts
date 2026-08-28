@@ -2058,9 +2058,30 @@ export async function runUndo(
       // --preserve-modified recorded each touched row's pre-write
       // userModificationDate on `preModDates`. After the inverse legs land, put
       // those umd values back (floor(preUmd)) so the UNDO is ALSO off the
-      // changes/watch timeline — matching the forward op's silence. Best-effort:
-      // a failed restore is disclosed, never fatal (the inverse already stands).
-      // Records without preModDates (the default) are untouched.
+      // changes/watch timeline — matching the forward op's silence.
+      //
+      // This is NATIVE PARITY, not a convenience: UMDZ1 (2026-08-28, golden-v4 /
+      // Things 3.23, docs/lab/umdz1-undo-umd.md) measured the app's own ⌘Z
+      // RESTORING umd to its exact pre-edit value — the stored float, sub-second
+      // included — on every undoable class it could drive: a completion, a
+      // move-to-trash, and (REPX3 §4.2) a template rule edit. The app treats an
+      // undo as a restoration of the record, not as a fresh compensating edit.
+      // Our one divergence is resolution: AppleScript's `date` has no sub-second,
+      // so we land on floor(preUmd) — always ≤ the app's value, which is the safe
+      // direction for `changes --since` (a restored row never re-surfaces).
+      // The same campaign confirmed our writes can never ride that undo (a
+      // URL-scheme update leaves Edit ▸ Undo disabled and ⌘Z inert), which is why
+      // we mirror the behavior here instead of delegating to it.
+      //
+      // CLASSIFICATION INVARIANT (maintainer ruling, 2026-08-28): the restore is
+      // best-effort and purely ADDITIVE — a failed leg, or no AppleScript vector
+      // to run one at all, is disclosed and the undo still reports `ok`. An
+      // operation is NEVER classed irreversible merely because a modification
+      // date cannot be restored; `planUndo` accordingly never reads preModDates.
+      // Locked by test/engine/write-undo.test.ts.
+      //
+      // Records without preModDates (the default) are untouched — their undo is
+      // an honest timeline entry.
       if (!failed && record.preModDates !== undefined) {
         const umdTargets: ModRestoreTarget[] = Object.entries(record.preModDates)
           .filter((e): e is [string, number] => typeof e[1] === "number")

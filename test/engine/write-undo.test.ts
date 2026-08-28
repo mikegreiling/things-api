@@ -466,3 +466,174 @@ describe("runUndo — structural precondition guard", () => {
     expect(auditRecords).toHaveLength(0);
   });
 });
+
+/**
+ * Symmetric umd-restore — the undo half of `--preserve-modified`, and the
+ * classification invariant that rides with it.
+ *
+ * A forward write made with the flag records each touched row's pre-write
+ * `userModificationDate` on the audit record (`preModDates`). Undoing that write
+ * restores those values after the inverse legs land, so the reversal is as
+ * timeline-silent as the original. This mirrors the app: UMDZ1 (2026-08-28,
+ * golden-v4 / Things 3.23) measured the GUI's own ⌘Z RESTORING `umd` to its
+ * exact pre-edit value — the stored float, sub-second included — on every
+ * undoable gesture it could drive (a completion, a move-to-trash, and REPX3
+ * §4.2's template rule edit). The app treats an undo as a restoration of the
+ * record, not as a fresh edit.
+ *
+ * THE INVARIANT (maintainer ruling, 2026-08-28): a modification date that cannot
+ * be restored NEVER downgrades an op's reversibility. The restore is best-effort
+ * and purely additive — a failed leg, or no AppleScript vector to run one at all,
+ * is disclosed in the plan notes and the undo still reports `ok`. `planUndo` must
+ * never consult `preModDates` to reach `irreversible`.
+ */
+describe("runUndo — symmetric umd-restore (--preserve-modified originals)", () => {
+  /** A fractional pre-write umd: the AS restore lands on floor() (1-second floor). */
+  const PRE_UMD = 1_780_000_000.75;
+
+  /**
+   * Seed a completed to-do sitting at its post-write umd and write the audit
+   * record for the completion that put it there. `preModDates` is the
+   * `--preserve-modified` capture the forward write left behind (omit it for a
+   * write made without the flag).
+   */
+  function seedPreservedCompletion(capture?: { preUmd: number | null }): string {
+    const uuid = seedTodo(fixture.db, {
+      title: "Done",
+      status: "completed",
+      modificationDate: NOW_EPOCH,
+    });
+    writeAudit([
+      auditRecord({
+        op: "todo.complete",
+        uuid,
+        pre: { status: "open" },
+        ...(capture !== undefined && { preModDates: { [uuid]: capture.preUmd } }),
+      }),
+    ]);
+    return uuid;
+  }
+
+  /**
+   * A vector that runs the inverse (bumping umd, as a real write does) and
+   * applies — or refuses — the `set modification date` restore leg.
+   */
+  function restoringVector(
+    uuid: string,
+    opts: { id?: "applescript" | "url-scheme"; failRestore?: boolean } = {},
+  ) {
+    const calls: string[] = [];
+    const vector: WriteVector = {
+      id: opts.id ?? "applescript",
+      matrix: MATRIX,
+      async execute(invocation) {
+        calls.push(invocation.payload);
+        if (invocation.payload.includes("set modification date")) {
+          if (opts.failRestore === true) {
+            return { exitCode: 1, stdout: "", stderr: "Things got an error (-1728)" };
+          }
+          const m = /set modification date of (?:to do|project) id "([^"]+)"/.exec(
+            invocation.payload,
+          );
+          if (m?.[1] !== undefined) {
+            fixture.db
+              .prepare("UPDATE TMTask SET userModificationDate = ? WHERE uuid = ?")
+              .run(Math.floor(PRE_UMD), m[1]);
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        // The inverse itself: reopen the to-do, bumping umd like any real write.
+        touch(uuid, "status = 0");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    return { vector, calls };
+  }
+
+  const umdOf = (uuid: string): number | null =>
+    (
+      fixture.db
+        .prepare("SELECT userModificationDate AS u FROM TMTask WHERE uuid = ?")
+        .get(uuid) as { u: number | null } | undefined
+    )?.u ?? null;
+
+  it("restores the captured pre-write umd after the inverse lands, and discloses it", async () => {
+    const uuid = seedPreservedCompletion({ preUmd: PRE_UMD });
+    const { vector, calls } = restoringVector(uuid);
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("ok");
+    expect(items[0]?.plan.kind).toBe("invertible");
+    // The inverse ran FIRST, then exactly one restore leg addressing the row.
+    const restoreLegs = calls.filter((c) => c.includes("set modification date"));
+    expect(restoreLegs).toHaveLength(1);
+    expect(restoreLegs[0]).toContain(`set modification date of to do id "${uuid}"`);
+    // The umd is back at the floored original — the undo is off the timeline.
+    expect(umdOf(uuid)).toBe(Math.floor(PRE_UMD));
+    expect(items[0]?.plan.notes.join(" ")).toContain("restored the modification date on 1 row(s)");
+  });
+
+  it("a FAILED restore is disclosed and non-fatal — the undo still reports ok", async () => {
+    const uuid = seedPreservedCompletion({ preUmd: PRE_UMD });
+    const { vector } = restoringVector(uuid, { failRestore: true });
+
+    const items = await runUndo(deps([vector]), auditDir);
+    // THE INVARIANT: a umd that cannot be restored never makes an op irreversible.
+    expect(items[0]?.outcome).toBe("ok");
+    expect(items[0]?.plan.kind).toBe("invertible");
+    const notes = items[0]?.plan.notes.join(" ") ?? "";
+    expect(notes).toContain("could not restore the modification date");
+    expect(notes).toContain("non-fatal");
+    // The inverse itself stands; only the timeline silence was lost.
+    expect(umdOf(uuid)).toBe(NOW_EPOCH + 1);
+  });
+
+  it("no AppleScript vector at all: the inverse still lands and the undo is ok", async () => {
+    const uuid = seedPreservedCompletion({ preUmd: PRE_UMD });
+    // url-scheme only — `set modification date` is AppleScript-exclusive, so the
+    // restore has no surface whatsoever. That is the strongest form of "the
+    // modification date cannot be restored", and it must NOT change the verdict.
+    const { vector } = restoringVector(uuid, { id: "url-scheme" });
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("ok");
+    expect(items[0]?.plan.kind).toBe("invertible");
+    expect(items[0]?.plan.notes.join(" ")).toContain(
+      "no AppleScript vector is available to restore the modification date",
+    );
+  });
+
+  it("a create-only capture (all-null preModDates) emits no restore leg and no note", async () => {
+    // null = a row the forward op CREATED; its umd is legitimately new.
+    const uuid = seedPreservedCompletion({ preUmd: null });
+    const { vector, calls } = restoringVector(uuid);
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("ok");
+    expect(calls.some((c) => c.includes("set modification date"))).toBe(false);
+    expect(items[0]?.plan.notes.join(" ")).not.toContain("modification date");
+  });
+
+  it("--dry-run previews the restore without running it", async () => {
+    const uuid = seedPreservedCompletion({ preUmd: PRE_UMD });
+    const { vector, calls } = restoringVector(uuid);
+
+    const items = await runUndo(deps([vector]), auditDir, { dryRun: true });
+    expect(items[0]?.outcome).toBe("dry-run");
+    expect(items[0]?.plan.notes.join(" ")).toContain(
+      "would restore the modification date on 1 row(s)",
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a record WITHOUT preModDates (the default) gets no restore leg", async () => {
+    const uuid = seedPreservedCompletion();
+    const { vector, calls } = restoringVector(uuid);
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("ok");
+    expect(calls.some((c) => c.includes("set modification date"))).toBe(false);
+    // The undo is an honest timeline entry: umd stays at the inverse's bump.
+    expect(umdOf(uuid)).toBe(NOW_EPOCH + 1);
+  });
+});

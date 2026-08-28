@@ -76,8 +76,10 @@ export interface AuditRecord {
    * `--preserve-modified` capture (ADDITIVE): the pre-write `userModificationDate`
    * of each captured target row (uuid → epoch seconds, or null for a row the op
    * created), recorded on the `ok` record only when the flag was active. Cheap
-   * provenance that enables a future SYMMETRIC undo (restore the umd the mutation
-   * bumped) without a separate read. Absent on writes made without the flag.
+   * provenance that drives the SYMMETRIC undo — `runUndo` restores these values
+   * after the inverse legs land, so reversing a timeline-silent write is itself
+   * timeline-silent — without a separate read. Absent on writes made without the
+   * flag; a record whose restore cannot run is disclosed, never reclassified.
    */
   preModDates?: Record<string, number | null>;
   /**

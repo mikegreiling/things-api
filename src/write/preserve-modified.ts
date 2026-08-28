@@ -10,19 +10,28 @@
  * Net effect: the intended change persists, but the row stays off the umd-keyed
  * timeline.
  *
- * TWO documented limits, both carried in the surface copy, not per-invocation
- * noise:
- *   - 1-SECOND FLOOR: the AppleScript `date` type has no sub-second, so the
- *     restore lands on `floor(umd0)` — always ≤ the original, the safe direction
- *     for a `changes --since` query (a restored row never re-surfaces).
- *   - SYNC caveat: proven only on an UNSYNCED store; how a hand-written past
- *     `umd` interacts with Things Cloud's timestamp-ordered 3-way merge is
- *     UNKNOWN (SYNC2 blocked).
+ * ONE documented limit, carried in the surface copy rather than as
+ * per-invocation noise — the 1-SECOND FLOOR: the AppleScript `date` type has no
+ * sub-second, so the restore lands on `floor(umd0)`, always ≤ the original and
+ * therefore the safe direction for a `changes --since` query (a restored row
+ * never re-surfaces). The former "UNSYNCED-only" caveat is RETIRED: SYNC2B
+ * (SY-2/SY-2M, golden-v2 / Things 3.22.12) measured the flag SYNC-SAFE — Things
+ * Cloud treats `umd` as ordinary per-attribute synced data rather than a
+ * monotonic clock, so a hand-written past `umd` propagates to the peer and
+ * survives the round trip in both directions.
  *
  * A restore leg is BEST-EFFORT: the mutation has already verified and stands, so
  * a failed restore is disclosed per row (never fatal). One leg per touched
  * pre-existing row; a compound captures before its first leg and restores once
  * after its last.
+ *
+ * The same legs run on the UNDO side for a write made with the flag (undo.ts,
+ * keyed on the audit record's `preModDates`), which is NATIVE PARITY rather than
+ * a convenience: UMDZ1 (2026-08-28, golden-v4 / Things 3.23) measured the app's
+ * own ⌘Z restoring `umd` to its exact pre-edit value — the stored float,
+ * sub-second included — on every undoable gesture it could drive.
+ * A `umd` that cannot be restored is disclosed and never changes an operation's
+ * reversibility — see undo.ts.
  */
 import type { DatabaseSync } from "node:sqlite";
 
