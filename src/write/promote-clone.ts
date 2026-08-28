@@ -457,10 +457,6 @@ function landedRuleEcho(rule: RepeatRuleParams, startIso: IsoDate | null): strin
     rule.interval === 1
       ? `every ${UNIT_SINGULAR[rule.frequency]}`
       : `every ${rule.interval} ${UNIT_PLURAL[rule.frequency]}`;
-  if (rule.afterCompletion === true) {
-    return `landed: the series repeats ${cadence} after each occurrence is completed`;
-  }
-  const first = startIso !== null ? `; the first occurrence is ${startIso}` : "";
   const offset = rule.startDaysEarlier ?? 0;
   const deadlineNote =
     offset > 0
@@ -468,6 +464,14 @@ function landedRuleEcho(rule: RepeatRuleParams, startIso: IsoDate | null): strin
       : rule.deadline === true
         ? ", with a deadline on each occurrence"
         : "";
+  // An after-completion series has no calendar first occurrence to echo (the
+  // template is minted with an empty cursor), but it CAN be deadlined — the
+  // offset is measured from each occurrence's own start, not from a calendar
+  // grid (CNCAC2).
+  if (rule.afterCompletion === true) {
+    return `landed: the series repeats ${cadence} after each occurrence is completed${deadlineNote}`;
+  }
+  const first = startIso !== null ? `; the first occurrence is ${startIso}` : "";
   return `landed: the series repeats ${cadence}${first}${deadlineNote}`;
 }
 
@@ -1557,29 +1561,33 @@ export async function runAddRepeatingTodo(
   // not by a hand-written destructure — a field added to either vocabulary lands on
   // the right leg instead of falling between them (#549 / YANCH1 #493).
   const { rule: baseRule, add } = splitAddRepeatingRule(params);
-  const { afterCompletion } = params;
   const startDaysEarlier = add.startDaysEarlier;
 
   // A concrete `--deadline` (or `--start-days-earlier`) belongs to the RULE, not
   // the seed — see mapDeadlineOntoRule for the geometry and the refusals. The
   // to-do stakes: an un-mapped seed deadline makes the app preserve the seed as a
   // future-dated instance that double-books the cursor (DBLSPAWN1 cell C).
+  //
+  // AFTER-COMPLETION IS NOT AN EXCEPTION (CNCAC2, docs/lab/cncac2-deadline-lift.md).
+  // The rule kind used to divert this mapping on two beliefs, both measured false:
+  // that an after-completion repeat "has no calendar start to count back from"
+  // (it has one — the occurrence's own start, which is what the deadline offset is
+  // measured from on every rule kind), and that its minted instances are born
+  // deadline-free. The app's own Repeat dialog offers "Add deadlines" under
+  // `after completion`, the rule carries the offset in `ts` alongside the 4001
+  // deadline sentinel, and both the seed occurrence and every later mint carry the
+  // DERIVED deadline (CNCAC1 §9). The diversion left `--deadline` on the SEED —
+  // one deadlined occurrence and a deadline-free series — and refused
+  // `--start-days-earlier` outright; one mapping now serves both rule kinds.
   let rule: RuleWithDeadline = baseRule;
   let seedDeadline = add.deadline;
-  if ((add.deadline !== undefined || startDaysEarlier !== undefined) && afterCompletion !== true) {
+  if (add.deadline !== undefined || startDaysEarlier !== undefined) {
     ({ rule, seedDeadline } = mapDeadlineOntoRule(
       baseRule,
       add.when,
       add.deadline,
       startDaysEarlier,
     ));
-  } else if (startDaysEarlier !== undefined) {
-    // afterCompletion === true here: an after-completion repeat has no calendar
-    // start to count a deadline back from — refuse rather than silently drop it.
-    throw new RangeError(
-      "--start-days-earlier applies only to a fixed-schedule deadline — an after-completion repeat " +
-        "has no calendar start to count back from; drop --after-completion or --start-days-earlier",
-    );
   }
 
   // The seed carries the WHOLE add vocabulary by spread (a field added to

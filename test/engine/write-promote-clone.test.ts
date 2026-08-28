@@ -27,6 +27,7 @@ import {
   runMakeRepeatingTodo,
 } from "../../src/write/promote-clone.ts";
 import { composeRepeatRuleSpec, ruleXml } from "../../src/write/recurrence-rule-blob.ts";
+import { expectedRuleAssertions } from "../../src/write/repeat-asserts.ts";
 import { type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
@@ -641,21 +642,80 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     ).rejects.toThrow(/concrete --when/);
   });
 
-  it("add-repeating: --start-days-earlier with --after-completion is refused (no calendar start)", async () => {
-    await expect(
-      runAddRepeatingTodo(
-        deps(vector),
-        {
-          title: "After-completion offset",
-          when: "2026-07-15",
-          startDaysEarlier: 7,
-          afterCompletion: true,
-          frequency: "weekly",
-          interval: 1,
-        },
-        GUI,
-      ),
-    ).rejects.toThrow(/after-completion/);
+  // CNCAC2 (docs/lab/cncac2-deadline-lift.md): the deadline geometry no longer
+  // diverts by RULE KIND. An after-completion series is deadlined the same way a
+  // fixed one is — the offset is measured from each occurrence's own start, which
+  // such a series has — and the app's Repeat dialog has always offered it
+  // (CNCAC1 §9.1). The two shapes below used to be, respectively, a hard refusal
+  // and a silent mis-wire (the deadline stayed on the SEED, so one occurrence was
+  // deadlined and the series was not).
+  it("add-repeating: --start-days-earlier with --after-completion maps to the RULE (CNCAC2)", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "After-completion offset",
+        when: "2026-07-15",
+        startDaysEarlier: 7,
+        afterCompletion: true,
+        frequency: "weekly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // The RULE owns the deadline on an after-completion series too: the template's
+    // 4001 sentinel plus ts = −7 (in-lab: `tp=1 … ts=-3` + `tmplDeadline=4001-01-01`).
+    expect(row(res.uuid)?.["deadline"]).not.toBeNull();
+    const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.type).toBe("after-completion");
+    expect(rule?.startOffsetDays).toBe(-7);
+  });
+
+  it("add-repeating: --deadline with --after-completion maps to the RULE, not the seed (CNCAC2)", async () => {
+    const res = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "After-completion deadline",
+        when: "2026-07-15",
+        deadline: "2026-07-22", // 7 days after the start
+        afterCompletion: true,
+        frequency: "weekly",
+        interval: 1,
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.type).toBe("after-completion");
+    // Both spellings land the SAME rule — in-lab, byte-identical rule blobs.
+    expect(rule?.startOffsetDays).toBe(-7);
+    expect(row(res.uuid)?.["deadline"]).not.toBeNull();
+    // The landed-rule echo states the deadline on an after-completion series.
+    expect((res.notes ?? []).join(" ")).toMatch(
+      /after each occurrence is completed, with a deadline/,
+    );
+  });
+
+  // The expectedDelta the promote leg verifies against — the SAME assertion set
+  // the idempotency precheck rides. An after-completion deadlined rule must
+  // assert its type, its deadline flag and its start offset, or a drive that
+  // silently dropped the offset would still read as satisfied (#491).
+  it("expectedRuleAssertions: an after-completion deadlined rule asserts type + deadline + offset", () => {
+    const asserts = expectedRuleAssertions(
+      {
+        frequency: "weekly",
+        interval: 1,
+        afterCompletion: true,
+        deadline: true,
+        startDaysEarlier: 3,
+      },
+      { includeCursor: false },
+    );
+    expect(asserts).toContainEqual({ field: "repeating.rule.type", equals: "after-completion" });
+    expect(asserts).toContainEqual({ field: "repeating.deadlined", equals: true });
+    expect(asserts).toContainEqual({ field: "repeating.rule.startOffsetDays", equals: -3 });
   });
 
   it("add-repeating: --deadline before --when is refused (behavioral)", async () => {
