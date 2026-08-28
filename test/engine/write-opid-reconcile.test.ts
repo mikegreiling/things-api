@@ -391,3 +391,94 @@ describe("the batch line reconciles on the same machinery", () => {
     expect(titleOf(uuid), "nothing was dispatched for the blocked line").toBe("before");
   });
 });
+
+describe("the lookback is DOUBLE-CHECKED under the mutation lock (#639)", () => {
+  /**
+   * The race, reproduced at the granularity the bug actually lives at. A retry's
+   * pre-lock lookback answers "not applied" truthfully — and then the original
+   * finishes and records its result while the retry is on its way into the lock.
+   * The window between `replayIfApplied` and `runMutation` below IS that window.
+   *
+   * Before the fix, the retry carried its stale answer past the lock and executed
+   * the verb a second time. The post-acquire re-check is what makes having acted
+   * on the stale answer harmless.
+   */
+  it("a record that appears while the retry waits is honored — it replays, nothing re-runs", async () => {
+    const uuid = seedTodo(fixture.db, { title: "before" });
+    const d = deps(createSimulatorVector(fixture.path, { now: () => NOW }));
+    const options: WriteOptions = { opId: "raced" };
+
+    // 1. The retry's PRE-LOCK lookback: the original is still mid-drive, so there
+    //    is genuinely nothing to find.
+    expect(replayIfApplied(d, options), "the fast path truthfully finds nothing").toBeNull();
+
+    // 2. The original completes and records its result — while the retry is
+    //    between that answer and the lock.
+    appendRecord({
+      opId: "raced",
+      op: "todo.update",
+      uuid,
+      result: "ok",
+      requested: { uuid, title: "after" },
+    });
+
+    // 3. The retry proceeds into the pipeline, takes the lock, and re-asks.
+    const res = await runMutation(d, "todo.update", { uuid, title: "AGAIN" }, options);
+
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("unreachable");
+    expect(res.alreadyApplied, "the post-acquire check replayed the original").toBe(true);
+    expect(res.uuid).toBe(uuid);
+    expect(titleOf(uuid), "the second execution never happened").toBe("before");
+    expect(
+      readAuditRecords(auditDirPath).filter((r) => r.result === "intent"),
+      "a replay dispatches nothing, so it writes no intent marker either",
+    ).toHaveLength(0);
+  });
+
+  it("a LIVE holder's intent appearing mid-wait refuses instead of re-running", async () => {
+    const uuid = seedTodo(fixture.db, { title: "before" });
+    const d = deps(createSimulatorVector(fixture.path, { now: () => NOW }));
+    const options: WriteOptions = { opId: "raced-live" };
+    expect(replayIfApplied(d, options)).toBeNull();
+
+    // The original got as far as its write-ahead intent and is still running.
+    appendRecord({
+      opId: "raced-live",
+      op: "todo.update",
+      uuid,
+      result: "intent",
+      holder: { pid: process.pid, start: null },
+    });
+
+    const res = await runMutation(d, "todo.update", { uuid, title: "AGAIN" }, options);
+    expect(res).toMatchObject({ kind: "blocked", reason: "in-flight" });
+    expect(titleOf(uuid), "a refusal dispatches nothing").toBe("before");
+  });
+
+  it("an unkeyed write pays nothing for any of this", async () => {
+    const uuid = seedTodo(fixture.db, { title: "before" });
+    const d = deps(createSimulatorVector(fixture.path, { now: () => NOW }));
+    const res = await runMutation(d, "todo.update", { uuid, title: "after" }, {});
+    expect(res.kind).toBe("ok");
+    expect(titleOf(uuid)).toBe("after");
+    // No key → no holder identity on the M3 intent, exactly as before.
+    const intent = readAuditRecords(auditDirPath).find((r) => r.result === "intent");
+    expect(intent?.holder).toBeUndefined();
+    expect(intent?.expected).toBeUndefined();
+  });
+
+  it("a keyed write's intent names its holder and carries its oracle", async () => {
+    const uuid = seedTodo(fixture.db, { title: "before" });
+    const d = deps(createSimulatorVector(fixture.path, { now: () => NOW }));
+    await runMutation(d, "todo.update", { uuid, title: "after" }, { opId: "keyed-1" });
+    const intent = readAuditRecords(auditDirPath).find((r) => r.result === "intent");
+    expect(intent?.opId).toBe("keyed-1");
+    expect(intent?.holder?.pid).toBe(process.pid);
+    expect(intent?.expected).toEqual({
+      mode: "update",
+      uuid,
+      assert: [{ field: "title", equals: "after" }],
+    });
+  });
+});

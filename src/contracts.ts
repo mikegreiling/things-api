@@ -213,7 +213,8 @@ export interface OkEnvelope<T> {
  *  - `blocked:${suffix}` — a mutation refused before touching the app; the
  *    suffix is the specific hazard id (`H-…`) when one is named, else the block
  *    reason (`drift` | `disruption-tier` | `lock` | `environment` | `clock` |
- *    `scope`). The bare `blocked` is a policy refusal from the move planner.
+ *    `scope` | `reconcile` | `in-flight`). The bare `blocked` is a policy
+ *    refusal from the move planner.
  *
  * `blocked:drift` maps to exit code 5 (DriftBlocked); every other `blocked:*`
  * maps to exit code 4 (Blocked).

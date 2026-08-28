@@ -358,6 +358,7 @@ describe("withMutationLock — the composite scope", () => {
         ranALeg = true;
         throw new Error("unreachable");
       },
+      undefined, // unkeyed: no idempotency re-check, no in-flight intent
       opts(ME, new Set([ME, OTHER])),
     );
 

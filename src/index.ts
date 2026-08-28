@@ -38,7 +38,7 @@ export type {
   UiStateDeps,
   UiStateReport,
 } from "./ui-state.ts";
-export type { OpResultData, OpResultOptions, OpResultStatus } from "./op-result.ts";
+export type { OpResultData, OpResultHolder, OpResultOptions, OpResultStatus } from "./op-result.ts";
 export { probeAutomation } from "./write/automation-probe.ts";
 export type {
   AutomationProbeDeps,

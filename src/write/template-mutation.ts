@@ -466,20 +466,30 @@ export async function runTemplateStatusWrite(
   let ambiguousUuid = uuid;
   let ambiguousOccurrence: OccurrenceResolution | undefined;
 
-  return runComposite(deps, op, async () => {
-    const outcome = await statusBody();
-    return recordAmbiguousComposite(deps, outcome, {
-      op,
-      startedAt: now,
-      txnId,
-      uuid: ambiguousUuid,
-      invocation: `${op} on repeating series ${uuid}: unconfirmed`,
-      requested: { uuid },
-      expected: ambiguous,
-      ...(ambiguousOccurrence !== undefined && { occurrence: ambiguousOccurrence }),
-      options,
-    });
-  });
+  return runComposite(
+    deps,
+    op,
+    async () => {
+      const outcome = await statusBody();
+      return recordAmbiguousComposite(deps, outcome, {
+        op,
+        startedAt: now,
+        txnId,
+        uuid: ambiguousUuid,
+        invocation: `${op} on repeating series ${uuid}: unconfirmed`,
+        requested: { uuid },
+        expected: ambiguous,
+        ...(ambiguousOccurrence !== undefined && { occurrence: ambiguousOccurrence }),
+        options,
+      });
+    },
+    // No oracle on the in-flight marker: at this point the composite does not yet
+    // know whether it will resolve an already-open occurrence or MINT one, and
+    // the two need different assertions (the ambiguous summary picks the right
+    // one later, once the timeout point knows). A holder that dies before that is
+    // told so honestly rather than reconciled against a guess.
+    { options, txnId, uuid, requested: { uuid } },
+  );
 
   async function statusBody(): Promise<MutationResult> {
     const state = readSeriesState(deps, uuid);
@@ -607,20 +617,30 @@ export async function runTemplateExceptionWrite(
   let ambiguousUuid = uuid;
   let ambiguousOccurrence: OccurrenceResolution | undefined;
 
-  return runComposite(deps, op, async () => {
-    const outcome = await exceptionBody();
-    return recordAmbiguousComposite(deps, outcome, {
-      op,
-      startedAt: now,
-      txnId,
-      uuid: ambiguousUuid,
-      invocation: `${op} --exception on repeating series ${uuid}: unconfirmed`,
-      requested: { uuid, ...patch },
-      expected: ambiguous,
-      ...(ambiguousOccurrence !== undefined && { occurrence: ambiguousOccurrence }),
-      options,
-    });
-  });
+  return runComposite(
+    deps,
+    op,
+    async () => {
+      const outcome = await exceptionBody();
+      return recordAmbiguousComposite(deps, outcome, {
+        op,
+        startedAt: now,
+        txnId,
+        uuid: ambiguousUuid,
+        invocation: `${op} --exception on repeating series ${uuid}: unconfirmed`,
+        requested: { uuid, ...patch },
+        expected: ambiguous,
+        ...(ambiguousOccurrence !== undefined && { occurrence: ambiguousOccurrence }),
+        options,
+      });
+    },
+    // The in-flight marker carries NO oracle, deliberately — the same reasoning
+    // that makes this verb's ambiguous summary refuse (see above). It always
+    // mints, so a holder that died mid-mint leaves a state where any satisfiable
+    // assertion would claim an exception that does not exist. The retry gets the
+    // honest `blocked:reconcile` refusal and a pointer at `op-result`.
+    { options, txnId, uuid, requested: { uuid, ...patch } },
+  );
 
   async function exceptionBody(): Promise<MutationResult> {
     const state = readSeriesState(deps, uuid);

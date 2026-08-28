@@ -24,6 +24,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { pidAlive } from "../process-instance.ts";
+
 export class MutationLockError extends Error {
   constructor(message: string) {
     super(message);
@@ -34,15 +36,6 @@ export class MutationLockError extends Error {
 interface LockPayload {
   pid: number;
   ts: string;
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export interface MutationLock {

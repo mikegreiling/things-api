@@ -16,6 +16,7 @@ import { blockedCode, verifyFailedCode } from "../contracts.ts";
 import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
+import { currentInstance } from "../process-instance.ts";
 import {
   liveSeriesInstances,
   resolveProjectWriteTarget,
@@ -66,6 +67,11 @@ import {
   type OperationParamsMap,
 } from "./operations.ts";
 import { describeTruncation } from "./field-limits.ts";
+// The idempotency gate is a MUTUAL import with this module (it builds its replay
+// results from `replayResultFromRecord` here, and the double-checked lookback
+// here calls back into it). Both sides are hoisted function declarations, so the
+// cycle resolves at module-evaluation time; nothing is read at import time.
+import { replayIfApplied } from "./opid.ts";
 import { assertOperationParams } from "./param-schema.ts";
 import { computeCompletionContext, type CompletionContext } from "./completion-context.ts";
 import { assessOffRuleFirst } from "./repeat-anchor.ts";
@@ -362,6 +368,11 @@ export type MutationResult =
        * an earlier attempt that never finished confirming, and that attempt's
        * record carries nothing that can tell whether its change landed — so the
        * caller is told to look rather than handed a guess (src/write/opid.ts).
+       *
+       * `in-flight` is its LIVE sibling (#639): the key matched an attempt that
+       * is still running right now. Distinct from `lock` — that one says some
+       * other mutation holds the lock, this one says THIS key is already in
+       * progress, so the answer is to poll `things op-result` rather than retry.
        */
       reason:
         | "hazard"
@@ -371,7 +382,8 @@ export type MutationResult =
         | "environment"
         | "clock"
         | "scope"
-        | "reconcile";
+        | "reconcile"
+        | "in-flight";
       hazard?: HazardId;
       detail: string;
       remediation: string;
@@ -747,16 +759,58 @@ function truncationDetail(
  * single op, carrying the composite's own op name. No audit record is written
  * for it — unlike the single-op path, nothing was attempted, so there is no leg
  * to record.
+ *
+ * `keyed` (present exactly when the caller accepted an `--op-id`) adds the two
+ * halves of #639 at the SUMMARY layer, where a composite's key lives:
+ *
+ *  - the POST-ACQUIRE half of the double-checked lookback, run before the first
+ *    leg. Its absence is what let a retry fired mid-drive wait out the lock and
+ *    then re-run the whole verb — a second clone, a second trashed original, a
+ *    second series;
+ *  - the WRITE-AHEAD INTENT: one record, at the summary layer, saying this key
+ *    is in flight and which process owns it. The legs run with the key stripped
+ *    and write only their own ordinary M3 intents, so the verb keeps its
+ *    one-record-per-key discipline.
  */
+export interface CompositeKey {
+  /** The caller's write options — the `opId` here is what makes this composite keyed. */
+  options: WriteOptions;
+  /** The composite's own transaction id, so the intent joins its summary. */
+  txnId: string;
+  /** The verb's target as far as it is known before the first leg. */
+  uuid: string | null;
+  /** The normalized request, for the target/title snapshot the intent carries. */
+  requested: Record<string, unknown>;
+  /**
+   * The presence oracle a DEAD holder's resubmission would reconcile against.
+   * Omitted when the verb's start knows no assertion that could settle whether
+   * its change landed — those resubmissions refuse honestly instead.
+   */
+  expected?: DeltaSpec;
+}
+
 export async function runComposite(
   deps: WriteDeps,
   op: OperationKind,
   body: () => Promise<MutationResult>,
+  keyed?: CompositeKey,
   /** @internal test seam — see {@link AcquireMutationLockOptions}. */
   lockOptions: AcquireMutationLockOptions = {},
 ): Promise<MutationResult> {
   try {
-    return await withMutationLock(deps.lockPath, body, lockOptions);
+    return await withMutationLock(
+      deps.lockPath,
+      async () => {
+        if (keyed === undefined || keyed.options.opId === undefined) return body();
+        const locked = replayIfApplied(deps, keyed.options);
+        if (locked !== null) return locked;
+        appendSummaryIntent(deps, op, keyed);
+        const outcome = await body();
+        closeSummaryIntent(deps, op, keyed, outcome);
+        return outcome;
+      },
+      lockOptions,
+    );
   } catch (err) {
     if (err instanceof MutationLockError) {
       return {
@@ -769,6 +823,80 @@ export async function runComposite(
     }
     throw err;
   }
+}
+
+/**
+ * The keyed composite's write-ahead intent: ONE summary-layer record marking the
+ * key as in flight, with the holder identity that makes "still running" a
+ * decidable question rather than a hedge. Superseded, append-only, by whichever
+ * summary the verb writes when it finishes — this record is never rewritten.
+ */
+function appendSummaryIntent(
+  deps: WriteDeps,
+  op: OperationKind,
+  keyed: CompositeKey,
+  result: AuditRecord["result"] = "intent",
+): void {
+  const fp = deps.fingerprint();
+  const inFlight = result === "intent";
+  deps.audit.append({
+    v: 1,
+    ts: (deps.now?.() ?? new Date()).toISOString(),
+    actor: keyed.options.actor ?? deps.config.actor,
+    host: deps.config.host,
+    op,
+    uuid: keyed.uuid,
+    vector: null,
+    disruption: null,
+    invocation: null,
+    txn: { id: keyed.txnId, role: "summary" },
+    opId: keyed.options.opId as string,
+    ...(inFlight && { holder: currentInstance() }),
+    ...(inFlight && keyed.expected !== undefined && { expected: keyed.expected }),
+    requested: keyed.requested,
+    pre: null,
+    observed: null,
+    result,
+    verify: null,
+    durationMs: 0,
+    env: {
+      pkg: deps.pkgVersion ?? "0.0.1",
+      dbVersion: fp.observation.databaseVersion,
+      fingerprint: fingerprintLabel(fp, deps.config),
+    },
+  });
+}
+
+/**
+ * Supersede the write-ahead intent for the outcomes whose composite bodies write
+ * NO summary of their own — a refusal, an unsupported verb, or a verification
+ * failure that is not a timeout. Those all mean "this key is finished and
+ * nothing landed", and without a record saying so the intent would stand
+ * unsuperseded: once this process exits, its holder reads as dead and every
+ * later use of the key would be met with a reconcile refusal for a change that
+ * never happened.
+ *
+ * The two outcomes NOT closed here are the two the bodies already record: `ok`
+ * (the success summary, the verb's single undoable unit) and a `timeout`
+ * verify-failed (the AMBIGUOUS summary carrying the presence oracle). Writing a
+ * second record for either would compete with the one the caller's replay is
+ * meant to find.
+ */
+function closeSummaryIntent(
+  deps: WriteDeps,
+  op: OperationKind,
+  keyed: CompositeKey,
+  outcome: MutationResult,
+): void {
+  if (outcome.kind === "ok" || outcome.kind === "dry-run") return;
+  if (outcome.kind === "verify-failed" && outcome.reason === "timeout") return;
+  const result: AuditRecord["result"] =
+    outcome.kind === "blocked"
+      ? blockedCode(outcome)
+      : outcome.kind === "unsupported"
+        ? "unsupported"
+        : verifyFailedCode(outcome);
+  appendSummaryIntent(deps, op, keyed, result);
 }
 
 export async function runMutation<K extends OperationKind>(
@@ -923,6 +1051,24 @@ export async function runMutation<K extends OperationKind>(
   }
 
   try {
+    // 2a. DOUBLE-CHECKED IDEMPOTENCY (#639). The consumer entry already ran this
+    // lookback before we got here — but it ran it BEFORE the lock, and the whole
+    // point of a lock is that the world changes while you wait for it. A retry
+    // fired while the original was still mid-drive saw no record, queued here,
+    // and used to wake up after the original finished and execute the verb a
+    // SECOND time. Re-asking under the lock is what makes the earlier answer
+    // safe to have acted on: by now the original has written its record, so the
+    // answer is a replay (or a reconcile refusal) instead of a duplicate.
+    //
+    // The pre-lock check is kept as the cheap fast path — a settled key never
+    // reaches the lock at all — so this costs one extra trail read on exactly
+    // the writes that raced.
+    // (Returning here releases the lock through the `finally` below — never an
+    // explicit release as well: releasing twice unlinks whatever lock the NEXT
+    // writer has since created.)
+    const locked = replayIfApplied(deps, options);
+    if (locked !== null) return locked;
+
     // 3. Pre-read. The consumer zone (options.zone ?? deps.zone) is threaded so
     // any boundary-derived pre-state (the reorder swept/unswept log boundary,
     // LOGSORT ORD-13) is computed under the SAME zone the reads use.
@@ -1369,6 +1515,12 @@ export async function runMutation<K extends OperationKind>(
     // ONLY evidence the mutation may have landed. `things doctor` surfaces such
     // orphans; the final record written after verify supersedes this one.
     // (dry-run returned above, so nothing is recorded for a dry-run — preserved.)
+    //
+    // A KEYED write additionally makes this intent READABLE (#639): the holder's
+    // instance identity turns "no outcome recorded" into a decidable question
+    // (still running vs. died mid-flight), and `expected` gives a dead holder's
+    // resubmission the same presence oracle a timeout gets. Both are recorded
+    // only under a key — an unkeyed intent is crash evidence nobody polls.
     const intentUuid =
       delta.mode === "update" || delta.mode === "state"
         ? delta.uuid
@@ -1382,6 +1534,7 @@ export async function runMutation<K extends OperationKind>(
       invocation: invocation.redactedPayload,
       pre: flattenPreFields(preCapture.fields),
       uuid: intentUuid,
+      ...(options.opId !== undefined && { holder: currentInstance(), expected: delta }),
     });
 
     // Mark the write as touching the app (read by the CLI's signal handler so a

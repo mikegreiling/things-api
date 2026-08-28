@@ -6,6 +6,7 @@
  * (with + without a correlated trace), unknown op-id, and the intent→final
  * supersede + newest-final-wins rules.
  */
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -140,7 +141,74 @@ describe("opResult — intent-only (process died / still running)", () => {
     const r = opResult("job-6", { auditDir, traceDir });
     expect(r.status).toBe("intent-only");
     expect(r.tracePath).toBeNull();
-    expect(r.note).toContain("mid-flight");
+    expect(r.holder, "a record naming no process cannot answer the liveness question").toBeNull();
+    expect(r.note).toContain("cannot be determined");
+    expect(r.note).toContain("UNCERTAIN");
+  });
+});
+
+describe("opResult — a keyed intent's HOLDER decides in-flight from orphaned (#639)", () => {
+  it("holder alive → IN-FLIGHT: still running, poll rather than retry", () => {
+    // This very test process is the holder, so it is alive by construction.
+    seed([
+      makeRecord({
+        opId: "job-live",
+        result: "intent",
+        holder: { pid: process.pid, start: null },
+      }),
+    ]);
+    const r = opResult("job-live", { auditDir, traceDir });
+    expect(r.status).toBe("in-flight");
+    expect(r.holder).toMatchObject({ pid: process.pid, alive: true });
+    expect(r.result, "no outcome has been recorded yet").toBeNull();
+    expect(r.note).toContain("STILL RUNNING");
+    expect(r.note, "the caller's move is to poll, never to resubmit").toContain("again");
+  });
+
+  it("holder gone → ORPHANED: started, outcome unrecorded, resubmission is safe", () => {
+    // A REAL pid that has really exited: spawnSync returns only after the child
+    // is reaped, so this number named a process and no longer does — exactly the
+    // shape a killed writer leaves behind.
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid as number;
+    seed([
+      makeRecord({
+        opId: "job-dead",
+        result: "intent",
+        holder: { pid: deadPid, start: "Wed Aug 26 09:00:00 2026" },
+      }),
+    ]);
+    const r = opResult("job-dead", { auditDir, traceDir });
+    expect(r.status).toBe("orphaned");
+    expect(r.holder).toMatchObject({ pid: deadPid, alive: false });
+    expect(r.note).toContain("GONE");
+    expect(r.note).toContain("may or may not have landed");
+  });
+
+  it("a final record supersedes the intent, holder or no holder", () => {
+    seed([
+      makeRecord({ opId: "job-done", result: "intent", holder: { pid: process.pid, start: null } }),
+      makeRecord({ opId: "job-done", result: "ok" }),
+    ]);
+    const r = opResult("job-done", { auditDir, traceDir });
+    expect(r.status, "the live holder no longer matters once an outcome exists").toBe("found");
+    expect(r.result).toBe("ok");
+    expect(r.holder).toBeNull();
+  });
+
+  it("a re-dispatched key reads its NEWEST marker, not its oldest", () => {
+    // intent → timeout → intent: the second attempt is the one in flight.
+    seed([
+      makeRecord({ opId: "job-again", result: "intent", holder: { pid: 1, start: null } }),
+      makeRecord({ opId: "job-again", result: "verify-failed:timeout" }),
+      makeRecord({
+        opId: "job-again",
+        result: "intent",
+        holder: { pid: process.pid, start: null },
+      }),
+    ]);
+    const r = opResult("job-again", { auditDir, traceDir });
+    expect(r.status).toBe("in-flight");
+    expect(r.holder).toMatchObject({ pid: process.pid, alive: true });
   });
 });
 

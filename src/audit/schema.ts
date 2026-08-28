@@ -13,9 +13,23 @@
  * no later final sibling is the signature of a crashed write. Intent records
  * are NEVER undo targets — every undo reader filters `result === "ok"`, which
  * an intent (result `"intent"`) is not, so it is excluded uniformly.
+ *
+ * WRITE-AHEAD INTENT (#639). An intent is not only crash evidence — for a
+ * mutation carrying an `opId` it is the record that makes the key's state
+ * READABLE while the write is still running. Such an intent is written under the
+ * mutation lock, before the first mutating leg, and carries two extra fields:
+ * {@link AuditRecord.holder} (the writing process's instance identity) and
+ * {@link AuditRecord.expected} (the presence oracle). Together they let a later
+ * reader distinguish the three states a key can be in — still running, holder
+ * gone with the outcome unrecorded, or settled by a final record — instead of
+ * collapsing the first two into one hedge. A COMPOSITE writes exactly ONE such
+ * intent, at the SUMMARY layer: the key addresses the whole verb, so its
+ * in-flight marker must too (its legs run with the key stripped and write only
+ * their own ordinary M3 intents).
  */
 import { createHash } from "node:crypto";
 
+import type { ProcessInstance } from "../process-instance.ts";
 import type { DeltaSpec, OccurrenceResolution } from "../write/verify/delta.ts";
 
 export interface AuditRecord {
@@ -68,15 +82,30 @@ export interface AuditRecord {
    */
   occurrence?: OccurrenceResolution;
   /**
+   * IN-FLIGHT HOLDER (ADDITIVE): the process that owns this work, recorded on a
+   * keyed `intent` record so a later reader can tell "still running" from "died
+   * without recording an outcome" (#639). A pid alone cannot answer that — pids
+   * are recycled — so this is the pid PAIRED with its start time, the same
+   * instance key the session grant uses; {@link instanceAlive} states the
+   * (deliberately conservative) liveness rule. Absent on final records, where
+   * the outcome itself is the answer, and on unkeyed M3 intents, which nothing
+   * polls.
+   */
+  holder?: ProcessInstance;
+  /**
    * AMBIGUOUS-OUTCOME reconciliation key (ADDITIVE): the expected-state
-   * assertion this attempt was verifying, recorded on `verify-failed:timeout`
-   * records only — the one result class where the change may or may not have
-   * landed. A resubmission carrying the same `opId` re-evaluates THIS assertion
-   * against current state to decide whether the timed-out change is there
-   * (replay it as already-applied) or absent (execute normally), so the presence
-   * test is the attempt's OWN oracle rather than a per-operation guess
-   * (`src/write/opid.ts`). Absent on every other record — and an absent one is a
-   * refusal to guess, never an assumption either way.
+   * assertion this attempt was verifying. Recorded on the two record classes
+   * where the change may or may not have landed: `verify-failed:timeout`
+   * finals, and keyed `intent` markers (whose holder may die mid-flight and
+   * leave exactly that ambiguity — #639). A resubmission carrying the same
+   * `opId` re-evaluates THIS assertion against current state to decide whether
+   * the change is there (replay it as already-applied) or absent (execute
+   * normally), so the presence test is the attempt's OWN oracle rather than a
+   * per-operation guess (`src/write/opid.ts`). Absent on every other record —
+   * and an absent one is a refusal to guess, never an assumption either way. A
+   * composite's summary intent is legitimately absent here when the verb's
+   * timeout point knows no oracle that could settle the question; that
+   * resubmission refuses rather than reconciling.
    */
   expected?: DeltaSpec;
   /**

@@ -648,8 +648,17 @@ describe("update --exception on a repeating to-do", () => {
 // --------------------------------------------- what the result NAMES (#578)
 
 /** The composite's single summary record, or undefined when it wrote none. */
+/**
+ * The composite's summary RESULT. A keyed composite also writes a summary-layer
+ * `intent` first (#639), which is a marker rather than a result — so the record
+ * the one-record-per-key discipline is about is the non-intent one.
+ */
 function summaryRecord(): AuditRecord | undefined {
-  return auditRecords.find((r) => r.txn?.role === "summary");
+  return auditRecords.find((r) => r.txn?.role === "summary" && r.result !== "intent");
+}
+/** The write-ahead in-flight marker a keyed composite writes before its first leg. */
+function summaryIntent(): AuditRecord | undefined {
+  return auditRecords.find((r) => r.txn?.role === "summary" && r.result === "intent");
 }
 function legRecords(): AuditRecord[] {
   return auditRecords.filter((r) => r.txn?.role === "leg");
@@ -734,7 +743,13 @@ describe("the composite names the occurrence it wrote", () => {
     expect(summary?.uuid, "the summary is addressed to the occurrence").toBe(
       cnc.state.mintedUuids[0],
     );
-    expect(auditRecords.filter((r) => r.txn?.role === "summary")).toHaveLength(1);
+    expect(
+      auditRecords.filter((r) => r.txn?.role === "summary" && r.result !== "intent"),
+    ).toHaveLength(1);
+    // The in-flight marker precedes it and names the process that owned the verb,
+    // which is what lets a concurrent same-key retry be refused instead of queued.
+    expect(summaryIntent()?.opId).toBe("check-off-1");
+    expect(summaryIntent()?.holder?.pid).toBe(process.pid);
     expect(
       legRecords().map((r) => r.opId),
       "the key identifies the composite, never a leg",
