@@ -44,6 +44,7 @@ import {
   OMIT_EMPTY_NOTE,
   OP_ID_RE,
   opResult,
+  rescueStatus,
   OPERATION_KINDS,
   openThings,
   readAllowed,
@@ -197,7 +198,12 @@ const WRITE_TOOLS = new Set([
 const UI_TOOLS = new Set(["repeat", "convert_to_project"]);
 
 /** The always-available diagnostics. */
-const DIAGNOSTIC_TOOLS = new Set(["doctor", "capabilities", "op_result"]);
+// `rescue_status` is diagnostic rather than ui-class DELIBERATELY: it reports
+// the GUI capability verdict as data instead of being refused by it, which is
+// the only way it can answer the question it exists for — "why did that write
+// fail, and can anything be done from here?" — on a machine whose GUI access is
+// what broke. Its two ACTION siblings are CLI-only and appear on no MCP surface.
+const DIAGNOSTIC_TOOLS = new Set(["doctor", "capabilities", "op_result", "rescue_status"]);
 
 function toolClass(name: string): ToolClass {
   if (DIAGNOSTIC_TOOLS.has(name)) return "none";
@@ -3554,6 +3560,24 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) => guard(() => readResult(opResult(assertOpId(args.op_id)))),
+  );
+
+  registerTool(
+    "rescue_status",
+    {
+      description:
+        "Report why Things is unresponsive to commands, when one is failing in a way the data " +
+        "does not explain. A dialog left open in Things stops the app sending changes to Things " +
+        "Cloud and makes it answer that items you can plainly see are not there, so writes fail " +
+        "as if the item were missing. Reports whether a dialog is open and which one, how many " +
+        "are stacked, which application owns the keyboard, and whether another command is " +
+        "holding the change lock and for how long. Reads only — nothing is clicked, closed or " +
+        "quit. Closing a dialog and restarting Things are available on the command line as " +
+        "`things rescue dismiss` and `things rescue relaunch`; tell the user to run one of those.",
+      inputSchema: {},
+      annotations: READ_ONLY,
+    },
+    async () => guard(async () => jsonResult(await rescueStatus())),
   );
 
   return server;
