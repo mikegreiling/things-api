@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.19.3 — 2026-08-27
+
 - **Fixed — commands that drive the Things window could stall for a minute and leave the dialog standing.** The check that runs before a command types anything — is Things still in front, is the dialog it opened still the one showing — asked macOS two questions the wrong way round: it listed every running application to find the frontmost one, and then asked that application to describe whichever element had the keyboard. Every other step in these commands asks Things directly, by name. On some Macs those two broad questions do not come back, and nothing bounded how long they could take, so each attempt sat for fifteen seconds and the command gave up after about a minute having typed nothing at all — the safe outcome, reached the slowest possible way.
 
   Worse, the cleanup that should have closed the half-finished dialog started by asking the very same question again, twice, learned nothing both times, and left the dialog open. That is not cosmetic: while a dialog stands, Things reports its own lists as empty to anything scripting it, so the command could not even remove the working copy it had made, and the app stops sending your changes to Things Cloud until someone dismisses it by hand.
