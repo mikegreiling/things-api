@@ -186,7 +186,7 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
           "like this one and stops sending anything to Things Cloud — nothing was created",
         remediation:
           "dismiss the dialog in Things (click Cancel, or press Escape with Things in front), " +
-          "then run the same command again; `things ui-state` shows what is open",
+          "then run the same command again; `things rescue status` shows what is open",
       };
     }
   }

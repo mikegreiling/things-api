@@ -62,7 +62,6 @@ export const HELP_GROUPS: ReadonlyArray<{ title: string; commands: readonly stri
       "install-skill",
       "mcp",
       "snapshot",
-      "ui-state",
       "rescue",
       "legend",
     ],
@@ -115,7 +114,6 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   "install-skill": { args: "", desc: "install the agent skill for coding agents" },
   mcp: { args: "", desc: "serve the Model Context Protocol server on stdio" },
   snapshot: { args: "", desc: "full normalized dump of every record" },
-  "ui-state": { args: "", desc: "open Things dialogs and which app has focus" },
   rescue: { args: "<verb>", desc: "unstick Things: see, close, or restart it" },
   legend: { args: "", desc: "the symbols and colors list output uses" },
 };

@@ -2009,7 +2009,7 @@ describe("make-repeating — the pre-seed open-dialog gate (#620)", () => {
     if (res.kind !== "blocked") throw new Error("expected blocked");
     expect(res.detail).toContain("a dialog is already open in Things");
     expect(res.detail).toContain("Things Cloud");
-    expect(res.remediation).toContain("things ui-state");
+    expect(res.remediation).toContain("things rescue status");
     // The whole point: nothing was created and the original never moved.
     const after = fixture.db
       .prepare("SELECT count(*) AS n FROM TMTask WHERE title = 'Gate fixture'")

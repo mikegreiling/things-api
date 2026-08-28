@@ -19,7 +19,9 @@
  * The shipped driver never creates the third state (every dialog recipe
  * activates Things first, which is exactly why that step is permanent), but a
  * killed client, a harness tool-timeout or a person walking away mid-dialog can
- * all leave the first two. `ui-state` reports them. This module acts on them.
+ * all leave the first two. {@link rescueStatus} reports them; the other two
+ * verbs act on them. This is the single home for both halves — the read-only
+ * census that was once the top-level `ui-state` command lives here now.
  *
  * THE THREE VERBS, separated by what they can cost you:
  *
@@ -30,8 +32,9 @@
  *                            again, the only cure measured for oddities §26.
  *
  * PERMISSIONS DOCTRINE. Nothing here raises a macOS consent dialog. The screen
- * is read behind the prompt-free capability verdict, exactly as `ui-state` reads
- * it, and a machine that has not granted the access is TOLD so rather than
+ * is read behind the prompt-free capability verdict, exactly as `doctor
+ * --ui-state` reads it, and a machine that has not granted the access is TOLD so
+ * rather than
  * prompted. {@link rescueRelaunch} is the deliberate exception to needing that
  * grant at all — see its own note.
  */
@@ -52,6 +55,7 @@ import {
   describeUnprovenProbes,
   SYNC_GATE_WARNING,
   THINGS_PROCESS,
+  type UiProbe,
   type UiState,
 } from "./write/vectors/ui-state.ts";
 import {
@@ -1041,23 +1045,53 @@ function recordRescue(
 
 // ---------------------------------------------------------------- rendering
 
-/** The human render of `things rescue status`. */
+/**
+ * The human render of `things rescue status`.
+ *
+ * A ROW WHOSE PROBE DID NOT ANSWER SAYS SO (issue #629). Printing a field's
+ * unset default ("none", "unknown") beside rows that WERE measured is exactly
+ * what made a stalled inspection read as a clean screen in the field, so an
+ * unproven probe renders as "not established" rather than as its default, and
+ * the probes are named again in full on the `unproven:` row.
+ */
 export function rescueStatusLines(report: RescueStatusReport): string[] {
   const lines = ["── Things ──", `screen:      ${report.detail}`];
   const state = report.state;
   if (state !== null) {
+    const unproven = (p: UiProbe): boolean =>
+      state.stalledProbes.includes(p) || state.failedProbes.includes(p);
     lines.push(
       `dialog:      ${
-        state.sheetKind === "none"
-          ? "none"
-          : `${state.sheetKind} (${state.sheetForm}; ${state.sheetControls ?? "no census"})`
+        unproven("dialog")
+          ? "not established"
+          : state.sheetKind === "none"
+            ? "none"
+            : `${state.sheetKind} (${state.sheetForm}; ${state.sheetControls ?? "no census"})`
       }`,
-      `stacked:     ${state.sheetDepth}`,
-      `frontmost:   ${state.frontmostApp ?? "unknown"}${state.thingsFrontmost ? " (Things)" : ""}`,
+      `stacked:     ${unproven("dialog") ? "not established" : state.sheetDepth}`,
+      `frontmost:   ${
+        unproven("frontmost")
+          ? "not established"
+          : `${state.frontmostApp ?? (unproven("frontapp") ? "not established" : "unknown")}${
+              state.thingsFrontmost ? " (Things)" : ""
+            }`
+      }`,
+      // Which application owns the KEYBOARD, and what has focus inside it —
+      // not the same question as which application owns the screen, and the
+      // one that explains a keystroke landing in the void.
+      `focus:       ${
+        unproven("focus")
+          ? "not established"
+          : state.focusOwner === null
+            ? "unknown"
+            : `${state.focusOwner.app} · ${state.focusOwner.role || "no focused element"}${
+                state.focusOwner.subrole === null ? "" : ` / ${state.focusOwner.subrole}`
+              }`
+      }`,
       `inspectable: ${state.inspectable ? "yes" : "no — a system dialog macOS does not expose"}`,
     );
-    const unproven = describeUnprovenProbes(state);
-    if (unproven !== "") lines.push(`unproven:    ${unproven}`);
+    const unprovenText = describeUnprovenProbes(state);
+    if (unprovenText !== "") lines.push(`unproven:    ${unprovenText}`);
   }
   lines.push("── Change lock ──", `lock:        ${report.lock.detail}`);
   if (report.foreignModal !== null) {

@@ -19,7 +19,8 @@
  *      screen types into the void, or into someone else's window;
  *   2. the PRE-CLEANUP oracle — Escape is itself a keystroke, so the abort path
  *      must know who would receive it before sending it;
- *   3. the `ui-state` diagnostic (and `things doctor --ui-state`).
+ *   3. the window-state diagnostic — `things rescue status` and `things doctor
+ *      --ui-state`.
  *
  * PRIVACY: the census emits ROLE COUNTS and element ROLES only — never a
  * control's value, title or description, and never a window title. A Things

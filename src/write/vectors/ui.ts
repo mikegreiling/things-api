@@ -2460,7 +2460,7 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
 
 /**
  * Read the live window/focus census through the shipped dispatch seam — the
- * transport behind the `ui-state` diagnostic (src/ui-state.ts) and, in tests,
+ * transport behind the window-state diagnostic (src/ui-state.ts) and, in tests,
  * behind any injected runner. READ-ONLY: the census clicks nothing, types
  * nothing, and changes no state; see src/write/vectors/ui-state.ts.
  */
