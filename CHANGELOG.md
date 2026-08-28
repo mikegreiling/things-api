@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.19.4 — 2026-08-28
+
 - **BREAKING (output shape) — a successful change now tells you what to do about it, separately from what it did.** Every mutation used to hand back one flat `warnings` list holding everything at once: the step-by-step account of how the app was driven, a sentence explaining the Accessibility API, the plain-language echo of the rule that landed, where undo reaches, placement hints, lab caveats. A successful `make-repeating` returned about ten of them — and then, under `--json`, printed all ten again to stderr underneath the JSON. Nothing in that list said which line, if any, needed you.
 
   The list is now two lists. **`warnings`** holds only lines something follows from — reposition the new occurrence, remove a copy the app would otherwise double-book, look at rows that moved without being named, expect a permission prompt. **`notes`** holds the matter-of-fact disclosures: what landed, how it was applied, what `undo` will and will not reach. Either is omitted entirely when empty, so a quiet change stays quiet rather than shipping two empty arrays. In the terminal, warnings keep the `warning:` prefix and notes render dim and unlabelled underneath the result.
