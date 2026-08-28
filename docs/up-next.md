@@ -8,12 +8,9 @@ Sections are blocker-classes: **needs-Mike** (a decision, near-zero effort) · *
 
 ## POST-COMPACTION runway (Mike's rulings, 2026-08-28 — recorded pre-compaction, NOT yet acted on; execute in roughly this order)
 
-**FIRST: the chord-reorder Q&A session.** Mike: the post-CHORD2 decision set "almost deserves its own session — I'd like to ask some pointed questions about the state of things after we probed its capabilities." Open with a compact presentation of the measured state (chord laws, shipped heading op, §8 replacement candidates, ORD-19, canary), then take his questions; the four chord decisions stay parked until that conversation.
+**FIRST: the chord-reorder Q&A session.** Mike: the post-CHORD2 decision set "almost deserves its own session — I'd like to ask some pointed questions about the state of things after we probed its capabilities." The compact presentation (chord laws, shipped heading op, §8 replacement candidates, ORD-19, canary, recommendations on all four decisions) was DELIVERED 2026-08-28; awaiting his questions — the four chord decisions stay parked until that conversation concludes.
 
-**RULED — execute without re-asking:**
-- **Cut the next release** for the M1 — it carries TORPH1 #641 + rescue #642 + the five executed rulings #644–#648, including the #646 fix for the v0.19.2+ regression that broke every deadlined repeat drive.
-
-**NEEDS AN EXPLAINER before Mike can rule (re-present, don't just re-ask):**
+**NEEDS AN EXPLAINER before Mike can rule (explainers DELIVERED 2026-08-28 in the same walkthrough; awaiting his rulings):**
 - **Deputy-side drive execution** (the #638 queue entry): "I need more context — I'm not sure what is being asked of me." Prepare a proper brief: the problem (client death strands GUI workflows; TORPH1 measured the un-reaped residue), the design (submit whole recipe to the launchd deputy, journaled, completes-or-cleans on client death, op-result as the polling surface), the costs (deputy version bump + reinstall ceremony, complexity), the relation to the agent-daemon phase plan.
 - **Stateful display preferences**: he no longer remembers what it refers to — re-present the item (TTY toggle default family, `limitMode`/`pager`/`--plain`/`--pretty`, the config surface + precedence question; worked examples were delivered 2026-07-14).
 - **`rt1_instanceCreationStartDate` wording**: show him the exact current sentences (the "app-materialized first occurrence" phrasing in src/write/promote-clone.ts + sibling docs) against the measured same-day law (the app materializes today's instance immediately and the column names the NEXT slot), plus the proposed replacement wording; he rules, then the sweep.
@@ -25,6 +22,8 @@ Sections are blocker-classes: **needs-Mike** (a decision, near-zero effort) · *
 
 
 ## needs-Mike — decisions blocked on him, near-zero effort
+
+- **The written pre-release gate disagrees with five releases of practice — rule which one bends.** [reference/suite-audit.md](reference/suite-audit.md) (§ adopted rule, ~line 152) says every release is blocked until `npm run lab:regress` exits fully GREEN on a GUI host; releases v0.19.1 through v0.20.0 were all cut without running it (discovered while cutting 0.20.0). Either the gate becomes real (it belongs in the release runbook/checklist, and a red run blocks the tag) or the rule is amended to what practice actually is (e.g. required only for releases touching write-path/vector/CLI-vocabulary code). A retroactive `lab:regress` run for v0.20.0 was started 2026-08-28 the moment the gap was found; its verdict informs but does not settle the rule question.
 
 - **`doctor --ui-state`: keep or fold?** #644 deleted the top-level `ui-state` command per the ruling but kept the `doctor --ui-state` FLAG (a flag, not a namespace concern; `src/ui-state.ts` stays as its library surface). Keep the flag, or fold that render away too.
 
@@ -94,6 +93,7 @@ Sections are blocker-classes: **needs-Mike** (a decision, near-zero effort) · *
 - **`--markdown` output mode.** A third render target alongside TTY and `--json`: YAML frontmatter for metadata, `- [ ]`/`- [x]` for to-dos/checklists, `##` for Things headings, project title as `#`. It is a RENDERING of the same data, never a third contract (derive from the JSON-shaping layer, drift-tested); NO markdown import/roundtrip in scope. Likely sweet spot: agent contexts + piping into notes. *(Mike: do NOT spec yet — a future design discussion.)*
 - **Tag shorthand — `things @errand` (explicit-only).** Bare-noun routing of a tag NAME is rejected (collision surface; a rename could silently flip which view renders — see [design/decisions.md](design/decisions.md)). The open sliver is whether an explicit sigil (`things @errand` → `things anytime --tag errand`) is worth it at all, or whether tags stay explicit-only via `--tag`. Needs deliberate design; not scheduled.
 - **Stale-DB stderr warning on ordinary reads.** `doctor` answers "data may be stale — Things is not running" on demand (sync-health section); whether every read should emit a one-line stderr nag is a separate UX call that overlaps the display-preferences / chrome decisions above.
+- **CI actions v4 → v5 bump.** The release workflow emits Node 20 deprecation annotations on `actions/checkout@v4`, `upload-artifact@v4`, `download-artifact@v4`, `setup-node@v4` (forced onto Node 24). Non-blocking today; bump the four pins in one pass and watch one release-workflow run go green.
 - **Cross-terminal glyph audit.** The CLI glyph language (`src/cli/glyphs.ts` — checkbox marks, pie quarters, chips, `★/⏾/≡`) was chosen on one macOS font stack. Audit rendering across emulators/fonts (Terminal.app, iTerm2, Ghostty, kitty, VS Code, Warp × SF Mono/Menlo/JetBrains Mono/a Nerd Font, plus a CJK-wide `ambiguous=double` config and a `NO_COLOR`/piped pass). Watch for tofu on `⏾` (U+23FE) and the pie quarters, double-width drift breaking column alignment, dim-on-light legibility. Every glyph is a `glyphs.ts` constant, so retuning is one file.
 
 ## feature design — wants an ideation round before code
