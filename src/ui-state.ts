@@ -1,7 +1,11 @@
 /**
- * The `ui-state` diagnostic (issue #620): a read-only answer to "what is on the
- * screen right now?", for the two questions a GUI drive and a sync problem both
- * end up asking — is a dialog open in Things, and who owns the keyboard?
+ * The window-state diagnostic (issue #620): a read-only answer to "what is on
+ * the screen right now?", for the two questions a GUI drive and a sync problem
+ * both end up asking — is a dialog open in Things, and who owns the keyboard?
+ *
+ * ITS CLI HOME IS `things doctor --ui-state`. The stand-alone `ui-state`
+ * command is gone: `things rescue status` (src/rescue.ts) answers the same
+ * questions and adds the change lock and the acting verbs beside them.
  *
  * It reads and reports; it never clicks, types, activates, or dismisses
  * anything. The census itself lives with the ui vector
@@ -115,7 +119,7 @@ function probeLine(state: UiState): string[] {
   return unprovenText === "" ? [] : [`unproven:   ${unprovenText}`];
 }
 
-/** The human render, shared by `things ui-state` and `things doctor --ui-state`. */
+/** The human render of the window-state section, for `things doctor --ui-state`. */
 export function uiStateLines(report: UiStateReport): string[] {
   const lines = ["── Window state ──", `summary:     ${report.detail}`];
   const state = report.state;

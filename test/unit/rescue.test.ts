@@ -14,7 +14,13 @@ import { describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { UiCapability } from "../../src/capability.ts";
-import { rescueDismiss, rescueRelaunch, rescueStatus, type RescueDeps } from "../../src/rescue.ts";
+import {
+  rescueDismiss,
+  rescueRelaunch,
+  rescueStatus,
+  rescueStatusLines,
+  type RescueDeps,
+} from "../../src/rescue.ts";
 import {
   describeLockRefusal,
   LOCK_HOLDER_SUSPECT_MS,
@@ -135,6 +141,32 @@ describe("rescue status", () => {
     const { deps } = harness(screen);
     const report = await rescueStatus(deps);
     expect(report.remediation.join(" ")).toContain("things rescue relaunch");
+  });
+
+  // The two properties inherited from the retired top-level `ui-state` command,
+  // which `rescue status` is now the only home for.
+  it("renders which application owns the keyboard, and what has focus in it", async () => {
+    const screen = healthyScreen({ kind: "repeat", depth: 1, role: "AXTextField" });
+    const { deps } = harness(screen);
+    const rendered = rescueStatusLines(await rescueStatus(deps)).join("\n");
+
+    expect(rendered).toContain("focus:");
+    expect(rendered).toContain("Things3 · AXTextField");
+    expect(rendered).toContain("dialog:      repeat");
+    expect(rendered).toContain("stacked:     1");
+  });
+
+  it("renders a probe that did not answer as 'not established', never as its default", async () => {
+    // #629: the census short-circuits at the stalled probe, so `dialog` reports
+    // its unset default — which must NOT be printed as a clean screen.
+    const screen = healthyScreen({ stalled: ["dialog"] });
+    const { deps } = harness(screen);
+    const rendered = rescueStatusLines(await rescueStatus(deps)).join("\n");
+
+    expect(rendered).toContain("dialog:      not established");
+    expect(rendered).toContain("stacked:     not established");
+    expect(rendered).not.toContain("dialog:      none");
+    expect(rendered).toContain("unproven:");
   });
 });
 
