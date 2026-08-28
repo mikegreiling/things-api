@@ -80,6 +80,34 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
       "list. Not dispatched directly — use the checklist granular actions",
   },
   "todo.delete": { support: "no", disruption: 3, validation: "validated", evidence: ["U14"] },
+  // The series RE-ANCHOR only — `reschedule-repeat` in its bare `--when` spelling
+  // (a rule RESTATEMENT is not expressible here and plans onto the ui vector; the
+  // spec's vectorsFor keeps the two apart). `update?id=<template>&when=<a strictly
+  // FUTURE date>` moves both cursor columns and recomputes the rule's own calendar
+  // anchor from that date — byte-identical to the app's `Update Rule` button, with
+  // no prompt (REANCH1, re-verified REANCH2 cell A1). Things 3.23+ ONLY: on 3.22.14
+  // every dated spelling kills the process, so the pipeline version-gates it.
+  // Hard-guarded by H-REPEAT-REANCHOR (future date · fixed rule · one weekday ·
+  // not paused) and dispatched BARE: any `deadline=` in the same url voids the
+  // whole write on a template (REANCH2 cells D6/E1/E3/E4).
+  "todo.reschedule-repeat": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["REANCH1-C1", "REANCH2-A1"],
+    notes:
+      "re-anchor spelling only (bare --when); rewrites the rule's calendar anchor and SKIPS " +
+      "every slot between the old cursor and the new date; 3.23+ only",
+  },
+  "project.reschedule-repeat": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["REANCH1-C3"],
+    notes:
+      "update-project?when= — the same re-anchor on a repeating project template (identical " +
+      "five-column delta, REANCH1 §4.1); the to-do route aimed at a project row is a silent no-op",
+  },
   "todo.duplicate": {
     support: "yes",
     disruption: 0,

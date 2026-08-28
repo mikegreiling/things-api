@@ -657,6 +657,19 @@ const REPEAT_RULE: OpSchema<"todo.make-repeating"> = {
   next: opt(isoDate()),
 };
 
+/**
+ * reschedule-repeat: the same vocabulary with `frequency` + `interval` OPTIONAL,
+ * because the verb has two spellings — restate the rule (both required), or move
+ * the next occurrence with `next` alone (the series RE-ANCHOR). Which one this is,
+ * and that a re-anchor carries nothing else, is settled by `assertRescheduleRule`
+ * — the schema's job is only to let the second shape through the type gate.
+ */
+const RESCHEDULE_RULE: OpSchema<"todo.reschedule-repeat"> = {
+  ...REPEAT_RULE,
+  frequency: opt(enumOf(["daily", "weekly", "monthly", "yearly"])),
+  interval: opt(int(1, 99, "a whole number 1–99")),
+};
+
 const SET_DATES: OpSchema<"todo.set-dates"> = {
   uuid: str("an item uuid"),
   completedAt: opt(timestamp()),
@@ -825,12 +838,12 @@ export const PARAM_SCHEMAS: { [K in OperationKind]: OpSchema<K> } = {
   "project.dissolve-heading": { uuid: str("a heading uuid") },
   "todo.clear-dated-reminder": UUID_ONLY,
   "todo.make-repeating": REPEAT_RULE,
-  "todo.reschedule-repeat": REPEAT_RULE,
+  "todo.reschedule-repeat": RESCHEDULE_RULE,
   "todo.pause-repeat": UUID_ONLY,
   "todo.resume-repeat": UUID_ONLY,
   "todo.create-next-copy": UUID_ONLY,
   "todo.convert-to-project": UUID_ONLY,
-  "project.reschedule-repeat": REPEAT_RULE,
+  "project.reschedule-repeat": RESCHEDULE_RULE,
   "project.pause-repeat": { uuid: str("a project uuid or unique title") },
   "project.resume-repeat": { uuid: str("a project uuid or unique title") },
   "area.reorder": {

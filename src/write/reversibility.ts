@@ -241,11 +241,11 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
   },
   "todo.reschedule-repeat": {
     class: "conditional",
-    note: "the rule mutates in place (identity preserved, UI2-b); the FULL rule vocabulary re-drives reschedule with the captured prior rule (weekday set, monthly/yearly anchor, ends bound, deadline/start-offset all restored) — invertible whenever the prior rule was captured, decodable, and within the Repeat dialog's vocabulary; irreversible for a rule the dialog itself cannot produce (two end bounds, a multi-anchor month/year rule, or an after-completion rule with a calendar day). A per-instance reminder time is not part of the captured rule and is not restored",
+    note: "MOVING the next occurrence (the bare --when re-anchor) is IRREVERSIBLE: the series' old date is by then today or past, and re-writing it is the crash the guards exist to prevent (REANCH1 §5/§8) — the way back is another move to a future date, or the app's own ⌘Z. Restating the RULE mutates it in place (identity preserved, UI2-b); the FULL rule vocabulary re-drives reschedule with the captured prior rule (weekday set, monthly/yearly anchor, ends bound, deadline/start-offset all restored) — invertible whenever the prior rule was captured, decodable, and within the Repeat dialog's vocabulary; irreversible for a rule the dialog itself cannot produce (two end bounds, a multi-anchor month/year rule, or an after-completion rule with a calendar day). A per-instance reminder time is not part of the captured rule and is not restored",
   },
   "project.reschedule-repeat": {
     class: "conditional",
-    note: "the project's rule mutates in place (identity preserved, UIC2-a); re-drives reschedule with the captured prior rule (same faithfulness boundary as todo.reschedule-repeat) — invertible when the prior rule was captured, decodable, and dialog-expressible; irreversible otherwise. A per-instance reminder time is not restored",
+    note: "the re-anchor spelling is IRREVERSIBLE for the same reason as the to-do verb. Restating the rule mutates it in place (identity preserved, UIC2-a); re-drives reschedule with the captured prior rule (same faithfulness boundary as todo.reschedule-repeat) — invertible when the prior rule was captured, decodable, and dialog-expressible; irreversible otherwise. A per-instance reminder time is not restored",
   },
 
   // ---- promote-via-clone (make/add-repeating) → undo is trash-both (+restore) --

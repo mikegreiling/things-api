@@ -85,3 +85,24 @@ export function privateReorderIsNoOp(installedVersion: string | null): boolean {
   const cmp = compareAppVersions(installedVersion, PRIVATE_REORDER_NO_OP_FROM);
   return cmp !== null && cmp >= 0;
 }
+
+/**
+ * The first Things version that accepts a dated `when=` on a repeating template
+ * instead of dying on it — the series RE-ANCHOR (REANCH1 §6,
+ * docs/lab/reanch1-url-reanchor.md). On 3.22.14 every dated spelling kills the
+ * process with zero delta, five deaths for five arms; on 3.23 a strictly-future
+ * date re-anchors the series cleanly. The capability appeared WITHOUT an
+ * announcement, so it is version-gated rather than assumed.
+ */
+export const URL_REANCHOR_FROM = "3.23";
+
+/**
+ * True when the installed Things is known to carry the URL series re-anchor —
+ * a readable version at least {@link URL_REANCHOR_FROM}. An UNKNOWN or
+ * unparseable version reads false: this gate stands in front of a write that
+ * KILLS the app on every older build, so it fails closed.
+ */
+export function urlReanchorSupported(installedVersion: string | null): boolean {
+  const cmp = compareAppVersions(installedVersion, URL_REANCHOR_FROM);
+  return cmp !== null && cmp >= 0;
+}

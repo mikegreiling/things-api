@@ -38,10 +38,13 @@ import type {
   OperationKind,
   OperationParamsMap,
   RepeatFrequency,
+  RepeatReanchorParams,
   RepeatRuleParams,
   ReorderParams,
+  RescheduleRepeatParams,
   WhenValue,
 } from "../operations.ts";
+import { isRepeatReanchor } from "../operations.ts";
 import { assertContainerRef, resolveResolutionInstant } from "../commands.ts";
 import {
   computeReorderPre,
@@ -50,8 +53,9 @@ import {
   resolveProject,
   resolveTag,
 } from "../pre-state.ts";
-import { deadlineDriveNext, fixedSpawnPlan } from "../repeat-anchor.ts";
+import { deadlineDriveNext, deriveFixedAnchor, fixedSpawnPlan } from "../repeat-anchor.ts";
 import { composeRepeatRuleSpec, ruleXml } from "../recurrence-rule-blob.ts";
+import { asRepeatRuleParams, ruleToInverseParams } from "../repeat-rule.ts";
 import { resolveTagRefs } from "../tag-refs.ts";
 import type {
   CompiledInvocation,
@@ -1466,6 +1470,55 @@ function applyMakeRepeating(
 }
 
 /**
+ * The RE-ANCHOR spelling of reschedule-repeat (REANCH1, Things 3.23): the rule is
+ * KEPT and moved. Five columns land in the app — both cursors, the rule blob, the
+ * today-index reference and the modification stamp — and inside the blob the
+ * rule's own start anchor AND its calendar anchor are recomputed from the target
+ * date (a weekly Sunday rule moved to a Thursday becomes a Thursday rule). Every
+ * existing instance, and the instance-creation COUNT, are untouched: the slots
+ * between the old cursor and the new date are simply skipped.
+ *
+ * Modeled by reading the existing rule back as params, dropping its calendar
+ * anchor, and re-composing it against the target date — the same derive-from-date
+ * law the app applies (and the same one `deriveFixedAnchor` gives the dialog).
+ */
+function applyReanchor(sim: DatabaseSync, params: RepeatReanchorParams, ctx: ApplyCtx): void {
+  const row = sim
+    .prepare("SELECT rt1_recurrenceRule AS rule, deadline FROM TMTask WHERE uuid = ?")
+    .get(params.uuid) as { rule: unknown; deadline: number | null } | undefined;
+  if (row === undefined || row.rule === null) {
+    throw new Error("simulator: reschedule-repeat target is not a repeating template");
+  }
+  const existing = decodeRecurrenceRule(row.rule);
+  const prior = ruleToInverseParams(existing, row.deadline !== null);
+  if (prior === null) {
+    throw new Error("simulator: this series' rule cannot be re-anchored");
+  }
+  const { weekdays: _w, monthly: _m, yearly: _y, ...unanchored } = prior;
+  const effective = {
+    uuid: params.uuid,
+    ...unanchored,
+    ...deriveFixedAnchor(unanchored, params.next),
+  } as RepeatRuleParams;
+  const spec = composeRepeatRuleSpec(effective, params.next, epochOfIso(params.next));
+  spec.ts = existing.startOffsetDays; // the deadline geometry is preserved verbatim
+  sim
+    .prepare(
+      "UPDATE TMTask SET rt1_recurrenceRule = ?, rt1_instanceCreationStartDate = ?, " +
+        "rt1_nextInstanceStartDate = ?, todayIndexReferenceDate = ?, userModificationDate = ? " +
+        "WHERE uuid = ?",
+    )
+    .run(
+      new TextEncoder().encode(ruleXml(spec)),
+      encodePackedDate(params.next),
+      encodePackedDate(params.next),
+      encodePackedDate(params.next),
+      ctx.nowEpoch,
+      params.uuid,
+    );
+}
+
+/**
  * reschedule-repeat (RSIM5, to-do or project): identity PRESERVED, the rule
  * rewritten in place to the target `{frequency, interval, anchors}` with the
  * instance-creation date advanced to the new next occurrence. `tp` and the
@@ -1473,7 +1526,16 @@ function applyMakeRepeating(
  * reschedule explicitly changes them. (The shipped op's interval-entry app bug
  * — RSIM5 caveat — is NOT modeled here: the simulator applies the TARGET rule.)
  */
-function applyReschedule(sim: DatabaseSync, params: RepeatRuleParams, ctx: ApplyCtx): void {
+function applyReschedule(
+  sim: DatabaseSync,
+  reschedule: RescheduleRepeatParams,
+  ctx: ApplyCtx,
+): void {
+  if (isRepeatReanchor(reschedule)) {
+    applyReanchor(sim, reschedule, ctx);
+    return;
+  }
+  const params = asRepeatRuleParams(reschedule);
   const row = sim
     .prepare("SELECT rt1_recurrenceRule AS rule FROM TMTask WHERE uuid = ?")
     .get(params.uuid) as { rule: unknown } | undefined;

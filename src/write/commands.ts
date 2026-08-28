@@ -18,9 +18,12 @@ import type {
   OperationKind,
   OperationParamsMap,
   ProjectItemSpec,
+  RepeatReanchorParams,
   RepeatRuleParams,
+  RescheduleRepeatParams,
   WhenValue,
 } from "./operations.ts";
+import { isRepeatReanchor } from "./operations.ts";
 import {
   areaMemberCounts,
   childTagTitles,
@@ -54,7 +57,12 @@ import {
 } from "./update-fields.ts";
 import { resolveTagRefs } from "./tag-refs.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
-import { assertRepeatRule } from "./repeat-rule.ts";
+import {
+  assertRepeatRule,
+  assertRescheduleRule,
+  asRepeatRuleParams,
+  ruleToInverseParams,
+} from "./repeat-rule.ts";
 import { assessOffRuleFirst, deadlineDriveNext, deriveFixedAnchor } from "./repeat-anchor.ts";
 import { expectedRuleAssertions } from "./repeat-asserts.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
@@ -103,6 +111,15 @@ export interface DeltaCtx {
 export interface CommandSpec<K extends OperationKind = OperationKind> {
   op: K;
   hazards: HazardId[];
+  /**
+   * The vectors THIS CALL may use, when the answer depends on the params rather
+   * than on the operation alone. The planner's matrix is per-op; a verb with two
+   * spellings that ride different transports (`reschedule-repeat`: a rule
+   * restatement drives the dialog, a bare re-anchor dispatches one url) narrows
+   * the candidate set here so the planner cannot pick a vector this call's params
+   * cannot be compiled for. Omitted = every matrix entry is a candidate.
+   */
+  vectorsFor?(params: OperationParamsMap[K]): VectorId[];
   preRead(db: DatabaseSync, params: OperationParamsMap[K], now: Date, zone?: string): PreState;
   expectedDelta(pre: PreState, params: OperationParamsMap[K], ctx: DeltaCtx): DeltaSpec;
   compile(
@@ -2120,6 +2137,24 @@ function requestedRuleKeys(params: RepeatRuleParams): string[] {
 /** ui ops all guard existence/type + the H-UI-DRIVE acknowledgement. */
 const UI_HAZARDS: HazardId[] = ["H-UNKNOWN-DESTINATION", "H-UI-DRIVE"];
 
+/**
+ * reschedule-repeat additionally guards the RE-ANCHOR spelling's preconditions
+ * (H-REPEAT-REANCHOR), which run BEFORE the GUI-drive gate — a re-anchor that
+ * cannot be dispatched safely should say why, not ask for an acknowledgement it
+ * does not need.
+ */
+const RESCHEDULE_HAZARDS: HazardId[] = ["H-UNKNOWN-DESTINATION", "H-REPEAT-REANCHOR", "H-UI-DRIVE"];
+
+/**
+ * reschedule-repeat's two spellings ride two transports: a bare re-anchor is ONE
+ * `things:///update?when=` dispatch (tier 0, no GUI), a rule restatement is the
+ * Repeat dialog. Neither is compilable for the other's vector, so the planner is
+ * told which one this call is.
+ */
+function rescheduleVectors(params: RescheduleRepeatParams): VectorId[] {
+  return isRepeatReanchor(params) ? ["url-scheme"] : ["ui"];
+}
+
 const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
   op: "todo.make-repeating",
   hazards: UI_HAZARDS,
@@ -2170,16 +2205,107 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
   },
 };
 
+/**
+ * A series RE-ANCHOR as ONE url dispatch: `things:///update?id=<template>&when=<date>`
+ * (`update-project` for a project template). BARE by measurement — REANCH2 cells
+ * D6/E1/E3/E4 found that ANY `deadline=` riding the same url voids the whole
+ * write, re-anchor included, so this compile carries the date and nothing else.
+ */
+function reanchorUrl(
+  urlCommand: "update" | "update-project",
+  params: RepeatReanchorParams,
+  ctx: CompileCtx,
+): CompiledInvocation {
+  return thingsUrl(urlCommand, { id: params.uuid, when: params.next }, ctx.token);
+}
+
+/**
+ * What a landed RE-ANCHOR looks like: the PRIOR rule, re-anchored to the target
+ * date. The write rewrites both cursor columns, `todayIndexReferenceDate` and the
+ * rule blob — whose calendar anchor is recomputed FROM that date (a weekly Sunday
+ * rule moved to a Thursday becomes a Thursday rule; monthly day-of-month and
+ * yearly month+day move likewise, REANCH1 §2/§7) — while frequency, interval,
+ * rule type, ends bound and deadline mode all survive untouched.
+ *
+ * Expressed in the SAME vocabulary a dialog reschedule uses: the prior rule read
+ * back as params, plus the anchor DERIVED from the target date, handed to the one
+ * expected-rule builder ({@link expectedRuleAssertions}). So the re-anchor is
+ * verified at the same fidelity as a rule rewrite — a landing that moved anything
+ * else (or nothing at all: a refused write and the app's `target == cursor`
+ * short-circuit both exit 0 at the transport, REANCH1 §2.4/§8) is a
+ * verify-failed, never a silent ok. Returns null when the prior rule cannot be
+ * expressed as params — the guard has already refused those shapes, so a null
+ * here means only the cursor pair is asserted.
+ */
+function reanchorAssertions(pre: PreState, next: IsoDate): FieldAssertion[] {
+  // BOTH cursor columns (REANCH1 §8): `nextOccurrence` is the projection the app
+  // maintains, `spawnCursor` the raw materialization cursor beside it. A partial
+  // landing moves one and not the other.
+  const cursors: FieldAssertion[] = [
+    { field: "repeating.nextOccurrence", equals: next },
+    { field: "repeating.spawnCursor", equals: next },
+  ];
+  const target = pre.target;
+  if (target === null || target.type === "heading") return cursors;
+  const rule = target.repeating.rule;
+  if (rule === undefined) return cursors;
+  const prior = ruleToInverseParams(rule, target.repeating.deadlined === true);
+  if (prior === null) return cursors;
+  // The anchor the app recomputes from the target date — derived by the SAME law
+  // the dialog drives (deriveFixedAnchor), with any EXPLICIT prior anchor dropped
+  // first so the derivation is not short-circuited by the one being replaced.
+  const { weekdays: _w, monthly: _m, yearly: _y, ...unanchored } = prior;
+  const eff = { ...unanchored, next, ...deriveFixedAnchor(unanchored, next) };
+  return [...cursors, ...expectedRuleAssertions(eff, { includeCursor: false })];
+}
+
 const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
   op: "todo.reschedule-repeat",
-  hazards: UI_HAZARDS,
-  preRead(db, params) {
-    assertRepeatRule(params);
+  hazards: RESCHEDULE_HAZARDS,
+  vectorsFor: rescheduleVectors,
+  preRead(db, params, now, zone) {
+    assertRescheduleRule(params);
     const pre = emptyPreState();
-    pre.target = loadTarget(db, params.uuid);
+    // The device's current day — the re-anchor's strictly-future check runs
+    // against it (H-REPEAT-REANCHOR), under the SAME response clock the verify
+    // uses.
+    pre.todayIso = localToday(now, zone);
+    pre.target = loadTarget(db, params.uuid, now, zone);
     return pre;
   },
-  expectedDelta(_pre, params) {
+  expectedDelta(pre, params) {
+    return rescheduleDelta(pre, params);
+  },
+  compile(params, vector, _pre, ctx) {
+    if (isRepeatReanchor(params)) {
+      if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+      return reanchorUrl("update", params, ctx);
+    }
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const rule = asRepeatRuleParams(params);
+    return uiDrive(
+      rescheduleRepeatRecipe(rule.uuid, rule.frequency, rule.interval, reschedRuleExtras(rule)),
+    );
+  },
+};
+
+/**
+ * The reschedule's expected delta, both spellings (to-do and project share it —
+ * the DB delta is identical, UIC2-a).
+ */
+function rescheduleDelta(pre: PreState, params: RescheduleRepeatParams): DeltaSpec {
+  if (isRepeatReanchor(params)) {
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: reanchorAssertions(pre, params.next),
+      // The prior rule + deadline flag, so the change record holds what the
+      // series looked like before its anchor moved (there is no headless inverse
+      // — see reversibility.ts — but the record is still the evidence).
+      capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
+    };
+  }
+  {
     // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in place.
     // Assert the FULL requested rule (#491) — type + unit + interval + calendar
     // anchor + ends bound + deadline offset + the ANCH2 first-occurrence cursor —
@@ -2191,7 +2317,8 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
     // so the undo can re-drive it faithfully. The DERIVED-anchor effective params
     // (reschedEffParams) are asserted — the SAME bag the compile drives — so a
     // `--when`-only reschedule verifies the derived anchor the drive lands (RSPA1).
-    const eff = reschedEffParams(params);
+    const rule = asRepeatRuleParams(params);
+    const eff = reschedEffParams(rule);
     return {
       mode: "update",
       uuid: params.uuid,
@@ -2210,21 +2337,10 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
       // rewrites an EXISTING rule, so there is a full pre-state to diff against —
       // which is why make-repeating / add-repeating do not carry it: they mint the
       // rule, so every field is new by construction and there is nothing to compare.
-      collateral: { requested: requestedRuleKeys(params) },
+      collateral: { requested: requestedRuleKeys(rule) },
     };
-  },
-  compile(params, vector) {
-    if (vector !== "ui") unsupportedVector(this.op, vector);
-    return uiDrive(
-      rescheduleRepeatRecipe(
-        params.uuid,
-        params.frequency,
-        params.interval,
-        reschedRuleExtras(params),
-      ),
-    );
-  },
-};
+  }
+}
 
 const todoPauseRepeat: CommandSpec<"todo.pause-repeat"> = {
   op: "todo.pause-repeat",
@@ -2329,51 +2445,35 @@ const todoResumeRepeat: CommandSpec<"todo.resume-repeat"> = {
 
 const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
   op: "project.reschedule-repeat",
-  hazards: UI_HAZARDS,
-  preRead(db, params) {
-    assertRepeatRule(params);
+  hazards: RESCHEDULE_HAZARDS,
+  vectorsFor: rescheduleVectors,
+  preRead(db, params, now, zone) {
+    assertRescheduleRule(params);
     const pre = emptyPreState();
-    pre.target = loadTarget(db, params.uuid);
+    pre.todayIso = localToday(now, zone);
+    pre.target = loadTarget(db, params.uuid, now, zone);
     return pre;
   },
-  expectedDelta(_pre, params) {
-    // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place;
-    // capture the prior rule (+ deadline flag) for the faithful undo. Assert the
-    // FULL requested rule (#491) via expectedRuleAssertions — same completeness as
-    // todo.reschedule-repeat (a shallow unit+interval subset false-noop'd an
-    // anchor/deadline/ends-only reschedule). The DERIVED-anchor effective params
-    // (reschedEffParams) are asserted — the SAME bag the compile drives — so a
-    // `--when`-only reschedule verifies the derived anchor the drive lands (RSPA1).
-    const eff = reschedEffParams(params);
-    return {
-      mode: "update",
-      uuid: params.uuid,
-      // includeCursor asserts the first-occurrence cursor == --when. For an OFF-RULE
-      // first (explicit anchor ≠ --when) the cursor lands on the next RULE-ALIGNED
-      // occurrence, not --when (DACON1 cell DC4: --when Oct 16 with an Oct-16 due
-      // anchor cursors to the next aligned start, 2029-10-02), so asserting it would
-      // false-fail an honored off-rule reschedule — drop the cursor assertion there
-      // and verify the rule anchor only.
-      assert: expectedRuleAssertions(eff, {
-        includeCursor: assessOffRuleFirst(eff)?.kind !== "honored",
-      }),
-      capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
-      // UNEXPLAINED-DELTA DETECTION (CGRD1 guard 3). The assertions above prove
-      // the requested rule landed; this proves nothing ELSE did. A reschedule
-      // rewrites an EXISTING rule, so there is a full pre-state to diff against —
-      // which is why make-repeating / add-repeating do not carry it: they mint the
-      // rule, so every field is new by construction and there is nothing to compare.
-      collateral: { requested: requestedRuleKeys(params) },
-    };
+  expectedDelta(pre, params) {
+    return rescheduleDelta(pre, params);
   },
-  compile(params, vector) {
+  compile(params, vector, _pre, ctx) {
+    // The route must match the ROW TYPE: `update` aimed at a project template is
+    // a silent no-op and vice versa (REANCH1 §4.1). The op namespace carries the
+    // type (H-UNKNOWN-DESTINATION refuses a mismatched target), so the route is
+    // simply the project one here.
+    if (isRepeatReanchor(params)) {
+      if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+      return reanchorUrl("update-project", params, ctx);
+    }
     if (vector !== "ui") unsupportedVector(this.op, vector);
+    const rule = asRepeatRuleParams(params);
     return uiDrive(
       projectRescheduleRepeatRecipe(
-        params.uuid,
-        params.frequency,
-        params.interval,
-        reschedRuleExtras(params),
+        rule.uuid,
+        rule.frequency,
+        rule.interval,
+        reschedRuleExtras(rule),
       ),
     );
   },

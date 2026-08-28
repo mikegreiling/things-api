@@ -154,6 +154,18 @@ export const DISCLOSURES = {
     tier: "warning",
     why: "the redundant occurrence is still there and WILL double-book — it names the delete to run",
   },
+  "reanchor-series-moved": {
+    tier: "warning",
+    why: "the caller moved ONE date and the whole recurring pattern moved with it (a weekly item moved to a Thursday now repeats on Thursdays) — they may want to restate the rule instead",
+  },
+  "reanchor-slots-skipped": {
+    tier: "warning",
+    why: "occurrences the caller never named will now never appear — silently skipped rows are theirs to re-create if they mattered",
+  },
+  "reanchor-irreversible": {
+    tier: "warning",
+    why: "`things undo` will refuse this one; the only way back is another move or the app's own undo",
+  },
   "promote-off-rule-first": {
     tier: "warning",
     why: "the series landed two-phase (a first occurrence off its own rule) — the caller may want to correct it",

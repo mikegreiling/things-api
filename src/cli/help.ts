@@ -450,42 +450,42 @@ someday orders bounce; --before/--after co-touches siblings; caps 30; flags=fals
 
 Verbs: \`things todo|project make-repeating <ref>\` (turn an existing item into a
 repeater), \`… add-repeating "<title>"\` (create + make repeating in one call),
-\`… reschedule-repeat <ref>\` (change a rule in place). Every rule takes
-\`--frequency <daily|weekly|monthly|yearly>\` and a required \`--interval <n>\`
-(\`--interval 1\` = every unit). These drive the app's Repeat dialog, so they require
-\`--dangerously-drive-gui\`, \`--dry-run\` previews included.
+\`… reschedule-repeat <ref>\` (change a rule in place). Every rule takes \`--frequency
+<daily|weekly|monthly|yearly>\` and \`--interval <n>\` (1 = every unit). These drive the
+app's Repeat dialog, so they require \`--dangerously-drive-gui\`, \`--dry-run\` included.
+
+MOVING a series: \`reschedule-repeat <ref> --when <date>\` with NO --frequency/--interval
+keeps the rule and needs no --dangerously-drive-gui. The WHOLE series moves (weekly → a
+Thursday repeats on Thursdays), occurrences due before that date are skipped, and it
+cannot be undone here. Refused for a date not after today, a paused, --after-completion
+or multi-weekday series, and before Things 3.23; for ONE occurrence use --exception.
 
 Driving the dialog can take over a minute on a large database, so allow a GENEROUS
-timeout — 120s or more. If your own timeout stops the command first you get empty output
-though the change may still have landed: re-check with \`things show <ref>\`, never
-blindly re-run. An app-side timeout returns a structured result naming the same re-check.
-
-make-repeating is RECOVERABLE: it copies the item, promotes the copy, and moves the
-ORIGINAL to the Trash, so \`things undo\` reverses it; it refuses a nested repeater.
+timeout — 120s or more. If yours stops it first you get empty output though the change may
+have landed: re-check with \`things show <ref>\`, never blindly re-run. make-repeating is
+RECOVERABLE: it promotes a copy and trashes the ORIGINAL, so \`things undo\` reverses it;
+it refuses a nested repeater.
 
 Shaping the rule (compose with the frequency):
   --after-completion          the next occurrence lands N units after you COMPLETE the
                               current one, instead of on a calendar date (the default)
-  --weekdays mon,thu,fri      weekly: MULTIPLE days in ONE rule — never make two
-                              repeaters for "every Thursday and Friday"
+  --weekdays mon,thu,fri      weekly: MULTIPLE days in ONE rule — never two repeaters
   --on-day <1-31|last>        monthly/yearly: a date anchor
   --on-weekday <day> --on-ordinal <1-5|last>   nth-weekday anchor; yearly adds
-  --yearly-month <1-12>       e.g. last Sunday of December, every year:
-                              --frequency yearly --yearly-month 12
-                              --on-weekday sunday --on-ordinal last
+  --yearly-month <1-12>       last Sunday of December: --frequency yearly
+                              --yearly-month 12 --on-weekday sunday --on-ordinal last
   --ends-after <n> | --ends-on YYYY-MM-DD      stop bounds
   --reminder HH:mm · --deadline · --start-days-earlier <n>
 
-ONE occurrence vs the SERIES. A schedule/deadline change on a repeating to-do is
-ambiguous and refused, naming both ways out: \`--exception\` (just the next occurrence,
-created for you if it has not appeared yet) or \`reschedule-repeat\` (the series).
-\`--exception\` is refused when the series already lands on the day you asked for, and
-for --after-completion rules; undo restores the occurrence's change, never the
-occurrence itself. \`complete\`/\`cancel\` on a repeater need no flag — they resolve the
+ONE occurrence vs the SERIES. A schedule/deadline change on a repeating to-do is ambiguous
+and refused, naming both ways out: \`--exception\` (just the next occurrence, created for
+you if it has not appeared — refused when the series already lands on that day, and for
+--after-completion rules; undo restores its change, never the occurrence) or
+\`reschedule-repeat\` (the series). \`complete\`/\`cancel\` need no flag: they resolve the
 CURRENT occurrence and report which one, and when the next lands.
 
-make-repeating returns a \`repeating\` block: \`instanceUuid\` the visible current
-occurrence, \`templateUuid\` the rule (the <ref> for \`reschedule-repeat\`).`,
+make-repeating returns a \`repeating\` block: \`instanceUuid\` the visible current occurrence,
+\`templateUuid\` the rule (the <ref> for \`reschedule-repeat\`).`,
 };
 
 /** The valid topic names, in the order the "unknown topic" hint lists them. */

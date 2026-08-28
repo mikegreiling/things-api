@@ -48,7 +48,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { localToday } from "../model/dates.ts";
 import { getField } from "./verify/delta.ts";
 import { isRepeatingTemplate, loadTarget } from "./pre-state.ts";
-import { isUiDriveOp, type OperationKind, type ReorderParams } from "./operations.ts";
+import {
+  isRepeatReanchor,
+  isUiDriveOp,
+  type OperationKind,
+  type ReorderParams,
+  type RescheduleRepeatParams,
+} from "./operations.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
 import { restoreModDates, type ModRestoreTarget } from "./preserve-modified.ts";
 import { ruleToInverseParams } from "./repeat-rule.ts";
@@ -1685,6 +1691,18 @@ export function planUndo(
     case "todo.reschedule-repeat":
     case "project.reschedule-repeat": {
       if (uuid === null) return irreversible("no target uuid recorded");
+      // The RE-ANCHOR spelling has NO inverse (REANCH1 §8). Moving the series
+      // back would mean writing its OLD date — which is by then today or in the
+      // past on the very machine the write lands on, and that write kills the
+      // app (§5). The rule anchor could be re-driven through the dialog, but the
+      // cursor could not, so an "undo" would leave the series somewhere neither
+      // the caller nor the app chose. Refused whole, with the app's own ⌘Z named.
+      if (isRepeatReanchor(record.requested as unknown as RescheduleRepeatParams)) {
+        return irreversible(
+          "moving a repeating series' next occurrence cannot be undone here — move it to another " +
+            "future date, or use the Things app's own undo",
+        );
+      }
       const priorRule = decodedRuleOf(record);
       if (priorRule === null) {
         return irreversible(

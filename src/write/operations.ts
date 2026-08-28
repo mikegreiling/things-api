@@ -789,6 +789,63 @@ export interface RepeatRuleParams {
 }
 
 /**
+ * `reschedule-repeat` params — the full {@link RepeatRuleParams} vocabulary with
+ * `frequency` + `interval` OPTIONAL, because the verb now has TWO spellings:
+ *
+ *  - **Restate the rule** (both present): the Repeat dialog is driven, exactly as
+ *    before — the ui vector, `dangerouslyDriveGui`, the whole rule rewritten.
+ *  - **RE-ANCHOR** (`{ uuid, next }` alone, both absent): move the series' next
+ *    occurrence to a date without restating its rule. One background `open` on
+ *    the URL scheme, tier 0, no GUI-drive acknowledgement — the path REANCH1
+ *    measured (docs/lab/reanch1-url-reanchor.md) and REANCH2 re-verified. It is
+ *    guarded hard: Things ≥ 3.23, a strictly-future date, a fixed non-paused
+ *    single-weekday rule, and a route matching the row type.
+ *
+ * The two are exclusive by construction — a re-anchor carries `next` and NOTHING
+ * else, so any other rule field means the dialog spelling and `frequency` +
+ * `interval` are required with it (enforced by `assertRescheduleRule`).
+ */
+export interface RescheduleRepeatParams extends Omit<RepeatRuleParams, "frequency" | "interval"> {
+  /** The recurrence unit — required UNLESS this is a bare re-anchor. */
+  frequency?: RepeatFrequency;
+  /** "every N units", 1–99 — required UNLESS this is a bare re-anchor. */
+  interval?: number;
+}
+
+/**
+ * The bare RE-ANCHOR spelling of {@link RescheduleRepeatParams}: a target uuid and
+ * the date its series' next occurrence moves to, nothing else.
+ */
+export interface RepeatReanchorParams {
+  uuid: string;
+  next: IsoDate;
+}
+
+/**
+ * Is this reschedule the bare re-anchor (URL-drivable) rather than a rule
+ * restatement (GUI-bound)? The discriminator is `frequency`: validation
+ * (`assertRescheduleRule`) refuses every other rule field alongside its absence,
+ * so an params bag without a frequency IS `{ uuid, next }`.
+ */
+export function isRepeatReanchor(
+  params: RescheduleRepeatParams,
+): params is RepeatReanchorParams & RescheduleRepeatParams {
+  return params.frequency === undefined && params.next !== undefined;
+}
+
+/**
+ * Does THIS call drive the GUI? Every {@link UI_DRIVE_OPS} member does, except a
+ * `reschedule-repeat` in its bare re-anchor spelling, which compiles to one URL
+ * dispatch and therefore carries no GUI-drive gate (H-UI-DRIVE). Keyed on the
+ * params, so the scare gate rides the SPELLING rather than the verb.
+ */
+export function drivesGuiForParams(op: OperationKind, params: Record<string, unknown>): boolean {
+  if (!isUiDriveOp(op)) return false;
+  if (op !== "todo.reschedule-repeat" && op !== "project.reschedule-repeat") return true;
+  return !isRepeatReanchor(params as unknown as RescheduleRepeatParams);
+}
+
+/**
  * The calendar-anchor subset of the Repeat-dialog rule vocabulary the
  * add-repeating composites carry on their PROMOTE leg (frequency/interval plus
  * the after-completion + weekly/monthly/yearly/ends anchors). The deadline-
@@ -970,12 +1027,12 @@ export interface OperationParamsMap {
   "project.dissolve-heading": UuidParams;
   "todo.clear-dated-reminder": UuidParams;
   "todo.make-repeating": RepeatRuleParams;
-  "todo.reschedule-repeat": RepeatRuleParams;
+  "todo.reschedule-repeat": RescheduleRepeatParams;
   "todo.pause-repeat": UuidParams;
   "todo.resume-repeat": UuidParams;
   "todo.create-next-copy": UuidParams;
   "todo.convert-to-project": UuidParams;
-  "project.reschedule-repeat": RepeatRuleParams;
+  "project.reschedule-repeat": RescheduleRepeatParams;
   "project.pause-repeat": UuidParams;
   "project.resume-repeat": UuidParams;
   "area.reorder": AreaReorderParams;

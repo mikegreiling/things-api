@@ -14,7 +14,7 @@ import {
   type TaskStatus,
   type Todo,
 } from "./entities.ts";
-import { decodeEpochReal, decodePackedDate, decodeReminderTime } from "./dates.ts";
+import { decodeEpochReal, decodePackedDate, decodeReminderTime, type IsoDate } from "./dates.ts";
 import { templateProjectionDay, type TemplateProjectionRow } from "./template-projection.ts";
 import { reminderIsLive } from "../read/stage.ts";
 
@@ -103,6 +103,15 @@ function mapStart(row: { start: number | null; uuid: string }): StartState {
   return start;
 }
 
+/** A packed day column as an ISO date, or null when it is absent or undecodable. */
+function packedDayOrNull(value: number | null): IsoDate | null {
+  try {
+    return decodePackedDate(value);
+  } catch {
+    return null;
+  }
+}
+
 function mapRepeating(row: TaskRow): RepeatingInfo {
   const isTemplate = row.rt1_recurrenceRule !== null || row.repeater !== null;
   const templateUuid = row.rt1_repeatingTemplate;
@@ -113,6 +122,12 @@ function mapRepeating(row: TaskRow): RepeatingInfo {
     // cache). Null when the series projects nowhere: paused, after-completion
     // between instances, ended, or underivable. Never a guessed date.
     info.nextOccurrence = decodePackedDate(templateProjectionDay(row));
+    // The RAW spawn cursor beside the projection — the write engine's second
+    // read-back column for a series re-anchor (REANCH1 §8). Fails CLOSED to null
+    // on an out-of-domain packed value, exactly as templateProjectionDay does:
+    // this is a verification input, and a throwing read would turn a corrupt
+    // column into an unreadable row.
+    info.spawnCursor = packedDayOrNull(row.tpCursor);
     info.paused = row.rt1_instanceCreationPaused === 1;
     // A deadlined template carries a far-future sentinel (4001-01-01) in its
     // own `deadline` column; a deadline-less one carries NULL. This — NOT the

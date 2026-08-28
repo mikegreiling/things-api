@@ -275,7 +275,7 @@ interface VectorSupport {
 }
 ```
 
-The planner filters vectors by `support !== 'no'`, constraint predicates against the pre-read (e.g. `not-on-repeating` checks recurrence fields), `validation === 'validated'` (unless config `allowUnvalidatedCapabilities`), and `disruption <= maxDisruption`; then picks lowest tier, tie-broken by registry priority. URL-scheme matrix entries encode validated reality: baseline tier 2 (T01 observed focus change), with an `open -g` variant entry marked tier 1 / `validation: 'unvalidated'` for the lab to confirm. Nothing about AppleScript/Shortcuts is hardcoded — they register with all-`unvalidated` matrices.
+The planner filters vectors by `support !== 'no'`, constraint predicates against the pre-read (e.g. `not-on-repeating` checks recurrence fields), `validation === 'validated'` (unless config `allowUnvalidatedCapabilities`), `disruption <= maxDisruption`, and — where a verb has two spellings that ride different transports — the params-narrowed set its `CommandSpec.vectorsFor` returns (`reschedule-repeat`: a rule restatement drives the dialog, a bare `--when` re-anchor dispatches one url); then picks lowest tier, tie-broken by registry priority. URL-scheme matrix entries encode validated reality: baseline tier 2 (T01 observed focus change), with an `open -g` variant entry marked tier 1 / `validation: 'unvalidated'` for the lab to confirm. Nothing about AppleScript/Shortcuts is hardcoded — they register with all-`unvalidated` matrices.
 
 ### Result types (discriminated unions)
 

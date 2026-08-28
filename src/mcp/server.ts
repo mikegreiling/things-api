@@ -82,6 +82,7 @@ import {
   type DisruptionTier,
   type ErrorCode,
   type HeadingPlacement,
+  type IsoDate,
   type MonthlyAnchor,
   type MovePosition,
   type MoveResult,
@@ -2778,14 +2779,20 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "Manage recurrence on a to-do or project (scope) by driving the local Things app's " +
-        "interface — every action needs dangerously_drive_gui. action start: turn a plain item " +
+        "interface — every action needs dangerously_drive_gui EXCEPT reschedule with when alone " +
+        "(see below). action start: turn a plain item " +
         "into a repeating one (promote-via-clone: a disposable copy is promoted and the ORIGINAL " +
         "is moved to the Trash, so undo reverses it — it removes the new series and restores the " +
         "original); give frequency + interval and optionally the weekday set, monthly/yearly day, " +
         "end bound, or per-occurrence deadline; returns a repeating block with instanceUuid (the " +
         "visible occurrence), templateUuid (the rule), and replacedUuid. A project holding a " +
         "nested repeating template is refused. action reschedule: change a repeating item's rule " +
-        "in place, keeping the same item (undoable — it restores the previous rule). action " +
+        "in place, keeping the same item (undoable — it restores the previous rule) — or, with " +
+        "when alone and no frequency/interval, MOVE the series to that date keeping its rule: no " +
+        "dangerously_drive_gui, but the whole series moves (a weekly item moved to a Thursday " +
+        "repeats on Thursdays), occurrences due before that date never appear, and it cannot be " +
+        "undone. Moving needs a date after today, a series that is not paused, does not repeat " +
+        "after completion, and does not repeat on several weekdays; Things 3.23 or later. action " +
         "pause/resume: stop or restart its new occurrences, keeping the rule. action add: create " +
         "an item and make it repeating in one call — it is created first and PERSISTS even if the " +
         "promote refuses (give a title; for a project give an area to place it or omit it to " +
@@ -2837,6 +2844,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         reminder: repeatRuleShape.reminder,
         deadline: repeatRuleShape.deadline,
         start_days_earlier: repeatRuleShape.start_days_earlier,
+        when: z
+          .string()
+          .optional()
+          .describe(
+            `start/reschedule: ${DATE_FORMAT} — the first occurrence. Given WITH frequency and ` +
+              "interval it starts the rule on that date; given ALONE (reschedule) it MOVES the " +
+              "series to that date, keeping the rule and needing no dangerously_drive_gui",
+          ),
         ...driveGuiShape,
         ...dryRunShape,
         ...preserveModifiedShape,
@@ -2911,10 +2926,28 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           return mutationResult(await c.write.run(op, { uuid: args.uuid }, opts));
         }
         // start | reschedule
+        if (frequency === undefined && interval === undefined && args.action === "reschedule") {
+          // The RE-ANCHOR spelling: a date alone moves the series and keeps its
+          // rule (no GUI drive, so no acknowledgement). Every other rule field is
+          // refused by the library — it cannot be expressed on this path.
+          if (args.when === undefined) {
+            return usage('action "reschedule" requires frequency and interval, or when');
+          }
+          return mutationResult(
+            await c.write.run(
+              args.scope === "todo" ? "todo.reschedule-repeat" : "project.reschedule-repeat",
+              { uuid: args.uuid, next: args.when as IsoDate },
+              opts,
+            ),
+          );
+        }
         if (frequency === undefined || interval === undefined) {
           return usage(`action "${args.action}" requires frequency and interval`);
         }
-        const extras = repeatExtras(args, frequency);
+        const extras = {
+          ...repeatExtras(args, frequency),
+          ...(args.when !== undefined && { next: args.when as IsoDate }),
+        };
         if (args.scope === "todo") {
           if (args.action === "start") {
             return mutationResult(

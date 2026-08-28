@@ -46,7 +46,11 @@ import {
   type EnvironmentChange,
   type EnvironmentTracker,
 } from "./environment.ts";
-import { privateReorderIsNoOp, sdefDeclaresPrivateReorder } from "./experimental.ts";
+import {
+  privateReorderIsNoOp,
+  sdefDeclaresPrivateReorder,
+  urlReanchorSupported,
+} from "./experimental.ts";
 import {
   classifyTransportFailure,
   classifyVerifyFailure,
@@ -63,6 +67,7 @@ import {
 } from "./lock.ts";
 import {
   isHeadingTargetOp,
+  isRepeatReanchor,
   type Acknowledgements,
   type OperationKind,
   type OperationParamsMap,
@@ -76,7 +81,7 @@ import { replayIfApplied } from "./opid.ts";
 import { assertOperationParams } from "./param-schema.ts";
 import { computeCompletionContext, type CompletionContext } from "./completion-context.ts";
 import { assessOffRuleFirst } from "./repeat-anchor.ts";
-import type { RepeatRuleParams } from "./operations.ts";
+import type { RepeatRuleParams, RescheduleRepeatParams } from "./operations.ts";
 import { planVector } from "./planner.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 import {
@@ -1159,12 +1164,41 @@ export async function runMutation<K extends OperationKind>(
       params = norm.params as OperationParamsMap[K];
     }
 
+    // 3c. The series RE-ANCHOR's VERSION gate (REANCH1 §6). A dated `when=` on a
+    // repeating template re-anchors the series on Things 3.23 and KILLS the
+    // process on 3.22.14 — an unannounced behavior change, in the unusual
+    // direction. So the capability is gated on the installed version and fails
+    // CLOSED on an unreadable one; below the gate the dialog spelling (which
+    // works on both lines) is the remedy. Checked here, before planning, so the
+    // refusal names the version rather than surfacing as an unsupported vector.
+    if (
+      (op === "todo.reschedule-repeat" || op === "project.reschedule-repeat") &&
+      isRepeatReanchor(params as unknown as RescheduleRepeatParams) &&
+      !urlReanchorSupported(deps.environment?.capture().thingsVersion ?? null)
+    ) {
+      audit({ result: blockedCode({ reason: "environment" }) });
+      return {
+        kind: "blocked",
+        op,
+        reason: "environment",
+        detail:
+          "this version of Things cannot move a repeating item's next occurrence on its own — " +
+          "the version that can is 3.23 or later",
+        remediation:
+          "restate the rule instead: `things " +
+          (op.startsWith("project.") ? "project" : "todo") +
+          " reschedule-repeat <ref> --frequency <freq> --interval <n> --when <date> " +
+          "--dangerously-drive-gui`, or update Things",
+      };
+    }
+
     // 4. Vector planning under the disruption policy.
     const appRunning = (deps.isAppRunning ?? defaultIsAppRunning)();
     const plan = planVector(op, deps.vectors, {
       maxDisruption,
       appRunning,
       allowExperimental: config.allowExperimental,
+      ...(spec.vectorsFor !== undefined && { allowVectors: spec.vectorsFor(params) }),
       ...(options.vector !== undefined && { forcedVector: options.vector }),
     });
     if (plan.kind === "unsupported") {
@@ -1893,13 +1927,40 @@ export async function runMutation<K extends OperationKind>(
       // monthly shape was already refused at validation. (make/add-repeating carry
       // their own disclosure via the promote result.)
       if (op === "todo.reschedule-repeat" || op === "project.reschedule-repeat") {
-        const offRuleParams = params as unknown as RepeatRuleParams;
-        const offRule = assessOffRuleFirst(
-          offRuleParams,
-          preservedDeadlineOffsetFor(pre, offRuleParams),
-        );
-        if (offRule?.kind === "honored") {
-          disclose(bag, "promote-off-rule-first", offRule.disclosure.message);
+        const reschedule = params as unknown as RescheduleRepeatParams;
+        if (isRepeatReanchor(reschedule)) {
+          // The three things a re-anchor does that the caller did not ask for,
+          // all measured (REANCH1 §2.3, §2.2/§7, §8): the recurring pattern moves
+          // with the date, the slots in between are dropped, and there is no
+          // headless way back.
+          disclose(
+            bag,
+            "reanchor-series-moved",
+            `the whole series moved: it now repeats from ${reschedule.next} — a weekly item ` +
+              "moved to a Thursday repeats on Thursdays, a monthly one moved to the 17th " +
+              "repeats on the 17th",
+          );
+          disclose(
+            bag,
+            "reanchor-slots-skipped",
+            `any occurrence due before ${reschedule.next} will not appear — the series resumes ` +
+              "on the new date",
+          );
+          disclose(
+            bag,
+            "reanchor-irreversible",
+            "this cannot be undone here — move the series to another date, or use the Things " +
+              "app's own undo",
+          );
+        } else {
+          const offRuleParams = reschedule as unknown as RepeatRuleParams;
+          const offRule = assessOffRuleFirst(
+            offRuleParams,
+            preservedDeadlineOffsetFor(pre, offRuleParams),
+          );
+          if (offRule?.kind === "honored") {
+            disclose(bag, "promote-off-rule-first", offRule.disclosure.message);
+          }
         }
       }
       if (vector.id === "ui") {
