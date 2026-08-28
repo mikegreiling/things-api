@@ -36,7 +36,10 @@ describe("classifyTransportFailure", () => {
     });
     expect(hint?.likelyCause).toBe("modal-open");
     expect(hint?.hint).toContain("a dialog is open");
-    expect(hint?.hint).toContain("things ui-state");
+    // #640: the diagnosis names the surface that ACTS on it, not only the one
+    // that reports it.
+    expect(hint?.hint).toContain("things rescue status");
+    expect(hint?.hint).toContain("things rescue dismiss");
     expect(hint?.hint).toContain("Things Cloud");
     expect(hint?.hint).toContain("nothing was changed");
   });

@@ -318,6 +318,9 @@ const EXPECTED_TOOLS = [
   "capabilities",
   "doctor",
   "op_result", // read-only caller-recovery lookup over the change history
+  // The read-only third of the rescue family. Its two ACTION siblings
+  // (dismiss/relaunch) are CLI-only and must never appear here (#640).
+  "rescue_status",
 ];
 
 describe("things MCP server", () => {

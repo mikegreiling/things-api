@@ -92,8 +92,9 @@ export function classifyTransportFailure(input: {
         "that IS there whenever a dialog is open somewhere in the app: while one stands, Things " +
         "reports its own lists as empty to scripted callers, so a change addressed by id cannot " +
         "resolve. It also stops sending changes to Things Cloud until the dialog is dismissed. " +
-        "Run `things ui-state` to see what is open, dismiss it (click Cancel, or press Escape " +
-        "with Things in front), then run the same command again — nothing was changed." +
+        "Run `things rescue status` to see what is open and whether it can be closed from here, " +
+        "`things rescue dismiss` to close it, then run the same command again — nothing was " +
+        "changed." +
         environmentSuffix(input.environmentChanges),
     };
   }

@@ -26,16 +26,167 @@ import { dirname } from "node:path";
 
 import { pidAlive } from "../process-instance.ts";
 
+/** Who holds the lock, and since when — the lockfile's whole payload. */
+export interface LockHolder {
+  pid: number;
+  /** ISO-8601 instant the holder took the lock. */
+  ts: string;
+}
+
+/**
+ * How long a LIVE holder may hold the lock before a refusal is allowed to say
+ * the process may be hung (issue #640).
+ *
+ * The number has to sit above every legitimate hold, because the sentence it
+ * unlocks invites the reader to kill the holder — and killing a working drive
+ * is a worse outcome than a late diagnosis. The longest legitimate hold is a
+ * COMPOSITE with a GUI leg: measured at 3.7s on a golden clone (DRVLAT1), and
+ * the `--dangerously-drive-gui` copy already warns a field host can take "over
+ * a minute on a large database". Five minutes is an order of magnitude past
+ * that, so a holder still standing at five minutes is not slow — it is stuck,
+ * or it is a pid whose process died in a way `kill(pid, 0)` cannot see.
+ */
+export const LOCK_HOLDER_SUSPECT_MS = 5 * 60_000;
+
 export class MutationLockError extends Error {
-  constructor(message: string) {
+  /**
+   * The holder the wait timed out against, when the lockfile could be read.
+   * Null when the file was torn or unreadable — the refusal then says only what
+   * it can prove.
+   */
+  readonly holder: LockHolder | null;
+
+  constructor(message: string, holder: LockHolder | null = null) {
     super(message);
     this.name = "MutationLockError";
+    this.holder = holder;
   }
 }
 
-interface LockPayload {
-  pid: number;
-  ts: string;
+type LockPayload = LockHolder;
+
+/** What `rescue status` and the `blocked:lock` refusal both report about a holder. */
+export interface LockHolderReport {
+  /** The lockfile's payload; null when no lock is held or it could not be parsed. */
+  holder: LockHolder | null;
+  /** Does a process with that pid still exist? False when there is no holder. */
+  alive: boolean;
+  /** How long the holder has held it, in ms; null when unknown or unparseable. */
+  heldForMs: number | null;
+  /**
+   * A live holder past {@link LOCK_HOLDER_SUSPECT_MS} — old enough that the
+   * copy may say it looks hung. A dead holder is never "suspect": it is simply
+   * stale, and the next acquisition steals it without anyone being told.
+   */
+  suspect: boolean;
+}
+
+/** No lock on the file — the shape every reader gets when the slot is empty. */
+const NO_HOLDER: LockHolderReport = { holder: null, alive: false, heldForMs: null, suspect: false };
+
+/**
+ * READ the lockfile without touching it — no steal, no wait, no acquisition.
+ * This is the accessor `things rescue status` reports from, and it is
+ * deliberately incapable of changing anything: a diagnostic that can release
+ * another process's lock is a diagnostic nobody can run safely.
+ *
+ * An absent file, a torn write and an unparseable payload all read as "no
+ * holder we can name", never as "no lock" — the caller states what it proved.
+ */
+export function readLockHolder(
+  path: string,
+  deps: Partial<Pick<LockDeps, "readFileSync" | "pidAlive">> & { now?: () => number } = {},
+): LockHolderReport {
+  const read = deps.readFileSync ?? readFileSync;
+  const alivep = deps.pidAlive ?? pidAlive;
+  let raw: string;
+  try {
+    raw = read(path, "utf8") as string;
+  } catch {
+    return NO_HOLDER; // no lockfile — nothing is holding it
+  }
+  let holder: LockHolder;
+  try {
+    holder = JSON.parse(raw) as LockHolder;
+  } catch {
+    return NO_HOLDER; // torn write — the next acquisition treats it as stale
+  }
+  if (typeof holder.pid !== "number" || typeof holder.ts !== "string") return NO_HOLDER;
+  const alive = alivep(holder.pid);
+  const takenAt = Date.parse(holder.ts);
+  const heldForMs = Number.isFinite(takenAt)
+    ? Math.max(0, (deps.now ?? Date.now)() - takenAt)
+    : null;
+  return {
+    holder,
+    alive,
+    heldForMs,
+    suspect: alive && heldForMs !== null && heldForMs >= LOCK_HOLDER_SUSPECT_MS,
+  };
+}
+
+/** "4m 12s" / "1h 3m" / "8s" — a held-since age a person reads at a glance. */
+export function formatHeldFor(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return s % 60 === 0 ? `${m}m` : `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+}
+
+/**
+ * The `blocked:lock` refusal's sentences (issue #640).
+ *
+ * The old copy was *"another mutation is in progress (pid N since T); waited
+ * 30000ms"* + *"wait for the concurrent mutation to finish and retry"*. It is
+ * true and it is useless in the one case that actually happens: the holder is a
+ * process that died without releasing — a killed client, a harness timeout —
+ * and no amount of waiting will ever clear it. The pid and the timestamp were
+ * already in the payload; all that was missing was the arithmetic and the
+ * consequence.
+ *
+ * So the refusal now says how LONG it has been held, whether that process is
+ * still alive, and — only past {@link LOCK_HOLDER_SUSPECT_MS}, only for a holder
+ * that is still alive — that killing it releases the lock. The threshold matters
+ * in both directions: below it the sentence would invite the reader to kill a
+ * drive that is merely working, and it is deliberately far above any measured
+ * legitimate hold.
+ *
+ * Aliveness is measured HERE, at refusal time, not at throw time — the holder
+ * may have died during the wait, and "it is gone, retry" is a different and
+ * better answer than "wait for it".
+ */
+export function describeLockRefusal(
+  err: MutationLockError,
+  deps: { pidAlive?: (pid: number) => boolean; now?: () => number } = {},
+): { detail: string; remediation: string } {
+  const holder = err.holder;
+  const base = "wait for the concurrent mutation to finish and retry";
+  if (holder === null) return { detail: err.message, remediation: base };
+
+  const alive = (deps.pidAlive ?? pidAlive)(holder.pid);
+  const takenAt = Date.parse(holder.ts);
+  const heldForMs = Number.isFinite(takenAt)
+    ? Math.max(0, (deps.now ?? Date.now)() - takenAt)
+    : null;
+  const age = heldForMs === null ? "" : `, held for ${formatHeldFor(heldForMs)}`;
+
+  if (!alive) {
+    return {
+      detail: `${err.message}${age} — that process is no longer running, so the lock is stale`,
+      remediation: "run the command again; the next attempt takes the lock",
+    };
+  }
+  const suspect = heldForMs !== null && heldForMs >= LOCK_HOLDER_SUSPECT_MS;
+  return {
+    detail: `${err.message}${age} — pid ${holder.pid} is still running`,
+    remediation: suspect
+      ? `${base}. It has held the lock for ${formatHeldFor(heldForMs)}, which is far longer ` +
+        `than any change takes: that process may be hung, and killing it (\`kill ${holder.pid}\`) ` +
+        "releases the lock. `things rescue status` shows what it is waiting on"
+      : base,
+  };
 }
 
 export interface MutationLock {
@@ -183,6 +334,7 @@ export async function acquireMutationLock(
         throw new MutationLockError(
           `another mutation is in progress (pid ${holder.pid} since ${holder.ts}); ` +
             `waited ${waitMs}ms for ${path}`,
+          holder,
         );
       }
       // lock-acquisition retries are inherently sequential polling against the same lockfile

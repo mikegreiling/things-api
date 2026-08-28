@@ -56,6 +56,7 @@ import {
 import { evaluateGuards, type GuardBlock, type HazardId } from "./guards.ts";
 import {
   acquireMutationLock,
+  describeLockRefusal,
   MutationLockError,
   withMutationLock,
   type AcquireMutationLockOptions,
@@ -821,13 +822,7 @@ export async function runComposite(
     );
   } catch (err) {
     if (err instanceof MutationLockError) {
-      return {
-        kind: "blocked",
-        op,
-        reason: "lock",
-        detail: err.message,
-        remediation: "wait for the concurrent mutation to finish and retry",
-      };
+      return { kind: "blocked", op, reason: "lock", ...describeLockRefusal(err) };
     }
     throw err;
   }
@@ -1047,13 +1042,7 @@ export async function runMutation<K extends OperationKind>(
   } catch (err) {
     if (err instanceof MutationLockError) {
       audit({ result: blockedCode({ reason: "lock" }) });
-      return {
-        kind: "blocked",
-        op,
-        reason: "lock",
-        detail: err.message,
-        remediation: "wait for the concurrent mutation to finish and retry",
-      };
+      return { kind: "blocked", op, reason: "lock", ...describeLockRefusal(err) };
     }
     throw err;
   }

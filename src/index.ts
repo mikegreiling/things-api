@@ -38,6 +38,27 @@ export type {
   UiStateDeps,
   UiStateReport,
 } from "./ui-state.ts";
+export {
+  rescueDismiss,
+  rescueDismissLines,
+  rescueRelaunch,
+  rescueRelaunchLines,
+  rescueStatus,
+  rescueStatusLines,
+} from "./rescue.ts";
+export type {
+  RescueDeps,
+  RescueDismissAck,
+  RescueDismissOutcome,
+  RescueDismissResult,
+  RescueForeignModal,
+  RescueLockView,
+  RescueRelaunchAck,
+  RescueRelaunchOutcome,
+  RescueRelaunchResult,
+  RescueSchemaVerdict,
+  RescueStatusReport,
+} from "./rescue.ts";
 export type { OpResultData, OpResultHolder, OpResultOptions, OpResultStatus } from "./op-result.ts";
 export { probeAutomation } from "./write/automation-probe.ts";
 export type {

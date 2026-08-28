@@ -211,7 +211,17 @@ export interface UndoSelector {
  */
 function undoableRecords(records: AuditRecord[]): AuditRecord[] {
   return records.filter(
-    (r) => r.result === "ok" && !r.actor.startsWith("undo:") && r.txn?.role !== "leg",
+    (r) =>
+      r.result === "ok" &&
+      !r.actor.startsWith("undo:") &&
+      r.txn?.role !== "leg" &&
+      // …and never a RESCUE action (issue #640). `rescue dismiss` / `rescue
+      // relaunch` are recorded because a verb that destroys in-flight work
+      // should leave a trace, but they change no task data and have no inverse:
+      // a closed dialog cannot be re-opened with what was typed into it, and a
+      // relaunched app cannot be un-relaunched. Without this they would show up
+      // as the newest undo target and `undo` would have nothing to compile.
+      !r.op.startsWith("rescue."),
   );
 }
 

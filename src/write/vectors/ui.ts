@@ -1966,7 +1966,7 @@ async function clickCancel(run: UiRunner): Promise<boolean> {
   const center = parseFrameCenter(frameRes.stdout);
   if (center === null) return false;
   const res = await run(
-    clickPointCommand(center.x, center.y, "click the open dialog's Cancel button"),
+    uiClickPointCommand(center.x, center.y, "click the open dialog's Cancel button"),
     STEP_TIMEOUT_MS,
   );
   return res.ok;
@@ -2261,7 +2261,12 @@ $.CGEventPost($.kCGHIDEventTap, mev(2));`;
 }
 
 /** The command that posts an AX-resolved mouse click (one stable JXA shape). */
-function clickPointCommand(x: number, y: number, label: string): UiCommand {
+/**
+ * A synthesized HID click at a screen point. Exported (issue #640) so the rescue
+ * path's Cancel fallback and the drive's own click are literally the same shape
+ * — a second construction site is a second place for the event sequence to drift.
+ */
+export function uiClickPointCommand(x: number, y: number, label: string): UiCommand {
   return { primitive: "click-point", label, lang: "javascript", script: jxaClickScript(x, y) };
 }
 
@@ -2462,6 +2467,22 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
 export function readLiveUiState(run: UiRunner = defaultRun): Promise<UiState | null> {
   return readUiState(run, CENSUS_TIMEOUT_MS);
 }
+
+/**
+ * The production dispatch seam itself, exported (issue #640).
+ *
+ * The drive owns its own runner and always will. But `things rescue` presses a
+ * button on a dialog no drive opened, so it needs the SAME transport — the
+ * deputy routing, the reveal/osascript split, the timeout handling — without
+ * borrowing the drive's recipe machinery. Re-declaring a second dispatcher would
+ * mean a second place for the deputy contract to drift, which is the one thing
+ * this seam exists to prevent.
+ *
+ * Nothing else changes: this is `defaultRun` under a name a caller outside the
+ * vector can read, and every injected-runner test seam still works exactly as
+ * before.
+ */
+export const defaultUiRunner: UiRunner = defaultRun;
 
 /**
  * Wrap the dispatch seam so every osascript hop is recorded. The last-dispatched
@@ -3025,7 +3046,7 @@ async function driveClickElement(
             "or the app is not in the expected state; no click was sent",
     };
   }
-  const clickRes = await run(clickPointCommand(center.x, center.y, step.label), STEP_TIMEOUT_MS);
+  const clickRes = await run(uiClickPointCommand(center.x, center.y, step.label), STEP_TIMEOUT_MS);
   if (!clickRes.ok) {
     return {
       ok: false,

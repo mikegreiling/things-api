@@ -187,6 +187,7 @@ function syncHealthLines(sh: DiagnoseReport["syncHealth"], ui?: UiStateReport): 
     lines.push(
       "dialog:      a dialog is open in Things, which stops the app sending changes to Things " +
         "Cloud — anything written on this Mac stays here until it is dismissed",
+      "  next:      `things rescue status` for what is open and whether it can be closed from here",
     );
   }
   return lines;
@@ -293,6 +294,8 @@ function uiVectorLines(ui: DiagnoseReport["ui"]): string[] {
     `certification: ${certified} on-device + ${lab} lab-verified of ${total} (${ui.certificationProfile}) — ` +
       "lab-verified recipes ran end-to-end in a disposable VM; on-device confirmation is the " +
       "final step (docs/lab/ui-certification-runbook.md)",
+    "  next:        `things rescue status` when a command fails as if an item were missing — a " +
+      "dialog left open in Things produces exactly that",
   ];
 }
 
