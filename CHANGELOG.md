@@ -15,6 +15,25 @@
 - **Changed — the backdating flip-dance (`complete`/`cancel`/`update --completed-at`) now holds one lock across its whole sequence** instead of taking one per leg, so another writer can no longer land a change between the "complete" and the "cancel" legs. (Issue #639.)
 
 - **Fixed — `--op-id` on a `clone` of a repeating template was silently dropped.** The key never reached the record the verb writes, so a resubmission deduplicated against nothing and made a second series. It now rides that summary like every other keyed composite. (Issue #639.)
+- **New — `things rescue`, for when Things is running, answering, and unusable.** There is a state this app gets into that looks like nothing at all from the outside: a dialog is left standing in Things — an automation that was interrupted, or someone who walked away mid-edit — and from then on the app lies to everything scripting it. It reports its own lists as empty, so a command addressed at a to-do you can plainly see comes back saying that to-do does not exist. It stops sending anything to Things Cloud, so writes land on this Mac and quietly never reach your phone. And nothing says so: the app is up, the window is there, and `doctor` reports a healthy machine.
+
+  Until now the only diagnosis was `things ui-state`, which tells you a dialog is open and stops there. On a Mac you are sitting at, that is enough — you close the dialog. On a Mac you are not sitting at, it was the end of the road: the remaining recourse was to connect to the screen and drive the app by hand.
+
+  Three commands, separated by what they can cost you:
+
+  **`things rescue status`** is free, needs no flags and no permission, and changes nothing. It reports whether a dialog is open in Things and which one it is, how many are stacked behind it, which application owns the keyboard, and whether another command is holding the change lock — with the holder's process id, how long it has held it, and whether that process is even still alive. When the thing on screen is a macOS dialog rather than one of Things', it says so and names the application it belongs to, because nothing here will ever press a button on a dialog it did not open.
+
+  **`things rescue dismiss`** closes the dialog in front by pressing its own Cancel button, discarding whatever was typed into it — the database is untouched. It closes exactly one: dialogs stack, they close from the top down, and the result tells you how many are left rather than pressing an unknown number of unknown buttons on your behalf. It refuses, without pressing anything at all, when the dialog is one it cannot identify, when it belongs to macOS, or when the screen cannot be read reliably enough to know what a click would land on. And when a dialog ignores its own Cancel — which does happen — it says so plainly instead of reporting a success it cannot see.
+
+  **`things rescue relaunch`** quits Things and starts it again in the background. Everything already saved survives; the only thing lost is what was typed into the open dialog and never saved. It is the blunt instrument, and it is deliberately the last one offered — but it is also the only thing known to clear a dialog that will not close, and it releases every change Things has been holding back from Things Cloud. It asks for `--yes`, and on a Mac configured as a workstation it asks for a second flag as well, on the grounds that someone may be sitting in front of the dialog it is about to destroy.
+
+  Everything `rescue` actually does is recorded in the change history, with the state of the screen before and after. `status`, which does nothing, records nothing. (Issue #640; campaign RSCU1.)
+
+- **Improved — a command blocked by another one now tells you whether waiting will help.** The refusal used to say a mutation was in progress, name a process id and a timestamp, and advise you to wait and retry. That is fine when something really is running and useless in the case that actually happens: the process holding the lock died without releasing it — a client killed by a timeout, a terminal closed mid-command — and no amount of waiting will ever clear it.
+
+  It now does the arithmetic it always had the numbers for. A holder that is no longer running is named as stale, with "run the command again" instead of "wait". A holder that is still running is reported with how long it has held the lock. And a holder that is still running but has held it far longer than any change takes is named as one that may be hung, with the command that releases it. That last sentence is deliberately slow to appear, because it invites you to kill something: it never fires on a command that is merely slow.
+
+- **Improved — the "that item doesn't exist" refusal now names the command that fixes it.** When Things answers that an item is missing while the database plainly holds it, the diagnosis was already right — a dialog is open somewhere in the app — but the advice was to go look at the screen. It now points at `things rescue status` and `things rescue dismiss`, and `doctor` links to the same place from its window and sync rows.
 
 ## 0.19.4 — 2026-08-28
 
