@@ -102,6 +102,72 @@ export const AX_DIALOG_SHELL_SNIPPET = `		set shellRef to missing value
 			end repeat
 		end if`;
 
+/**
+ * The census's individually-budgeted probes, in the order they run. The first
+ * three are DECISION-CRITICAL — the guard, the drive preflight and the cleanup
+ * ladder all decide on them — and the last two are DECORATION for the refusal
+ * copy. That order is the point: everything a caller acts on is proven before a
+ * single unaddressed query is attempted.
+ *
+ *   - `running`  — is there a Things process at all (a name-keyed lookup);
+ *   - `frontmost` — `frontmost of process "Things3"`, ADDRESSED: the one fact a
+ *                   keystroke guard actually needs;
+ *   - `dialog`   — the dialog shell, its form, its stack depth and its control
+ *                   census, all addressed inside `process "Things3"`;
+ *   - `frontapp` — WHICH other application owns the screen. This is the whole
+ *                   process table enumerated (`first application process whose
+ *                   frontmost is true`), so it runs only when the addressed
+ *                   `frontmost` probe already said the answer is not Things, and
+ *                   only for the sentence that names the thief;
+ *   - `focus`    — the focused element's role, through
+ *                   `AXFocusedUIElement`. MEASURED at ~3.5x the cost of every
+ *                   addressed probe in this vector even on a bare clone
+ *                   (docs/lab/fgrd2-census-hardening.md §2), and it decides
+ *                   nothing — so it goes last, inside its own budget, and its
+ *                   absence costs a clause in a sentence.
+ */
+export type UiProbe = "running" | "frontmost" | "dialog" | "frontapp" | "focus";
+
+/** Probes whose absence makes the census unusable for a keystroke decision. */
+const CRITICAL_PROBES: readonly UiProbe[] = ["running", "frontmost", "dialog"];
+
+/** Every probe name the census can report, for parsing its record back. */
+const KNOWN_PROBES: ReadonlySet<string> = new Set<UiProbe>([
+  "running",
+  "frontmost",
+  "dialog",
+  "frontapp",
+  "focus",
+]);
+
+/**
+ * Per-APPLE-EVENT budget for every read in the census (`with timeout of N
+ * seconds`). Without one, osascript's default is two MINUTES: a System Events
+ * call that does not come back is then bounded only by the caller's own process
+ * deadline, which is how issue #629's field incident spent ~15s per inspection
+ * and ~56s per drive discovering nothing. With one, a read that will not answer
+ * raises AppleScript error -1712 and the census carries on to the next probe —
+ * or stops, if the probe was one the caller decides on.
+ */
+const PROBE_TIMEOUT_S = 2;
+
+/**
+ * Wall-clock budget for the WHOLE census, checked between probes. `with
+ * timeout` bounds one Apple event, not a run of them, so a surface that is
+ * merely slow (rather than wedged) could still add up. Past this, the remaining
+ * probes are skipped and reported as stalled rather than waited on.
+ */
+const CENSUS_BUDGET_S = 8;
+
+/**
+ * The transport deadline for one census hop — the backstop under the in-script
+ * budgets, not the mechanism. Deliberately far below the 15s step timeout that
+ * bounded the old single-shot script: nothing here may take this long, and if
+ * it does the caller must hear about it while the drive can still be aborted
+ * cleanly rather than after four of them have gone by.
+ */
+export const CENSUS_TIMEOUT_MS = 12_000;
+
 /** Who owns keyboard focus. Role only — never the element's value or title (see PRIVACY). */
 export interface UiFocusOwner {
   /** The frontmost application's process name (e.g. "Things3"). */
@@ -143,8 +209,52 @@ export interface UiState {
    * of a SECURE SYSTEM MODAL (a macOS privacy/consent dialog), which belongs to
    * no application's Accessibility tree. Everything else in the census is then
    * "what could still be proven", never a guess.
+   *
+   * A probe that TIMED OUT does not set this: "macOS refused to describe the
+   * screen" and "the screen did not answer in time" are different facts with
+   * different remediations, and #629 is what conflating them costs.
    */
   inspectable: boolean;
+  /**
+   * The probes that did not answer within their budget. Non-empty means the
+   * corresponding fields are UNPROVEN, not false — every caller reads them that
+   * way, and a critical probe here aborts a drive instead of being retried.
+   */
+  stalledProbes: UiProbe[];
+  /**
+   * The probes that answered with an error rather than a value (the surface is
+   * there but would not describe itself — a secure modal, a process that exited
+   * between two reads). Reported for the same reason: what could not be proven
+   * is named, never guessed at.
+   */
+  failedProbes: UiProbe[];
+}
+
+/** Did a probe the caller has to DECIDE on fail to answer? */
+export function censusUnverifiable(state: UiState | null): boolean {
+  if (state === null) return true;
+  return CRITICAL_PROBES.some(
+    (p) => state.stalledProbes.includes(p) || state.failedProbes.includes(p),
+  );
+}
+
+/** Name the probes that did not answer, for a diagnostic someone has to act on. */
+export function describeUnprovenProbes(state: UiState): string {
+  const label: Record<UiProbe, string> = {
+    running: "whether Things is running",
+    frontmost: "whether Things owns the screen",
+    dialog: "which dialog is open",
+    frontapp: "which application owns the screen",
+    focus: "which element has keyboard focus",
+  };
+  const parts: string[] = [];
+  if (state.stalledProbes.length > 0) {
+    parts.push(`did not answer in time: ${state.stalledProbes.map((p) => label[p]).join(", ")}`);
+  }
+  if (state.failedProbes.length > 0) {
+    parts.push(`could not be read: ${state.failedProbes.map((p) => label[p]).join(", ")}`);
+  }
+  return parts.join("; ");
 }
 
 /** A recognizable token in the script so a test runner can key off the ui-state command. */
@@ -157,14 +267,39 @@ export const UI_STATE_LABEL = "read the window and focus state";
 export const THINGS_PROCESS = "Things3";
 
 /**
- * The census script. Every read is wrapped: a surface that will not answer
- * degrades that ONE field rather than failing the whole census, because the
- * cases this exists for — a foreign modal, an AX-blind session — are exactly
- * the cases where half the tree is unreadable.
+ * The census script — ADDRESSED probes, each on its own Apple-event budget
+ * (issue #629).
+ *
+ * WHAT CHANGED, AND WHY IT HAD TO. The 0.19.2 census was one unbounded script
+ * that opened with two UNADDRESSED queries: `first application process whose
+ * frontmost is true` (the entire process table enumerated) and `value of
+ * attribute "AXFocusedUIElement"` on whatever that returned (a system-wide
+ * focused-element resolution). Everything else the ui vector runs — every step
+ * the field incident's log shows succeeding, inside the very sheet the census
+ * could not describe — is addressed: `tell process "Things3" to …`. So the one
+ * script that stalled was the one script that left the addressed style, and it
+ * stalled on the critical path of BOTH the per-step guard and the cleanup that
+ * was supposed to recover from it. Rebuilt here so that:
+ *
+ *   - the decision-critical facts are ADDRESSED and are proven FIRST;
+ *   - every read carries `with timeout of ${PROBE_TIMEOUT_S} seconds`, so a
+ *     surface that will not answer costs seconds, not the caller's whole
+ *     deadline;
+ *   - a critical probe that does not answer STOPS the census then and there —
+ *     the remaining probes cannot change what the caller must now do (abort and
+ *     clean up), so waiting for them is pure latency;
+ *   - the two unaddressed queries survive only as DECORATION, last, skipped
+ *     entirely when the addressed probes already answered the question they
+ *     were there to answer.
+ *
+ * Every probe still degrades one field rather than failing the census, and what
+ * could not be proven is NAMED (`stalled=` / `failed=`) instead of silently
+ * reading as a clean "nothing is open".
  */
 export function axUiStateScript(): string {
   return `${UI_STATE_MARKER}
 set frontName to ""
+set frontIsThings to false
 set focusRole to ""
 set focusSub to ""
 set canInspect to true
@@ -173,70 +308,159 @@ set sheetForm to "none"
 set sheetKind to "none"
 set sheetDepth to 0
 set census to ""
-tell application "System Events"
+set stalled to ""
+set failed to ""
+set halted to false
+set t0 to (current date)
+
+-- P1 running: a name-keyed lookup, no Accessibility round-trip.
+try
+	with timeout of ${PROBE_TIMEOUT_S} seconds
+		tell application "System Events" to set thingsRunning to (exists application process "${THINGS_PROCESS}")
+	end timeout
+on error errMsg number errNum
+	if errNum is -1712 then
+		set stalled to stalled & "running "
+	else
+		set failed to failed & "running "
+	end if
+	set halted to true
+end try
+
+-- P2 frontmost, ADDRESSED: the single fact the per-step input guard decides on.
+if (not halted) and thingsRunning then
 	try
-		set fp to first application process whose frontmost is true
-		set frontName to (name of fp) as text
-		try
-			set fe to value of attribute "AXFocusedUIElement" of fp
-			set focusRole to (role of fe) as text
-			try
-				set focusSub to (subrole of fe) as text
-			end try
-		on error
-			set canInspect to false
-		end try
-	on error
-		set canInspect to false
-	end try
-	try
-		if (exists application process "${THINGS_PROCESS}") then set thingsRunning to true
-	end try
-end tell
-if thingsRunning then
-	tell application "System Events" to tell process "${THINGS_PROCESS}"
-${AX_DIALOG_SHELL_SNIPPET}
-		if shellRef is not missing value then
-			set nCb to -1
-			set nPu to -1
-			set nBt to -1
-			set nGp to -1
-			set nTf to -1
-			try
-				set nCb to (count of checkboxes of shellRef)
-			end try
-			try
-				set nPu to (count of pop up buttons of shellRef)
-			end try
-			try
-				set nBt to (count of buttons of shellRef)
-			end try
-			try
-				set nGp to (count of groups of shellRef)
-			end try
-			try
-				set nTf to (count of text fields of shellRef)
-			end try
-			set census to "cb:" & nCb & " pu:" & nPu & " bt:" & nBt & " gp:" & nGp & " tf:" & nTf
-			set winId to ""
-			try
-				set winId to (value of attribute "AXIdentifier" of shellRef) as text
-			end try
-			if winId starts with "MovePopUpDialog-" then
-				set sheetKind to "move-picker"
-			else if nCb is 2 and nPu is 1 and nBt is 2 and nGp is 1 and nTf is 0 then
-				set groupOk to false
-				try
-					set g to group 1 of shellRef
-					if ((count of text fields of g) + (count of pop up buttons of g)) > 0 then set groupOk to true
-				end try
-				if groupOk then set sheetKind to "repeat"
-			end if
-			if sheetKind is "none" then set sheetKind to "other"
+		with timeout of ${PROBE_TIMEOUT_S} seconds
+			tell application "System Events" to tell process "${THINGS_PROCESS}" to set frontIsThings to (frontmost as boolean)
+		end timeout
+		if frontIsThings then set frontName to "${THINGS_PROCESS}"
+	on error errMsg number errNum
+		if errNum is -1712 then
+			set stalled to stalled & "frontmost "
+		else
+			set failed to failed & "frontmost "
 		end if
-	end tell
+		set halted to true
+	end try
 end if
-return "front=" & frontName & linefeed & "running=" & thingsRunning & linefeed & "form=" & sheetForm & linefeed & "depth=" & sheetDepth & linefeed & "kind=" & sheetKind & linefeed & "census=" & census & linefeed & "role=" & focusRole & linefeed & "subrole=" & focusSub & linefeed & "inspectable=" & canInspect`;
+
+-- P3 dialog: shell, form, stack depth and control census — all addressed
+-- inside the Things process, which is the shape every working drive step uses.
+if (not halted) and thingsRunning then
+	try
+		with timeout of ${PROBE_TIMEOUT_S} seconds
+			tell application "System Events" to tell process "${THINGS_PROCESS}"
+${AX_DIALOG_SHELL_SNIPPET}
+				if shellRef is not missing value then
+					set nCb to -1
+					set nPu to -1
+					set nBt to -1
+					set nGp to -1
+					set nTf to -1
+					try
+						set nCb to (count of checkboxes of shellRef)
+					end try
+					try
+						set nPu to (count of pop up buttons of shellRef)
+					end try
+					try
+						set nBt to (count of buttons of shellRef)
+					end try
+					try
+						set nGp to (count of groups of shellRef)
+					end try
+					try
+						set nTf to (count of text fields of shellRef)
+					end try
+					set census to "cb:" & nCb & " pu:" & nPu & " bt:" & nBt & " gp:" & nGp & " tf:" & nTf
+					set winId to ""
+					try
+						set winId to (value of attribute "AXIdentifier" of shellRef) as text
+					end try
+					if winId starts with "MovePopUpDialog-" then
+						set sheetKind to "move-picker"
+					else if nCb is 2 and nPu is 1 and nBt is 2 and nGp is 1 and nTf is 0 then
+						set groupOk to false
+						try
+							set g to group 1 of shellRef
+							if ((count of text fields of g) + (count of pop up buttons of g)) > 0 then set groupOk to true
+						end try
+						if groupOk then set sheetKind to "repeat"
+					end if
+					if sheetKind is "none" then set sheetKind to "other"
+				end if
+			end tell
+		end timeout
+	on error errMsg number errNum
+		if errNum is -1712 then
+			set stalled to stalled & "dialog "
+		else
+			set failed to failed & "dialog "
+		end if
+		set halted to true
+	end try
+end if
+
+-- P4 frontapp: the ONLY enumeration left, and it runs only when the addressed
+-- probe has already said the screen is not ours — its whole job is naming the
+-- application in the refusal sentence.
+if (not halted) and (not frontIsThings) then
+	if ((current date) - t0) > ${CENSUS_BUDGET_S} then
+		set stalled to stalled & "frontapp "
+	else
+		try
+			with timeout of ${PROBE_TIMEOUT_S} seconds
+				tell application "System Events" to set frontName to (name of first application process whose frontmost is true) as text
+			end timeout
+		on error errMsg number errNum
+			if errNum is -1712 then
+				set stalled to stalled & "frontapp "
+			else
+				set failed to failed & "frontapp "
+			end if
+		end try
+	end if
+end if
+
+-- P5 focus: decoration, and the most expensive read in the census. Addressed at
+-- the process that owns the screen rather than resolved system-wide, run last,
+-- and skipped outright once the budget is spent. An ERROR here (as opposed to a
+-- timeout) is the secure-system-modal signature: macOS exposes no tree for one.
+if not halted then
+	if ((current date) - t0) > ${CENSUS_BUDGET_S} then
+		set stalled to stalled & "focus "
+	else
+		set focusTarget to frontName
+		if focusTarget is "" then
+			set stalled to stalled & "focus "
+		else
+			try
+				with timeout of ${PROBE_TIMEOUT_S} seconds
+					tell application "System Events" to tell process focusTarget
+						set fe to value of attribute "AXFocusedUIElement"
+						-- No focused element is a perfectly ordinary state (an app
+						-- with no key window); it is not an unreadable screen.
+						if fe is not missing value then
+							set focusRole to (role of fe) as text
+							try
+								set focusSub to (subrole of fe) as text
+							end try
+						end if
+					end tell
+				end timeout
+			on error errMsg number errNum
+				if errNum is -1712 then
+					set stalled to stalled & "focus "
+				else
+					set canInspect to false
+					set failed to failed & "focus "
+				end if
+			end try
+		end if
+	end if
+end if
+
+return "front=" & frontName & linefeed & "isfront=" & frontIsThings & linefeed & "running=" & thingsRunning & linefeed & "form=" & sheetForm & linefeed & "depth=" & sheetDepth & linefeed & "kind=" & sheetKind & linefeed & "census=" & census & linefeed & "role=" & focusRole & linefeed & "subrole=" & focusSub & linefeed & "inspectable=" & canInspect & linefeed & "stalled=" & stalled & linefeed & "failed=" & failed`;
 }
 
 /**
@@ -252,6 +476,8 @@ export function parseUiState(stdout: string): UiState | null {
     fields.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim());
   }
   if (!fields.has("kind") || !fields.has("inspectable")) return null;
+  const probes = (key: string): UiProbe[] =>
+    (fields.get(key) ?? "").split(/\s+/).filter((p): p is UiProbe => KNOWN_PROBES.has(p));
   const kindRaw = fields.get("kind") ?? "none";
   const sheetKind: UiSheetKind =
     kindRaw === "repeat" || kindRaw === "move-picker" || kindRaw === "other" ? kindRaw : "none";
@@ -261,12 +487,17 @@ export function parseUiState(stdout: string): UiState | null {
   const frontRaw = fields.get("front") ?? "";
   const frontmostApp = frontRaw === "" ? null : frontRaw;
   const role = fields.get("role") ?? "";
-  const subrole = fields.get("subrole") ?? "";
+  // AppleScript coerces an absent attribute to the literal words "missing
+  // value"; that is "no subrole", not a subrole named that.
+  const subroleRaw = fields.get("subrole") ?? "";
+  const subrole = subroleRaw === "missing value" ? "" : subroleRaw;
   const census = fields.get("census") ?? "";
   const depth = Number(fields.get("depth") ?? "0");
   return {
     thingsRunning: fields.get("running") === "true",
-    thingsFrontmost: frontmostApp === THINGS_PROCESS,
+    // Decided by the ADDRESSED probe, not by comparing a name the enumeration
+    // may never have been asked for (issue #629).
+    thingsFrontmost: fields.get("isfront") === "true",
     frontmostApp,
     sheetOpen: sheetKind !== "none",
     sheetKind,
@@ -276,6 +507,8 @@ export function parseUiState(stdout: string): UiState | null {
     focusOwner:
       frontmostApp === null ? null : { app: frontmostApp, role, subrole: subrole || null },
     inspectable: fields.get("inspectable") === "true",
+    stalledProbes: probes("stalled"),
+    failedProbes: probes("failed"),
   };
 }
 
@@ -283,10 +516,13 @@ export function parseUiState(stdout: string): UiState | null {
  * Read the census through the injected runner. Returns null on a transport
  * failure — an UNKNOWN state, which every caller treats fail-closed (the guard
  * refuses; the cleanup path does not send a blind Escape).
+ *
+ * `timeoutMs` defaults to {@link CENSUS_TIMEOUT_MS}: a census is not a drive
+ * step and must not borrow a drive step's patience (issue #629).
  */
 export async function readUiState(
   run: (command: UiCommand, timeoutMs: number) => Promise<UiRunResult>,
-  timeoutMs: number,
+  timeoutMs: number = CENSUS_TIMEOUT_MS,
 ): Promise<UiState | null> {
   const res = await run(
     { primitive: "resolve", label: UI_STATE_LABEL, script: axUiStateScript() },
@@ -305,6 +541,12 @@ export async function readUiState(
  */
 export function describeFocusOwner(state: UiState | null): string {
   if (state === null) return "the window state could not be read";
+  // #629: an inspection that did not come back says nothing about who owns the
+  // screen — and saying "an unidentified application is frontmost" would read
+  // as a measurement. Name the probe that stalled instead.
+  if (censusUnverifiable(state)) {
+    return `the window state inspection did not complete (${describeUnprovenProbes(state)})`;
+  }
   if (!state.inspectable) {
     return (
       "a system dialog owns the screen — macOS does not expose it to other apps, so it cannot be " +
@@ -320,11 +562,37 @@ export function describeFocusOwner(state: UiState | null): string {
     : `${app} is frontmost and keyboard focus is on a ${role}`;
 }
 
-/** A one-line human summary of the census, for a diagnostic line or a warning. */
+/**
+ * A one-line human summary of the census, for a diagnostic line or a warning.
+ *
+ * Reports WHAT EACH PROBE PROVED. A stalled probe leaves its clause reading
+ * "could not be determined" and is named at the end — never omitted, and never
+ * rendered as its default (issue #629: a census that could not see the open
+ * Repeat sheet used to report a clean screen).
+ */
 export function describeUiState(state: UiState): string {
-  const front = state.thingsFrontmost
-    ? "Things is frontmost"
-    : `${state.frontmostApp ?? "an unidentified application"} is frontmost`;
+  const unproven = (p: UiProbe): boolean =>
+    state.stalledProbes.includes(p) || state.failedProbes.includes(p);
+  const trailer = (): string => {
+    const unprovenText = describeUnprovenProbes(state);
+    return unprovenText === "" ? "" : ` — ${unprovenText}`;
+  };
+  if (unproven("running")) {
+    return `nothing about the screen could be established${trailer()}`;
+  }
+  if (!state.thingsRunning && !unproven("frontmost")) {
+    return `Things is not running${trailer()}`;
+  }
+  const front = unproven("frontmost")
+    ? "whether Things owns the screen could not be determined"
+    : state.thingsFrontmost
+      ? "Things is frontmost"
+      : unproven("frontapp")
+        ? "another application is frontmost (it could not be named)"
+        : `${state.frontmostApp ?? "an unidentified application"} is frontmost`;
+  if (unproven("dialog")) {
+    return `${front}; whether a dialog is open in Things could not be determined${trailer()}`;
+  }
   const sheet =
     state.sheetKind === "none"
       ? "no dialog is open in Things"
@@ -336,7 +604,7 @@ export function describeUiState(state: UiState): string {
   // A stack means the thing in front is sitting ON another dialog, and each one
   // has to be dismissed in turn (MODALX1 §6).
   const stacked = state.sheetDepth > 1 ? `, on top of ${state.sheetDepth - 1} more` : "";
-  return `${front}; ${sheet}${stacked}`;
+  return `${front}; ${sheet}${stacked}${trailer()}`;
 }
 
 /**

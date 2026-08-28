@@ -38,7 +38,12 @@ import {
 import type { CompiledInvocation, UiRecipe, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedTodo } from "../fixtures/seed.ts";
-import { healthyScreen, screenAnswer, type FakeScreen } from "../fixtures/ui-state.ts";
+import {
+  healthyScreen,
+  isSheetOpenProbe,
+  screenAnswer,
+  type FakeScreen,
+} from "../fixtures/ui-state.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -1508,6 +1513,126 @@ describe("ui driver — the per-step focus guard (#620)", () => {
     );
     expect(res.exitCode).toBe(0);
     expect(commands.filter(isCensus).length).toBe(1);
+  });
+});
+
+// ===========================================================================
+// A window-state inspection that will not answer (issue #629).
+//
+// The field incident: the census stalled with the Repeat sheet standing, the
+// guard refused, and the CLEANUP then ran the very same census three more times
+// — ~15s each, ~56s in total — learned nothing each time, fell to the AX-blind
+// close+reopen, and left the sheet standing. A standing sheet empties Things'
+// top-level scripting collections (MODALX1 §2.1), so the composite could not
+// then trash its own disposable copy, and it holds Things Cloud sync.
+//
+// The rule this suite pins: a stalled inspection is a DIAGNOSTIC. It routes
+// straight to a cleanup that does not depend on it, and that cleanup proves its
+// own outcome through the narrow ADDRESSED read instead.
+// ===========================================================================
+/** A screen whose census stalls on a decision-critical probe (issue #629). */
+const stalledScreen = (o: Partial<FakeScreen> = {}): FakeScreen =>
+  healthyScreen({ kind: "repeat", opens: "repeat", stalled: ["dialog"], ...o });
+
+describe("ui driver — a stalled window-state inspection (#629)", () => {
+  /**
+   * A runner over a fake screen where the addressed sheet-open read STILL
+   * answers — which is the whole premise: the narrow question works when the
+   * broad one does not.
+   */
+  function stalledRunner(screen: FakeScreen): {
+    run: (c: UiCommand, t: number) => Promise<UiRunResult>;
+    commands: UiCommand[];
+  } {
+    const commands: UiCommand[] = [];
+    return {
+      commands,
+      run: async (c) => {
+        commands.push(c);
+        if (isSheetOpenProbe(c)) return ok(screen.kind === "none" ? "false" : "true");
+        return screenAnswer(screen, c) ?? (c.primitive === "resolve" ? ok("true") : ok());
+      },
+    };
+  }
+
+  it("types NOTHING, and says the inspection timed out rather than guessing", async () => {
+    const { run, commands } = stalledRunner(stalledScreen());
+    const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("the window state inspection timed out");
+    expect(res.stderr).toContain("treating the dialog as unverifiable");
+    expect(commands.some((c) => c.primitive === "key")).toBe(false);
+  });
+
+  it("goes STRAIGHT to the semantic Cancel — it does not re-run the inspection that just stalled", async () => {
+    const { run, commands } = stalledRunner(stalledScreen());
+    await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    // Two censuses at most: the drive's open-dialog precondition and the
+    // guard's own. The cleanup adds NONE — that is the 56s the field lost.
+    expect(commands.filter(isCensus).length).toBeLessThanOrEqual(2);
+    const guardIdx = commands.findIndex((c) => c.label === "confirm with Return");
+    const cancelIdx = commands.findIndex((c) => c.script?.includes('button "Cancel"') === true);
+    expect(guardIdx).toBe(-1); // the keystroke never dispatched
+    expect(cancelIdx).toBeGreaterThan(-1);
+    // Nothing inspects after the cleanup starts.
+    expect(commands.slice(cancelIdx).some(isCensus)).toBe(false);
+  });
+
+  it("PROVES the dismissal with the addressed read, and says how it was proven", async () => {
+    const { run, commands } = stalledRunner(stalledScreen());
+    const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(res.stderr).toContain("closed with its own Cancel button, confirmed closed");
+    expect(res.stderr).toContain("the window state could not be inspected");
+    // The proof is the narrow addressed question, asked AFTER the press.
+    const cancelIdx = commands.findIndex((c) => c.script?.includes('button "Cancel"') === true);
+    expect(commands.slice(cancelIdx).some(isSheetOpenProbe)).toBe(true);
+    // No blind Escape into unknown focus, ever.
+    expect(commands.some((c) => c.primitive === "key" && c.script?.includes("key code 53"))).toBe(
+      false,
+    );
+  });
+
+  it("falls to a real click at the Cancel button's own frame when the press does not take", async () => {
+    // AXPress reports success and the dialog stays up — measured behavior is
+    // possible on a custom control, so the ladder does not stop there.
+    const screen = stalledScreen({ dismissable: false });
+    const { commands, run: base } = stalledRunner(screen);
+    let presses = 0;
+    const run = async (c: UiCommand, t: number): Promise<UiRunResult> => {
+      if (c.script?.includes('click button "Cancel"') === true) {
+        presses += 1;
+        commands.push(c);
+        return ok("OK"); // "pressed" — but the fake screen is stranded
+      }
+      return base(c, t);
+    };
+    await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(presses).toBeGreaterThan(0);
+    expect(commands.some((c) => c.primitive === "click-point" && c.label.includes("Cancel"))).toBe(
+      true,
+    );
+    // And only then the window-close rung.
+    expect(commands.some((c) => c.script?.includes("reopen") === true)).toBe(true);
+  });
+
+  it("reports the dialog MAY REMAIN when nothing clears it and the inspection is still out", async () => {
+    const screen = stalledScreen({ dismissable: false });
+    const { run } = stalledRunner(screen);
+    const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(res.stderr).toContain("may still be open");
+    expect(res.stderr).toContain("Things Cloud");
+    expect(res.stderr).not.toContain("confirmed closed");
+  });
+
+  it("leaves a drive alone when only the DECORATIVE probes stalled", async () => {
+    // Refusing here would ground every drive on a host whose focused-element
+    // read is merely slow — and no decision depends on it.
+    const { run, commands } = stalledRunner(
+      healthyScreen({ kind: "none", opens: "repeat", stalled: ["focus", "frontapp"] }),
+    );
+    const res = await createUiVector(config(true), run).execute(invocation(keyRecipe()));
+    expect(res.exitCode).toBe(0);
+    expect(commands.some((c) => c.primitive === "key")).toBe(true);
   });
 });
 

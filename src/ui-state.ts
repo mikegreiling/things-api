@@ -15,10 +15,22 @@
  * surface may raise a consent dialog outside the two setup ceremonies.
  */
 import { uiAllowed, uiCapability as uiCapabilityDefault, type UiCapability } from "./capability.ts";
-import { describeUiState, SYNC_GATE_WARNING, type UiState } from "./write/vectors/ui-state.ts";
+import {
+  describeUiState,
+  describeUnprovenProbes,
+  SYNC_GATE_WARNING,
+  type UiProbe,
+  type UiState,
+} from "./write/vectors/ui-state.ts";
 import { readLiveUiState } from "./write/vectors/ui.ts";
 
-export type { UiFocusOwner, UiSheetForm, UiSheetKind, UiState } from "./write/vectors/ui-state.ts";
+export type {
+  UiFocusOwner,
+  UiProbe,
+  UiSheetForm,
+  UiSheetKind,
+  UiState,
+} from "./write/vectors/ui-state.ts";
 
 export interface UiStateReport {
   /** Could the screen be read at all on this machine? */
@@ -69,7 +81,8 @@ export async function readUiStateReport(deps: UiStateDeps = {}): Promise<UiState
       warnings: [],
     };
   }
-  if (!state.thingsRunning) {
+  const unproven = state.stalledProbes.length > 0 || state.failedProbes.length > 0;
+  if (!state.thingsRunning && !unproven) {
     return {
       available: true,
       detail: "Things is not running, so it has no window and no dialog open",
@@ -81,10 +94,25 @@ export async function readUiStateReport(deps: UiStateDeps = {}): Promise<UiState
   return {
     available: true,
     detail: describeUiState(state),
-    remediation: [],
+    // #629: a probe that did not answer is REPORTED, with what to do about it —
+    // never swallowed into a confident-looking summary, and never collapsed
+    // into a bare "nothing could be read". Everything the other probes DID
+    // prove is in `state` and in the summary above.
+    remediation: unproven
+      ? [
+          "one or more of the screen reads did not answer; check that Things is responding, then " +
+            "run this again",
+        ]
+      : [],
     state,
     warnings: state.sheetOpen ? [SYNC_GATE_WARNING] : [],
   };
+}
+
+/** Render the per-probe verdicts, or "" when every probe answered. */
+function probeLine(state: UiState): string[] {
+  const unprovenText = describeUnprovenProbes(state);
+  return unprovenText === "" ? [] : [`unproven:   ${unprovenText}`];
 }
 
 /** The human render, shared by `things ui-state` and `things doctor --ui-state`. */
@@ -92,21 +120,39 @@ export function uiStateLines(report: UiStateReport): string[] {
   const lines = ["── Window state ──", `summary:     ${report.detail}`];
   const state = report.state;
   if (state !== null) {
+    // #629: a row whose probe did not answer says so. Printing the field's
+    // unset default ("none", "unknown") next to rows that WERE measured is what
+    // made a stalled inspection read as a clean screen.
+    const unproven = (p: UiProbe): boolean =>
+      state.stalledProbes.includes(p) || state.failedProbes.includes(p);
     lines.push(
-      `frontmost:   ${state.frontmostApp ?? "unknown"}${state.thingsFrontmost ? " (Things)" : ""}`,
-      `dialog:      ${state.sheetKind}${
-        state.sheetKind === "none"
-          ? ""
-          : ` (${state.sheetForm}; ${state.sheetControls ?? "no census"})`
-      }`,
-      `focus:       ${
-        state.focusOwner === null
-          ? "unknown"
-          : `${state.focusOwner.app} · ${state.focusOwner.role || "no focused element"}${
-              state.focusOwner.subrole === null ? "" : ` / ${state.focusOwner.subrole}`
+      `frontmost:   ${
+        unproven("frontmost")
+          ? "not established"
+          : `${state.frontmostApp ?? (unproven("frontapp") ? "not established" : "unknown")}${
+              state.thingsFrontmost ? " (Things)" : ""
             }`
       }`,
+      `dialog:      ${
+        unproven("dialog")
+          ? "not established"
+          : `${state.sheetKind}${
+              state.sheetKind === "none"
+                ? ""
+                : ` (${state.sheetForm}; ${state.sheetControls ?? "no census"})`
+            }`
+      }`,
+      `focus:       ${
+        unproven("focus")
+          ? "not established"
+          : state.focusOwner === null
+            ? "unknown"
+            : `${state.focusOwner.app} · ${state.focusOwner.role || "no focused element"}${
+                state.focusOwner.subrole === null ? "" : ` / ${state.focusOwner.subrole}`
+              }`
+      }`,
       `inspectable: ${state.inspectable ? "yes" : "no — a system dialog macOS does not expose"}`,
+      ...probeLine(state),
     );
   }
   for (const warning of report.warnings) lines.push(`  warning:   ${warning}`);

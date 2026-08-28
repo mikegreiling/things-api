@@ -47,6 +47,7 @@ import {
   axAbortScript,
   axAuditDialogScript,
   axCancelDialogScript,
+  axCancelFrameScript,
   commandForStep,
 } from "../../src/write/vectors/ui.ts";
 import { axUiStateScript } from "../../src/write/vectors/ui-state.ts";
@@ -123,6 +124,7 @@ function everyScript(): { label: string; script: string; lang: string }[] {
   for (const extra of [
     { label: "driver \u00b7 ui-state census", script: axUiStateScript() },
     { label: "driver \u00b7 dismiss (Cancel)", script: axCancelDialogScript() },
+    { label: "driver \u00b7 Cancel button frame", script: axCancelFrameScript() },
     { label: "driver \u00b7 abort (Escape)", script: axAbortScript() },
     {
       label: "driver \u00b7 pre-commit audit",

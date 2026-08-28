@@ -31,6 +31,7 @@ export { opResult } from "./op-result.ts";
 export { readUiStateReport, uiStateLines } from "./ui-state.ts";
 export type {
   UiFocusOwner,
+  UiProbe,
   UiSheetForm,
   UiSheetKind,
   UiState,

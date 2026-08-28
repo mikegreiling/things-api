@@ -44,7 +44,10 @@ import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import {
   AX_DIALOG_SHELL_SNIPPET,
+  CENSUS_TIMEOUT_MS,
+  censusUnverifiable,
   describeFocusOwner,
+  describeUnprovenProbes,
   readUiState,
   SYNC_GATE_WARNING,
   THINGS_PROCESS,
@@ -1662,6 +1665,26 @@ end tell`;
 }
 
 /**
+ * The Cancel button's on-screen FRAME, resolved through the same addressed
+ * dialog-shell path the AXPress dismissal uses (issue #629). Feeds the pointer
+ * fallback: if `AXPress` on the button reports success and the dialog is still
+ * standing, a real click at the button's own AX-resolved centre is the next
+ * thing to try before discarding the window wholesale. The frame comes from the
+ * tree, never from a remembered coordinate, so a moved dialog fails closed.
+ */
+export function axCancelFrameScript(): string {
+  return `${SE}
+${AX_DIALOG_SHELL_SNIPPET}
+  if shellRef is missing value then error "no dialog is open"
+  if not (exists button "Cancel" of shellRef) then error "the open dialog has no Cancel button"
+  set _b to button "Cancel" of shellRef
+  set _p to position of _b
+  set _s to size of _b
+  return ((item 1 of _p) as text) & " " & ((item 2 of _p) as text) & " " & ((item 1 of _s) as text) & " " & ((item 2 of _s) as text)
+end tell`;
+}
+
+/**
  * The PROVEN app-level clearance / relocation maneuver (SESSGATE, #480, live-host
  * recovery): close the front Things window — which takes an attached modal sheet
  * with it — then reopen and activate. Runs entirely through Things' own
@@ -1748,6 +1771,13 @@ export interface ClearResult {
   sheetKind?: UiSheetKind;
   /** Who owned the screen when the cleanup started, when it was not Things. */
   focusOwner?: string;
+  /**
+   * True when the cleanup ran WITHOUT a working window-state inspection (issue
+   * #629) — the dismissal and its proof came from addressed reads alone, so the
+   * outcome is real but the identity of what was dismissed was taken from what
+   * this drive had already observed rather than re-confirmed.
+   */
+  unverified?: boolean;
 }
 
 /**
@@ -1785,6 +1815,79 @@ async function pressCancel(run: UiRunner): Promise<boolean> {
 }
 
 /**
+ * The pointer fallback for the Cancel rung (issue #629): a real click at the
+ * button's own AX-resolved centre, for the case where `AXPress` reports success
+ * and the dialog is demonstrably still standing. Needs Things frontmost — the
+ * HID tap posts at the foreground surface (NATIVE1-e) — so it activates first,
+ * and re-reads the frame AFTERWARDS, because bringing Things forward can
+ * re-attach a detached editor as a sheet and move the button.
+ */
+async function clickCancel(run: UiRunner): Promise<boolean> {
+  await run(
+    {
+      primitive: "activate",
+      label: "bring Things forward to click its dialog's Cancel button",
+      script: axActivateScript(),
+    },
+    STEP_TIMEOUT_MS,
+  );
+  const frameRes = await run(
+    {
+      primitive: "resolve-frame",
+      label: "locate the open dialog's Cancel button",
+      script: axCancelFrameScript(),
+    },
+    STEP_TIMEOUT_MS,
+  );
+  if (!frameRes.ok) return false;
+  const center = parseFrameCenter(frameRes.stdout);
+  if (center === null) return false;
+  const res = await run(
+    clickPointCommand(center.x, center.y, "click the open dialog's Cancel button"),
+    STEP_TIMEOUT_MS,
+  );
+  return res.ok;
+}
+
+/**
+ * The dismissal that needs NO working inspection (issue #629): press the
+ * dialog's own Cancel button, PROVE the dialog is gone with one addressed
+ * existence read, and fall through to a real click at the button's frame if the
+ * press reported success while the dialog stayed up.
+ *
+ * This is the rung the field incident needed and did not have. Its cleanup
+ * re-ran the census that had just stalled, learned nothing three times over,
+ * and ended in the AX-blind close+reopen — which left the sheet standing, and
+ * with it the app-wide scripting freeze that stopped the composite trashing its
+ * own disposable copy (MODALX1 §2.1) and the Things Cloud sync gate.
+ *
+ * Everything here is addressed inside `process "Things3"`: {@link
+ * axCancelDialogScript} and {@link axSheetOpenScript} are the same shape as the
+ * drive steps that kept working while the census did not.
+ */
+async function semanticCancel(
+  run: UiRunner,
+  expected: UiSheetKind | null,
+  owner: { focusOwner?: string },
+): Promise<ClearResult> {
+  const kind = expected === null ? {} : { sheetKind: expected };
+  // A stack unwinds LIFO (MODALX1 §6), so press-and-verify in a loop rather
+  // than pressing once and assuming.
+  for (let i = 0; i < MAX_DISMISS_ROUNDS; i += 1) {
+    if (!(await pressCancel(run))) break;
+    if (!(await sheetStillOpen(run))) {
+      return { state: "dismissed", how: "cancel-button", ...kind, ...owner, unverified: true };
+    }
+  }
+  if (await clickCancel(run)) {
+    if (!(await sheetStillOpen(run))) {
+      return { state: "dismissed", how: "cancel-button", ...kind, ...owner, unverified: true };
+    }
+  }
+  return closeReopenRung(run, expected, owner, false, true);
+}
+
+/**
  * Clear a half-open dialog a failed drive left behind — AUDITED at every rung
  * (issue #620; supersedes the unconditional Escape, which was measured firing
  * into a foreign application's modal while the Things sheet it was meant for
@@ -1811,8 +1914,14 @@ async function pressCancel(run: UiRunner): Promise<boolean> {
 async function clearDialog(
   run: UiRunner,
   expected: UiSheetKind | null = null,
+  inspectionStalled = false,
 ): Promise<ClearResult> {
-  const census = await readUiState(run, STEP_TIMEOUT_MS);
+  // #629: the inspection already refused to answer once. Asking it again buys
+  // nothing and costs the caller another deadline — go straight to the rung
+  // that needs no inspection and proves itself with one addressed read.
+  if (inspectionStalled) return semanticCancel(run, expected, {});
+  const census = await readUiState(run, CENSUS_TIMEOUT_MS);
+  if (censusUnverifiable(census)) return semanticCancel(run, expected, {});
   const owner =
     census !== null && !census.thingsFrontmost ? { focusOwner: describeFocusOwner(census) } : {};
   const readable = census !== null && census.inspectable;
@@ -1841,7 +1950,7 @@ async function clearDialog(
   if (readable) {
     for (let i = 0; i < MAX_DISMISS_ROUNDS; i += 1) {
       if (!(await pressCancel(run))) break;
-      const after = await readUiState(run, STEP_TIMEOUT_MS);
+      const after = await readUiState(run, CENSUS_TIMEOUT_MS);
       if (after === null || !after.inspectable) break;
       if (!after.sheetOpen) return { state: "dismissed", how: "cancel-button", ...kind, ...owner };
       if (!oursToDismiss(after.sheetKind, expected)) {
@@ -1862,7 +1971,7 @@ async function clearDialog(
       },
       STEP_TIMEOUT_MS,
     );
-    const reaudit = await readUiState(run, STEP_TIMEOUT_MS);
+    const reaudit = await readUiState(run, CENSUS_TIMEOUT_MS);
     if (reaudit !== null && reaudit.inspectable) {
       if (!reaudit.sheetOpen)
         return { state: "dismissed", how: "cancel-button", ...kind, ...owner };
@@ -1877,7 +1986,7 @@ async function clearDialog(
       { primitive: "key", label: "abort (Escape)", script: axAbortScript() },
       STEP_TIMEOUT_MS,
     );
-    const after = await readUiState(run, STEP_TIMEOUT_MS);
+    const after = await readUiState(run, CENSUS_TIMEOUT_MS);
     if (after !== null && after.inspectable && !after.sheetOpen) {
       return { state: "dismissed", how: "escape", ...kind, ...owner };
     }
@@ -1898,6 +2007,12 @@ async function closeReopenRung(
   expected: UiSheetKind | null,
   owner: { focusOwner?: string },
   blind = false,
+  /**
+   * #629: the window-state inspection is not answering, so the outcome is
+   * decided by the ADDRESSED sheet-open read instead of a fresh census. The
+   * verdict is still proven — just proven by a narrower question.
+   */
+  inspectionStalled = false,
 ): Promise<ClearResult> {
   await run(
     {
@@ -1908,7 +2023,14 @@ async function closeReopenRung(
     STEP_TIMEOUT_MS,
   );
   if (blind) return { state: "cleared-blind", how: "window-close", ...owner };
-  const after = await readUiState(run, STEP_TIMEOUT_MS);
+  if (inspectionStalled) {
+    const kind = expected === null ? {} : { sheetKind: expected };
+    if (!(await sheetStillOpen(run))) {
+      return { state: "dismissed", how: "window-close", ...kind, ...owner, unverified: true };
+    }
+    return { state: "may-remain", ...kind, ...owner, unverified: true };
+  }
+  const after = await readUiState(run, CENSUS_TIMEOUT_MS);
   if (after === null || !after.inspectable) {
     return { state: "cleared-blind", how: "window-close", ...owner };
   }
@@ -2215,7 +2337,7 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
  * nothing, and changes no state; see src/write/vectors/ui-state.ts.
  */
 export function readLiveUiState(run: UiRunner = defaultRun): Promise<UiState | null> {
-  return readUiState(run, STEP_TIMEOUT_MS);
+  return readUiState(run, CENSUS_TIMEOUT_MS);
 }
 
 /**
@@ -2295,6 +2417,15 @@ const POINTER_CLASS: ReadonlySet<UiCommandPrimitive> = new Set<UiCommandPrimitiv
 /** What the drive has observed about the dialog it is driving (see {@link oursToDismiss}). */
 interface SheetLatch {
   sheet: UiSheetKind | null;
+  /**
+   * Set the FIRST time a window-state inspection fails to answer (issue #629).
+   * Once it is set, nothing downstream inspects again: the cleanup ladder goes
+   * straight to the dialog's own Cancel button and proves the outcome with a
+   * single addressed existence read, because re-running the inspection that
+   * just stalled is how one 15s stall became a 56s one and left the sheet
+   * standing.
+   */
+  inspectionStalled: boolean;
 }
 
 /**
@@ -2315,6 +2446,17 @@ export function judgeFocusGuard(
     return refuse(
       "the window and focus state could not be read, so there is no proof the input would reach " +
         "Things — nothing was sent",
+    );
+  }
+  // #629: a probe that did not come back is a DIAGNOSTIC, not a state. Say so
+  // in those words, name what could not be established, and route the drive
+  // straight to its cleanup — the caller must not read this as "retry".
+  if (censusUnverifiable(state)) {
+    return refuse(
+      `the window state inspection timed out — treating the dialog as unverifiable (${describeUnprovenProbes(
+        state,
+      )}). Nothing was sent, and the dialog this command opened is being closed. Check that Things ` +
+        "is responding, then run the same command again",
     );
   }
   if (!state.inspectable) {
@@ -2356,7 +2498,11 @@ function guardedRun(inner: UiRunner, latch: SheetLatch): UiRunner {
     if (!KEYSTROKE_CLASS.has(command.primitive) && !POINTER_CLASS.has(command.primitive)) {
       return inner(command, timeoutMs);
     }
-    const state = await readUiState(inner, STEP_TIMEOUT_MS);
+    const state = await readUiState(inner, CENSUS_TIMEOUT_MS);
+    // An inspection that would not answer poisons every later inspection's
+    // credibility, so the cleanup ladder is told once and never asks again
+    // (issue #629).
+    if (state === null || censusUnverifiable(state)) latch.inspectionStalled = true;
     // The dialog invariant applies to keystroke-class hops only: a pointer hop
     // is aimed at a frame it resolved a moment ago and fails closed on its own
     // if that frame moved.
@@ -2371,6 +2517,7 @@ function guardedRun(inner: UiRunner, latch: SheetLatch): UiRunner {
         frontmost: state?.frontmostApp ?? null,
         sheetKind: state?.sheetKind ?? null,
         inspectable: state?.inspectable ?? false,
+        stalled: state?.stalledProbes ?? null,
       }));
       return { ok: false, stdout: "", stderr: guardRefusal };
     }
@@ -2399,6 +2546,10 @@ function dialogNoun(kind: UiSheetKind | undefined): string {
  */
 export function describeCleanup(clear: ClearResult): string {
   const owner = clear.focusOwner === undefined ? "" : ` (${clear.focusOwner} when cleanup started)`;
+  // #629: when the window-state inspection stalled, the cleanup still ran and
+  // still proved its outcome — through the narrower addressed read. Say which
+  // it was, so nobody reads "confirmed closed" as more than it is.
+  const how = clear.unverified === true ? " (the window state could not be inspected)" : "";
   switch (clear.state) {
     case "none":
       return "No dialog was left open in Things.";
@@ -2409,7 +2560,7 @@ export function describeCleanup(clear: ClearResult): string {
           : clear.how === "escape"
             ? `${dialogNoun(clear.sheetKind)} was dismissed with Escape`
             : `${dialogNoun(clear.sheetKind)} was cleared by closing and reopening the Things window`
-      }, confirmed closed${owner}.`;
+      }, confirmed closed${how}${owner}.`;
     case "cleared-blind":
       return (
         "Things had no window reachable on the current screen (the Mac may be locked, or a" +
@@ -2875,11 +3026,13 @@ async function drive(
   // Every step below dispatches through the PER-STEP FOCUS GUARD (issue #620);
   // the latch records the dialog this drive is observed driving, so the cleanup
   // ladder can tell our own half-open dialog from one the user opened after us.
-  const latch: SheetLatch = { sheet: null };
+  const latch: SheetLatch = { sheet: null, inspectionStalled: false };
   const run = guardedRun(rawRun, latch);
   // The cleanup ladder audits for itself (it is what decides whether a keystroke
-  // may be sent at all), so it runs OUTSIDE the guard.
-  const clearNow = (): Promise<ClearResult> => clearDialog(rawRun, latch.sheet);
+  // may be sent at all), so it runs OUTSIDE the guard — and it is told when the
+  // inspection has already stalled, so it never re-runs it (issue #629).
+  const clearNow = (): Promise<ClearResult> =>
+    clearDialog(rawRun, latch.sheet, latch.inspectionStalled);
   const done: string[] = [];
   // The overall-drive WATCHDOG (TRACE1 #487). A drive can outlast the caller's
   // own timeout on a slow production database (large + Things-Cloud syncing
@@ -3017,7 +3170,11 @@ async function drive(
   //      directly, for every recipe, before anything is pressed — and a dialog
   //      standing here also means the app is ignoring scripted changes app-wide
   //      and holding Things Cloud sync, which is the operator's real problem.
-  const startState = await readUiState(rawRun, STEP_TIMEOUT_MS);
+  const startState = await readUiState(rawRun, CENSUS_TIMEOUT_MS);
+  // An inspection that stalls at the very first hop is remembered, so a later
+  // failure's cleanup does not go asking it again (issue #629). The preflight
+  // itself stays permissive — only a POSITIVE sighting refuses (MODALX1 §7).
+  if (censusUnverifiable(startState)) latch.inspectionStalled = true;
   if (startState !== null && startState.inspectable && startState.sheetOpen) {
     return refusal(
       `ui preflight refused: a dialog is already open in Things (${startState.sheetKind}${
@@ -3432,7 +3589,7 @@ export function createUiVector(
     // composite's FIRST leg mints a row through the URL scheme, which sails
     // straight past an open dialog — and every AppleScript leg after it then
     // fails, leaving a copy behind. The orchestrator asks this BEFORE it seeds.
-    probeUiState: () => readUiState(tracedRun, STEP_TIMEOUT_MS),
+    probeUiState: () => readUiState(tracedRun, CENSUS_TIMEOUT_MS),
     // Pre-seed gate seam for the promote orchestrators (SESSGATE, #480): probe the
     // live session BEFORE they seed a row, so a locked/full-screen session refuses
     // with zero mutation. Present regardless of `enabled` (the orchestrator has
