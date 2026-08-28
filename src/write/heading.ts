@@ -13,6 +13,7 @@
  * <2s stopDate window (someday state survives the round-trip — P11a).
  */
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
+import { attach, disclose, disclosuresOf } from "./disclosures.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import type {
   ContainerRef,
@@ -50,13 +51,13 @@ export async function runAddHeading(
     move.kind === "blocked" || move.kind === "verify-failed"
       ? move.detail
       : `placement ${move.kind}`;
-  return {
-    ...create,
-    warnings: [
-      ...(create.warnings ?? []),
-      `the heading was created but its placement leg failed (${detail}); it was appended at the end`,
-    ],
-  };
+  const bag = disclosuresOf(create);
+  disclose(
+    bag,
+    "heading-placement-failed",
+    `the heading was created but its placement leg failed (${detail}); it was appended at the end`,
+  );
+  return attach(create, bag);
 }
 
 export interface HeadingArchiveResult {

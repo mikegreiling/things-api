@@ -354,10 +354,10 @@ describe("ui vector — two-key gating", () => {
     expect(res.kind).toBe("ok");
     if (res.kind === "ok") {
       expect(res.vector).toBe("ui");
-      expect((res.warnings ?? []).join(" ")).toContain("Accessibility");
+      expect((res.notes ?? []).join(" ")).toContain("applied via GUI drive");
       // pause-repeat is lab-certified (UIC1) — still not confirmed on device, so
       // the drive carries a status warning naming that tier.
-      expect((res.warnings ?? []).join(" ")).toContain("lab-certified");
+      expect((res.notes ?? []).join(" ")).toContain("lab-certified");
     }
   });
 
@@ -469,7 +469,7 @@ describe("ui vector — idempotency + transport recovery (defect (a))", () => {
     expect(res.kind).toBe("ok");
     expect(scripted.ran()).toBe(false); // the app was never driven
     if (res.kind === "ok") {
-      expect((res.warnings ?? []).join(" ")).toContain("already in the requested state");
+      expect((res.notes ?? []).join(" ")).toContain("already in the requested state");
       expect(res.undoToken).toBeUndefined(); // nothing changed → nothing to undo
     }
   });
@@ -615,7 +615,7 @@ describe("ui vector — idempotency + transport recovery (defect (a))", () => {
     expect(res.kind).toBe("ok");
     expect(scripted.ran()).toBe(false); // every requested field already holds → no drive
     if (res.kind === "ok") {
-      expect((res.warnings ?? []).join(" ")).toContain("already in the requested state");
+      expect((res.notes ?? []).join(" ")).toContain("already in the requested state");
       expect(res.undoToken).toBeUndefined();
     }
   });

@@ -59,6 +59,14 @@ import { assertOperationParams } from "./param-schema.ts";
 import { computeReorderPre, resolveArea, resolveProject, todayEveningFlagOf } from "./pre-state.ts";
 import { privateReorderIsNoOp, sdefDeclaresPrivateReorder } from "./experimental.ts";
 import {
+  attach,
+  disclose,
+  disclosuresOf,
+  newDisclosures,
+  tiers,
+  type Disclosures,
+} from "./disclosures.ts";
+import {
   fingerprintLabel,
   readAuthToken,
   runMutation,
@@ -380,7 +388,9 @@ export async function runReorder(
   // ran a degraded-but-guaranteed non-experimental fallback — say so, so the
   // caller never silently mistakes a fallback for the native placement.
   if (strategy.fallbackNote !== undefined && result.kind === "ok") {
-    return { ...result, warnings: [...(result.warnings ?? []), strategy.fallbackNote] };
+    const bag = disclosuresOf(result);
+    disclose(bag, "reorder-fallback", strategy.fallbackNote);
+    return attach(result, bag);
   }
   return result;
 }
@@ -405,7 +415,9 @@ function discloseTodayCohortRestamp(result: ReorderResult, n: number): ReorderRe
     "their Today entry cohort (the moved item(s) always re-stamp inherently), which changes only " +
     "their Today grouping, not their schedule (MOVPLC/TODWIRE)";
   if (result.kind === "ok") {
-    return { ...result, warnings: [...(result.warnings ?? []), note] };
+    const bag = disclosuresOf(result);
+    disclose(bag, "reorder-today-cohort-restamp", note);
+    return attach(result, bag);
   }
   return { ...result, plan: { ...result.plan, invocation: `${result.plan.invocation} — ${note}` } };
 }
@@ -1585,19 +1597,23 @@ async function runBounce(
   // userModificationDate-SILENT (a umd-diffing sync/watcher misses it), and a project
   // template left as the untouched suffix moved not at all — surface both so the caller
   // never mistakes a umd-silent placement for a no-op.
-  const warnings: string[] = [];
+  const bag = newDisclosures();
   if (templatesPresent) {
     const tt = coBounce.filter((u) => isTmpl(u) && !isProjectTemplate(u));
     const pt = coBounce.filter(isProjectTemplate);
     if (tt.length > 0) {
-      warnings.push(
+      disclose(
+        bag,
+        "reorder-templates-silent",
         `${tt.length} repeating to-do template(s) were front-inserted via \`list "Upcoming"\` and ` +
           "are userModificationDate-SILENT (a umd-diffing sync/watcher will not see the move): " +
           tt.join(", "),
       );
     }
     if (pt.length > 0) {
-      warnings.push(
+      disclose(
+        bag,
+        "reorder-templates-unmoved",
         `${pt.length} repeating project template(s) were left byte-untouched as the day-block suffix ` +
           "(no headless reach on this day — every movable was placed above them): " +
           pt.join(", "),
@@ -1614,7 +1630,7 @@ async function runBounce(
     // A bounce reorder is a summary txn, so its token is the txn id (matches
     // the audit record's undoToken); pass it to `things undo --txn <token>`.
     undoToken: txnId,
-    ...(warnings.length > 0 && { warnings }),
+    ...tiers(bag),
     // Co-bounced siblings the anchor placement re-inserted (honest disclosure).
     ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
   };
@@ -1719,12 +1735,49 @@ async function verifyIndexOrder(deps: WriteDeps, coBounce: string[], options: Wr
   );
 }
 
+/**
+ * The flag-safe swap protocols mint a throwaway SCRATCH container to park rows
+ * in, then remove it. Both outcomes are disclosed, and they are DIFFERENT tiers
+ * (#632): a scratch that was cleaned up is mechanism — how the placement was
+ * realized, nothing follows — while one that survived is an empty container
+ * sitting in the caller's sidebar or project list, and the line names the
+ * cleanup they now have to do themselves.
+ */
+function discloseScratch(
+  bag: Disclosures,
+  scratch: string,
+  container: "project" | "area",
+  removed: boolean,
+  failedKind?: string,
+): void {
+  const gone = container === "area" ? "deleted" : "moved to the Trash";
+  const nonEmpty =
+    container === "area" ? "deletes a non-empty area" : "trashes a non-empty scratch";
+  if (removed) {
+    disclose(
+      bag,
+      "reorder-scratch-cleaned",
+      `scratch ${container} ${scratch} was created for the reorder and ${gone} ` +
+        `(verified empty first — the protocol never ${nonEmpty})`,
+    );
+    return;
+  }
+  disclose(
+    bag,
+    "reorder-scratch-orphaned",
+    `scratch ${container} ${scratch} was created for the reorder and could NOT be ` +
+      `${container === "area" ? "deleted" : "trashed"}` +
+      `${failedKind === undefined ? "" : ` (${failedKind})`} — it remains empty in your ` +
+      `${container === "area" ? "sidebar" : "project list"}; remove it manually`,
+  );
+}
+
 /** The OK result shape shared by the three protocols. */
 function swapOk(
   deps: WriteDeps,
   coBounce: string[],
   ctx: SwapCtx,
-  warnings?: string[],
+  bag: Disclosures = newDisclosures(),
 ): MutationResult {
   const reader = createDbReader(deps.db);
   const observed: Record<string, unknown> = {};
@@ -1737,9 +1790,21 @@ function swapOk(
     vector: "url-scheme",
     tier: 0,
     undoToken: ctx.txnId,
-    ...(warnings !== undefined && warnings.length > 0 && { warnings }),
+    ...tiers(bag),
     ...(ctx.touchedUnnamed.length > 0 && { touched: ctx.touchedUnnamed }),
   };
+}
+
+/** A one-disclosure bag for the scratch-container outcome. See {@link discloseScratch}. */
+function scratchBag(
+  scratch: string,
+  container: "project" | "area",
+  removed: boolean,
+  failedKind?: string,
+): Disclosures {
+  const bag = newDisclosures();
+  discloseScratch(bag, scratch, container, removed, failedKind);
+  return bag;
 }
 
 /**
@@ -2099,12 +2164,7 @@ async function runLoosePark(
     txnId,
     actor,
   });
-  return swapOk(deps, coBounce, ctx, [
-    `scratch project ${scratch} was created for the reorder and ` +
-      (scratchTrashed
-        ? "moved to the Trash (verified empty first — the protocol never trashes a non-empty scratch)"
-        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
-  ]);
+  return swapOk(deps, coBounce, ctx, scratchBag(scratch, "project", scratchTrashed, del.kind));
 }
 
 /**
@@ -2317,12 +2377,7 @@ async function runProjPark(
     txnId,
     actor,
   });
-  return swapOk(deps, coBounce, ctx, [
-    `scratch area ${scratch} was created for the reorder and ` +
-      (scratchDeleted
-        ? "deleted (verified empty first — the protocol never deletes a non-empty area)"
-        : `could NOT be deleted (${del.kind}) — it remains in your sidebar empty; delete it manually`),
-  ]);
+  return swapOk(deps, coBounce, ctx, scratchBag(scratch, "area", scratchDeleted, del.kind));
 }
 
 /** Observed `index` ranks over the touched run (for the audit summary). */
@@ -2665,12 +2720,7 @@ async function runInboxPark(
     txnId,
     actor,
   });
-  return swapOk(deps, coBounce, ctx, [
-    `scratch project ${scratch} was created for the reorder and ` +
-      (scratchTrashed
-        ? "moved to the Trash (verified empty first — the protocol never trashes a non-empty scratch)"
-        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
-  ]);
+  return swapOk(deps, coBounce, ctx, scratchBag(scratch, "project", scratchTrashed, del.kind));
 }
 
 /**
@@ -2880,12 +2930,7 @@ async function runProjectRoot(
     txnId,
     actor,
   });
-  return swapOk(deps, coBounce, ctx, [
-    `scratch project ${scratch} was created for the reorder and ` +
-      (scratchTrashed
-        ? "moved to the Trash (verified empty first — the protocol never trashes a non-empty scratch)"
-        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
-  ]);
+  return swapOk(deps, coBounce, ctx, scratchBag(scratch, "project", scratchTrashed, del.kind));
 }
 
 /**
@@ -3115,13 +3160,12 @@ async function runAreaBack(
     txnId,
     actor,
   });
-  return swapOk(deps, coBounce, ctx, [
-    `scratch ${isProjects ? "area" : "project"} ${scratch} was created for the reorder and ` +
-      (scratchRemoved
-        ? `${isProjects ? "deleted" : "moved to the Trash"} (verified empty first — the protocol never ` +
-          `${isProjects ? "deletes a non-empty area" : "trashes a non-empty scratch"})`
-        : `could NOT be ${isProjects ? "deleted" : "trashed"} (${del.kind}) — it remains empty; remove it manually`),
-  ]);
+  return swapOk(
+    deps,
+    coBounce,
+    ctx,
+    scratchBag(scratch, isProjects ? "area" : "project", scratchRemoved, del.kind),
+  );
 }
 
 /**

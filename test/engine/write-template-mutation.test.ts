@@ -296,8 +296,18 @@ function statusOf(uuid: string): number {
     }
   ).status;
 }
-function warningsOf(r: MutationResult): string[] {
-  return r.kind === "ok" ? (r.warnings ?? []) : [];
+/**
+ * The occurrence disclosures a template-target composite carries. They are
+ * NOTES (#632): each states what was written and when the series comes back —
+ * matter-of-fact, never a call to action.
+ */
+function notesOf(r: MutationResult): string[] {
+  return r.kind === "ok" ? (r.notes ?? []) : [];
+}
+
+/** Both tiers, for an assertion that something is said NOWHERE. */
+function saidOf(r: MutationResult): string[] {
+  return r.kind === "ok" ? [...(r.warnings ?? []), ...(r.notes ?? [])] : [];
 }
 
 // ------------------------------------------------------------ status writes
@@ -319,8 +329,8 @@ describe("complete/cancel on a repeating to-do — the CNC composite", () => {
     expect(cnc.state.calls, "no occurrence should be created when one is already open").toBe(0);
     expect(statusOf(instance as string)).toBe(3);
     expect(statusOf(template), "the series itself is never resolved").toBe(0);
-    expect(warningsOf(result).join(" ")).toContain("2026-07-05 occurrence");
-    expect(warningsOf(result).join(" ")).toContain("the next occurrence is 2026-07-12");
+    expect(notesOf(result).join(" ")).toContain("2026-07-05 occurrence");
+    expect(notesOf(result).join(" ")).toContain("the next occurrence is 2026-07-12");
   });
 
   it("materializes the pending occurrence when the series has none open, and says so", async () => {
@@ -340,7 +350,7 @@ describe("complete/cancel on a repeating to-do — the CNC composite", () => {
     const minted = cnc.state.mintedUuids[0] as string;
     expect(statusOf(minted)).toBe(3);
     expect(statusOf(template)).toBe(0);
-    const said = warningsOf(result).join(" ");
+    const said = notesOf(result).join(" ");
     expect(said).toContain("2026-07-12 occurrence");
     expect(said).toContain("created just now");
     expect(said).toContain("the next occurrence is 2026-07-19");
@@ -361,8 +371,8 @@ describe("complete/cancel on a repeating to-do — the CNC composite", () => {
 
     expect(result.kind).toBe("ok");
     expect(statusOf(cnc.state.mintedUuids[0] as string)).toBe(2);
-    expect(warningsOf(result).join(" ")).toContain("canceled the 2026-07-12 occurrence");
-    expect(warningsOf(result).join(" ")).toContain("the next occurrence is 2026-07-19");
+    expect(notesOf(result).join(" ")).toContain("canceled the 2026-07-12 occurrence");
+    expect(notesOf(result).join(" ")).toContain("the next occurrence is 2026-07-19");
   });
 
   it("refuses a series with NO CURSOR — there is nothing to bring forward (CNCAC1 §6)", async () => {
@@ -404,9 +414,9 @@ describe("complete/cancel on a repeating to-do — the CNC composite", () => {
     expect(result.kind).toBe("ok");
     expect(cnc.state.calls).toBe(1);
     expect(statusOf(cnc.state.mintedUuids[0] as string)).toBe(3);
-    expect(warningsOf(result).join(" ")).toContain("checked off the 2026-07-12 occurrence");
+    expect(notesOf(result).join(" ")).toContain("checked off the 2026-07-12 occurrence");
     expect(
-      warningsOf(result).join(" "),
+      notesOf(result).join(" "),
       "an after-completion series restarts its interval from the completion",
     ).toContain("restarted the interval from today");
   });
@@ -469,7 +479,7 @@ describe("complete/cancel on a repeating to-do — the CNC composite", () => {
     expect(result.kind).toBe("ok");
     expect(cnc.state.calls).toBe(0);
     expect(statusOf(plain)).toBe(3);
-    expect(warningsOf(result).join(" ")).not.toContain("occurrence");
+    expect(saidOf(result).join(" ")).not.toContain("occurrence");
   });
 });
 
@@ -494,7 +504,7 @@ describe("update --exception on a repeating to-do", () => {
       startDate: number | null;
     };
     expect(decode(moved.startDate)).toBe("2026-07-15");
-    const said = warningsOf(result).join(" ");
+    const said = notesOf(result).join(" ");
     expect(said).toContain("changed only the 2026-07-12 occurrence");
     expect(said).toContain("the series itself is unchanged");
     expect(said).toContain("the next occurrence is 2026-07-19");
@@ -576,7 +586,7 @@ describe("update --exception on a repeating to-do", () => {
 
     expect(result.kind).toBe("ok");
     expect(cnc.state.calls).toBe(1);
-    expect(warningsOf(result).join(" ")).toContain("changed only the 2026-07-12 occurrence");
+    expect(notesOf(result).join(" ")).toContain("changed only the 2026-07-12 occurrence");
   });
 
   it("a non-dated schedule value cannot collide, so it is not refused", async () => {

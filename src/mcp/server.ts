@@ -352,8 +352,12 @@ function errorResult(error: {
   message: string;
   likelyCause?: string;
   remediation?: string;
-  /** Machine-readable disambiguation context (candidates / suggestions), mirroring the CLI envelope's error.detail. */
-  details?: { candidates?: unknown[]; suggestions?: string[] };
+  /**
+   * Machine-readable failure context, mirroring the CLI envelope's `error.detail`:
+   * disambiguation candidates / suggestions, and — on a failed GUI drive — the
+   * step account (`steps`), which a failure always carries (#632).
+   */
+  details?: { candidates?: unknown[]; suggestions?: string[]; steps?: string[] };
 }): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(error) }], isError: true };
 }
@@ -389,6 +393,13 @@ function mutationResult(result: MutationResult | ReorderResult): ToolResult {
         message: result.detail,
         ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
         ...(result.hint !== undefined && { remediation: result.hint }),
+        // A FAILURE always carries the drive's step account (#632). A SUCCESS
+        // never does over MCP: there is no per-tool `verbose` argument, because
+        // adding one to every write tool would cost every agent the schema text
+        // on every call — the exact context tax this change removes. An agent
+        // that wants the steps of a change that already succeeded reads them
+        // from the change history with `op_result`.
+        ...(result.steps !== undefined && { details: { steps: result.steps } }),
       });
     case "unsupported":
       return errorResult({

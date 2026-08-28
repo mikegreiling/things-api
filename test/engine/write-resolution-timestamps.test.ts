@@ -395,7 +395,7 @@ describe("executed flip-dance (txn summary + undo wiring)", () => {
     if (r.kind === "ok") {
       expect(r.op).toBe("todo.cancel");
       expect(r.undoToken).toBeDefined();
-      expect((r.warnings ?? []).join(" ")).toContain("3 non-atomic legs");
+      expect((r.notes ?? []).join(" ")).toContain("3 non-atomic legs");
     }
     // 3 URL/AS calls total (2 URL flips + 1 AS backdate) and a summary audit record.
     expect(url.calls.length + as.calls.length).toBe(3);

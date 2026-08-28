@@ -189,7 +189,7 @@ describe("todo.make-repeating — promote-via-clone", () => {
     expect(res.repeating?.instanceUuid).toBeDefined();
     expect(res.undoToken).toBeDefined();
     // The trashed original is named in a warning.
-    expect((res.warnings ?? []).join(" ")).toContain(src);
+    expect((res.notes ?? []).join(" ")).toContain(src);
 
     // A single make-repeating SUMMARY record captures template + instance + original.
     const summary = auditRecords.find(
@@ -786,8 +786,8 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     // The preserved FUTURE instance was trashed (it would spawn a duplicate on the date).
     expect(res.repeating?.instanceUuid).toBeNull();
     expect(instancesOf(res.uuid)).toBe(0);
-    expect((res.warnings ?? []).join(" ")).toMatch(/future/i);
-    expect((res.warnings ?? []).join(" ")).toMatch(/Trash/);
+    expect((res.notes ?? []).join(" ")).toMatch(/future/i);
+    expect((res.notes ?? []).join(" ")).toMatch(/Trash/);
   });
 
   it("make-repeating: a TODAY-scheduled deadlined source's preserved instance is KEPT (legitimate current occurrence)", async () => {
@@ -807,7 +807,7 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     // The current-occurrence instance is legitimate — kept, no duplicate-factory warning.
     expect(res.repeating?.instanceUuid).not.toBeNull();
     expect(instancesOf(res.uuid)).toBe(1);
-    expect((res.warnings ?? []).join(" ")).not.toMatch(/duplicate/i);
+    expect([...(res.warnings ?? []), ...(res.notes ?? [])].join(" ")).not.toMatch(/duplicate/i);
   });
 });
 
@@ -1206,7 +1206,7 @@ describe("template-direct clone via re-promote — todo", () => {
     expect(res.repeating?.instanceUuid).toBeDefined();
     expect(res.undoToken).toBeDefined();
     // The new-series-identity disclosure is present.
-    expect((res.warnings ?? []).join(" ")).toContain("NEW repeating series");
+    expect((res.notes ?? []).join(" ")).toContain("NEW repeating series");
     // The SOURCE template is untouched (we cloned it, not moved it).
     expect(row(src)?.["trashed"]).toBe(0);
 

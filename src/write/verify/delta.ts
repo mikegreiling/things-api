@@ -8,12 +8,15 @@ import type { DatabaseSync } from "node:sqlite";
 import type { AnyTask, TaskType } from "../../model/entities.ts";
 import { anchorKeyOfOffsets } from "../../model/recurrence.ts";
 import { byUuid } from "../../read/detail.ts";
+import { localToday, type IsoDate } from "../../model/dates.ts";
+import { disclose, newDisclosures, type Disclosures } from "../disclosures.ts";
 import {
   collateralFindings,
   COLLATERAL_FIELD_PATHS,
   type CollateralFinding,
 } from "../repeat-collateral.ts";
 import type { RuleFields } from "../repeat-asserts.ts";
+import { anchorRelation, assertSpawnExpectation, spawnRuleKind } from "../spawn-expectation.ts";
 
 /**
  * A JSON-serializable predicate an assertion may check IN PLACE OF equality.
@@ -318,8 +321,13 @@ export interface DeltaEvaluation {
   discoveredUuid?: string;
   /** Make-repeating create-probe: the enriched template/instance/replaced block. */
   repeating?: RepeatingDiscovery;
-  /** Advisory notes from the repeating derivation (underivable instance, etc.). */
-  repeatingWarnings?: string[];
+  /**
+   * The repeating derivation's own disclosures, ALREADY TIERED (#634): the
+   * spawn-expectation assertion decides whether a missing (or unexpectedly
+   * present) instance is a `warning` or a matter-of-fact `note`, and the
+   * pipeline carries the pair without reclassifying it.
+   */
+  repeatingDisclosures?: Disclosures;
   /**
    * A PERMANENT verify failure the poller must not retry (e.g. an unbreakable
    * template ambiguity) — carries a distinct `detail` naming the cause.
@@ -364,6 +372,14 @@ export interface VerifyReader {
   countAbsent(uuids: string[]): number;
   modDateOf(uuid: string): number | null;
   /**
+   * The reader's own local TODAY, under the injected clock and zone — the clock
+   * the write planner used, never the wall clock. The spawn-expectation
+   * assertion (#634) compares a series' first-occurrence date against it, and
+   * must agree with the planner about what day it is (a pinned `THINGS_NOW` /
+   * consumer zone otherwise flips a same-day series into a future one).
+   */
+  todayIso(): IsoDate;
+  /**
    * Assertable fields of a TMArea/TMTag row: title, tags (areas, sorted
    * titles), parent (tags, uuid or null), shortcut (tags). Null = row gone.
    */
@@ -388,6 +404,7 @@ export function createDbReader(
 ): VerifyReader {
   return {
     taskByUuid: (uuid) => byUuid(db, uuid, now, zone),
+    todayIso: () => localToday(now, zone),
     areaExists(uuid) {
       return db.prepare("SELECT 1 FROM TMArea WHERE uuid = ?").get(uuid) !== undefined;
     },
@@ -624,17 +641,21 @@ function matchesFingerprint(candidate: AnyTask, fp: RepeatingFingerprint): boole
   );
 }
 
-/** Pick the single FK-derived instance, warning on the zero/many cases (never hard-fails). */
-function pickInstance(fkInstances: string[], warnings: string[]): string | null {
-  if (fkInstances.length === 1) return fkInstances[0] ?? null;
-  if (fkInstances.length === 0) {
-    warnings.push(
-      "could not derive the spawned instance: no row links back to the new repeating template " +
-        "(the app may not have materialized the current occurrence)",
-    );
-    return null;
-  }
-  warnings.push(
+/**
+ * Pick the single FK-derived instance.
+ *
+ * The ZERO case is deliberately SILENT here (#634): whether "no instance" is a
+ * problem or the measured law depends on the rule shape and the anchor date,
+ * and that judgement belongs to the spawn-expectation assertion below — which
+ * runs once, with the rule in hand, instead of this function shrugging at every
+ * caller. The MANY case has no such nuance: several rows linking back to a
+ * brand-new template is ambiguous whatever the rule says.
+ */
+function pickInstance(fkInstances: string[], bag: Disclosures): string | null {
+  if (fkInstances.length <= 1) return fkInstances[0] ?? null;
+  disclose(
+    bag,
+    "instance-ambiguous",
     `derived ${fkInstances.length} rows linking to the new repeating template; the app's ` +
       "per-occurrence stamping is nondeterministic — using the first",
   );
@@ -655,31 +676,54 @@ function deriveRepeatingDiscovery(
   template: AnyTask,
   probe: RepeatingProbe,
   reader: VerifyReader,
-): { repeating: RepeatingDiscovery; warnings: string[] } {
+): { repeating: RepeatingDiscovery; disclosures: Disclosures } {
   const dbType = dbTypeOf(spec.probe.type);
   const fkInstances = reader.instancesOfTemplate(template.uuid, dbType);
   const fate = reader.repeatingSourceFate(probe.sourceUuid);
-  const warnings: string[] = [];
+  const bag = newDisclosures();
 
   let instanceUuid: string | null;
   let replacedUuid: string | null;
+  // Whether the app PRESERVED the source and relinked it as the current
+  // occurrence — a structural fate (SRCFATE §P1), read here rather than guessed,
+  // and one of the two axes of the spawn-expectation map.
+  let preserved = false;
   if (fate.present && fate.templateFk === template.uuid) {
     // Source preserved AND relinked as the current-occurrence instance.
     instanceUuid = probe.sourceUuid;
     replacedUuid = null;
+    preserved = true;
   } else if (!fate.present) {
     // Identity replacement: the source was destroyed; a fresh instance minted.
     replacedUuid = probe.sourceUuid;
-    instanceUuid = pickInstance(fkInstances, warnings);
+    instanceUuid = pickInstance(fkInstances, bag);
   } else {
     // Present but not linked to the new template — an unexpected post-op state.
-    warnings.push(
+    disclose(
+      bag,
+      "promote-source-unlinked",
       `the original item (${probe.sourceUuid}) is still present but not linked to the new ` +
         "repeating template — unexpected post-op state",
     );
     replacedUuid = null;
-    instanceUuid = pickInstance(fkInstances, warnings);
+    instanceUuid = pickInstance(fkInstances, bag);
   }
+
+  // ASSERT the spawn expectation (#634). The rule shape and the first-occurrence
+  // date decide what SHOULD be here; a disagreement in either direction is a
+  // warning, agreement is a note naming the date (or silence when the caller
+  // already holds the instance). See src/write/spawn-expectation.ts.
+  const rule = "repeating" in template ? template.repeating.rule : undefined;
+  const firstOccurrence =
+    ("repeating" in template ? template.repeating.nextOccurrence : undefined) ?? null;
+  const assertion = assertSpawnExpectation({
+    kind: spawnRuleKind({ afterCompletion: rule?.type === "after-completion", preserved }),
+    relation: anchorRelation(firstOccurrence, reader.todayIso()),
+    firstOccurrence,
+    todayIso: reader.todayIso(),
+    found: instanceUuid !== null,
+  });
+  if (assertion !== null) disclose(bag, assertion.id, assertion.text);
 
   const repeating: RepeatingDiscovery = {
     templateUuid: template.uuid,
@@ -692,7 +736,7 @@ function deriveRepeatingDiscovery(
       childrenReplaced: reader.countAbsent(probe.subtreeUuids),
     }),
   };
-  return { repeating, warnings };
+  return { repeating, disclosures: bag };
 }
 
 /**
@@ -776,7 +820,7 @@ function evaluateRepeatingCreate(
   }
 
   // 2. Derive the instance via the template FK + resolve the source fate.
-  const { repeating, warnings } = deriveRepeatingDiscovery(spec, template, probe, reader);
+  const { repeating, disclosures } = deriveRepeatingDiscovery(spec, template, probe, reader);
   return {
     satisfied: true,
     movement: true,
@@ -784,7 +828,9 @@ function evaluateRepeatingCreate(
     observed: checkAssertions(template, spec.assert).observed,
     discoveredUuid: template.uuid,
     repeating,
-    ...(warnings.length > 0 && { repeatingWarnings: warnings }),
+    ...(disclosures.warnings.length + disclosures.notes.length > 0 && {
+      repeatingDisclosures: disclosures,
+    }),
   };
 }
 

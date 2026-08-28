@@ -204,7 +204,8 @@ export async function promoteProjectViaGui(
     txnId,
     invocation: `make-repeating(project, coerced from anytime) id=${uuid} → template ${drive.uuid ?? "?"}`,
   });
-  return { ...drive, ...(drive.warnings !== undefined && { warnings: drive.warnings }) };
+  // The drive's disclosures are already tiered — pass them through untouched.
+  return drive;
 }
 
 // --------------------------------------------------------------------- audit

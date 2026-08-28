@@ -38,6 +38,7 @@ import {
   type WriteCapabilityOptions,
 } from "../capability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
+import { carry, disclose, newDisclosures, tiers } from "./disclosures.ts";
 import {
   describeEnvironmentChanges,
   diffEnvironment,
@@ -136,6 +137,14 @@ export interface WriteOptions extends Acknowledgements {
    * Handled by the client's tag-prep orchestrator, above `runMutation`.
    */
   createTags?: boolean;
+  /**
+   * Add the GUI drive's step play-by-play to a SUCCESSFUL result (`steps`). Off
+   * by default: the step list is the diagnostic ladder's middle rung (#632) —
+   * a failure carries it unconditionally and the change-history record always
+   * captures it, so a success only carries it when the caller asks. Has no
+   * effect on an op no GUI drive executed.
+   */
+  verbose?: boolean;
   /** Audit attribution. */
   actor?: string;
   /** Compound-operation grouping (set by orchestrators, not callers). */
@@ -234,8 +243,32 @@ export type MutationResult =
        * is without inferring it. Absent for every other op.
        */
       occurrence?: OccurrenceResolution;
-      /** Advisory notes (e.g. a changed environment tuple — consent may re-prompt later). */
+      /**
+       * ACTIONABLE disclosures — something follows for the caller: a placement
+       * that needs a follow-up reorder, collateral rows to inspect, a consent
+       * prompt to expect, a duplicate to remove. Every string here is a call to
+       * consider doing something; if nothing follows from a line it belongs in
+       * {@link notes}. Omitted when empty. See src/write/disclosures.ts, which
+       * holds the tier of every disclosure the write layer can emit.
+       */
       warnings?: string[];
+      /**
+       * MATTER-OF-FACT disclosures — what landed, how it was applied, what
+       * `undo` will and will not reach. Informative, never a call to action
+       * (#632: the flat array these were split out of made an agent pay
+       * attention to prose that asked nothing of it). Omitted when empty.
+       */
+      notes?: string[];
+      /**
+       * The GUI drive's step play-by-play (ui vector only), one compact entry
+       * per step. THE DIAGNOSTIC LADDER (#632): absent from a success result by
+       * default, present when the caller asked for it (`--verbose` /
+       * {@link WriteOptions.verbose}), and ALWAYS captured on the change-history
+       * record — `things op-result <key>` renders it whether or not the caller
+       * asked. A failure carries it unconditionally. The per-invocation trace
+       * file remains the deep tier below this one.
+       */
+      steps?: string[];
       /**
        * Co-bounced siblings (ADDITIVE): a bounce reorder that anchors a block
        * with --before/--after (or lands it mid-bucket) must re-insert every
@@ -314,6 +347,12 @@ export type MutationResult =
       uncertain?: true;
       /** The local trace file reconstructing this drive's timeline (TRACE1). */
       tracePath?: string;
+      /**
+       * The GUI drive's step play-by-play, up to and including the step that
+       * stopped it. A FAILURE always carries it (#632) — it is why the field bug
+       * reports were rich enough to act on. Absent when no GUI drive ran.
+       */
+      steps?: string[];
     }
   | {
       kind: "blocked";
@@ -344,6 +383,16 @@ export type MutationResult =
       considered: { vector: VectorId; why: string }[];
     }
   | { kind: "dry-run"; op: OperationKind; plan: MutationPlan };
+
+/**
+ * The drive's step play-by-play as a spreadable fragment, omitted when there is
+ * none (a transport vector runs no steps). One helper so the FAILURE paths, the
+ * change-history record, and the `--verbose` success all read the same field and
+ * cannot drift apart (#632).
+ */
+function stepsOf(result: { steps?: string[] }): { steps?: string[] } {
+  return result.steps !== undefined && result.steps.length > 0 ? { steps: result.steps } : {};
+}
 
 export interface WriteDeps {
   db: DatabaseSync;
@@ -1111,6 +1160,12 @@ export async function runMutation<K extends OperationKind>(
       const preEval = evaluateDelta(delta, preReader, preCapture);
       if (preEval.satisfied) {
         const uuid = delta.uuid;
+        const noOp = newDisclosures();
+        disclose(
+          noOp,
+          "already-in-state",
+          "the item was already in the requested state — no GUI drive was performed (idempotent no-op)",
+        );
         audit({
           result: "ok",
           vector: vector.id,
@@ -1130,9 +1185,7 @@ export async function runMutation<K extends OperationKind>(
           vector: vector.id,
           tier: effectiveTier,
           // No undoToken: nothing changed, so there is nothing to invert.
-          warnings: [
-            "the item was already in the requested state — no GUI drive was performed (idempotent no-op)",
-          ],
+          ...tiers(noOp),
         };
       }
     }
@@ -1420,6 +1473,7 @@ export async function runMutation<K extends OperationKind>(
             invocation: invocation.redactedPayload,
             pre: flattenPreFields(preCapture.fields),
             observed: recovery.observed,
+            ...stepsOf(executeResult),
             // The watchdog abort is THE ambiguous outcome — the detail below says
             // so — so the assertion rides the record and a resubmission with the
             // same opId re-reads state instead of risking the duplicate.
@@ -1451,6 +1505,7 @@ export async function runMutation<K extends OperationKind>(
               `retrying (retrying could create a duplicate series).${traceNote}`,
             uncertain: true as const,
             ...(wd.tracePath != null && wd.tracePath !== "" && { tracePath: wd.tracePath }),
+            ...stepsOf(executeResult),
           };
         }
         // The ui drive stopped because the Things WINDOW stopped answering
@@ -1472,6 +1527,7 @@ export async function runMutation<K extends OperationKind>(
             invocation: invocation.redactedPayload,
             pre: flattenPreFields(preCapture.fields),
             observed: recovery.observed,
+            ...stepsOf(executeResult),
           });
           return {
             kind: "verify-failed" as const,
@@ -1479,6 +1535,7 @@ export async function runMutation<K extends OperationKind>(
             reason: "ui-unreachable" as const,
             expected: delta,
             observed: recovery.observed,
+            ...stepsOf(executeResult),
             detail:
               `the Things window could not be driven: the drive stopped at step ` +
               `"${unreachable.step}" because ` +
@@ -1594,10 +1651,15 @@ export async function runMutation<K extends OperationKind>(
         if (Object.keys(captured).length > 0) preModDatesAudit = captured;
         preserve = await restoreModDates(deps.db, deps.vectors, targets);
       }
+      // The change-history record is the APPEND-ONLY DEBUG LOG (#632): it
+      // captures the drive's step list on success as well as on failure, so the
+      // play-by-play a default success output no longer prints is still
+      // retrievable — `things op-result <key>` renders it.
       audit({
         ...auditCommon,
         result: "ok",
         uuid,
+        ...stepsOf(executeResult),
         ...(preModDatesAudit !== undefined && { preModDates: preModDatesAudit }),
       });
       if (deps.environment !== undefined) {
@@ -1625,12 +1687,14 @@ export async function runMutation<K extends OperationKind>(
               uuid,
               ...(options.txn !== undefined && { txn: options.txn }),
             });
-      const warnings: string[] = [];
+      const bag = newDisclosures();
       // Auto-launch disclosure (#486): the app was not running when this write
       // started, so it was background-launched for the write. Never silent — a
       // side effect the caller should see (a simulating vector never launches).
       if (!appRunning && vector.simulates !== true) {
-        warnings.push(
+        disclose(
+          bag,
+          "auto-launch",
           "Things was not running, so it was launched in the background for this write",
         );
       }
@@ -1641,26 +1705,38 @@ export async function runMutation<K extends OperationKind>(
       if (templateDelete && options.txn?.role !== "leg" && pre.target !== null) {
         const kindNoun = op === "project.delete" ? "project" : "to-do";
         const series = liveSeriesInstances(deps.db, pre.target.uuid);
-        warnings.push("this repeating series will no longer generate new occurrences");
+        disclose(
+          bag,
+          "template-delete-series-stops",
+          "this repeating series will no longer generate new occurrences",
+        );
         if (series.count > 0) {
-          warnings.push(
+          disclose(
+            bag,
+            "template-delete-occurrences-left",
             `its ${series.count} existing occurrence${series.count === 1 ? " was" : "s were"} ` +
               "left in place (not moved to the Trash)" +
               (series.currentUuid !== null ? ` — the current one is ${series.currentUuid}` : ""),
           );
         }
-        warnings.push(
+        disclose(
+          bag,
+          "template-delete-irreversible",
           `this cannot be undone here — to bring the series back, use the Things app's Trash ` +
             `(Put Back on the ${kindNoun})`,
         );
       }
       if (transportRecovered) {
-        warnings.push(
+        disclose(
+          bag,
+          "transport-recovered",
           "the GUI drive reported a transport error, but a follow-up re-read confirmed the " +
             "requested change DID land — no retry is needed (retrying could overwrite it)",
         );
       }
-      if (outcome.repeatingWarnings !== undefined) warnings.push(...outcome.repeatingWarnings);
+      // The instance-derivation disclosures arrive ALREADY TIERED from the
+      // expectation assertion (#634) — carried, never reclassified here.
+      carry(bag, outcome.repeatingDisclosures);
       // DACON1 off-rule-first disclosure (reschedule-repeat): an explicit anchor
       // that disagrees with --when lands an OFF-RULE first occurrence (honored for
       // weekly/yearly). State both halves of the landed pattern; the dishonored
@@ -1672,27 +1748,30 @@ export async function runMutation<K extends OperationKind>(
           offRuleParams,
           preservedDeadlineOffsetFor(pre, offRuleParams),
         );
-        if (offRule?.kind === "honored") warnings.push(offRule.disclosure.message);
+        if (offRule?.kind === "honored") {
+          disclose(bag, "promote-off-rule-first", offRule.disclosure.message);
+        }
       }
       if (vector.id === "ui") {
-        warnings.push(
-          "this change was applied by driving the local Things app through the Accessibility API",
-        );
-        // Surface the drive's own step summary (e.g. how a sidebar move was
-        // performed: one drag / scroll-while-held / N hops) — behavior detail
-        // the caller can log, and the lab's certification evidence.
-        const driveSummary = executeResult.stdout.trim();
-        if (driveSummary !== "") warnings.push(driveSummary);
+        // COMPRESSED mechanism disclosure (#632). The old sentence spent a line
+        // explaining the Accessibility API on every GUI-applied write; `vector`
+        // and `tier` already carry the fact structurally, so the prose is now
+        // just the few words a reader needs to place it.
+        disclose(bag, "ui-mechanism", `applied via GUI drive (tier ${effectiveTier})`);
         const cert = certificationOf(op);
         if (cert !== undefined && cert.status !== "certified") {
-          warnings.push(
+          disclose(
+            bag,
+            "ui-recipe-uncertified",
             `this operation is ${cert.status}: its GUI recipe has not been confirmed on real ` +
               "hardware (see `things doctor` / docs/lab/ui-certification-runbook.md)",
           );
         }
       }
       if (envChanges.length > 0) {
-        warnings.push(
+        disclose(
+          bag,
+          "environment-changed",
           `environment changed since the last verified write: ` +
             `${describeEnvironmentChanges(envChanges)} — the first use of another ` +
             `capability may show a macOS consent prompt`,
@@ -1732,13 +1811,19 @@ export async function runMutation<K extends OperationKind>(
         ...(preserve !== null &&
           preserve.failures.length > 0 && { preserveFailures: preserve.failures }),
         ...(completionContext !== undefined && { context: completionContext }),
-        ...(warnings.length > 0 && { warnings }),
+        // The step list rides a SUCCESS only when the caller asked for it —
+        // the diagnostic ladder's middle rung (#632).
+        ...(options.verbose === true && stepsOf(executeResult)),
+        ...tiers(bag),
       };
     }
 
+    // A FAILURE always carries the drive's play-by-play — on the record and on
+    // the result (#632). It is why the field bug reports were rich enough to fix.
     audit({
       ...auditCommon,
       result: verifyFailedCode({ reason: outcome.kind }),
+      ...stepsOf(executeResult),
       // A TIMEOUT is the one ambiguous verdict — the change may or may not have
       // landed — so the assertion this attempt was checking is recorded with it.
       // A resubmission carrying the same opId re-evaluates it against current
@@ -1752,6 +1837,7 @@ export async function runMutation<K extends OperationKind>(
         reason: outcome.kind,
         expected: delta,
         observed: outcome.observed,
+        ...stepsOf(executeResult),
         detail:
           // The collateral verdict carries its own sentence — which field moved,
           // from what to what, and why a retry is not the answer (CGRD1).

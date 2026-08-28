@@ -42,6 +42,7 @@ import type {
   TodoMoveParams,
 } from "./operations.ts";
 import { replayIfApplied } from "./opid.ts";
+import { carry, disclose, newDisclosures, tiers, type Disclosures } from "./disclosures.ts";
 import {
   fingerprintLabel,
   runComposite,
@@ -599,7 +600,11 @@ async function trashRedundantFuturePreservedInstance(
   txnId: string,
   now: Date,
   afterCompletion: boolean,
-): Promise<{ warning: string; trashedUuid: string } | null> {
+): Promise<{
+  id: "promote-duplicate-trashed" | "promote-duplicate-orphaned";
+  text: string;
+  trashedUuid: string;
+} | null> {
   // AFTER-COMPLETION series are exempt: the double-book is a CURSOR phenomenon
   // (`rt1_nextInstanceStartDate` pointing at an already-materialized occurrence),
   // and an after-completion template is minted with NO cursor at all — the next
@@ -627,16 +632,27 @@ async function trashRedundantFuturePreservedInstance(
     legOptions(options, txnId),
   );
   const kindWord = kind === "project" ? "project" : "to-do";
-  const warning =
-    trashed.kind === "ok"
-      ? `the source ${kindWord} was kept by the app as a pre-materialized first occurrence dated ` +
-        `${startIso}; because that date is in the future the series would have spawned a DUPLICATE ` +
-        `there, so the redundant occurrence was moved to the Trash — the series mints a single ` +
-        `occurrence when ${startIso} arrives`
-      : `the app kept the source ${kindWord} as a pre-materialized first occurrence dated ${startIso} ` +
-        `(a future date the series would DUPLICATE), and it could NOT be auto-trashed — remove it ` +
-        `with \`things ${kind} delete ${instanceUuid}\``;
-  return { warning, trashedUuid: instanceUuid };
+  // The two arms are DIFFERENT tiers (#632): the compound already removed the
+  // redundant occurrence (a statement of what happened) versus it is still there
+  // and WILL double-book (a line that names the delete the caller must run).
+  return trashed.kind === "ok"
+    ? {
+        id: "promote-duplicate-trashed",
+        text:
+          `the source ${kindWord} was kept by the app as a pre-materialized first occurrence dated ` +
+          `${startIso}; because that date is in the future the series would have spawned a DUPLICATE ` +
+          `there, so the redundant occurrence was moved to the Trash — the series mints a single ` +
+          `occurrence when ${startIso} arrives`,
+        trashedUuid: instanceUuid,
+      }
+    : {
+        id: "promote-duplicate-orphaned",
+        text:
+          `the app kept the source ${kindWord} as a pre-materialized first occurrence dated ${startIso} ` +
+          `(a future date the series would DUPLICATE), and it could NOT be auto-trashed — remove it ` +
+          `with \`things ${kind} delete ${instanceUuid}\``,
+        trashedUuid: instanceUuid,
+      };
 }
 
 /**
@@ -812,7 +828,7 @@ function promoteOk(args: {
   replacedUuid: string | null;
   title: string;
   txnId: string;
-  warnings: string[];
+  disclosures: Disclosures;
 }): Extract<MutationResult, { kind: "ok" }> {
   const repeating: RepeatingDiscovery = {
     templateUuid: args.templateUuid,
@@ -836,7 +852,7 @@ function promoteOk(args: {
       txn: { id: args.txnId, role: "summary" },
     }),
     repeating,
-    ...(args.warnings.length > 0 && { warnings: args.warnings }),
+    ...tiers(args.disclosures),
   };
 }
 
@@ -1104,12 +1120,19 @@ async function makeRepeatingViaClone(
       if (!first.honored) return nextMismatch(op, templateUuid, expectedStartIso, first.landed);
     }
 
-    const warnings: string[] = [
+    const bag = newDisclosures();
+    disclose(
+      bag,
+      "landed-rule",
       landedRuleEcho(effParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
+    );
+    disclose(
+      bag,
+      "promote-source-trashed",
       `the original ${expectedType} (uuid ${srcUuid}) was moved to the Trash; \`things undo\` ` +
         "removes the new series (trash-both) and restores it",
-      PLACEMENT_NOTE,
-    ];
+    );
+    disclose(bag, "promote-placement", PLACEMENT_NOTE);
     // DBLSPAWN1: if the promote PRESERVED the source (deadline / terminal-element
     // trigger) as a FUTURE-dated instance, the app would spawn a duplicate on that date
     // — trash the redundant occurrence and disclose (cursor mints the single real one).
@@ -1123,12 +1146,14 @@ async function makeRepeatingViaClone(
       afterCompletion,
     );
     if (dbl !== null) {
-      warnings.push(dbl.warning);
+      disclose(bag, dbl.id, dbl.text);
       if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
     }
     const offRule = offRuleFirstNote(effParams);
-    if (offRule !== null) warnings.push(offRule);
-    if (promote.warnings !== undefined) warnings.push(...promote.warnings);
+    if (offRule !== null) disclose(bag, "promote-off-rule-first", offRule);
+    // The promote LEG's own disclosures arrive already tiered — carried, never
+    // reclassified (the instance-derivation assertion, #634, rides this).
+    carry(bag, promote);
 
     appendPromoteSummary(deps, {
       startedAt,
@@ -1150,7 +1175,7 @@ async function makeRepeatingViaClone(
       replacedUuid: cloneUuid,
       title: srcTitle,
       txnId,
-      warnings,
+      disclosures: bag,
     });
   }
 }
@@ -1370,10 +1395,13 @@ async function addRepeatingViaCreate(
       if (!first.honored) return nextMismatch(op, templateUuid, expectedStartIso, first.landed);
     }
 
-    const warnings: string[] = [
+    const bag = newDisclosures();
+    disclose(
+      bag,
+      "landed-rule",
       landedRuleEcho(ruleParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
-      PLACEMENT_NOTE,
-    ];
+    );
+    disclose(bag, "promote-placement", PLACEMENT_NOTE);
     // DBLSPAWN1 backstop: the deadline-mapping above keeps the seed deadline-free (no
     // SRCFATE preserve), but any OTHER preserve trigger reaching the seed (defensive)
     // would double-book a future first occurrence — trash the redundant instance.
@@ -1387,12 +1415,12 @@ async function addRepeatingViaCreate(
       afterCompletion,
     );
     if (dbl !== null) {
-      warnings.push(dbl.warning);
+      disclose(bag, dbl.id, dbl.text);
       if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
     }
     const offRule = offRuleFirstNote(ruleParams);
-    if (offRule !== null) warnings.push(offRule);
-    if (promote.warnings !== undefined) warnings.push(...promote.warnings);
+    if (offRule !== null) disclose(bag, "promote-off-rule-first", offRule);
+    carry(bag, promote);
 
     appendPromoteSummary(deps, {
       startedAt,
@@ -1412,7 +1440,7 @@ async function addRepeatingViaCreate(
       replacedUuid: createdUuid,
       title,
       txnId,
-      warnings,
+      disclosures: bag,
     });
   }
 }
@@ -1790,20 +1818,26 @@ export async function cloneTemplateViaRepromote(
     }
     const { templateUuid, instanceUuid } = discoveryOf(promote);
 
-    const warnings: string[] = [NEW_SERIES_NOTE, PLACEMENT_NOTE];
+    const bag = newDisclosures();
+    disclose(bag, "template-clone-new-series", NEW_SERIES_NOTE);
+    disclose(bag, "promote-placement", PLACEMENT_NOTE);
     if (params.preserveCreated === true) {
-      warnings.push(
+      disclose(
+        bag,
+        "template-clone-created-best-effort",
         "--preserve-created is best-effort on a template clone: the promote may replace the clone " +
           "row with the new template, whose creation date is the conversion time",
       );
     }
     if (src.repeating.paused === true) {
-      warnings.push(
+      disclose(
+        bag,
+        "template-clone-source-paused",
         `the source template was PAUSED; the new series is created UNPAUSED and begins spawning — ` +
           `pause it with \`things ${kind} pause-repeat\` if you want it suspended`,
       );
     }
-    if (promote.warnings !== undefined) warnings.push(...promote.warnings);
+    carry(bag, promote);
 
     // Summary WITHOUT originalUuid → undo is the add-repeating trash-both (remove
     // the minted series; there is no original to restore).
@@ -1824,7 +1858,7 @@ export async function cloneTemplateViaRepromote(
       replacedUuid: cloneUuid,
       title,
       txnId,
-      warnings,
+      disclosures: bag,
     });
   });
 }

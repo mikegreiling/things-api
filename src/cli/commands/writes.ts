@@ -85,6 +85,7 @@ interface WriteFlagOpts {
   dangerouslyDriveGui?: boolean;
   opId?: string;
   preserveModified?: boolean;
+  verbose?: boolean;
 }
 
 /**
@@ -112,6 +113,16 @@ const PRESERVE_MODIFIED_HELP =
   "the item stays off the timeline everywhere — unless another device edits the same item " +
   "at nearly the same time, which re-dates it.";
 
+/**
+ * `--verbose` help. The flag is the middle rung of the diagnostic ladder: a
+ * successful change reports what it did and what to consider doing next, and
+ * only says HOW it drove the app when asked. A failure prints the steps without
+ * the flag, and `things op-result <key>` prints them after the fact either way.
+ */
+const VERBOSE_HELP =
+  "add the step-by-step account of how the change was driven through the app; a failed change " +
+  "reports it anyway, and `things op-result` reports it for any change already made";
+
 function addWriteFlags(cmd: Command, capability: WriteFlagCapability = {}): Command {
   const opId = new Option(
     "--op-id <key>",
@@ -132,6 +143,7 @@ function addWriteFlags(cmd: Command, capability: WriteFlagCapability = {}): Comm
     .option("--allow-very-disruptive", "permit changes that visibly drive the Things UI")
     .option("--verify-timeout <ms>", "how long to wait for the change to take effect")
     .option("--actor <name>", "author name recorded for this change (default: from config)")
+    .option("--verbose", VERBOSE_HELP)
     .addOption(opId);
 }
 
@@ -226,6 +238,7 @@ function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}
     ...(maxDisruption !== undefined && { maxDisruption }),
     ...(opts.verifyTimeout !== undefined && { verifyTimeoutMs: Number(opts.verifyTimeout) }),
     ...(opts.actor !== undefined && { actor: opts.actor }),
+    ...(opts.verbose === true && { verbose: true }),
     ...(opts.dangerouslyDriveGui === true && { dangerouslyDriveGui: true }),
     ...(opts.opId !== undefined && { opId: opts.opId }),
     ...(opts.preserveModified === true && { preserveModified: true }),
@@ -551,6 +564,33 @@ function emitContextNote(result: {
   if (parts.length > 0) process.stdout.write(dim(`  ${parts.join("; ")}\n`));
 }
 
+/**
+ * The TWO TIERS on the human path (#632), plus the step account when it was
+ * asked for. Warnings are the actionable half and keep the `warning:` prefix on
+ * stderr, where an operator's eye already goes; notes are matter-of-fact and
+ * render DIM and unprefixed on stdout alongside the other disclosure lines, so
+ * "here is what happened" never wears the costume of "you should do something".
+ *
+ * The step account is dimmer still and indented under its own heading — present
+ * only when `--verbose` put `steps` on the result.
+ */
+function emitDisclosures(result: {
+  warnings?: string[];
+  notes?: string[];
+  steps?: string[];
+}): void {
+  for (const note of result.notes ?? []) process.stdout.write(dim(`  ${note}\n`));
+  for (const warning of result.warnings ?? []) {
+    process.stderr.write(`warning: ${warning}\n`);
+  }
+  const steps = result.steps ?? [];
+  if (steps.length === 0) return;
+  process.stdout.write(dim(`  drove ${steps.length} step(s):\n`));
+  for (const [i, step] of steps.entries()) {
+    process.stdout.write(dim(`    ${i + 1}. ${step}\n`));
+  }
+}
+
 function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMeta): void {
   switch (result.kind) {
     case "bounce-aborted": {
@@ -578,10 +618,11 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
       return;
     }
     case "ok": {
-      for (const warning of result.warnings ?? []) {
-        process.stderr.write(`warning: ${warning}\n`);
-      }
       if (opts.json) {
+        // ONE CHANNEL (#632). Under --json the envelope is the WHOLE output:
+        // `warnings` and `notes` are already in it, so echoing them to stderr
+        // made every consumer pay for the same prose twice — once parsed, once
+        // as noise in its log. The human path below keeps the prose.
         process.stdout.write(
           `${JSON.stringify(okEnvelope("mutation-result", mutationWireData(result), meta))}\n`,
         );
@@ -595,6 +636,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
         emitOccurrenceNote(result);
         emitPreserveNote(result);
         emitContextNote(result);
+        emitDisclosures(result);
       }
       process.exitCode = ExitCode.Ok;
       return;
@@ -628,7 +670,14 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
                 message: result.detail,
                 ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
                 ...(result.hint !== undefined && { remediation: result.hint }),
-                detail: { expected: result.expected, observed: result.observed },
+                detail: {
+                  expected: result.expected,
+                  observed: result.observed,
+                  // A FAILURE always carries the drive's play-by-play (#632) —
+                  // no flag, no second command. It is what made the field bug
+                  // reports actionable.
+                  ...(result.steps !== undefined && { steps: result.steps }),
+                },
               },
               meta,
             ),
@@ -640,6 +689,9 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
           process.stderr.write(
             `  likely cause: ${result.likelyCause}${result.hint !== undefined ? ` — ${result.hint}` : ""}\n`,
           );
+        }
+        for (const [i, step] of (result.steps ?? []).entries()) {
+          process.stderr.write(`  step ${i + 1}: ${step}\n`);
         }
       }
       process.exitCode = ExitCode.VerifyFailed;
@@ -2767,14 +2819,12 @@ export function registerWriteCommands(program: Command): void {
         // Human path discloses the count inline; --json carries it on
         // `observed.logged`. Everything else defers to the shared emitter.
         if (result.kind === "ok" && o.json !== true) {
-          for (const warning of result.warnings ?? []) {
-            process.stderr.write(`warning: ${warning}\n`);
-          }
           const logged = (result.observed as { logged?: number } | null)?.logged ?? 0;
           process.stdout.write(
             `ok log-now (logged ${logged} item${logged === 1 ? "" : "s"}, ` +
               `vector=${result.vector}, tier=${result.tier}, verified)\n`,
           );
+          emitDisclosures(result);
           process.exitCode = ExitCode.Ok;
           return;
         }

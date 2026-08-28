@@ -554,6 +554,18 @@ export interface ExecuteResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  /**
+   * The drive's step play-by-play as a LIST — one compact entry per recipe step
+   * that ran, in order (the same labels `stdout` renders as one prose line).
+   * Emitted by the ui vector on every drive, complete or partial; absent on the
+   * transport vectors, which have no steps.
+   *
+   * This is the DIAGNOSTIC LADDER's middle rung (#632): it never rides a success
+   * result by default (it made the field bug reports rich and costs context on
+   * every success), the change-history record ALWAYS captures it, `--verbose`
+   * opts a success back into it, and a failure always carries it.
+   */
+  steps?: string[];
   /** The transport was killed by its own deadline — the signature of an unanswered consent dialog. */
   timedOut?: boolean;
   /**

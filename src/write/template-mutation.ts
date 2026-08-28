@@ -77,6 +77,7 @@ import { addDaysIso, decodePackedDate, localToday, type IsoDate } from "../model
 import type { RepeatRule } from "../model/recurrence.ts";
 import { projectOccurrences } from "../model/occurrences.ts";
 import { byUuid } from "../read/detail.ts";
+import { attach, disclose, disclosuresOf } from "./disclosures.ts";
 import type { OperationKind, UpdateFields } from "./operations.ts";
 import { replayIfApplied } from "./opid.ts";
 import {
@@ -548,24 +549,25 @@ export async function runTemplateStatusWrite(
 
     const verb = op === "todo.complete" ? "checked off" : "canceled";
     const nextDate = nextOccurrenceAfter(deps, state.templateUuid);
-    const disclosure = [
+    const bag = disclosuresOf(write);
+    disclose(
+      bag,
+      "occurrence-resolved",
       `${verb} ${occurrenceLabel(occurrenceDate)} of "${state.title}"` +
         (minted ? " (created just now, because the series had no unfinished copy)" : ""),
+    );
+    disclose(
+      bag,
+      "occurrence-next",
       nextDate === null
         ? "the series has no further scheduled occurrence"
         : state.afterCompletion
           ? `the next occurrence is ${nextDate} — this series counts from each completion, so ` +
             "resolving it now restarted the interval from today"
           : `the next occurrence is ${nextDate}`,
-    ];
-    if (minted) disclosure.push(IRREVERSIBLE_NOTE);
-    return {
-      ...write,
-      op,
-      occurrence,
-      undoToken,
-      warnings: [...(write.warnings ?? []), ...disclosure],
-    };
+    );
+    if (minted) disclose(bag, "occurrence-mint-irreversible", IRREVERSIBLE_NOTE);
+    return attach({ ...write, op, occurrence, undoToken }, bag);
   }
 }
 
@@ -710,21 +712,22 @@ export async function runTemplateExceptionWrite(
     });
 
     const nextDate = nextOccurrenceAfter(deps, state.templateUuid);
-    return {
-      ...write,
-      op,
-      occurrence,
-      undoToken,
-      warnings: [
-        ...(write.warnings ?? []),
-        `changed only ${occurrenceLabel(state.cursor)} of "${state.title}" — the series itself is ` +
-          "unchanged",
-        nextDate === null
-          ? "the series has no further scheduled occurrence"
-          : `the next occurrence is ${nextDate}`,
-        IRREVERSIBLE_NOTE,
-      ],
-    };
+    const bag = disclosuresOf(write);
+    disclose(
+      bag,
+      "occurrence-exception-scope",
+      `changed only ${occurrenceLabel(state.cursor)} of "${state.title}" — the series itself is ` +
+        "unchanged",
+    );
+    disclose(
+      bag,
+      "occurrence-next",
+      nextDate === null
+        ? "the series has no further scheduled occurrence"
+        : `the next occurrence is ${nextDate}`,
+    );
+    disclose(bag, "occurrence-mint-irreversible", IRREVERSIBLE_NOTE);
+    return attach({ ...write, op, occurrence, undoToken }, bag);
   }
 }
 

@@ -1668,7 +1668,7 @@ describe("project scope: PROJROOT move fallback (SIT7 — native unavailable)", 
     expect(row.project).toBe(proj);
     // Disclosure: the ok result names the non-experimental fallback.
     if (result.kind === "ok") {
-      expect(result.warnings?.some((w) => w.includes("PROJROOT"))).toBe(true);
+      expect(result.notes?.some((w) => w.includes("PROJROOT"))).toBe(true);
     }
   });
 
@@ -2493,7 +2493,7 @@ describe('tomorrow scope (ORDFIN2 TOMORROWLIST one-call `list "Tomorrow"` day-so
     expect(calls.some((c) => c.includes("when=2026-07-06"))).toBe(true);
     expect(ascending(ranks([t2, t3, t1]))).toBe(true);
     if (result.kind === "ok") {
-      expect(result.warnings?.some((w) => w.includes("dated-day-bounce"))).toBe(true);
+      expect(result.notes?.some((w) => w.includes("dated-day-bounce"))).toBe(true);
     }
   });
 
@@ -3460,7 +3460,7 @@ describe("LOOSEPARK (SIT6 — flagged area-less loose anytime to-dos)", () => {
     expect(row.deadline).not.toBeNull();
     expect(row.project).toBeNull(); // unparked back to loose
     if (result.kind === "ok") {
-      expect(result.warnings?.some((w) => w.includes("Trash"))).toBe(true);
+      expect(result.notes?.some((w) => w.includes("Trash"))).toBe(true);
     }
   });
 
@@ -3636,7 +3636,7 @@ describe("someday scope: SOMEBACK bounce fallback (SIT7 — native unavailable)"
       expect(row.startDate).toBeNull();
     }
     if (result.kind === "ok") {
-      expect(result.warnings?.some((w) => w.includes("SOMEBACK"))).toBe(true);
+      expect(result.notes?.some((w) => w.includes("SOMEBACK"))).toBe(true);
     }
   });
 
@@ -3728,8 +3728,7 @@ describe("inbox scope: INBOXBACK move fallback (SIT7 — native unavailable)", (
       expect(row.area).toBeNull();
       expect(row.heading).toBeNull();
     }
-    if (result.kind === "ok")
-      expect(result.warnings?.some((w) => w.includes("INBOXBACK"))).toBe(true);
+    if (result.kind === "ok") expect(result.notes?.some((w) => w.includes("INBOXBACK"))).toBe(true);
   });
 
   it("dry-run describes the INBOXBACK legs without executing", async () => {
@@ -3829,8 +3828,7 @@ describe("area scope: AREABACK move fallback (SIT7 — native unavailable)", () 
     expect(row.reminderTime).not.toBeNull();
     expect(row.deadline).not.toBeNull();
     expect(row.area).toBe(area);
-    if (result.kind === "ok")
-      expect(result.warnings?.some((w) => w.includes("AREABACK"))).toBe(true);
+    if (result.kind === "ok") expect(result.notes?.some((w) => w.includes("AREABACK"))).toBe(true);
   });
 
   it("projects: park to scratch AREA + re-home (reverse) front-inserts, area FK kept, scratch deleted", async () => {
@@ -3914,7 +3912,7 @@ describe("container-day scope: dated day-bounce fallback (SIT7 — native unavai
     expect(calls.some((c2) => c2.includes("when=2026-07-10"))).toBe(true);
     expect(ascending(ranks([b, c, a]))).toBe(true);
     if (result.kind === "ok") {
-      expect(result.warnings?.some((w) => w.includes("dated-day-bounce"))).toBe(true);
+      expect(result.notes?.some((w) => w.includes("dated-day-bounce"))).toBe(true);
     }
   });
 });
@@ -3967,7 +3965,7 @@ describe("SIT7 fallback routing (experimental on → native, off / canary-fail �
     expect(calls).toContain("project.add"); // INBOXBACK ran, not the native command
     expect(ascending(ranks([b, a], `"index"`))).toBe(true);
     if (result.kind === "ok") {
-      const note = (result.warnings ?? []).join(" ");
+      const note = (result.notes ?? []).join(" ");
       expect(note).toContain("Things 3.23");
       expect(note).toContain("without changing anything");
       expect(note).not.toContain("sdef");
@@ -3996,7 +3994,7 @@ describe("SIT7 fallback routing (experimental on → native, off / canary-fail �
     );
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
-      expect((result.warnings ?? []).join(" ")).toContain("allow-experimental is off");
+      expect((result.notes ?? []).join(" ")).toContain("allow-experimental is off");
     }
   });
 

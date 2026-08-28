@@ -16,6 +16,7 @@ import type { IsoDate } from "../model/dates.ts";
 import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
 import { taskMembershipClause } from "../read/scope.ts";
 import { resolutionDeltaDate } from "./commands.ts";
+import { disclose, disclosuresOf, tiers } from "./disclosures.ts";
 import type { OperationKind } from "./operations.ts";
 import { isRepeatingTemplate, loadTarget, projectChildren } from "./pre-state.ts";
 import { replayIfApplied } from "./opid.ts";
@@ -213,6 +214,12 @@ async function runComposite(
     preserve = await restoreModDates(deps.db, deps.vectors, targets);
   }
 
+  const bag = disclosuresOf(ok);
+  disclose(
+    bag,
+    "resolution-non-atomic-legs",
+    `applied as ${legs.length} non-atomic legs: ${disclosure}`,
+  );
   return {
     ...ok,
     op: summaryOp,
@@ -224,7 +231,7 @@ async function runComposite(
       }),
     ...(preserve !== null &&
       preserve.failures.length > 0 && { preserveFailures: preserve.failures }),
-    warnings: [...(ok.warnings ?? []), `applied as ${legs.length} non-atomic legs: ${disclosure}`],
+    ...tiers(bag),
   };
 }
 

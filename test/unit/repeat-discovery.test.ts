@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { COMMANDS } from "../../src/write/commands.ts";
+import { composeRepeatRuleSpec, ruleXml } from "../../src/write/recurrence-rule-blob.ts";
 import { createDbReader, evaluateDelta } from "../../src/write/verify/delta.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
@@ -175,7 +176,7 @@ describe("source-fate resolution (RSIM-R: absent OR relinked-as-instance)", () =
         instanceUuid: "INST",
         replacedUuid: source,
       });
-      expect(evaluation.repeatingWarnings).toBeUndefined();
+      expect(evaluation.repeatingDisclosures).toBeUndefined();
     });
   });
 
@@ -203,7 +204,11 @@ describe("source-fate resolution (RSIM-R: absent OR relinked-as-instance)", () =
     });
   });
 
-  it("warns (not fatal) when the FK instance cannot be derived", () => {
+  // #634 reshaped this: "no FK instance" is no longer a blanket warning. The
+  // fixture's template carries no readable first-occurrence date, so the anchor
+  // relation is `unknown` — an UNPINNED cell, which asserts nothing in either
+  // direction. The derivation still tolerates the missing instance.
+  it("tolerates an underivable FK instance, asserting nothing on an unpinned cell", () => {
     withDb((db) => {
       const source = seedTodo(db, { title: "Chores", creationDate: NOW_EPOCH - 10 });
       const { evaluation } = evalTodo(db, source, () => {
@@ -219,7 +224,7 @@ describe("source-fate resolution (RSIM-R: absent OR relinked-as-instance)", () =
       expect(evaluation.satisfied).toBe(true);
       expect(evaluation.repeating?.instanceUuid).toBeNull();
       expect(evaluation.repeating?.replacedUuid).toBe(source);
-      expect(evaluation.repeatingWarnings?.[0]).toContain("could not derive the spawned instance");
+      expect(evaluation.repeatingDisclosures).toBeUndefined();
     });
   });
 
@@ -479,5 +484,121 @@ describe("project make-repeating — FK instance filtered by type + childrenRepl
         childrenReplaced: 1, // only the flattened nested-template uuid is dead
       });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #634 — the derivation ASSERTS the spawn expectation instead of shrugging.
+//
+// Every cell below drives the SAME real make-repeating spec through the SAME
+// live reader as the tests above; only the landed state differs. The map
+// (src/write/spawn-expectation.ts) decides what SHOULD be there, and the
+// derivation speaks only when reality and the map disagree — or to name the
+// date the caller is waiting for.
+
+/** A real rule blob, so the derivation reads a decodable `repeating.rule`. */
+const ruleBlob = (afterCompletion: boolean): string =>
+  ruleXml(
+    composeRepeatRuleSpec(
+      {
+        uuid: "seed",
+        frequency: "weekly",
+        interval: 1,
+        ...(afterCompletion && { afterCompletion }),
+      },
+      "2026-07-05",
+      0,
+    ),
+  );
+
+/** {@link evalTodo}, with the rule kind under test as the REQUESTED rule. */
+function evalTodoWithRule(
+  db: FixtureDb["db"],
+  source: string,
+  afterCompletion: boolean,
+  mutate: () => void,
+) {
+  const params = { uuid: source, ...RULE, ...(afterCompletion && { afterCompletion }) };
+  const pre = COMMANDS["todo.make-repeating"].preRead(db, params, NOW);
+  mutate();
+  const spec = COMMANDS["todo.make-repeating"].expectedDelta(pre, params, CTX);
+  if (spec.mode !== "create") throw new Error("unreachable");
+  return { spec, evaluation: evaluateDelta(spec, createDbReader(db, NOW), EMPTY_PRE) };
+}
+
+/**
+ * Land a template with a chosen rule kind + cursor, and optionally an instance,
+ * then return the disclosures the derivation produced.
+ */
+function deriveWith(opts: {
+  afterCompletion: boolean;
+  cursor: string | null;
+  withInstance: boolean;
+}): { warnings: string[]; notes: string[] } {
+  return withDb((db) => {
+    const source = seedTodo(db, { title: "Chores", creationDate: NOW_EPOCH - 10 });
+    // The REQUESTED rule must match the landed one, or the spec's own
+    // full-fidelity rule assertion fails the promote before the derivation is
+    // reached — these cells are about the INSTANCE, not the rule.
+    const { evaluation } = evalTodoWithRule(db, source, opts.afterCompletion, () => {
+      db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(source);
+      const template = seedTodo(db, {
+        uuid: "TMPL",
+        title: "Chores",
+        recurrenceRuleXml: ruleBlob(opts.afterCompletion),
+        nextInstanceStartDate: opts.cursor,
+        creationDate: NOW_EPOCH,
+      });
+      if (opts.withInstance) {
+        seedTodo(db, {
+          uuid: "INST",
+          title: "Chores",
+          repeatingTemplate: template,
+          creationDate: NOW_EPOCH,
+        });
+      }
+    });
+    expect(evaluation.satisfied, "the promote itself still succeeds in every cell").toBe(true);
+    return {
+      warnings: evaluation.repeatingDisclosures?.warnings ?? [],
+      notes: evaluation.repeatingDisclosures?.notes ?? [],
+    };
+  });
+}
+
+describe("post-promote instance derivation asserts the spawn expectation (#634)", () => {
+  it("THE FIELD CASE — after-completion + future cursor + no instance is a NOTE naming the date", () => {
+    const said = deriveWith({ afterCompletion: true, cursor: "2026-08-04", withInstance: false });
+    // Not a warning: VMRES1/ACFUT1 measured this as the law, not a surprise.
+    expect(said.warnings).toEqual([]);
+    expect(said.notes.join(" ")).toContain("no occurrence yet");
+    expect(said.notes.join(" ")).toContain("2026-08-04");
+    expect(said.notes.join(" ")).toContain("in 30 days");
+    // The shrug that motivated the issue is gone for good.
+    expect(said.notes.join(" ")).not.toContain("could not derive");
+  });
+
+  it("EXPECTED-AND-MISSING — a same-day fixed series with no instance is a real warning", () => {
+    const said = deriveWith({ afterCompletion: false, cursor: "2026-07-05", withInstance: false });
+    expect(said.warnings.join(" ")).toContain("current occurrence is missing");
+    expect(said.notes).toEqual([]);
+  });
+
+  it("UNEXPECTED-FOUND — a future fixed series that already has an instance is a real warning", () => {
+    const said = deriveWith({ afterCompletion: false, cursor: "2026-08-04", withInstance: true });
+    expect(said.warnings.join(" ")).toContain("not expected to produce yet");
+    expect(said.notes).toEqual([]);
+  });
+
+  it("EXPECTED-AND-PRESENT — a same-day fixed series with its instance says NOTHING", () => {
+    const said = deriveWith({ afterCompletion: false, cursor: "2026-07-05", withInstance: true });
+    expect(said.warnings).toEqual([]);
+    expect(said.notes).toEqual([]);
+  });
+
+  it("a cursor-less after-completion series is told it waits for a completion", () => {
+    const said = deriveWith({ afterCompletion: true, cursor: null, withInstance: false });
+    expect(said.warnings).toEqual([]);
+    expect(said.notes.join(" ")).toContain("checked off");
   });
 });

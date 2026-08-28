@@ -168,7 +168,7 @@ describe("todo.clone", () => {
     const c = row(res.uuid);
     expect(c["title"]).toBe("Renamed clone");
     expect(c["creationDate"]).toBe(CREATED_EPOCH);
-    expect(res.warnings?.some((w) => w.includes("MINUTE resolution"))).toBe(true);
+    expect(res.notes?.some((w) => w.includes("MINUTE resolution"))).toBe(true);
   });
 
   it("--preserve-created + a reminder: splits the reminder into a follow-up leg (no reminder+createdAt collision)", async () => {
@@ -191,7 +191,7 @@ describe("todo.clone", () => {
     expect(c["reminderTime"]).toBe(encodeReminderTime("08:00"));
     expect(c["startDate"]).toBe(encodePackedDate(TODAY));
     // The reminder was reproduced by a distinct leg (disclosed in the applied list).
-    expect(res.warnings?.join(" ")).toContain("reproduced reminder");
+    expect(res.notes?.join(" ")).toContain("reproduced reminder");
   });
 
   it("dry-run discloses the reminder follow-up leg under --preserve-created", async () => {

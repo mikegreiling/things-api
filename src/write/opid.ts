@@ -31,6 +31,7 @@
  * first, and an intent marker means the attempt may still be in flight.
  */
 import type { AuditRecord } from "../audit/schema.ts";
+import { attach, disclose, disclosuresOf } from "./disclosures.ts";
 import type { OperationKind } from "./operations.ts";
 import {
   replayResultFromRecord,
@@ -198,13 +199,17 @@ function reconcileTimedOut(deps: WriteDeps, record: AuditRecord): MutationResult
   const replay = replayResultFromRecord(record);
   if (replay.kind !== "ok") return replay; // replayResultFromRecord always builds an ok
   const { undoToken: _noToken, ...rest } = replay;
-  return {
-    ...rest,
-    uuid: evaluation.discoveredUuid ?? record.uuid,
-    observed: evaluation.observed,
-    ...(evaluation.repeating !== undefined && { repeating: evaluation.repeating }),
-    warnings: [...(replay.warnings ?? []), RECONCILED_NOTE],
-  };
+  const bag = disclosuresOf(replay);
+  disclose(bag, "reconciled-replay", RECONCILED_NOTE);
+  return attach(
+    {
+      ...rest,
+      uuid: evaluation.discoveredUuid ?? record.uuid,
+      observed: evaluation.observed,
+      ...(evaluation.repeating !== undefined && { repeating: evaluation.repeating }),
+    },
+    bag,
+  );
 }
 
 /**
