@@ -117,6 +117,46 @@ describe("uiStateLines", () => {
     expect(text).toContain("inspectable: no — a system dialog macOS does not expose");
   });
 
+  // ------------------------------------------------------------ issue #629
+  it("reports what each probe PROVED, and names the one that did not answer", async () => {
+    // The field symptom: with the Repeat sheet standing, `ui-state` collapsed
+    // to state null and one generic sentence. The sheet was right there.
+    const report = await readUiStateReport({
+      capability: allowed,
+      read: async () => state({ kind: "repeat", stalled: ["focus"] }),
+    });
+    expect(report.state).not.toBeNull();
+    expect(report.state?.sheetKind).toBe("repeat");
+    const text = uiStateLines(report).join("\n");
+    expect(text).toContain("frontmost:   Things3 (Things)");
+    expect(text).toContain("dialog:      repeat (attached; cb:2 pu:1 bt:2 gp:1 tf:0)");
+    expect(text).toContain("focus:       not established");
+    expect(text).toContain("unproven:   did not answer in time: which element has keyboard focus");
+    expect(text).toContain("next:");
+  });
+
+  it("never renders an unproven row as its unset default", async () => {
+    const report = await readUiStateReport({
+      capability: allowed,
+      read: async () => state({ kind: "repeat", stalled: ["dialog"] }),
+    });
+    const text = uiStateLines(report).join("\n");
+    // "dialog: none" beside probes that WERE measured is the lie #629 fixed.
+    expect(text).not.toContain("dialog:      none");
+    expect(text).toContain("dialog:      not established");
+    expect(text).toContain("frontmost:   Things3 (Things)");
+  });
+
+  it("does not claim Things is 'not running' when the probe that would say so stalled", async () => {
+    const report = await readUiStateReport({
+      capability: allowed,
+      read: async () => state({ thingsRunning: true, kind: "repeat", stalled: ["running"] }),
+    });
+    expect(report.detail).not.toContain("Things is not running");
+    expect(report.detail).toContain("nothing about the screen could be established");
+    expect(report.state).not.toBeNull();
+  });
+
   it("renders the refusal with its remediation and no invented state", async () => {
     const report = await readUiStateReport({ capability: denied, read: async () => null });
     const text = uiStateLines(report).join("\n");

@@ -1960,6 +1960,8 @@ describe("make-repeating — the pre-seed open-dialog gate (#620)", () => {
         sheetControls: open ? "cb:2 pu:1 bt:2 gp:1 tf:0" : null,
         focusOwner: { app: "Things3", role: "AXTextField", subrole: null },
         inspectable: true,
+        stalledProbes: [],
+        failedProbes: [],
       }),
     };
   }

@@ -36,6 +36,14 @@ export interface FakeScreen {
   inspectable: boolean;
   /** When false, no dismissal command clears the dialog (the stranded case). */
   dismissable: boolean;
+  /**
+   * Probes that did not answer within their budget (issue #629). A CRITICAL one
+   * here (`running` / `frontmost` / `dialog`) makes the census unverifiable, so
+   * the guard refuses and the cleanup skips straight to the semantic Cancel.
+   */
+  stalled: string[];
+  /** Probes that errored rather than timing out (the secure-modal signature). */
+  failed: string[];
 }
 
 /**
@@ -56,27 +64,64 @@ export function healthyScreen(overrides: Partial<FakeScreen> = {}): FakeScreen {
     subrole: "",
     inspectable: true,
     dismissable: true,
+    stalled: [],
+    failed: [],
     ...overrides,
   };
 }
 
+/**
+ * Render the census record the way the real script does — INCLUDING its
+ * short-circuit: a decision-critical probe that does not answer stops the
+ * census there, so every probe after it reports its unset default. That is the
+ * property #629 turns on (a stalled census must never render as a clean
+ * screen), so the fake has to have it too.
+ */
 export function censusStdout(s: FakeScreen): string {
-  const open = s.kind !== "none";
+  const ORDER = ["running", "frontmost", "dialog", "frontapp", "focus"];
+  const CRITICAL = new Set(["running", "frontmost", "dialog"]);
+  const halt = [...s.stalled, ...s.failed].find((p) => CRITICAL.has(p));
+  const ran = (probe: string): boolean =>
+    halt === undefined || ORDER.indexOf(probe) < ORDER.indexOf(halt);
+  const open = s.kind !== "none" && ran("dialog");
+  // The addressed frontmost probe NAMES Things itself; the enumeration runs
+  // only to name somebody else.
+  const frontName = !ran("frontmost")
+    ? ""
+    : s.front === "Things3"
+      ? "Things3"
+      : ran("frontapp")
+        ? s.front
+        : "";
   return [
-    `front=${s.front}`,
-    `running=${s.thingsRunning}`,
+    `front=${frontName}`,
+    `isfront=${ran("frontmost") && s.front === "Things3"}`,
+    `running=${ran("running") && s.thingsRunning}`,
     `form=${open ? s.form : "none"}`,
     `depth=${open ? Math.max(1, s.depth) : 0}`,
-    `kind=${s.kind}`,
+    `kind=${open ? s.kind : "none"}`,
     `census=${open ? s.census : ""}`,
-    `role=${s.role}`,
-    `subrole=${s.subrole}`,
+    `role=${ran("focus") ? s.role : ""}`,
+    `subrole=${ran("focus") ? s.subrole : ""}`,
     `inspectable=${s.inspectable}`,
+    `stalled=${s.stalled.join(" ")}`,
+    `failed=${s.failed.join(" ")}`,
   ].join("\n");
 }
 
 export function isCensusCommand(c: UiCommand): boolean {
   return (c.script ?? "").includes(UI_STATE_MARKER);
+}
+
+/**
+ * The ADDRESSED "is a dialog open?" read (issue #629) — the narrow question the
+ * cleanup proves itself with when the full census will not answer. Deliberately
+ * NOT handled by {@link screenAnswer}: tests that model a leftover sheet the
+ * census cannot see have to answer it themselves, which is the whole point of
+ * having a second, independent oracle.
+ */
+export function isSheetOpenProbe(c: UiCommand): boolean {
+  return (c.script ?? "").includes("set sheetOpen to false");
 }
 
 /**
@@ -104,6 +149,15 @@ export function screenAnswer(screen: FakeScreen, c: UiCommand): UiRunResult | nu
     screen.depth = Math.max(0, screen.depth - 1);
     if (screen.depth === 0) screen.kind = "none";
   };
+  // The Cancel button's frame, for the pointer fallback.
+  if (script.includes("position of _b")) {
+    if (screen.kind === "none") return { ok: false, stdout: "", stderr: "no dialog is open" };
+    return { ok: true, stdout: "300 400 80 24", stderr: "" };
+  }
+  if (c.primitive === "click-point" && c.label.includes("Cancel")) {
+    close();
+    return { ok: true, stdout: "", stderr: "" };
+  }
   if (script.includes('button "Cancel"')) {
     if (screen.kind === "none") return { ok: true, stdout: "NO-DIALOG", stderr: "" };
     close();
