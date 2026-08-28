@@ -48,10 +48,21 @@ describe("ui-state census script", () => {
 
   it("identifies the Repeat dialog from its CONTROL CENSUS, not from a title", () => {
     // The structural discriminator (RDLG1 §2.1) — two checkboxes, one direct
-    // pop-up, two buttons, one group, no direct text field — appears verbatim.
-    expect(script).toContain("nCb is 2 and nPu is 1 and nBt is 2 and nGp is 1 and nTf is 0");
+    // pop-up, two buttons, one group — appears verbatim.
+    expect(script).toContain("nCb is 2 and nPu is 1 and nBt is 2 and nGp is 1");
     // …and the picker is identified by its own window identifier.
     expect(script).toContain("MovePopUpDialog-");
+  });
+
+  it("accepts the DEADLINE-MODE census too (0 OR 1 direct text fields)", () => {
+    // CNCAC2: ticking "Add deadlines" reveals the "and start [n] days earlier"
+    // offset field as a DIRECT child of the shell (CGRD1 §B: 0 with deadlines
+    // OFF, exactly 1 with them ON). A `nTf is 0` clause re-classified the
+    // drive's own Repeat sheet as `other` the moment it ticked the box, and the
+    // per-step focus guard then refused the next keystroke hop — aborting every
+    // deadlined promote/reschedule and leaving the sheet standing.
+    expect(script).toContain("(nTf is 0 or nTf is 1)");
+    expect(script).not.toContain("and nTf is 0 then");
   });
 
   it("emits no element values, titles or descriptions (no user content can leak)", () => {

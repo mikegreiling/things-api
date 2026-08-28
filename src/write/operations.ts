@@ -866,7 +866,8 @@ export interface ProjectAddRepeatingParams extends AddRepeatingRuleFields {
  * landing on the seed — this deadlines every occurrence AND keeps the seed
  * deadline-free so the app does not SRCFATE-preserve it into a double-booked
  * future instance (DBLSPAWN1). It therefore requires a concrete `when` on or
- * before it (after-completion series keep the seed's one-off deadline instead).
+ * before it. An AFTER-COMPLETION series is deadlined the same way: the offset is
+ * measured from each occurrence's own start, which such a series has (CNCAC2).
  * `startDaysEarlier` is the SAME deadline geometry named from the other end (the
  * per-occurrence lead directly, deadline derived as `when + N`); the two are
  * over-determined together and must AGREE (`deadline − when == startDaysEarlier`).
@@ -880,7 +881,8 @@ export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
   /**
    * The FIRST occurrence's due date — mapped to the RULE (derive start-days-earlier =
    * deadline − when), so every occurrence is deadlined and the seed carries none.
-   * Needs a concrete `when` on or before it; not applicable to after-completion.
+   * Needs a concrete `when` on or before it. Applies to an after-completion series
+   * too — the offset is measured from each occurrence's start, not from a calendar.
    */
   deadline?: IsoDate;
   /**
@@ -888,8 +890,7 @@ export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
    * before its own deadline (integer ≥ 0), the deadline derived as `when + N`.
    * Where a concrete `deadline` names the first due date, this names the
    * per-occurrence lead directly. Needs a concrete `when`; when BOTH are given they
-   * must AGREE (`deadline − when == startDaysEarlier`) or the call is refused. Not
-   * applicable to after-completion (no calendar start to count back from).
+   * must AGREE (`deadline − when == startDaysEarlier`) or the call is refused.
    */
   startDaysEarlier?: number;
   tags?: string[];

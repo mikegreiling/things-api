@@ -36,11 +36,26 @@ import type { UiCommand, UiRunResult } from "./ui.ts";
  *
  *   - `repeat`      — the Repeat sheet: exactly two checkboxes, exactly one
  *                     direct pop-up button (the frequency), exactly two buttons
- *                     (OK / Cancel), no direct text field, and one cadence group
- *                     carrying its own field/pop-up. That shape holds in every
- *                     mode of the 3.23 dialog and in both of its forms (attached
- *                     sheet when Things is frontmost, detached editor window when
- *                     it is not), and no other Things sheet presents it.
+ *                     (OK / Cancel), AT MOST ONE direct text field, and one
+ *                     cadence group carrying its own field/pop-up. That shape
+ *                     holds in every mode of the 3.23 dialog and in both of its
+ *                     forms (attached sheet when Things is frontmost, detached
+ *                     editor window when it is not), and no other Things sheet
+ *                     presents it.
+ *
+ *                     THE DIRECT-TEXT-FIELD COUNT IS 0 OR 1, NEVER JUST 0
+ *                     (CNCAC2, 2026-08-28, golden-v4 / 3.23). Ticking "Add
+ *                     deadlines" REVEALS the `and start [n] days earlier` offset
+ *                     field as a DIRECT child of the shell — the CGRD1 §B census
+ *                     measured exactly that ("0 direct text fields with deadlines
+ *                     OFF and exactly 1 with them ON") — so a `tf is 0` clause
+ *                     re-classified the drive's OWN Repeat sheet as `other` the
+ *                     instant it ticked the box. The per-step focus guard then
+ *                     refused the very next keystroke hop ("start N days
+ *                     earlier"), aborting EVERY deadlined promote/reschedule and
+ *                     leaving the sheet standing. Measured live:
+ *                     `sheetKind":"other" … "sheetControls":"cb:2 pu:1 bt:2 gp:1
+ *                     tf:1"`.
  *   - `move-picker` — the Move… project picker, identified POSITIVELY by its own
  *                     `AXIdentifier` prefix (`MovePopUpDialog-`) — the same
  *                     identity check the picker-row resolver makes.
@@ -393,7 +408,7 @@ ${AX_DIALOG_SHELL_SNIPPET}
 					end try
 					if winId starts with "MovePopUpDialog-" then
 						set sheetKind to "move-picker"
-					else if nCb is 2 and nPu is 1 and nBt is 2 and nGp is 1 and nTf is 0 then
+					else if nCb is 2 and nPu is 1 and nBt is 2 and nGp is 1 and (nTf is 0 or nTf is 1) then
 						set groupOk to false
 						try
 							set g to group 1 of shellRef
