@@ -38,6 +38,7 @@ import { projectView } from "../read/project-view.ts";
 import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
 import { entityStage, entityWhen } from "../read/stage.ts";
 import type { CloneParams, OperationKind, ProjectItemSpec, WhenValue } from "./operations.ts";
+import { attach, carry, disclose, disclosuresOf, newDisclosures, tiers } from "./disclosures.ts";
 import { cloneTemplateViaRepromote } from "./promote-clone.ts";
 import {
   fingerprintLabel,
@@ -638,10 +639,12 @@ export async function runCloneProject(
     ),
   ];
   const mintedChildren = cloneChildren.map((c) => c.uuid);
-  const warnings: string[] = [];
+  const bag = newDisclosures();
 
   if (cloneChildren.length !== sourceChildren.length) {
-    warnings.push(
+    disclose(
+      bag,
+      "clone-child-states-lost",
       "the clone's child set did not match the source one-for-one — logged/canceled child states " +
         "were NOT reproduced (the copy is otherwise faithful)",
     );
@@ -702,7 +705,11 @@ export async function runCloneProject(
     applied,
     preserveCreated,
   );
-  return warnings.length > 0 ? { ...ok, warnings: [...(ok.warnings ?? []), ...warnings] } : ok;
+  // `cloneOk` already tiered its own mechanism/fidelity disclosures — fold this
+  // function's child-state finding onto them without reclassifying either.
+  const merged = disclosuresOf(ok);
+  carry(merged, tiers(bag));
+  return attach(ok, merged);
 }
 
 // -------------------------------------------------------------- shared tail
@@ -771,9 +778,16 @@ function cloneOk(
   applied: string[],
   preserveCreated: boolean,
 ): OkResult {
-  const warnings = [`applied as ${applied.length} non-atomic legs: ${applied.join("; ")}`];
+  const bag = newDisclosures();
+  disclose(
+    bag,
+    "clone-non-atomic-legs",
+    `applied as ${applied.length} non-atomic legs: ${applied.join("; ")}`,
+  );
   if (preserveCreated) {
-    warnings.push(
+    disclose(
+      bag,
+      "clone-created-date-coarse",
       "the source's creation date was copied at MINUTE resolution (sub-minute precision is lost)",
     );
   }
@@ -786,6 +800,6 @@ function cloneOk(
     vector,
     tier,
     undoToken: txnId,
-    warnings,
+    ...tiers(bag),
   };
 }

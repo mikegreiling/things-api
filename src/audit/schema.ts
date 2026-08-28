@@ -79,6 +79,20 @@ export interface AuditRecord {
    * refusal to guess, never an assumption either way.
    */
   expected?: DeltaSpec;
+  /**
+   * The GUI drive's step play-by-play (ADDITIVE), one compact entry per recipe
+   * step, in order — recorded on the FINAL record of every ui-vector write,
+   * success and failure alike.
+   *
+   * This record is the APPEND-ONLY DEBUG LOG of the diagnostic ladder (#632).
+   * The step list used to ride every successful result and cost a caller context
+   * on writes that went fine; now the default success output omits it, a failure
+   * carries it, `--verbose` opts a success back into it, and it is ALWAYS here —
+   * so `things op-result <op-id>` can hand it back after the fact. Compact
+   * labels only (the recipe's own step names); the per-invocation trace file
+   * remains the deep tier with the raw payloads and timings.
+   */
+  steps?: string[];
   /** Normalized requested delta (params as given, post-normalization). */
   requested: Record<string, unknown>;
   /** Asserted-field subset of the pre-state (null when target didn't exist). */

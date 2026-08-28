@@ -324,6 +324,24 @@ The moment that occurrence is resolved the app anchors the series and derives a 
 The credit is narrow and worth bounding: the row it draws there still carries a live checkbox, and checking it produces the [oddities §18](things-app-oddities.md) stranded copy. The *state modelling* is exactly right; only the affordance on top of it is not. Evidence: [lab/cncac1-after-completion-checkoff.md](lab/cncac1-after-completion-checkoff.md) §7.1/§7.4. Things 3.23.
 
 
+### 6l. A future start date on an after-completion rule is expressed by back-dating a completion that never happened
+
+§6k's honesty about a series with no date has a companion problem: what does the app do when a user asks for an after-completion series whose *first* occurrence is a month out? The rule kind has exactly one native concept of time — "one interval after the last completion" — and there is no completion yet, so there is no obvious place to put a requested date. A start-date column on the template would be the straightforward answer, and a second column is exactly the kind of thing that later disagrees with the first.
+
+Things instead writes the anchor it already has, **backwards**. For a weekly after-completion series asked to start on 2026-07-20, the template lands `rt1_afterCompletionReferenceDate = 2026-07-13` — the requested date **minus one interval** — and derives `rt1_nextInstanceStartDate := anchor + interval` straight onto the requested day. Measured 3/3, across both creation shapes and two different intervals:
+
+```
+requested 2026-07-20  ->  acRef 2026-07-13  next 2026-07-20   (weekly)
+requested 2026-07-10  ->  acRef 2026-07-03  next 2026-07-10
+requested 2026-07-11  ->  acRef 2026-07-04  next 2026-07-11
+```
+
+The recipe drives no date at all — the dialog has no first-occurrence control in after-completion mode — so this is the app reconciling a request with its own model rather than storing the request verbatim. It invents the completion that *would have* produced the asked-for date, and everything downstream stays a pure function of the one anchor column: no second source of truth, no special-case "but this one is still pending" branch, and a series that behaves identically whether its anchor came from a real check-off or a synthetic one. When the date arrives, the fabricated anchor is consumed exactly as a real one would be — `acRef` and the cursor both return to NULL — leaving the series in precisely §6k's never-completed shape.
+
+That is the §1 derivation discipline solving a modelling problem the hard way and getting it right: the awkward input is normalized into the existing model at write time, instead of being carried alongside it forever. Evidence: [lab/acfut1-after-completion-future-anchor.md](lab/acfut1-after-completion-future-anchor.md) §1–§2; [lab/vmres1-residuals.md](lab/vmres1-residuals.md) §1. Things 3.23.
+
+---
+
 ## 7. Truncation that respects the reader, not the buffer
 
 Things caps a URL-scheme `notes` value at 10,000 characters and every title/name at 4,000 UTF-16 code units, and it enforces those caps by storing a prefix rather than refusing the write. The *silence* is a real hazard and is filed as such next door ([oddities §2j](things-app-oddities.md)) — but the CUT ITSELF is careful in a way most implementations are not, and the two facts are worth keeping apart.

@@ -235,7 +235,7 @@ describe("reconciling a resubmission against a timed-out original", () => {
     if (replay.kind !== "ok") throw new Error("unreachable");
     expect(replay.alreadyApplied).toBe(true);
     expect(replay.uuid).toBe(uuid);
-    expect(replay.warnings, "the reconciliation is disclosed, never silent").toContain(
+    expect(replay.notes, "the reconciliation is disclosed, never silent").toContain(
       RECONCILED_NOTE,
     );
     // No undo token: the trail holds no completed-change record to reverse.
@@ -284,7 +284,7 @@ describe("reconciling a resubmission against a timed-out original", () => {
     expect(third.kind === "ok" && third.alreadyApplied).toBe(true);
     if (third.kind !== "ok") throw new Error("unreachable");
     expect(third.undoToken).toBeDefined();
-    expect(third.warnings ?? []).not.toContain(RECONCILED_NOTE);
+    expect(third.notes ?? []).not.toContain(RECONCILED_NOTE);
   });
 
   it("a create whose uuid was never discovered answers with the row the re-read finds", () => {
@@ -311,7 +311,7 @@ describe("reconciling a resubmission against a timed-out original", () => {
     if (replay?.kind !== "ok") throw new Error("unreachable");
     expect(replay.uuid, "the uuid comes from the re-read, not the record").toBe(created);
     expect(replay.title).toBe("Ambiguous capture");
-    expect(replay.warnings).toContain(RECONCILED_NOTE);
+    expect(replay.notes).toContain(RECONCILED_NOTE);
   });
 });
 

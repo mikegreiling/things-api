@@ -715,7 +715,9 @@ export async function runBatch(
             op: entry.op,
             uuid,
             detail:
-              decision.warnings?.includes(RECONCILED_NOTE) === true
+              // The reconciliation disclosure is a NOTE (#632) — an undo pointer
+              // stating what happened, not a task — so it is read from `notes`.
+              decision.notes?.includes(RECONCILED_NOTE) === true
                 ? "already applied by an earlier submission whose confirmation timed out — the " +
                   "change was found in place, so it was not re-run"
                 : "already applied by an earlier submission (matching opId in the change history) — not re-run",

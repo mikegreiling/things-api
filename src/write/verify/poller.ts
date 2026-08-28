@@ -22,6 +22,7 @@
  * (timeout < the window) are unaffected — the window never elapses. It never
  * touches the tripwire (timeout) or silent-noop paths.
  */
+import type { Disclosures } from "../disclosures.ts";
 import type { CollateralFinding } from "../repeat-collateral.ts";
 import type { DeltaEvaluation, RepeatingDiscovery } from "./delta.ts";
 
@@ -38,8 +39,8 @@ export interface PollOutcome {
   discoveredUuid?: string;
   /** Make-repeating: the enriched template/instance/replaced block. */
   repeating?: RepeatingDiscovery;
-  /** Make-repeating: advisory notes from the repeating derivation. */
-  repeatingWarnings?: string[];
+  /** Make-repeating: the repeating derivation's ALREADY-TIERED disclosures (#634). */
+  repeatingDisclosures?: Disclosures;
   /** A distinct failure detail from a terminal evaluation (overrides the generic one). */
   detail?: string;
   /** `collateral` only: the fields that moved with nothing to attribute them to. */
@@ -79,7 +80,9 @@ export async function pollUntilVerified(
         observed: last.observed,
         ...(last.discoveredUuid !== undefined && { discoveredUuid: last.discoveredUuid }),
         ...(last.repeating !== undefined && { repeating: last.repeating }),
-        ...(last.repeatingWarnings !== undefined && { repeatingWarnings: last.repeatingWarnings }),
+        ...(last.repeatingDisclosures !== undefined && {
+          repeatingDisclosures: last.repeatingDisclosures,
+        }),
       };
     }
     // UNEXPLAINED DELTA (CGRD1 guard 3): the requested change LANDED — the

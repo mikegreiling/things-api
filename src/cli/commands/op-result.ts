@@ -25,7 +25,9 @@ export function registerOpResult(program: Command): void {
         "your environment killed the command before it printed its result: let the command die, " +
         "then run this. Reports FOUND (the final result + target + observation), INTENT-ONLY (the " +
         "op started but no outcome was written — still running or the process died mid-flight, " +
-        "outcome UNCERTAIN), or UNKNOWN (no such op-id in history). Always exit 0 (a history read).",
+        "outcome UNCERTAIN), or UNKNOWN (no such op-id in history). Also reports the step-by-step " +
+        "account of how a change was driven through the app, for a change that succeeded as well " +
+        "as one that failed. Always exit 0 (a history read).",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .action((opId: string, opts: { json?: boolean }) => {
@@ -57,6 +59,16 @@ export function registerOpResult(program: Command): void {
         }
         if (data.status === "found" && data.observed !== null) {
           process.stdout.write(`  observed: ${JSON.stringify(data.observed)}\n`);
+        }
+        // The step account, read back from the change history (#632). A write
+        // that succeeded no longer prints its steps, so this is where they are
+        // recovered — which is what makes leaving them off the success output
+        // a move rather than a loss.
+        if (data.steps !== null && data.steps.length > 0) {
+          process.stdout.write(`  drove ${data.steps.length} step(s):\n`);
+          for (const [i, step] of data.steps.entries()) {
+            process.stdout.write(`    ${i + 1}. ${step}\n`);
+          }
         }
       }
       process.exitCode = 0;

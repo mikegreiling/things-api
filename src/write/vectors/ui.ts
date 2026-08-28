@@ -3063,6 +3063,7 @@ async function drive(
       exitCode: 1,
       stdout: `ui drive watchdog stopped after ${done.length} step(s): ${done.join(" → ") || "nothing"}`,
       stderr: `ui drive exceeded its ${Math.round(budgetMs / 1000)}s budget at "${lastStep}"`,
+      steps: [...done],
       timedOut: true,
       watchdog: {
         budgetMs,
@@ -3101,7 +3102,11 @@ async function drive(
     // changing nothing, and must not be reported as that.
     const cause: "unreachable" | "unresponsive" | null =
       clear?.state === "cleared-blind" ? "unreachable" : stepTimedOut ? "unresponsive" : null;
-    const res = refusal(base + cleanup);
+    // The step list rides EVERY partial exit: a failure always carries the
+    // play-by-play, which is what made the field bug reports rich (#632). The
+    // step that stopped the drive is named as the last entry so the list reads
+    // as the whole attempt, not only the part that worked.
+    const res = { ...refusal(base + cleanup), steps: [...done, `${failed} — FAILED: ${why}`] };
     if (cause === null) return res;
     return {
       ...res,
@@ -3459,6 +3464,10 @@ async function drive(
     exitCode: 0,
     stdout: `${relocationNote}drove ${done.length} step(s): ${done.join(" → ")}`,
     stderr: "",
+    // The same play-by-play as a LIST (#632). `stdout` keeps the prose form the
+    // trace and the transport-failure paths already read; `steps` is what the
+    // change-history record stores and `--verbose` renders.
+    steps: relocationNote === "" ? [...done] : [relocationNote.trim(), ...done],
   };
 }
 

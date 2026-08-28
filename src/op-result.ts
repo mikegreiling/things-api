@@ -74,6 +74,15 @@ export interface OpResultData {
   observed: Record<string, unknown> | null;
   /** The verify attempt/elapsed the final record captured; null when absent. */
   verify: { attempts: number; elapsedMs: number } | null;
+  /**
+   * The GUI drive's step play-by-play, as the change-history record captured it
+   * — one compact entry per step, in order. THIS IS THE RETRIEVAL PATH of the
+   * diagnostic ladder (#632): a successful write no longer prints its steps, so
+   * this is where they are read back afterwards, for a success as readily as
+   * for a failure. Null when the op ran through a transport vector (no steps),
+   * or when the record predates the field.
+   */
+  steps: string[] | null;
   /** The record's start timestamp (ISO-8601); null when UNKNOWN. */
   ts: string | null;
   /** The final record's wall-clock duration in ms; null when INTENT-ONLY / UNKNOWN. */
@@ -177,6 +186,7 @@ export function opResult(opId: string, options: OpResultOptions = {}): OpResultD
       uuid: null,
       observed: null,
       verify: null,
+      steps: null,
       ts: null,
       durationMs: null,
       tracePath: null,
@@ -201,6 +211,7 @@ export function opResult(opId: string, options: OpResultOptions = {}): OpResultD
       ...(rec.occurrence !== undefined && { occurrence: rec.occurrence }),
       observed: rec.observed,
       verify: rec.verify,
+      steps: rec.steps ?? null,
       ts: rec.ts,
       durationMs: rec.durationMs,
       tracePath: null,
@@ -219,6 +230,9 @@ export function opResult(opId: string, options: OpResultOptions = {}): OpResultD
     uuid: rec.uuid,
     observed: null,
     verify: null,
+    // An intent marker is written BEFORE the app is touched, so it never carries
+    // steps — the drive had not run yet. The trace file is the recovery here.
+    steps: null,
     ts: rec.ts,
     durationMs: null,
     tracePath,
