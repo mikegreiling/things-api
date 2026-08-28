@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.0 — 2026-08-28
+
 - **Confirmed — undoing a write you made with `--preserve-modified` keeps it off the changes timeline, the same way Things' own Undo does.** The flag exists so a bulk edit — a re-tag, a sweep — does not shove every item it touched to the top of everything that sorts by "recently changed". Reversing such a write already restored the modification dates it had preserved, so the reversal is as quiet as the original; what was missing was any evidence that this matches the app.
 
   It does, exactly. Undo an edit in Things by hand and the app puts the item's modification date back to the value it had before — not a fresh timestamp, and not rounded: the stored value, to the microsecond. It treats an undo as *that did not happen* rather than as a new edit, which is the whole reason the behavior is worth matching. Ours is the same behavior at one-second resolution (the only surface that can write this field takes whole seconds), and it errs in the direction that keeps a restored item from resurfacing in `things changes --since`.
