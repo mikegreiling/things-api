@@ -21,6 +21,7 @@ import {
   type RepeatEnds,
   type RepeatFrequency,
   type RepeatRuleParams,
+  type RescheduleRepeatParams,
   type Weekday,
   type WeekdayOrdinal,
   type YearlyAnchor,
@@ -293,6 +294,91 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
   // requests and `--when`-only (derived-anchor) requests return null.
   const offRule = assessOffRuleFirst(params);
   if (offRule?.kind === "dishonored") throw new RangeError(offRule.refusal);
+}
+
+/**
+ * The rule fields a bare RE-ANCHOR may NOT carry — everything in the vocabulary
+ * except `next` (the date it moves the series to). Exhaustive by construction:
+ * a field added to {@link RescheduleRepeatParams} breaks compilation here until
+ * it is classified, so a new flag can never silently become "allowed on a
+ * re-anchor" (the #491/UIC6-l doctrine).
+ */
+const REANCHOR_FORBIDDEN: {
+  [K in Exclude<
+    keyof RescheduleRepeatParams,
+    "uuid" | "next" | "frequency" | "interval"
+  >]-?: string;
+} = {
+  afterCompletion: "--after-completion",
+  weekdays: "--weekdays",
+  monthly: "--on-day/--on-weekday/--on-ordinal",
+  yearly: "--yearly-month",
+  ends: "--ends-after/--ends-on",
+  reminder: "--reminder",
+  deadline: "--deadline",
+  startDaysEarlier: "--start-days-earlier",
+};
+
+/**
+ * Validate a `reschedule-repeat` params bag, which has TWO legal shapes
+ * ({@link RescheduleRepeatParams}):
+ *
+ *  - `{ uuid, next }` alone — the bare RE-ANCHOR. Moves the series' next
+ *    occurrence without restating the rule; every other rule field is refused
+ *    here, because the vector that carries it (one `things:///update?when=`
+ *    dispatch, REANCH1) can express nothing else. A `deadline=` riding the SAME
+ *    url additionally VOIDS the whole write on Things 3.23 — the re-anchor that
+ *    lands alone lands nothing beside a deadline (REANCH2 cells D6/E1/E3/E4), so
+ *    "nothing else" is a measured requirement, not tidiness.
+ *  - the full rule — `frequency` + `interval` required, then
+ *    {@link assertRepeatRule} exactly as before.
+ *
+ * Throws a RangeError with a behavioral message on any violation.
+ */
+export function assertRescheduleRule(params: Omit<RescheduleRepeatParams, "uuid">): void {
+  if (params.frequency !== undefined || params.interval !== undefined) {
+    if (params.frequency === undefined || params.interval === undefined) {
+      throw new RangeError(
+        "a rule change needs BOTH a frequency and an interval — or give only a date " +
+          "(--when) to move the next occurrence and keep the rule",
+      );
+    }
+    assertRepeatRule(params as Omit<RepeatRuleParams, "uuid">);
+    return;
+  }
+  if (params.next === undefined) {
+    throw new RangeError(
+      "nothing to change — give a frequency and an interval to set the rule, or a date " +
+        "(--when) to move the next occurrence",
+    );
+  }
+  const extras = (Object.keys(REANCHOR_FORBIDDEN) as (keyof typeof REANCHOR_FORBIDDEN)[]).filter(
+    (key) => params[key] !== undefined,
+  );
+  if (extras.length > 0) {
+    throw new RangeError(
+      `moving the next occurrence keeps the existing rule — ${extras
+        .map((key) => REANCHOR_FORBIDDEN[key])
+        .join(", ")} needs a frequency and an interval too (it restates the whole rule)`,
+    );
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(params.next)) {
+    throw new RangeError(`invalid next ${JSON.stringify(params.next)} — expected YYYY-MM-DD`);
+  }
+}
+
+/**
+ * A reschedule bag in its RULE spelling, narrowed. Every consumer reaches this
+ * only after {@link isRepeatReanchor} has answered false, and validation has
+ * already refused a half-stated rule — so an absent frequency/interval here is a
+ * programming error, not a user one.
+ */
+export function asRepeatRuleParams(params: RescheduleRepeatParams): RepeatRuleParams {
+  const { frequency, interval } = params;
+  if (frequency === undefined || interval === undefined) {
+    throw new Error("reschedule: rule params without a frequency/interval (validation bug)");
+  }
+  return { ...params, frequency, interval };
 }
 
 // ----------------------------------------------------- decode → inverse params

@@ -32,6 +32,13 @@ export function planVector(
     maxDisruption: DisruptionTier;
     appRunning: boolean;
     forcedVector?: VectorId;
+    /**
+     * The vectors THIS CALL's params can be compiled for (CommandSpec.vectorsFor)
+     * — a per-params narrowing of the per-op matrix, so a verb whose two
+     * spellings ride different transports cannot be planned onto the wrong one.
+     * Absent = every matrix entry stands.
+     */
+    allowVectors?: VectorId[];
     /** Config gate for `experimental: true` matrix entries (default off). */
     allowExperimental?: boolean;
   },
@@ -49,6 +56,20 @@ export function planVector(
       vector.id !== options.forcedVector &&
       vector.simulates !== true
     ) {
+      continue;
+    }
+    // A params-narrowed candidate set, applied like the forced vector above: the
+    // simulator stands in for every transport under the bench fence, so it is
+    // never narrowed out.
+    if (
+      options.allowVectors !== undefined &&
+      !options.allowVectors.includes(vector.id) &&
+      vector.simulates !== true
+    ) {
+      considered.push({
+        vector: vector.id,
+        why: "this call's parameters cannot be delivered on this vector",
+      });
       continue;
     }
     const support = vector.matrix[op];

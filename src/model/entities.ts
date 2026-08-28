@@ -45,6 +45,17 @@ export interface RepeatingInfo {
   templateUuid: string | null;
   /** Templates: the app-materialized next occurrence date (null for after-completion rules until spawned). */
   nextOccurrence?: IsoDate | null;
+  /**
+   * Templates: the SPAWN CURSOR — `rt1_instanceCreationStartDate`, the raw column
+   * the app advances as it materializes occurrences, distinct from the
+   * `nextOccurrence` projection above (which prefers the app's own
+   * `rt1_nextInstanceStartDate` cache and DERIVES from this cursor when that is
+   * NULL). INTERNAL: the write engine's verification target — a series re-anchor
+   * moves BOTH columns, and reading only the projection cannot tell a landed
+   * re-anchor from one the app silently declined (REANCH1 §8). Never emitted on
+   * the wire (`reshapeRepeatingWire` whitelists what a template card carries).
+   */
+  spawnCursor?: IsoDate | null;
   /** Templates: instance creation paused in the app UI. */
   paused?: boolean;
   /**

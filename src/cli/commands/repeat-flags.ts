@@ -9,9 +9,11 @@ import type { Command } from "commander";
 
 import type {
   AddRepeatingRuleFields,
+  IsoDate,
   MonthlyAnchor,
   RepeatFrequency,
   RepeatRuleParams,
+  RescheduleRepeatParams,
   Weekday,
   WeekdayOrdinal,
   YearlyAnchor,
@@ -238,6 +240,84 @@ const FLAG_MAP: {
   startDaysEarlier: (opts) =>
     opts["startDaysEarlier"] !== undefined ? Number(opts["startDaysEarlier"]) : undefined,
 };
+
+/**
+ * Every rule flag's CLI spelling, keyed by its commander option name — the
+ * "did the caller ask for a rule change?" test for `reschedule-repeat`, whose
+ * bare `--when` spelling carries none of them. Exhaustive over the flags
+ * {@link addRepeatRuleFlags} attaches (minus `--when` itself), so a new flag has
+ * to be classified here before it can be silently accepted-and-dropped.
+ */
+const RULE_FLAG_SPELLINGS: Record<string, string> = {
+  afterCompletion: "--after-completion",
+  weekdays: "--weekdays",
+  onDay: "--on-day",
+  onWeekday: "--on-weekday",
+  onOrdinal: "--on-ordinal",
+  yearlyMonth: "--yearly-month",
+  endsAfter: "--ends-after",
+  endsOn: "--ends-on",
+  reminder: "--reminder",
+  deadline: "--deadline",
+  startDaysEarlier: "--start-days-earlier",
+};
+
+/**
+ * Build `reschedule-repeat` params from CLI options — the verb has TWO spellings
+ * and this is where they are told apart:
+ *
+ *  - `--frequency` + `--interval` (+ any rule flags) → restate the rule.
+ *  - `--when <date>` ALONE → move the series' next occurrence, keeping the rule.
+ *
+ * Half a rule, a rule flag with no frequency, and an empty call are refused with
+ * a usage message rather than partially applied (UIC6-l: never silently drop a
+ * flag the caller passed).
+ */
+export function rescheduleParamsFromOpts(
+  uuid: string,
+  opts: Record<string, unknown>,
+): { kind: "ok"; params: RescheduleRepeatParams } | { kind: "error"; message: string } {
+  const frequency = opts["frequency"] as RepeatFrequency | undefined;
+  const interval = opts["interval"];
+  const when = opts["when"];
+  if (frequency === undefined && interval === undefined) {
+    const extras = Object.keys(RULE_FLAG_SPELLINGS)
+      .filter((key) => opts[key] !== undefined)
+      .map((key) => RULE_FLAG_SPELLINGS[key]);
+    if (extras.length > 0) {
+      return {
+        kind: "error",
+        message: `${extras.join(", ")} changes the rule, so --frequency and --interval are required with it`,
+      };
+    }
+    if (typeof when !== "string") {
+      return {
+        kind: "error",
+        message:
+          "nothing to change — give --when <date> to move the next occurrence, or --frequency " +
+          "and --interval to set a new rule",
+      };
+    }
+    return { kind: "ok", params: { uuid, next: when as IsoDate } };
+  }
+  if (frequency === undefined || interval === undefined) {
+    return {
+      kind: "error",
+      message:
+        "--frequency and --interval go together — give both to set a new rule, or neither " +
+        "(just --when <date>) to move the next occurrence",
+    };
+  }
+  return {
+    kind: "ok",
+    params: {
+      uuid,
+      frequency,
+      interval: Number(interval),
+      ...repeatRuleFlagsFromOpts(opts, frequency),
+    },
+  };
+}
 
 /**
  * Build the extended rule fields from CLI options (present keys only —

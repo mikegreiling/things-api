@@ -18,6 +18,7 @@ import {
   addRepeatingRuleFieldsFromOpts,
   addRepeatRuleFlags,
   repeatRuleFlagsFromOpts,
+  rescheduleParamsFromOpts,
 } from "./repeat-flags.ts";
 import {
   aggregateExitCode,
@@ -1737,27 +1738,28 @@ export function registerWriteCommands(program: Command): void {
         todo
           .command("reschedule-repeat <uuid>")
           .description(
-            "Change an existing repeating to-do's rule in place (the item keeps its identity). Set " +
-              "the new rule with the flags below; see `things help repeating`. `things undo` " +
-              "restores the previous rule.",
+            "Change an existing repeating to-do in place (the item keeps its identity). Two " +
+              "spellings: with --frequency and --interval it sets a new rule (see `things help " +
+              "repeating`), driving the app's interface, and `things undo` restores the previous " +
+              "rule. With --when <date> ALONE it MOVES the series to that date instead, keeping " +
+              "the rule and needing no --dangerously-drive-gui — the whole series moves (a weekly " +
+              "item moved to a Thursday repeats on Thursdays), occurrences due before that date " +
+              "never appear, and it cannot be undone here. Moving needs a date after today, a " +
+              "series that is not paused, does not repeat after completion, and does not repeat " +
+              "on several weekdays; Things 3.23 or later.",
           )
-          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
-          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+          .option("--frequency <freq>", REPEAT_FREQ_HELP)
+          .option("--interval <n>", REPEAT_INTERVAL_HELP),
       ),
     ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    const frequency = opts["frequency"] as RepeatFrequency;
+    const built = rescheduleParamsFromOpts(uuid, opts);
+    if (built.kind === "error") {
+      usageError(opts, built.message);
+      return;
+    }
     await runWrite(opts, (c) =>
-      c.write.run(
-        "todo.reschedule-repeat",
-        {
-          uuid,
-          frequency,
-          interval: Number(opts["interval"]),
-          ...repeatRuleFlagsFromOpts(opts, frequency),
-        },
-        writeOptionsFrom(opts),
-      ),
+      c.write.run("todo.reschedule-repeat", built.params, writeOptionsFrom(opts)),
     );
   });
 
@@ -2035,27 +2037,28 @@ export function registerWriteCommands(program: Command): void {
         project
           .command("reschedule-repeat <ref>")
           .description(
-            "Change an existing repeating project's rule in place (target by uuid or unique name; " +
-              "the project keeps its identity). Set the new rule with the flags below; see " +
-              "`things help repeating`. `things undo` restores the previous rule.",
+            "Change an existing repeating project in place (target by uuid or unique name; the " +
+              "project keeps its identity). With --frequency and --interval it sets a new rule " +
+              "(see `things help repeating`), driving the app's interface, and `things undo` " +
+              "restores the previous rule. With --when <date> ALONE it MOVES the series to that " +
+              "date instead, keeping the rule and needing no --dangerously-drive-gui — the whole " +
+              "series moves, occurrences due before that date never appear, and it cannot be " +
+              "undone here. Same conditions as the to-do verb: a date after today, a series that " +
+              "is not paused, does not repeat after completion, and does not repeat on several " +
+              "weekdays; Things 3.23 or later.",
           )
-          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
-          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+          .option("--frequency <freq>", REPEAT_FREQ_HELP)
+          .option("--interval <n>", REPEAT_INTERVAL_HELP),
       ),
     ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    const frequency = opts["frequency"] as RepeatFrequency;
+    const built = rescheduleParamsFromOpts(uuid, opts);
+    if (built.kind === "error") {
+      usageError(opts, built.message);
+      return;
+    }
     await runWrite(opts, (c) =>
-      c.write.run(
-        "project.reschedule-repeat",
-        {
-          uuid,
-          frequency,
-          interval: Number(opts["interval"]),
-          ...repeatRuleFlagsFromOpts(opts, frequency),
-        },
-        writeOptionsFrom(opts),
-      ),
+      c.write.run("project.reschedule-repeat", built.params, writeOptionsFrom(opts)),
     );
   });
 

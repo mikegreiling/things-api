@@ -24,6 +24,7 @@ import {
 } from "../../src/write/resolution-timestamps.ts";
 import { runBatch } from "../../src/write/batch.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
+import type { EnvironmentTracker, EnvironmentTuple } from "../../src/write/environment.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import { defaultVectors } from "../../src/write/vectors/registry.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
@@ -47,6 +48,17 @@ import { makeTempDir } from "../fixtures/temp-dir.ts";
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
 const TODAY = "2026-07-05"; // localToday(NOW) is date-only, tz-invariant for noon-UTC
+
+/** A pinned app-version tracker — the version gates read `thingsVersion` off this. */
+function fakeEnvironment(thingsVersion: string | null): EnvironmentTracker {
+  const tuple: EnvironmentTuple = {
+    thingsVersion,
+    macosVersion: "26.0",
+    pkgVersion: "0.0.0-test",
+    nodeBinary: "/test/node",
+  };
+  return { capture: () => tuple, load: () => tuple, record: () => {} };
+}
 
 /** The exact Unix-epoch second-precision stamp a resolution timestamp materializes. */
 const stampEpoch = (iso: string): number =>
@@ -1035,6 +1047,94 @@ describe("simulator write vector — covered operations", () => {
       interval: 2,
     });
     expect(row(templateUuid)["rt1_instanceCreationStartDate"]).toBe(encodePackedDate("2026-07-07"));
+  });
+
+  it("todo.reschedule-repeat RE-ANCHOR (REANCH1): rule kept, both cursors moved, no GUI ack", async () => {
+    const src = seedTodo(fixture.db, { title: "Sweep the deck", start: "active" });
+    const made = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 1, weekdays: ["sunday"], next: "2026-07-12" },
+      GUI,
+    );
+    if (made.kind !== "ok" || made.uuid === null) throw new Error("expected template uuid");
+    const templateUuid = made.uuid;
+
+    const instancesBefore = instancesOf(templateUuid).length;
+    // 2026-07-16 is a THURSDAY — the re-anchor moves the recurring day with it.
+    const res = await runMutation(
+      deps(vector, { environment: fakeEnvironment("3.23") }),
+      "todo.reschedule-repeat",
+      { uuid: templateUuid, next: "2026-07-16" },
+      // NO dangerouslyDriveGui: the re-anchor is one url dispatch.
+    );
+    expect(res.kind).toBe("ok");
+
+    const tmpl = row(templateUuid);
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-16"));
+    expect(tmpl["rt1_instanceCreationStartDate"]).toBe(encodePackedDate("2026-07-16"));
+    expect(decodeTemplate(templateUuid)).toMatchObject({ type: "fixed", unit: "weekly" });
+    // The calendar anchor followed the date: Sunday (0) → Thursday (4).
+    expect(decodeTemplate(templateUuid).offsets).toEqual([{ weekday: 4 }]);
+    // Its instances are untouched — the skipped slots are simply never minted.
+    expect(instancesOf(templateUuid)).toHaveLength(instancesBefore);
+    // All three consequences are disclosed on the result.
+    const said = res.kind === "ok" ? [...(res.warnings ?? []), ...(res.notes ?? [])].join(" ") : "";
+    expect(said).toContain("2026-07-16");
+    expect(said).toContain("cannot be undone");
+  });
+
+  it("the re-anchor is REFUSED below Things 3.23 (where the same url kills the app)", async () => {
+    const src = seedTodo(fixture.db, { title: "Rinse the filter", start: "active" });
+    const made = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "daily", interval: 1, next: "2026-07-12" },
+      GUI,
+    );
+    if (made.kind !== "ok" || made.uuid === null) throw new Error("expected template uuid");
+
+    const res = await runMutation(
+      deps(vector, { environment: fakeEnvironment("3.22.14") }),
+      "todo.reschedule-repeat",
+      { uuid: made.uuid, next: "2026-07-16" },
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") {
+      expect(res.reason).toBe("environment");
+      expect(res.detail).toContain("3.23");
+      expect(res.remediation).toContain("--frequency");
+    }
+    // Nothing moved.
+    expect(row(made.uuid)["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-12"));
+  });
+
+  it("undo REFUSES a re-anchor (its old date is by then in the past — REANCH1 §8)", async () => {
+    const auditDir = makeTempDir("sim-audit-reanchor");
+    const writer = createAuditWriter({ dir: auditDir, secrets: [], enabled: true });
+    const d = deps(vector, { audit: writer, environment: fakeEnvironment("3.23") });
+    const src = seedTodo(fixture.db, { title: "Change the water", start: "active" });
+    const made = await runMutation(
+      d,
+      "todo.make-repeating",
+      { uuid: src, frequency: "daily", interval: 1, next: "2026-07-12" },
+      GUI,
+    );
+    if (made.kind !== "ok" || made.uuid === null) throw new Error("expected template uuid");
+    const res = await runMutation(d, "todo.reschedule-repeat", {
+      uuid: made.uuid,
+      next: "2026-07-16",
+    });
+    expect(res.kind).toBe("ok");
+
+    const items = await runUndo(d, auditDir, { last: 1 });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.outcome).toBe("irreversible");
+    expect(items[0]?.plan.kind === "irreversible" ? items[0].plan.reason : "").toContain(
+      "cannot be undone",
+    );
+    // The series stayed where the re-anchor put it.
+    expect(row(made.uuid)["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-16"));
   });
 
   it("project.make-repeating FIXED (RSIM6): area preserved, start normalized to Someday", async () => {

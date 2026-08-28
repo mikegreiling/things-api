@@ -5,11 +5,13 @@
  */
 import { noUuidMatch } from "../read/queries.ts";
 import {
+  drivesGuiForParams,
   isHeadingOp,
   isHeadingTargetOp,
-  isUiDriveOp,
+  isRepeatReanchor,
   type Acknowledgements,
   type OperationKind,
+  type RescheduleRepeatParams,
 } from "./operations.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 
@@ -32,6 +34,7 @@ export const HAZARD_IDS = [
   "H-HEADING-ORDER",
   "H-NO-REMINDER",
   "H-UI-DRIVE",
+  "H-REPEAT-REANCHOR",
   "H-PROJECT-REPEAT",
   "H-CLONE-SOURCE",
   // A RUNTIME gate, not a pre-read guard: a dialog-class ui-drive op refuses when
@@ -593,8 +596,110 @@ const GUARDS: Record<HazardId, GuardFn> = {
           : "target an open, un-trashed project";
     return { hazard: "H-PROJECT-REPEAT", detail: tax.detail, remediation };
   },
-  "H-UI-DRIVE": ({ op, acks }) => {
-    if (!isUiDriveOp(op) || acks.dangerouslyDriveGui === true) return null;
+  /**
+   * The series RE-ANCHOR's preconditions (REANCH1 §8, docs/lab/reanch1-url-reanchor.md
+   * — re-verified by REANCH2). The bare `reschedule-repeat --when <date>` spelling
+   * dispatches ONE `things:///update?when=<date>` at a repeating template, which on
+   * Things 3.23 rewrites both cursor columns AND the rule's calendar anchor. Three of
+   * its edges KILL the app and two more corrupt the series silently, so every one is
+   * refused here — before anything is dispatched. Fires only for the re-anchor
+   * spelling; a rule restatement drives the dialog and is bound by its own validation.
+   */
+  "H-REPEAT-REANCHOR": ({ op, params, pre }) => {
+    if (op !== "todo.reschedule-repeat" && op !== "project.reschedule-repeat") return null;
+    if (!isRepeatReanchor(params as unknown as RescheduleRepeatParams)) return null;
+    const target = pre.target;
+    // A non-template target is the dangerous case, not a harmless one: the SAME
+    // url on an ordinary row is an ordinary schedule write, so it would silently
+    // re-schedule the item instead of refusing. (Existence and row-type-vs-verb
+    // are already H-UNKNOWN-DESTINATION's, which is why the route can never be
+    // the wrong one here — REANCH1 §4.1's silent no-op.)
+    if (!isRepeatingTemplate(target) || target === null || target.type === "heading") {
+      return {
+        hazard: "H-REPEAT-REANCHOR",
+        detail: "this item does not repeat, so it has no next occurrence to move",
+        remediation:
+          "schedule it with `things todo update <ref> --when <date>`, or make it repeating first",
+      };
+    }
+    const next = (params as { next?: unknown })["next"];
+    const today = pre.todayIso;
+    if (typeof next !== "string" || typeof today !== "string") {
+      return {
+        hazard: "H-REPEAT-REANCHOR",
+        detail: "moving the next occurrence needs a concrete date",
+        remediation: "give a date as YYYY-MM-DD",
+      };
+    }
+    // STRICTLY future, against THIS MACHINE's current day, checked as late as the
+    // pipeline allows (a request composed before midnight and dispatched after it
+    // changes class). A date equal to today is as fatal as the word `today`:
+    // both kill the process outright, leaving the row untouched (REANCH1 §5,
+    // oddities §1). ISO day strings compare chronologically.
+    if (next <= today) {
+      return {
+        hazard: "H-REPEAT-REANCHOR",
+        detail: `${next} is ${next === today ? "today" : "in the past"} — a series can only be moved to a future day`,
+        remediation: "give a date after today",
+      };
+    }
+    if (target.repeating.paused === true) {
+      return {
+        hazard: "H-REPEAT-REANCHOR",
+        detail: "this series is paused, so where its next occurrence lands is not yet settled",
+        remediation: "resume it first with `things todo resume-repeat <ref>`, then move it",
+      };
+    }
+    const rule = target.repeating.rule;
+    if (rule === undefined) {
+      return {
+        hazard: "H-REPEAT-REANCHOR",
+        detail: "this series' repeat rule could not be read, so the move cannot be checked first",
+        remediation:
+          "restate the rule instead: `things todo reschedule-repeat <ref> --frequency <freq> " +
+          "--interval <n> --when <date> --dangerously-drive-gui`",
+      };
+    }
+    // An after-completion rule has no calendar anchor at all (its next-occurrence
+    // column is NULL until an instance resolves), and the dated write takes the
+    // unguarded branch and kills the app, 2/2 (REANCH1 §4.2, oddities §15).
+    if (rule.type === "after-completion") {
+      return {
+        hazard: "H-REPEAT-REANCHOR",
+        detail:
+          "this series repeats a set time AFTER each occurrence is completed, so it has no " +
+          "calendar day to move",
+        remediation:
+          "complete or cancel the current occurrence to start the next interval, or give it a " +
+          "fixed schedule with `things todo reschedule-repeat <ref> --frequency <freq> " +
+          "--interval <n> --dangerously-drive-gui`",
+      };
+    }
+    // A rule that fires on SEVERAL weekdays comes back firing on different ones:
+    // {Mon, Wed, Fri} moved to a Thursday returns {Wed, Thu, Fri} — same count,
+    // two days the user never chose (REANCH1 §7, oddities §16). Nothing can be
+    // honestly disclosed about the result, so the write is refused.
+    const weekdayCount = rule.offsets.filter((o) => o.weekday !== undefined).length;
+    if (weekdayCount > 1) {
+      return {
+        hazard: "H-REPEAT-REANCHOR",
+        detail:
+          `this series repeats on ${weekdayCount} days of the week, and moving it would change ` +
+          "which days those are",
+        remediation:
+          "restate the rule instead, naming the days you want: `things todo reschedule-repeat " +
+          "<ref> --frequency weekly --interval <n> --weekdays <days> --when <date> " +
+          "--dangerously-drive-gui`",
+      };
+    }
+    return null;
+  },
+  "H-UI-DRIVE": ({ op, params, acks }) => {
+    // The GUI-drive gate rides the SPELLING, not the verb: a bare
+    // `reschedule-repeat --when <date>` re-anchor is one URL dispatch and drives
+    // no GUI, so it carries no acknowledgement (its own preconditions are
+    // H-REPEAT-REANCHOR's). Every other ui-vector call still needs both keys.
+    if (!drivesGuiForParams(op, params) || acks.dangerouslyDriveGui === true) return null;
     return {
       hazard: "H-UI-DRIVE",
       detail:
