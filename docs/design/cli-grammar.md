@@ -57,6 +57,31 @@ Two consequences of the narrower sugar path (Mike-approved rulings):
 
 Steps 1–2 run in the resolver (`resolveInvocation`, pre-commander, argv-level). Step 3 runs at action time in `classifyShowTarget` (it needs the database). The resolver never touches the database.
 
+### The one-positional rule (an unmatched token with trailing args is a COMMAND)
+
+Precedence 3 fires only when the unmatched first token could actually BE a reference. A reference occupies exactly **one positional** — `things show <ref>` takes one argument — so an argv whose classified token is followed by a **second positional** is not the bare-noun sugar at all: the token was meant as a command. Blindly rewriting it to `show <token> <more…>` produced an arity error against a command the caller never typed — `things to-do Hobbies` answered with *`things show` accepts 1 argument, but got: "Hobbies"* — losing the command-vs-ref distinction entirely. So the resolver classifies that shape **`unknown-command`** and hands the argv, unrewritten, to `src/cli/unknown-command.ts`:
+
+```
+$ things to-do Hobbies
+error: invalid command or ref: 'to-do'
+did you mean: things todo Hobbies
+
+A reference takes no further arguments — `things <ref>` shows one item. See `things help` for the command list.
+```
+
+The exact rule, all of it argv-level (the resolver still never touches the database):
+
+- **Trigger.** The first classified token (after [leading global flags](#precedence-chain-single-documented)) matches no registered command/alias, no view keyword, and no reserved mutation verb — AND the argv carries **more than one positional**. Positionals are counted the way commander would parse them for `show`: an option's value is not a positional (both `<n>` required and `[n]` optional option-arguments consume the next token, as commander does), `--flag=value` carries its own, and everything after a `--` terminator is a positional. An **unknown** option is assumed to take a value when a non-option token follows it — the conservative reading, so an ordinary unknown-option error keeps its own accurate message instead of being masked by this one.
+- **Not keyed on the token's spelling.** The shape of the INVOCATION decides, not whether the token looks hyphenated or ref-like: `things Hobbies extra` is reported the same way, because a second positional makes it invalid whatever the first token is. Which is also why the copy names both possibilities — *invalid command or ref*.
+- **Did-you-mean.** The nearest names from the command vocabulary (every registered top-level command and alias, plus the view keywords that route bare — e.g. `evening`) by edit distance with adjacent transpositions counted as one edit (`todya` → `today`). Only within a radius of **2** (**1** for tokens of three characters or fewer, where two edits is most of the word); all names tied at the best distance are offered, capped at three. Nothing within the radius → the bare error line, never a misleading guess. Each suggestion is rendered as the caller's own argv with the offending token replaced, so it is the command they meant to type.
+- **Exit + `--json`.** Usage (exit 2), like every other resolver error; under `--json` the error envelope carries `code: "usage"` and the suggestions on `error.detail.suggestions`.
+
+What this rule deliberately does NOT change:
+
+- **A LONE unmatched token keeps precedence 3.** `things to-do` is still the bare-noun sugar: it resolves as a reference and, failing, gets the [did-you-mean fallback](#did-you-mean-fallback-unresolved-subjects) (`no command or item named "to-do" …` plus candidates). One positional is a legitimate reference shape, and the not-found error already names the command possibility.
+- **Explicit `things show <bad-ref>` keeps its ref-flavored error.** The verb was typed, so the subject is a reference by construction — it never reaches this rule.
+- **Genuine implied-show is untouched**, including flag-carrying forms (`things Hobbies --area-limit 3`), the bare view names, and every registered/keyword/mutation-verb path.
+
 **Leading global flags.** Classification skips over leading global read flags to find the token it classifies, so `things --json Hobbies` routes exactly like `things Hobbies --json` (this fixes a bug the old `expandShorthand` had: any flag-led argv silently skipped routing). Only the universal boolean globals — `--json` and `--dry-run` — and `--db <path>` / `--db=<path>` (value-taking; the value is skipped too, never misread as the subject) are recognized. `--dry-run` is universal (see [Universal flags](#universal-flags)) and skips exactly like `--json`, so a leading one before a **bare-ref subject** rides onto the routed command (`things --dry-run Hobbies` → `things show Hobbies --dry-run`). As with `--json`, a leading flag before a **registered command** stays commander's to handle (`things --dry-run today`, like `things --json today`, is left untouched — program-level flags before a command were an error before and stay one; append the flag after the command instead: `things today --dry-run`). An **unknown** leading flag keeps the plain fall-through to commander (which reports it) rather than guessing whether the next token is that flag's value or the subject; a flags-only argv (`things --json` alone) likewise stays commander's to error on; and a registered command reached through leading flags is left untouched (program-level flags before a command were an error before and stay one).
 
 ## Keyword vocabularies (deliberately asymmetric)

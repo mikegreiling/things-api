@@ -338,6 +338,58 @@ describe("top-level mutation verbs → verb-hint (Part 3)", () => {
   });
 });
 
+describe("unmatched first token + extra positionals — not a reference", () => {
+  it("an unmatched token carrying a second positional is an unknown command", () => {
+    const r = resolve(["to-do", "Hobbies"]);
+    expect(r.form).toBe("unknown-command");
+    // The argv is handed to the handler UNCHANGED — never rewritten to `show`.
+    expect(r.argv).toEqual(["to-do", "Hobbies"]);
+    expect(r.ref).toBe("to-do");
+  });
+
+  it("the same through leading global flags", () => {
+    const r = resolve(["--json", "--db", "/tmp/x.sqlite", "to-do", "Hobbies"]);
+    expect(r.form).toBe("unknown-command");
+    expect(r.ref).toBe("to-do");
+  });
+
+  it("a LONE unmatched token still routes as a bare-noun reference", () => {
+    for (const argv of [["to-do"], ["to-do", "--json"], ["to-do", "--db", "/tmp/x.sqlite"]]) {
+      expect(resolve(argv).form, argv.join(" ")).toBe("bare-noun");
+    }
+  });
+
+  it("option VALUES are not positionals (a ref with option arguments still routes)", () => {
+    for (const argv of [
+      ["Hobbies", "--area-limit", "3"],
+      ["Hobbies", "--project-limit", "3", "--json"],
+      ["Hobbies", "--show-logged", "5"],
+      ["Hobbies", "--tag", "work"],
+      ["Hobbies", "--area-limit=3"],
+    ]) {
+      expect(resolve(argv).form, argv.join(" ")).toBe("bare-noun");
+    }
+  });
+
+  it("an UNKNOWN option's apparent value is not counted (commander reports the option)", () => {
+    // Over-counting here would replace commander's unknown-option error with a
+    // routing error that hides the real problem.
+    expect(resolve(["Hobbies", "--nope", "value"]).form).toBe("bare-noun");
+  });
+
+  it("everything after a `--` terminator counts as a positional", () => {
+    expect(resolve(["to-do", "--", "Hobbies"]).form).toBe("unknown-command");
+    expect(resolve(["Hobbies", "--"]).form).toBe("bare-noun");
+  });
+
+  it("registered commands, keywords, and mutation verbs are unaffected", () => {
+    expect(resolve(["area", "show", "Hobbies"]).form).toBe("canonical");
+    expect(resolve(["projects", "Hobbies"]).form).toBe("namespace-show");
+    expect(resolve(["show", "to-do"]).form).toBe("loose-show");
+    expect(resolve(["update", "Health", "--tags", "test"]).form).toBe("verb-hint");
+  });
+});
+
 describe("invocation context", () => {
   it("records the current invocation and lets the action fill in canonical", () => {
     resolve(["Hobbies"]);

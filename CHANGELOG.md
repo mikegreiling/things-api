@@ -39,6 +39,20 @@
 
 - **Improved — the "that item doesn't exist" refusal now names the command that fixes it.** When Things answers that an item is missing while the database plainly holds it, the diagnosis was already right — a dialog is open somewhere in the app — but the advice was to go look at the screen. It now points at `things rescue status` and `things rescue dismiss`, and `doctor` links to the same place from its window and sync rows.
 
+- **Fixed — a mistyped command with arguments is now named as a mistyped command, with the spelling that works.** `things` lets you omit the verb — `things Hobbies` shows that area — and a first word it does not recognize was therefore treated as the name of something to show. That is right for a lone word and wrong the moment there is a second one, because a name is only ever one argument. So `things to-do <ref>` — a misspelling of `todo` — was rewritten into a `show` the caller never typed and answered with its arity complaint: *`things show` accepts 1 argument, but got: "…"*, a sentence about a command that was not in the invocation.
+
+  It now reads:
+
+  ```
+  $ things to-do Hobbies
+  error: invalid command or ref: 'to-do'
+  did you mean: things todo Hobbies
+  ```
+
+  The suggestion is the nearest command name, spelled back as your own command line with the typo corrected, and it is offered only when something is genuinely close — a word resembling no command gets the error alone rather than a guess. Under `--json` the suggestions ride `error.detail.suggestions`.
+
+  A word on its own is unaffected: `things to-do` is still a lookup, and still answers with the item search it always did. `things show <name>` keeps its own not-found wording, and every working shorthand — `things <name>`, `things <name> --area-limit 3`, the bare view names — is untouched.
+
 ## 0.19.4 — 2026-08-28
 
 - **BREAKING (output shape) — a successful change now tells you what to do about it, separately from what it did.** Every mutation used to hand back one flat `warnings` list holding everything at once: the step-by-step account of how the app was driven, a sentence explaining the Accessibility API, the plain-language echo of the rule that landed, where undo reaches, placement hints, lab caveats. A successful `make-repeating` returned about ten of them — and then, under `--json`, printed all ten again to stderr underneath the JSON. Nothing in that list said which line, if any, needed you.

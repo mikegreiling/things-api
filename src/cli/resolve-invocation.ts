@@ -109,7 +109,15 @@ export type InvocationForm =
    * dedicated hint handler that suggests the namespaced write command instead
    * of emitting a confusing `show` usage error. `ref` carries the verb.
    */
-  | "verb-hint";
+  | "verb-hint"
+  /**
+   * `things <token> <more…>` — an unmatched first token that CANNOT be a bare
+   * reference, because a reference occupies exactly one positional and this
+   * argv carries more. Dispatched to the unknown-command handler, which names
+   * the offending token and suggests the nearest command. `ref` carries the
+   * token.
+   */
+  | "unknown-command";
 
 /**
  * Write verbs that shadow the bare-noun sugar in first position (the
@@ -226,6 +234,65 @@ export function subcommandsOf(program: Command, groupName: string): Set<string> 
   return names;
 }
 
+/**
+ * The option flags a bare-noun invocation could legitimately carry, split by
+ * whether commander would swallow the NEXT token as their value. The vocabulary
+ * is the rewrite target's own — `show`'s options plus the program-level globals
+ * — because the bare-noun sugar normalizes to `things show <ref>`. Commander
+ * consumes the next non-option token for BOTH required (`<n>`) and optional
+ * (`[n]`) option-arguments, so both land in `withValue`.
+ */
+function optionFlags(program: Command): { known: Set<string>; withValue: Set<string> } {
+  const known = new Set<string>();
+  const withValue = new Set<string>();
+  const show = program.commands.find((c) => c.name() === "show");
+  for (const opt of [...program.options, ...(show?.options ?? [])]) {
+    for (const flag of [opt.short, opt.long]) {
+      if (flag === undefined || flag === null) continue;
+      known.add(flag);
+      if (opt.required || opt.optional) withValue.add(flag);
+    }
+  }
+  return { known, withValue };
+}
+
+/**
+ * How many POSITIONAL tokens the argv carries from `from` onward, counted the
+ * way commander would parse them for `things show`: an option's value is not a
+ * positional, and everything after a `--` terminator is. An UNKNOWN option is
+ * assumed to take a value when a non-option token follows it — the conservative
+ * reading, since over-counting here would turn an ordinary unknown-option error
+ * into the unknown-command error and hide the real problem.
+ */
+function positionalCount(program: Command, args: string[], from: number): number {
+  const { known, withValue } = optionFlags(program);
+  let count = 0;
+  for (let i = from; i < args.length; i++) {
+    const tok = args[i] ?? "";
+    if (tok === "--") return count + (args.length - i - 1);
+    if (!tok.startsWith("-") || tok === "-") {
+      count += 1;
+      continue;
+    }
+    if (tok.includes("=")) continue; // --flag=value carries its own value
+    const next = args[i + 1];
+    const followedByValue = next !== undefined && (!next.startsWith("-") || next === "-");
+    if (withValue.has(tok) || (!known.has(tok) && followedByValue)) i += 1;
+  }
+  return count;
+}
+
+/**
+ * True when an unmatched first token cannot be a bare reference: a reference
+ * occupies exactly ONE positional (`things show <ref>` takes one argument), so
+ * a second positional means the token was meant as a COMMAND. Rewriting it to
+ * `show <token> <more…>` would report an arity error against a command the user
+ * never typed, losing the command-vs-ref distinction.
+ */
+function carriesExtraPositionals(program: Command, args: string[], at: number): boolean {
+  return positionalCount(program, args, at) > 1;
+}
+
 function classify(program: Command, args: string[]): ResolvedInvocation {
   const at = indexPastLeadingFlags(args);
   const first = at === null ? undefined : args[at];
@@ -253,6 +320,9 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
     // first and routed to the write hint instead of the show-sugar.
     if (mutationVerbs(program).has(first.toLowerCase())) {
       return { form: "verb-hint", argv: args, canonical: null, ref: first };
+    }
+    if (carriesExtraPositionals(program, args, at ?? 0)) {
+      return { form: "unknown-command", argv: args, canonical: null, ref: first };
     }
     return { form: "bare-noun", argv: ["show", ...args], canonical: null, ref: first };
   }
@@ -332,6 +402,14 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
   // and dispatched to the write-hint handler (docs/design/cli-grammar.md).
   if (mutationVerbs(program).has(first.toLowerCase())) {
     return { form: "verb-hint", argv: args, canonical: null, ref: first };
+  }
+
+  // An unmatched token that carries FURTHER positionals is not a reference —
+  // a reference takes exactly one slot. It is answered by name, with a
+  // did-you-mean over the command vocabulary, instead of being rewritten into
+  // a `show` arity error (docs/design/cli-grammar.md).
+  if (carriesExtraPositionals(program, args, at)) {
+    return { form: "unknown-command", argv: args, canonical: null, ref: first };
   }
 
   // Precedence 3: not a command — a bare-noun reference, routed through `show`.

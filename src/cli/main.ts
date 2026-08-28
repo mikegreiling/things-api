@@ -27,6 +27,7 @@ import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
 import { applyUniversalDryRun } from "./dry-run.ts";
 import { runVerbHint } from "./verb-hint.ts";
+import { runUnknownCommand } from "./unknown-command.ts";
 import { detectMoveHint, runMoveHint } from "./move-hint.ts";
 import { setRenderClock } from "./clock.ts";
 import { maybeEmitSkillDriftNote } from "./skill-check.ts";
@@ -139,6 +140,15 @@ export function runCli(): void {
   // show-sugar's confusing usage error (docs/design/cli-grammar.md).
   if (resolved.form === "verb-hint") {
     runVerbHint(program, resolved.argv);
+    return;
+  }
+  // An unmatched first token carrying further positionals (`things to-do X`)
+  // is not a reference — a reference takes exactly one slot. It is named as an
+  // invalid command/ref with a did-you-mean over the command vocabulary,
+  // instead of an arity error against a `show` the caller never typed
+  // (docs/design/cli-grammar.md).
+  if (resolved.form === "unknown-command") {
+    runUnknownCommand(program, resolved.argv);
     return;
   }
   // A namespaced `move` carrying scheduling intent (`todo move X --when today`,
