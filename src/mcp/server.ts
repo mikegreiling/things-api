@@ -630,7 +630,10 @@ const opIdShape = {
     .optional()
     .describe(
       "Idempotency key: a resubmission with the same key is recognized as already applied " +
-        "and not re-run (matches [A-Za-z0-9_-], 1-64 chars)",
+        "and not re-run (matches [A-Za-z0-9_-], 1-64 chars). Pass one on any write you might " +
+        "retry. If the call times out, do NOT read the item and guess and do NOT re-send it — " +
+        "call op_result with this key. A resubmission sent while the first is still running is " +
+        "refused, not executed",
     ),
 };
 
@@ -3542,10 +3545,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Look up what happened to a write you dispatched with op_id, from the local change history " +
         "alone (opens no database, changes nothing). Use it to recover the outcome when the write " +
-        "call was interrupted before it returned: report FOUND (the final result + target + " +
-        "observation), INTENT-ONLY (the op started but no outcome was written — still running or " +
-        "the process died mid-flight, outcome UNCERTAIN — re-read the target, do not blind-retry), " +
-        "or UNKNOWN (no such op_id in history).",
+        "call was interrupted before it returned — call this instead of re-reading the item and " +
+        "guessing. Reports FOUND (the final result + target + observation), IN-FLIGHT (still " +
+        "running — call again in a few seconds; do not re-send the write), ORPHANED (it started " +
+        "and its process ended without recording an outcome, so the outcome is UNCERTAIN — " +
+        "re-read the target, do not blind-retry), or UNKNOWN (no such op_id in history).",
       inputSchema: { op_id: z.string().describe("the op_id the original write carried") },
       annotations: READ_ONLY,
     },

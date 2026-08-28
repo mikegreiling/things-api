@@ -38,6 +38,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { stateDir } from "./paths.ts";
+import { processStart } from "./process-instance.ts";
 
 /**
  * How far apart two `kern.boottime` readings may sit and still describe the
@@ -106,20 +107,9 @@ function hostPidDefault(bundleId: string): number | null {
   }
 }
 
-function processStartDefault(pid: number): string | null {
-  try {
-    const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
-      encoding: "utf8",
-      timeout: 3000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const trimmed = out.trim();
-    return trimmed === "" ? null : trimmed;
-  } catch {
-    // A dead pid exits nonzero — the instance is gone, which is an answer.
-    return null;
-  }
-}
+// The pid + start-time pairing is stated once, in process-instance.ts — the
+// audit trail's in-flight holder check reads liveness by the same rule.
+const processStartDefault = processStart;
 
 function bootTimeDefault(): number | null {
   try {

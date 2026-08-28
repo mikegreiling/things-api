@@ -22,6 +22,7 @@ import { isRepeatingTemplate, loadTarget, projectChildren } from "./pre-state.ts
 import { replayIfApplied } from "./opid.ts";
 import {
   appendCompositeSummary,
+  runComposite as runLockedComposite,
   runMutation,
   type MutationResult,
   type WriteDeps,
@@ -135,104 +136,129 @@ async function runComposite(
 ): Promise<MutationResult> {
   if (options.dryRun === true) return dryRunComposite(summaryOp, uuid, legs, finalDelta);
 
-  // --preserve-modified: capture the target's umd BEFORE the first leg (each flip
-  // bumps it) and restore ONCE after the last (never per-leg — the leg options
-  // strip the flag). Single-target by construction (the resolution-timestamp
-  // compounds operate on one to-do/project).
-  const preUmd =
-    options.preserveModified === true
-      ? createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone).modDateOf(uuid)
-      : null;
-
   const startedAt = deps.now?.() ?? new Date();
   const inheritedTxn = options.txn?.role === "leg" ? options.txn.id : null;
   const txnId = inheritedTxn ?? newTxnId(startedAt);
-  const disclosure = legs.map((l, i) => `${i + 1}. ${l.describe}`).join(" → ");
-  let last: MutationResult | null = null;
-  for (let i = 0; i < legs.length; i++) {
-    const leg = legs[i] as Leg;
-    const result = await exec(deps, leg.op, leg.params, legOptions(options, txnId, leg.vector));
-    last = result;
-    if (result.kind !== "ok") {
-      const done = legs.slice(0, i).map((l) => l.describe);
-      const recovery =
-        done.length === 0
-          ? "nothing was applied — the item is unchanged"
-          : `applied so far: ${done.join("; ")} — leg ${i + 1} (${leg.describe}) failed; the item is left mid-sequence`;
-      const reason = result.kind === "verify-failed" ? result.reason : "mismatch";
-      // A TIMED-OUT leg leaves the sequence ambiguous — the flip may or may not
-      // have landed — so a KEYED call records the AMBIGUOUS summary in the same
-      // shape the promote compounds use: result `verify-failed:timeout` carrying
-      // the assertion a resubmission re-evaluates. Without it a retry on the same
-      // key would find no record and walk the whole dance again. The oracle is
-      // this composite's OWN final assertion (`finalDelta`) — a uuid-keyed state
-      // check on the one item every leg touches, so it settles the question
-      // either way; and re-running is safe when it says the change is absent,
-      // because the dance creates nothing. NESTED runs write no summary at all
-      // (the outer composite owns the record) and carry no key to record.
-      if (inheritedTxn === null && reason === "timeout") {
-        appendCompositeSummary(deps, {
-          startedAt,
+
+  // COMPOSITE LOCK (#639). The flip-dance used to serialize only leg by leg, so
+  // another writer could land between the complete and the cancel — and, worse,
+  // the key's lookback had no acquisition point to be re-checked at, which is
+  // what let a same-key retry wait out the legs and then run the whole dance
+  // again. One lock across the sequence gives both: leg acquisitions inside are
+  // reentrant no-ops, and the keyed gate double-checks under it. A NESTED run
+  // (this dance as the template composite's status leg) is already inside the
+  // outer hold and carries no key, so it passes straight through.
+  //
+  // The in-flight marker carries this composite's OWN final assertion as its
+  // oracle — a uuid-keyed state check on the one item every leg touches, so a
+  // holder that dies mid-dance leaves a retry able to settle the question either
+  // way, exactly as the ambiguous summary does for a timeout.
+  return runLockedComposite(deps, summaryOp, () => danceBody(), {
+    options,
+    startedAt,
+    txnId,
+    uuid,
+    requested: { uuid },
+    expected: finalDelta,
+  });
+
+  async function danceBody(): Promise<MutationResult> {
+    // --preserve-modified: capture the target's umd BEFORE the first leg (each flip
+    // bumps it) and restore ONCE after the last (never per-leg — the leg options
+    // strip the flag). Single-target by construction (the resolution-timestamp
+    // compounds operate on one to-do/project).
+    const preUmd =
+      options.preserveModified === true
+        ? createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone).modDateOf(uuid)
+        : null;
+
+    const disclosure = legs.map((l, i) => `${i + 1}. ${l.describe}`).join(" → ");
+    let last: MutationResult | null = null;
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i] as Leg;
+      const result = await exec(deps, leg.op, leg.params, legOptions(options, txnId, leg.vector));
+      last = result;
+      if (result.kind !== "ok") {
+        const done = legs.slice(0, i).map((l) => l.describe);
+        const recovery =
+          done.length === 0
+            ? "nothing was applied — the item is unchanged"
+            : `applied so far: ${done.join("; ")} — leg ${i + 1} (${leg.describe}) failed; the item is left mid-sequence`;
+        const reason = result.kind === "verify-failed" ? result.reason : "mismatch";
+        // A TIMED-OUT leg leaves the sequence ambiguous — the flip may or may not
+        // have landed — so a KEYED call records the AMBIGUOUS summary in the same
+        // shape the promote compounds use: result `verify-failed:timeout` carrying
+        // the assertion a resubmission re-evaluates. Without it a retry on the same
+        // key would find no record and walk the whole dance again. The oracle is
+        // this composite's OWN final assertion (`finalDelta`) — a uuid-keyed state
+        // check on the one item every leg touches, so it settles the question
+        // either way; and re-running is safe when it says the change is absent,
+        // because the dance creates nothing. NESTED runs write no summary at all
+        // (the outer composite owns the record) and carry no key to record.
+        if (inheritedTxn === null && reason === "timeout") {
+          appendCompositeSummary(deps, {
+            startedAt,
+            op: summaryOp,
+            uuid,
+            txnId,
+            invocation: `${summaryOp} (${legs.length}-leg): ${disclosure} — unconfirmed`,
+            options,
+            ambiguous: finalDelta,
+          });
+        }
+        return {
+          kind: "verify-failed",
           op: summaryOp,
-          uuid,
-          txnId,
-          invocation: `${summaryOp} (${legs.length}-leg): ${disclosure} — unconfirmed`,
-          options,
-          ambiguous: finalDelta,
-        });
+          reason,
+          expected: finalDelta,
+          observed: result.kind === "verify-failed" ? result.observed : null,
+          detail: `${result.kind === "blocked" ? result.detail : "a leg did not verify"} — ${recovery}`,
+        };
       }
-      return {
-        kind: "verify-failed",
-        op: summaryOp,
-        reason,
-        expected: finalDelta,
-        observed: result.kind === "verify-failed" ? result.observed : null,
-        detail: `${result.kind === "blocked" ? result.detail : "a leg did not verify"} — ${recovery}`,
-      };
     }
-  }
-  if (inheritedTxn === null) {
-    appendCompositeSummary(deps, {
-      startedAt,
+    if (inheritedTxn === null) {
+      appendCompositeSummary(deps, {
+        startedAt,
+        op: summaryOp,
+        uuid,
+        txnId,
+        invocation: `${summaryOp} (${legs.length}-leg): ${disclosure}`,
+        // The summary is the ONE record this composite's idempotency key belongs
+        // on (the legs run with the key stripped), so a resubmission matches the
+        // whole sequence rather than one flip of it.
+        options,
+      });
+    }
+    const ok = last as Extract<MutationResult, { kind: "ok" }>;
+
+    // Restore the captured umd once, after the last leg (best-effort, per row).
+    let preserve: { restored: number; failures: PreserveModifiedFailure[] } | null = null;
+    if (options.preserveModified === true && preUmd !== null) {
+      const post = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone).modDateOf(uuid);
+      const targets = post !== null && post > preUmd ? [{ uuid, preUmd }] : [];
+      preserve = await restoreModDates(deps.db, deps.vectors, targets);
+    }
+
+    const bag = disclosuresOf(ok);
+    disclose(
+      bag,
+      "resolution-non-atomic-legs",
+      `applied as ${legs.length} non-atomic legs: ${disclosure}`,
+    );
+    return {
+      ...ok,
       op: summaryOp,
       uuid,
-      txnId,
-      invocation: `${summaryOp} (${legs.length}-leg): ${disclosure}`,
-      // The summary is the ONE record this composite's idempotency key belongs
-      // on (the legs run with the key stripped), so a resubmission matches the
-      // whole sequence rather than one flip of it.
-      options,
-    });
+      undoToken: txnId,
+      ...(preserve !== null &&
+        (preserve.restored > 0 || preserve.failures.length > 0) && {
+          preservedModified: preserve.restored,
+        }),
+      ...(preserve !== null &&
+        preserve.failures.length > 0 && { preserveFailures: preserve.failures }),
+      ...tiers(bag),
+    };
   }
-  const ok = last as Extract<MutationResult, { kind: "ok" }>;
-
-  // Restore the captured umd once, after the last leg (best-effort, per row).
-  let preserve: { restored: number; failures: PreserveModifiedFailure[] } | null = null;
-  if (options.preserveModified === true && preUmd !== null) {
-    const post = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone).modDateOf(uuid);
-    const targets = post !== null && post > preUmd ? [{ uuid, preUmd }] : [];
-    preserve = await restoreModDates(deps.db, deps.vectors, targets);
-  }
-
-  const bag = disclosuresOf(ok);
-  disclose(
-    bag,
-    "resolution-non-atomic-legs",
-    `applied as ${legs.length} non-atomic legs: ${disclosure}`,
-  );
-  return {
-    ...ok,
-    op: summaryOp,
-    uuid,
-    undoToken: txnId,
-    ...(preserve !== null &&
-      (preserve.restored > 0 || preserve.failures.length > 0) && {
-        preservedModified: preserve.restored,
-      }),
-    ...(preserve !== null &&
-      preserve.failures.length > 0 && { preserveFailures: preserve.failures }),
-    ...tiers(bag),
-  };
 }
 
 // ------------------------------------------------------------------ helpers

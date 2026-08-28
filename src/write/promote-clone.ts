@@ -983,21 +983,36 @@ async function makeRepeatingViaClone(
   // interleave with another writer's legs — the promote's row selection is by
   // TITLE, so a concurrent clone of the same item makes it ambiguous. One lock,
   // held to the end; each leg's own acquisition is a reentrant no-op.
-  return runComposite(deps, op, async () => {
-    const outcome = await promoteBody();
-    // An unconfirmed outcome gets the compound's AMBIGUOUS summary, so a
-    // resubmission of the same key reconciles instead of minting a second series.
-    return recordAmbiguousPromote(deps, outcome, {
-      startedAt,
-      op,
-      txnId,
-      title: srcTitle,
-      type: expectedType,
-      invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote (unconfirmed)`,
-      requested: effParams as unknown as Record<string, unknown>,
+  return runComposite(
+    deps,
+    op,
+    async () => {
+      const outcome = await promoteBody();
+      // An unconfirmed outcome gets the compound's AMBIGUOUS summary, so a
+      // resubmission of the same key reconciles instead of minting a second series.
+      return recordAmbiguousPromote(deps, outcome, {
+        startedAt,
+        op,
+        txnId,
+        title: srcTitle,
+        type: expectedType,
+        invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote (unconfirmed)`,
+        requested: effParams as unknown as Record<string, unknown>,
+        options,
+      });
+    },
+    // The key's in-flight marker, with the SAME presence oracle the ambiguous
+    // summary would carry — so a holder that dies mid-drive leaves a retry
+    // exactly as able to reconcile as one that merely timed out.
+    {
       options,
-    });
-  });
+      startedAt,
+      txnId,
+      uuid: srcUuid,
+      requested: effParams as unknown as Record<string, unknown>,
+      expected: promotePresenceDelta(srcTitle, expectedType, startedAt),
+    },
+  );
 
   async function promoteBody(): Promise<MutationResult> {
     // 1. Clone the source as a disposable, embedded leg (--preserve-created). The
@@ -1306,21 +1321,35 @@ async function addRepeatingViaCreate(
   // COMPOSITE LOCK: add → promote (→ the seed auto-trash / DBLSPAWN1 clean-up)
   // is one verb, several mutations; hold one lock across all of them so a
   // concurrent composite cannot land its own legs between ours.
-  return runComposite(deps, op, async () => {
-    const outcome = await addBody();
-    // An unconfirmed outcome gets the compound's AMBIGUOUS summary, so a
-    // resubmission of the same key reconciles instead of creating a second series.
-    return recordAmbiguousPromote(deps, outcome, {
-      startedAt,
-      op,
-      txnId,
-      title,
-      type: expectedType,
-      invocation: `${op}: add "${title}" → promote (unconfirmed)`,
-      requested: { title, ...effRule },
+  return runComposite(
+    deps,
+    op,
+    async () => {
+      const outcome = await addBody();
+      // An unconfirmed outcome gets the compound's AMBIGUOUS summary, so a
+      // resubmission of the same key reconciles instead of creating a second series.
+      return recordAmbiguousPromote(deps, outcome, {
+        startedAt,
+        op,
+        txnId,
+        title,
+        type: expectedType,
+        invocation: `${op}: add "${title}" → promote (unconfirmed)`,
+        requested: { title, ...effRule },
+        options,
+      });
+    },
+    // Nothing exists yet, so the intent names no uuid — the title-and-time-bounded
+    // presence oracle is what a dead holder's retry reconciles against.
+    {
       options,
-    });
-  });
+      startedAt,
+      txnId,
+      uuid: null,
+      requested: { title, ...effRule },
+      expected: promotePresenceDelta(title, expectedType, startedAt),
+    },
+  );
 
   async function addBody(): Promise<MutationResult> {
     // 1. Create the item (full add vocabulary) as an embedded leg.
@@ -1747,118 +1776,135 @@ export async function cloneTemplateViaRepromote(
   if (gate !== null) return gate;
 
   // COMPOSITE LOCK: clone-as-plain → promote-with-the-source's-rule is one verb;
-  // hold one lock across both legs.
-  return runComposite(deps, op, async () => {
-    const startedAt = deps.now?.() ?? new Date();
-    const txnId = newTxnId(startedAt);
-
-    // 4. Mint the plain clone as an embedded leg — cloneTemplateAsPlain reaches the
-    //    clone orchestrator's plain-content path (recurrence + schedule stripped);
-    //    --title/--preserve-created ride through the CloneParams.
-    const cloneParams: CloneParams = {
-      uuid: srcUuid,
-      ...(params.title !== undefined && { title: params.title }),
-      ...(params.preserveCreated === true && { preserveCreated: true }),
-    };
-    const cloneOptions: WriteOptions = {
-      ...legOptions(options, txnId),
-      cloneTemplateAsPlain: true,
-    };
-    const clone =
-      kind === "project"
-        ? await runCloneProject(deps, cloneParams, cloneOptions)
-        : await runCloneTodo(deps, cloneParams, cloneOptions);
-    if (clone.kind !== "ok" || clone.uuid === null) {
-      // A nested-repeater refusal (a template CONTAINING a nested repeater) or any
-      // clone failure surfaces coherently here — re-label it to the compound op.
-      return clone.kind === "ok"
-        ? {
-            kind: "verify-failed",
-            op,
-            reason: "mismatch",
-            expected: {
-              mode: "create",
-              probe: { title, type: expectedType, sinceEpoch: 0 },
-              assert: [],
-            },
-            observed: null,
-            detail:
-              "the plain clone was created but its uuid was not discovered — nothing was promoted",
-          }
-        : { ...clone, op };
-    }
-    const cloneUuid = clone.uuid;
-
-    // 5. Native-promote the clone with the FULL decoded rule (ruleToInverseParams
-    //    carries deadline/start-earlier + the calendar anchors + ends).
-    const ruleParams: RepeatRuleParams = { uuid: cloneUuid, ...inverse };
-    const promote =
-      kind === "project"
-        ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
-        : await runMutation(
-            deps,
-            "todo.make-repeating",
-            ruleParams,
-            legOptions(options, txnId, "ui"),
-          );
-    if (promote.kind !== "ok") {
-      // The plain clone persists but was not promoted — honest report (no original
-      // to roll back; the clone is a fresh row the caller can trash and retry).
-      return {
-        ...promote,
-        op,
-        ...("detail" in promote
+  // hold one lock across both legs. Both the txn id and the start instant are
+  // bound OUT here so the key's in-flight marker shares them with the summary the
+  // verb will write — one key, one txn, one record at a time.
+  const startedAt = deps.now?.() ?? new Date();
+  const txnId = newTxnId(startedAt);
+  return runComposite(
+    deps,
+    op,
+    async () => {
+      // 4. Mint the plain clone as an embedded leg — cloneTemplateAsPlain reaches the
+      //    clone orchestrator's plain-content path (recurrence + schedule stripped);
+      //    --title/--preserve-created ride through the CloneParams.
+      const cloneParams: CloneParams = {
+        uuid: srcUuid,
+        ...(params.title !== undefined && { title: params.title }),
+        ...(params.preserveCreated === true && { preserveCreated: true }),
+      };
+      const cloneOptions: WriteOptions = {
+        ...legOptions(options, txnId),
+        cloneTemplateAsPlain: true,
+      };
+      const clone =
+        kind === "project"
+          ? await runCloneProject(deps, cloneParams, cloneOptions)
+          : await runCloneTodo(deps, cloneParams, cloneOptions);
+      if (clone.kind !== "ok" || clone.uuid === null) {
+        // A nested-repeater refusal (a template CONTAINING a nested repeater) or any
+        // clone failure surfaces coherently here — re-label it to the compound op.
+        return clone.kind === "ok"
           ? {
+              kind: "verify-failed",
+              op,
+              reason: "mismatch",
+              expected: {
+                mode: "create",
+                probe: { title, type: expectedType, sinceEpoch: 0 },
+                assert: [],
+              },
+              observed: null,
               detail:
-                `${promote.detail} — the plain clone (uuid ${cloneUuid}) was created but the promote ` +
-                `did not land; trash the clone with \`things ${kind} delete ${cloneUuid}\` and retry`,
+                "the plain clone was created but its uuid was not discovered — nothing was promoted",
             }
-          : {}),
-      } as MutationResult;
-    }
-    const { templateUuid, instanceUuid } = discoveryOf(promote);
+          : { ...clone, op };
+      }
+      const cloneUuid = clone.uuid;
 
-    const bag = newDisclosures();
-    disclose(bag, "template-clone-new-series", NEW_SERIES_NOTE);
-    disclose(bag, "promote-placement", PLACEMENT_NOTE);
-    if (params.preserveCreated === true) {
-      disclose(
-        bag,
-        "template-clone-created-best-effort",
-        "--preserve-created is best-effort on a template clone: the promote may replace the clone " +
-          "row with the new template, whose creation date is the conversion time",
-      );
-    }
-    if (src.repeating.paused === true) {
-      disclose(
-        bag,
-        "template-clone-source-paused",
-        `the source template was PAUSED; the new series is created UNPAUSED and begins spawning — ` +
-          `pause it with \`things ${kind} pause-repeat\` if you want it suspended`,
-      );
-    }
-    carry(bag, promote);
+      // 5. Native-promote the clone with the FULL decoded rule (ruleToInverseParams
+      //    carries deadline/start-earlier + the calendar anchors + ends).
+      const ruleParams: RepeatRuleParams = { uuid: cloneUuid, ...inverse };
+      const promote =
+        kind === "project"
+          ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
+          : await runMutation(
+              deps,
+              "todo.make-repeating",
+              ruleParams,
+              legOptions(options, txnId, "ui"),
+            );
+      if (promote.kind !== "ok") {
+        // The plain clone persists but was not promoted — honest report (no original
+        // to roll back; the clone is a fresh row the caller can trash and retry).
+        return {
+          ...promote,
+          op,
+          ...("detail" in promote
+            ? {
+                detail:
+                  `${promote.detail} — the plain clone (uuid ${cloneUuid}) was created but the promote ` +
+                  `did not land; trash the clone with \`things ${kind} delete ${cloneUuid}\` and retry`,
+              }
+            : {}),
+        } as MutationResult;
+      }
+      const { templateUuid, instanceUuid } = discoveryOf(promote);
 
-    // Summary WITHOUT originalUuid → undo is the add-repeating trash-both (remove
-    // the minted series; there is no original to restore).
-    appendPromoteSummary(deps, {
+      const bag = newDisclosures();
+      disclose(bag, "template-clone-new-series", NEW_SERIES_NOTE);
+      disclose(bag, "promote-placement", PLACEMENT_NOTE);
+      if (params.preserveCreated === true) {
+        disclose(
+          bag,
+          "template-clone-created-best-effort",
+          "--preserve-created is best-effort on a template clone: the promote may replace the clone " +
+            "row with the new template, whose creation date is the conversion time",
+        );
+      }
+      if (src.repeating.paused === true) {
+        disclose(
+          bag,
+          "template-clone-source-paused",
+          `the source template was PAUSED; the new series is created UNPAUSED and begins spawning — ` +
+            `pause it with \`things ${kind} pause-repeat\` if you want it suspended`,
+        );
+      }
+      carry(bag, promote);
+
+      // Summary WITHOUT originalUuid → undo is the add-repeating trash-both (remove
+      // the minted series; there is no original to restore). It carries the caller's
+      // key, like every other keyed composite's summary: without it the key rode
+      // nothing at all, so a resubmission deduped against nothing — and, since
+      // #639, the in-flight intent this verb now writes would never be superseded.
+      appendPromoteSummary(deps, {
+        startedAt,
+        op,
+        txnId,
+        templateUuid,
+        instanceUuid,
+        invocation: `${kind}.clone (template) ${srcUuid}: clone → promote ${cloneUuid} → template ${templateUuid}`,
+        requested: { source: srcUuid, title, ...inverse },
+        options,
+      });
+
+      return promoteOk({
+        op,
+        templateUuid,
+        instanceUuid,
+        replacedUuid: cloneUuid,
+        title,
+        txnId,
+        disclosures: bag,
+      });
+    },
+    {
+      options,
       startedAt,
-      op,
       txnId,
-      templateUuid,
-      instanceUuid,
-      invocation: `${kind}.clone (template) ${srcUuid}: clone → promote ${cloneUuid} → template ${templateUuid}`,
+      uuid: srcUuid,
       requested: { source: srcUuid, title, ...inverse },
-    });
-
-    return promoteOk({
-      op,
-      templateUuid,
-      instanceUuid,
-      replacedUuid: cloneUuid,
-      title,
-      txnId,
-      disclosures: bag,
-    });
-  });
+      expected: promotePresenceDelta(title, expectedType, startedAt),
+    },
+  );
 }

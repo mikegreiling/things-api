@@ -23,11 +23,12 @@ export function registerOpResult(program: Command): void {
       "Look up what happened to a write you dispatched with --op-id, from the local change " +
         "history alone (opens no database, drives nothing). Use it to recover the outcome when " +
         "your environment killed the command before it printed its result: let the command die, " +
-        "then run this. Reports FOUND (the final result + target + observation), INTENT-ONLY (the " +
-        "op started but no outcome was written — still running or the process died mid-flight, " +
-        "outcome UNCERTAIN), or UNKNOWN (no such op-id in history). Also reports the step-by-step " +
-        "account of how a change was driven through the app, for a change that succeeded as well " +
-        "as one that failed. Always exit 0 (a history read).",
+        "then run this. Reports FOUND (the final result + target + observation), IN-FLIGHT (the " +
+        "op is still running — poll again, do not resubmit), ORPHANED (it started and its process " +
+        "ended without recording an outcome, which is UNCERTAIN), or UNKNOWN (no such op-id in " +
+        "history). Also reports the step-by-step account of how a change was driven through the " +
+        "app, for a change that succeeded as well as one that failed. Always exit 0 (a history " +
+        "read).",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .action((opId: string, opts: { json?: boolean }) => {
@@ -41,12 +42,17 @@ export function registerOpResult(program: Command): void {
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(okEnvelope("op-result", data, meta))}\n`);
       } else {
+        const target = data.uuid !== null ? ` (${data.uuid})` : "";
         const head =
           data.status === "found"
-            ? `${data.result} — ${data.op}${data.uuid !== null ? ` (${data.uuid})` : ""}`
-            : data.status === "intent-only"
-              ? `intent-only — ${data.op} (no final outcome recorded)`
-              : "unknown op-id";
+            ? `${data.result} — ${data.op}${target}`
+            : data.status === "in-flight"
+              ? `in flight since ${data.ts} — ${data.op}${target}, pid ${data.holder?.pid ?? "?"}`
+              : data.status === "orphaned"
+                ? `started ${data.ts}, holder gone — outcome unrecorded for ${data.op}${target}`
+                : data.status === "intent-only"
+                  ? `intent-only — ${data.op}${target} (no final outcome recorded)`
+                  : "unknown op-id";
         process.stdout.write(`op-result ${opId}: ${head}\n`);
         process.stdout.write(`  ${data.note}\n`);
         if (data.occurrence !== undefined) {

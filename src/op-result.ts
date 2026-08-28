@@ -14,16 +14,25 @@
  * caller runs `things op-result <op-id>` in a FRESH short-lived process and reads
  * the final outcome the killed process already durably wrote (fsync per record).
  *
- * Three outcomes:
+ * Four outcomes:
  *  - FOUND — a final (non-intent) record carries the id: report its result code,
  *    target uuid, and post-verify observation (the standard fields the killed
  *    process would have printed).
- *  - INTENT-ONLY — only an `intent` marker exists: the op is still running, or the
- *    process died between touching the app and writing its final record — the
- *    outcome is UNCERTAIN (the app-side change may have landed). The newest
+ *  - IN-FLIGHT — an unsuperseded `intent` marker whose HOLDER IS ALIVE: the op is
+ *    still running right now. The caller's move is to poll again, not to retry.
+ *  - ORPHANED — an unsuperseded `intent` marker whose holder is GONE: the process
+ *    died between touching the app and writing its final record, so the outcome is
+ *    genuinely UNCERTAIN (the app-side change may have landed). The newest
  *    correlated trace file is surfaced when determinable.
  *  - UNKNOWN — no record carries the id: it never ran, the id is mistyped, or the
  *    record has aged out of the local history.
+ *
+ * Splitting the last two used to be impossible: an intent recorded no holder, so
+ * this could only hedge ("still running, OR died mid-flight") and the caller had
+ * to guess which. A keyed intent now carries the writing process's instance
+ * identity (#639), which makes it a question with an answer. The rare third
+ * shape — an intent with no holder recorded — keeps the old hedged status,
+ * because for that record the honest answer really is "cannot tell".
  *
  * This is a pure history read — it opens no database and drives nothing. Reused by
  * the CLI subcommand and (read-only) the MCP surface through the single library
@@ -34,6 +43,7 @@ import { join } from "node:path";
 
 import type { AuditRecord } from "./audit/schema.ts";
 import { auditDir as defaultAuditDir, traceDir as defaultTraceDir } from "./paths.ts";
+import { instanceAlive } from "./process-instance.ts";
 import { readAuditRecords } from "./write/undo.ts";
 import type { OccurrenceResolution } from "./write/verify/delta.ts";
 
@@ -48,7 +58,15 @@ export interface OpResultOptions {
   traceDir?: string;
 }
 
-export type OpResultStatus = "found" | "intent-only" | "unknown";
+export type OpResultStatus = "found" | "in-flight" | "orphaned" | "intent-only" | "unknown";
+
+/** The writing process behind an unsuperseded intent, and whether it still exists. */
+export interface OpResultHolder {
+  pid: number;
+  /** The pid's recorded start time, which is what makes pid reuse detectable. */
+  start: string | null;
+  alive: boolean;
+}
 
 export interface OpResultData {
   opId: string;
@@ -87,8 +105,14 @@ export interface OpResultData {
   ts: string | null;
   /** The final record's wall-clock duration in ms; null when INTENT-ONLY / UNKNOWN. */
   durationMs: number | null;
-  /** The newest correlated trace file path (INTENT-ONLY, best-effort); null otherwise. */
+  /** The newest correlated trace file path (unsuperseded intent, best-effort); null otherwise. */
   tracePath: string | null;
+  /**
+   * The process behind an unsuperseded intent — the identity that decides
+   * IN-FLIGHT from ORPHANED (#639). Null on every settled status, and on the
+   * legacy intent that recorded no holder.
+   */
+  holder: OpResultHolder | null;
   /** A one-line behavioral explanation of the outcome for a human/agent caller. */
   note: string;
 }
@@ -190,17 +214,25 @@ export function opResult(opId: string, options: OpResultOptions = {}): OpResultD
       ts: null,
       durationMs: null,
       tracePath: null,
+      holder: null,
       note:
         `no change-history record carries op-id "${opId}" — it never ran, the id is mistyped, or ` +
         "the record has aged out of the local history (`things doctor` shows the history health)",
     };
   }
 
-  // A final (non-intent) record supersedes the intent marker. Take the NEWEST one
-  // (an ambiguously-failed op can be re-dispatched under the same id, yielding
-  // several finals — the last is the current truth).
-  const finals = matched.filter((r) => r.result !== "intent");
-  if (finals.length > 0) {
+  // An intent is superseded by the final of its OWN attempt, paired by `ts` —
+  // both records of one attempt derive from the same `startedAt`, which is the
+  // schema's documented sibling invariant. Deliberately NOT "the last record
+  // wins": `readAuditRecords` RE-SORTS the trail by `ts`, so file order does not
+  // survive the read. `findPendingIntent` (write/opid.ts) applies the identical
+  // rule, so the reporting surface and the dispatch gate can never disagree
+  // about whether a key is in flight.
+  const settled = new Set(matched.filter((r) => r.result !== "intent").map((r) => r.ts));
+  const pending = matched.findLast((r) => r.result === "intent" && !settled.has(r.ts));
+
+  if (pending === undefined) {
+    const finals = matched.filter((r) => r.result !== "intent");
     const rec = finals[finals.length - 1] as AuditRecord;
     return {
       opId,
@@ -215,31 +247,72 @@ export function opResult(opId: string, options: OpResultOptions = {}): OpResultD
       ts: rec.ts,
       durationMs: rec.durationMs,
       tracePath: null,
+      holder: null,
       note: foundNote(rec.result, rec.uuid),
     };
   }
 
-  // Only intent marker(s): still running, or the process died mid-flight.
-  const rec = matched[matched.length - 1] as AuditRecord;
-  const tracePath = correlatedTrace(traceDir, rec.ts);
-  return {
+  // An unsuperseded intent. Its holder decides which of the two very different
+  // situations this is — and the caller's next move differs completely between
+  // them, which is why the old single hedged answer was worth splitting.
+  const last = pending;
+  const tracePath = correlatedTrace(traceDir, last.ts);
+  const recorded = last.holder;
+  const holder: OpResultHolder | null =
+    recorded === undefined ? null : { ...recorded, alive: instanceAlive(recorded) };
+  const target = last.uuid ?? "<uuid>";
+  const base = {
     opId,
-    status: "intent-only",
-    op: rec.op,
+    op: last.op,
     result: null,
-    uuid: rec.uuid,
+    uuid: last.uuid,
     observed: null,
     verify: null,
     // An intent marker is written BEFORE the app is touched, so it never carries
     // steps — the drive had not run yet. The trace file is the recovery here.
     steps: null,
-    ts: rec.ts,
+    ts: last.ts,
     durationMs: null,
     tracePath,
+    holder,
+  } as const;
+
+  if (holder !== null && holder.alive) {
+    return {
+      ...base,
+      status: "in-flight",
+      note:
+        `the operation is STILL RUNNING — it started ${last.ts} and the process that owns it ` +
+        `(pid ${holder.pid}) is alive. Nothing to recover yet: run this command again in a few ` +
+        "seconds until it reports a final outcome. Do NOT resubmit the write — a GUI-driven " +
+        "change takes seconds, and longer on a large or syncing database. (Resubmitting the same " +
+        "op-id while it runs is refused rather than executed, so a retry costs you the wait " +
+        "either way.)",
+    };
+  }
+
+  if (holder !== null) {
+    return {
+      ...base,
+      status: "orphaned",
+      note:
+        `the operation started ${last.ts} and the process that owned it (pid ${holder.pid}) is ` +
+        "GONE without recording an outcome — its app-side change may or may not have landed. " +
+        `Re-read the target (\`things show ${target}\`) and inspect the trace` +
+        (tracePath !== null ? ` (${tracePath})` : "") +
+        " rather than blind-retrying. Resubmitting the SAME command with the SAME op-id is safe: " +
+        "it re-reads state to decide whether that change is there, replaying it rather than " +
+        "repeating it (and refusing outright when the record cannot settle the question)",
+    };
+  }
+
+  return {
+    ...base,
+    status: "intent-only",
     note:
-      "the operation was recorded as STARTED but no final outcome was written — it is still " +
-      "running, or the process died mid-flight (its GUI-side change may have landed). The outcome " +
-      "is UNCERTAIN: re-read the target and inspect the trace" +
+      "the operation was recorded as STARTED but no final outcome was written, and the record " +
+      "names no process, so whether it is still running cannot be determined from here. The " +
+      `outcome is UNCERTAIN: re-read the target (\`things show ${target}\`) and inspect the trace` +
       (tracePath !== null ? ` (${tracePath})` : "") +
       " rather than blind-retrying",
   };

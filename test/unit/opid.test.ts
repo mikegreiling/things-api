@@ -7,11 +7,18 @@
  * reconciliation they feed is exercised end-to-end against the simulator in
  * `test/engine/write-opid-reconcile.test.ts`.
  */
+import { spawnSync } from "node:child_process";
+
 import { describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import { undoToken } from "../../src/audit/schema.ts";
-import { findOpIdRecord, presenceOracle } from "../../src/write/opid.ts";
+import {
+  findOpIdRecord,
+  findPendingIntent,
+  presenceOracle,
+  resolveOpId,
+} from "../../src/write/opid.ts";
 import { replayResultFromRecord } from "../../src/write/pipeline.ts";
 import type { DeltaSpec } from "../../src/write/verify/delta.ts";
 
@@ -91,6 +98,115 @@ describe("findOpIdRecord", () => {
     expect(findOpIdRecord([target, ...filler], "k", NOW)).toBeUndefined();
     // within the window, it matches.
     expect(findOpIdRecord([target, ...filler.slice(1)], "k", NOW)?.uuid).toBe("TARGET");
+  });
+});
+
+describe("findPendingIntent — is this key in flight right now? (#639)", () => {
+  it("an intent with no final after it is pending", () => {
+    const records = [record({ opId: "k", result: "intent", uuid: "RUNNING" })];
+    expect(findPendingIntent(records, "k", NOW)?.uuid).toBe("RUNNING");
+  });
+
+  it("a final of ANY class supersedes its own attempt's intent", () => {
+    for (const result of ["ok", "verify-failed:timeout", "blocked:lock", "unsupported"] as const) {
+      const records = [record({ opId: "k", result: "intent" }), record({ opId: "k", result })];
+      expect(findPendingIntent(records, "k", NOW), result).toBeUndefined();
+    }
+  });
+
+  it("pairing is by ts, NOT by position — the trail is re-sorted before it gets here", () => {
+    // `readAuditRecords` re-sorts by `ts`, so a "the last record wins" rule reads
+    // whatever the sort happened to put last. This is the TORPH1 cell-B shape,
+    // where a composite's intent briefly carried a LATER ts than its own summary
+    // and every finished promote read as permanently in flight.
+    const records = [
+      record({ ts: "2026-07-20T11:00:00Z", opId: "k", result: "ok", uuid: "LANDED" }),
+      record({ ts: "2026-07-20T11:00:00Z", opId: "k", result: "intent" }),
+    ];
+    expect(findPendingIntent(records, "k", NOW)).toBeUndefined();
+  });
+
+  it("a RE-DISPATCHED key is pending again — the unpaired intent is the live one", () => {
+    const records = [
+      record({ ts: "2026-07-20T10:00:00Z", opId: "k", result: "intent", uuid: "FIRST" }),
+      record({ ts: "2026-07-20T10:00:00Z", opId: "k", result: "verify-failed:timeout" }),
+      record({ ts: "2026-07-20T11:00:00Z", opId: "k", result: "intent", uuid: "SECOND" }),
+    ];
+    expect(findPendingIntent(records, "k", NOW)?.uuid).toBe("SECOND");
+  });
+
+  it("another key's intent is not this key's", () => {
+    expect(
+      findPendingIntent([record({ opId: "other", result: "intent" })], "k", NOW),
+    ).toBeUndefined();
+  });
+
+  it("ignores an intent older than the 7-day window", () => {
+    const stale = record({ ts: "2026-07-01T12:00:00Z", opId: "k", result: "intent" });
+    expect(findPendingIntent([stale], "k", NOW)).toBeUndefined();
+  });
+});
+
+/**
+ * A REAL pid that has really exited: spawnSync returns only after the child is
+ * reaped, so this number named a process and no longer does — the shape a killed
+ * writer leaves behind, and the one case `pidAlive` must answer false for.
+ */
+function deadHolder(): { pid: number; start: string } {
+  return {
+    pid: spawnSync(process.execPath, ["-e", ""]).pid as number,
+    start: "Wed Aug 26 09:00:00 2026",
+  };
+}
+
+describe("resolveOpId — a live holder REFUSES, a dead one reconciles (#639)", () => {
+  /** Deps stubbed down to what the intent branches touch (no db read reached). */
+  const deps = { now: () => NOW } as unknown as Parameters<typeof resolveOpId>[0];
+  const liveHolder = { pid: process.pid, start: null };
+
+  it("a LIVE holder's intent refuses with blocked:in-flight, pointing at op-result", () => {
+    const records = [record({ opId: "k", result: "intent", holder: liveHolder })];
+    const decision = resolveOpId(deps, records, "k", NOW);
+    expect(decision).toMatchObject({ kind: "blocked", reason: "in-flight", op: "todo.complete" });
+    expect(decision?.kind === "blocked" && decision.detail).toContain("STILL RUNNING");
+    expect(decision?.kind === "blocked" && decision.remediation).toContain("things op-result k");
+  });
+
+  it("a live intent WINS over an older matchable final for the same key", () => {
+    // The retry-after-timeout shape: replaying the stale timeout here would hand
+    // back a change the running attempt has not finished making.
+    const records = [
+      record({ ts: "2026-07-20T10:00:00Z", opId: "k", result: "verify-failed:timeout" }),
+      record({ ts: "2026-07-20T11:00:00Z", opId: "k", result: "intent", holder: liveHolder }),
+    ];
+    expect(resolveOpId(deps, records, "k", NOW)).toMatchObject({ reason: "in-flight" });
+  });
+
+  it("an intent with NO holder is treated as live — the safe unknowable answer", () => {
+    const records = [record({ opId: "k", result: "intent" })];
+    expect(resolveOpId(deps, records, "k", NOW)).toMatchObject({ reason: "in-flight" });
+  });
+
+  it("a DEAD holder's intent with no oracle refuses honestly with blocked:reconcile", () => {
+    const records = [record({ opId: "k", result: "intent", holder: deadHolder() })];
+    const decision = resolveOpId(deps, records, "k", NOW);
+    expect(decision).toMatchObject({ kind: "blocked", reason: "reconcile" });
+    expect(
+      decision?.kind === "blocked" && decision.detail,
+      "the refusal says the process ENDED, not that it timed out",
+    ).toContain("process ended without recording an outcome");
+  });
+
+  it("a superseded intent is invisible — the final decides, as before", () => {
+    const records = [
+      record({ opId: "k", result: "intent", holder: liveHolder }),
+      record({ opId: "k", result: "ok", uuid: "LANDED" }),
+    ];
+    expect(resolveOpId(deps, records, "k", NOW)).toMatchObject({
+      kind: "ok",
+      uuid: "LANDED",
+      alreadyApplied: true,
+    });
   });
 });
 

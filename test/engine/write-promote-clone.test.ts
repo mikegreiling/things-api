@@ -1661,9 +1661,13 @@ describe("the promote compounds take an --op-id — one summary record, one key"
     expect(res.kind).toBe("ok");
 
     const keyed = auditRecords.filter((r) => r.opId === "promote-once");
-    expect(keyed).toHaveLength(1);
-    expect(keyed[0]?.txn?.role).toBe("summary");
-    expect(keyed[0]?.op).toBe("todo.make-repeating");
+    // ONE RECORDED RESULT per key — preceded by the write-ahead intent that made
+    // the key readable while the verb was in flight (#639). Both sit at the
+    // SUMMARY layer, because that is where a composite's key lives.
+    expect(keyed.map((r) => r.result)).toEqual(["intent", "ok"]);
+    expect(keyed.every((r) => r.txn?.role === "summary")).toBe(true);
+    expect(keyed[0]?.holder?.pid, "the intent names the process that owns it").toBe(process.pid);
+    expect(keyed[1]?.op).toBe("todo.make-repeating");
     // Every leg belongs to the transaction and carries no key of its own.
     expect(
       auditRecords.filter((r) => r.txn?.role === "leg").every((r) => r.opId === undefined),
@@ -1718,7 +1722,10 @@ describe("the promote compounds take an --op-id — one summary record, one key"
       { ...GUI, opId: "p-add" },
     );
     for (const op of ["project.make-repeating", "todo.add-repeating", "project.add-repeating"]) {
-      const keyed = auditRecords.filter((r) => r.op === op && r.opId !== undefined);
+      // One RESULT per key (the write-ahead intent alongside it is not a result).
+      const keyed = auditRecords.filter(
+        (r) => r.op === op && r.opId !== undefined && r.result !== "intent",
+      );
       expect(keyed, op).toHaveLength(1);
       expect(keyed[0]?.txn?.role, op).toBe("summary");
     }
@@ -1778,13 +1785,22 @@ describe("a promote whose drive never confirmed is reconciled, not re-run", () =
     expect(res.kind).toBe("verify-failed");
     expect(res.kind === "verify-failed" && res.reason).toBe("timeout");
 
-    const summary = auditRecords.find((r) => r.opId === "maybe-made");
+    const keyed = auditRecords.filter((r) => r.opId === "maybe-made");
+    const summary = keyed[keyed.length - 1];
     expect(summary?.txn?.role).toBe("summary");
     expect(summary?.result).toBe("verify-failed:timeout");
     expect(summary?.expected).toMatchObject({
       mode: "create",
       probe: { title: "Unconfirmed habit", type: "to-do" },
       assert: [{ field: "repeating.isTemplate", equals: true }],
+    });
+    // The write-ahead intent carried the SAME oracle (#639), so a holder that
+    // died mid-drive would leave a retry exactly as able to reconcile as this
+    // timeout does.
+    expect(keyed[0]?.result).toBe("intent");
+    expect(keyed[0]?.expected).toMatchObject({
+      mode: "create",
+      probe: { title: "Unconfirmed habit", type: "to-do" },
     });
   });
 
