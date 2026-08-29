@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Fixed — a repeating to-do or project can now be moved between projects and areas.** `things todo move` and `things project move` refused any repeating item outright, telling the caller to "edit the repeat rule in the Things app" — an answer to a question nobody had asked, since moving a series into a different project says nothing about when it repeats. In a multi-item move it was worse: the ordinary items landed and the repeating one did not, leaving the block half-moved with the reason buried inside a generic failure.
+
+  Every container change now works, on both delivery paths: project to project, project to area, area to project, detaching to no container at all, and back. Measured in the lab against the app itself, arm by arm, with the whole row compared before and after: the repeat rule comes back byte for byte identical, both of the series' internal "next occurrence" markers are untouched, and the existing occurrences are not disturbed. The one destination that genuinely does not work is the **Inbox** — the app refuses to move a repeating item to any of its built-in lists — so `--inbox` is still refused, now saying exactly that and naming the destinations that do work.
+
+  Two things ride the change. A move that is refused for a single item now reports as a clean refusal with its reason on the surface, instead of as a generic failure wrapping it. And a successful move of a repeating item now tells you what it could not do for you: **occurrences that already exist stay in the old container**, only the ones created from now on appear in the new one. That split is invisible otherwise — the app behaves the same way — so the result names how many were left behind and which one is current. (Issue #655, campaign TMOV1.)
+
 ## 0.20.0 — 2026-08-28
 
 - **Confirmed — undoing a write you made with `--preserve-modified` keeps it off the changes timeline, the same way Things' own Undo does.** The flag exists so a bulk edit — a re-tag, a sweep — does not shove every item it touched to the top of everything that sorts by "recently changed". Reversing such a write already restored the modification dates it had preserved, so the reversal is as quiet as the original; what was missing was any evidence that this matches the app.

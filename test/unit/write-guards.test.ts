@@ -34,7 +34,7 @@ function check<K extends OperationKind>(
 }
 
 describe("H-REPEAT-SCHEDULE", () => {
-  it("blocks when/deadline updates and status/move ops on repeating templates", () => {
+  it("blocks when/deadline updates and status ops on repeating templates", () => {
     const uuid = seedTodo(fixture.db, {
       title: "Template",
       recurrenceRule: true,
@@ -42,6 +42,49 @@ describe("H-REPEAT-SCHEDULE", () => {
     });
     expect(check("todo.update", { uuid, when: "today" })?.hazard).toBe("H-REPEAT-SCHEDULE");
     expect(check("todo.complete", { uuid })?.hazard).toBe("H-REPEAT-SCHEDULE");
+  });
+
+  it("ALLOWS container moves on a template — project/area/loose, to-dos and projects (TMOV1)", () => {
+    // A template's container is independently mutable: every transition landed on
+    // both vectors with the rule blob byte-identical and both spawn cursors, the
+    // spawn tally and `start` untouched (TMOV1 A1–A5 / X1 / P1 / P2 / AC1).
+    const project = seedProject(fixture.db, { title: "Destination" });
+    const area = seedArea(fixture.db, "Destination area");
+    const template = seedTodo(fixture.db, {
+      title: "Template",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    expect(check("todo.move", { uuid: template, project: { uuid: project } })).toBeNull();
+    expect(check("todo.move", { uuid: template, area: { uuid: area } })).toBeNull();
+    expect(check("todo.move", { uuid: template, loose: true })).toBeNull();
+    expect(check("todo.move", { uuid: template, noHeading: true })).toBeNull();
+    const repeatingProject = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    expect(check("project.move", { uuid: repeatingProject, area: { uuid: area } })).toBeNull();
+    expect(check("project.move", { uuid: repeatingProject, noArea: true })).toBeNull();
+  });
+
+  it("still refuses the INBOX return on a template — the built-in-list wall (TMOV1 C1/C3)", () => {
+    // `move … to list "Inbox"` on a template errors 301 with zero row delta, the
+    // same wall RSIM-S §S4/§S-R3 measured on a template-side child. Fenced by
+    // DESTINATION: the block names the destinations that do work.
+    const template = seedTodo(fixture.db, {
+      title: "Template",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    const block = check("todo.move", { uuid: template, inbox: true });
+    expect(block?.hazard).toBe("H-REPEAT-SCHEDULE");
+    expect(block?.detail).toContain("built-in");
+    expect(block?.remediation).toContain("--to-project");
+    expect(block?.remediation).toContain("--loose");
+    // A plain to-do's Inbox return is untouched by any of this.
+    const plain = seedTodo(fixture.db, { title: "Plain" });
+    expect(check("todo.move", { uuid: plain, inbox: true })).toBeNull();
   });
 
   it("a to-do's schedule refusal is a TWO-WAY steer, not a dead end (ruling 2026-08-24)", () => {
