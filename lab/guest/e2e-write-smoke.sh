@@ -91,10 +91,16 @@ assert_out() {
 # and changes nothing (docs/lab/gv4-323-campaign.md §3.1), while STILL declaring
 # it — so the sdef canary is blind and the shipped engine stands a VERSION gate
 # in front of it (src/write/experimental.ts PRIVATE_REORDER_NO_OP_FROM). Scopes
-# with a SIT7 fallback degrade silently and their steps are unchanged; the three
-# native-ONLY reaches (heading order, and any day-group holding a repeating
-# template) refuse pre-dispatch instead. Those steps branch here rather than
-# hard-coding the pre-3.23 answer, so ONE script certifies both app generations.
+# with a SIT7 fallback degrade silently and their steps are unchanged; the
+# native-ONLY reach that remains — a day-group holding a repeating template —
+# refuses pre-dispatch instead. Those steps branch here rather than hard-coding
+# the pre-3.23 answer, so ONE script certifies both app generations.
+#
+# Heading order used to be the second native-only reach. It no longer is:
+# CHORDMH1 moved `project.move-heading` OFF the private reorder wire and onto the
+# app's own arrow-chord ui vector (src/write/commands.ts projectMoveHeading), so
+# its refusal is the ui-drive ack gate on BOTH app generations and its steps
+# below carry no version branch.
 THINGS_VERSION=$(defaults read /Applications/Things3.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo "")
 if python3 -c "
 import sys
@@ -109,11 +115,9 @@ fi
 echo "== Things ${THINGS_VERSION:-<unreadable>} — native private reorder available: $NATIVE_REORDER =="
 
 if [ "$NATIVE_REORDER" = "no" ]; then
-  # Native-only reaches refuse pre-dispatch: blocked, exit 4.
-  EXIT_HEADING_ORDER=4   # `project move-heading` — heading order has no fallback
+  # The native-only reach refuses pre-dispatch: blocked, exit 4.
   EXIT_TEMPLATE_DAY=4    # any day-group holding a repeating template
 else
-  EXIT_HEADING_ORDER=0
   EXIT_TEMPLATE_DAY=0
 fi
 # A Today set containing a PROJECT row is NOT version-conditional any more.
@@ -275,12 +279,25 @@ else
   echo "FAIL heading fixtures did not appear (json url seed)"
   FAILURES=$((FAILURES + 1))
 fi
-run_step "$EXIT_HEADING_ORDER" "native reorder of a project's HEADINGS (scf P1)" project move-heading "$HPROJ" "$H2" "$H1" --first
-if [ "$NATIVE_REORDER" = "no" ]; then
-  assert_out 'blocked:environment' \
-    "heading order refuses pre-dispatch on this Things (no fallback protocol exists)" \
-    "heading-order refusal is not the pre-dispatch environment block"
-fi
+# Heading order is a ui-vector op since CHORDMH1: `project.move-heading` drives
+# the app's own ⌘↑/⌘↓ heading chords (src/write/vectors/ui-chord.ts), so it is
+# gated exactly like every other GUI-driving verb and NOT by the 3.23 private
+# reorder gate. The drive itself stays out of lab:regress by design (ui-vector
+# ops carry a per-Things-version certification campaign instead —
+# docs/reference/suite-audit.md), so what the e2e locks end-to-end is the pair of
+# gates in front of it, neither of which touches the app:
+#   (a) no ack        -> H-UI-DRIVE, blocked (exit 4), remediation names the flag
+#   (b) ack, ui off   -> unsupported (exit 6), remediation names `ui-enabled`
+# (b) is also the proof the flag PARSES and THREADS on this verb — the failure
+# mode heading-drivegui-cli.test.ts locks at the unit layer.
+run_step 4 "heading order fail-closes on the ui-drive ack gate (CHORDMH1)" project move-heading "$HPROJ" "$H2" "$H1" --first
+assert_out 'blocked:H-UI-DRIVE' \
+  "heading order refuses on H-UI-DRIVE (the arrow-chord ui vector's ack gate)" \
+  "heading-order refusal is not the H-UI-DRIVE ack block"
+run_step 6 "heading order with the ack advances to the ui-enabled config gate" project move-heading "$HPROJ" "$H2" "$H1" --first --dangerously-drive-gui
+assert_out 'ui-enabled' \
+  "heading order's config-gate refusal names the ui-enabled key" \
+  "heading-order config refusal does not name ui-enabled"
 run_step 0 "seed top-level project TP1" project add "E2E-TP1"
 TP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed top-level project TP2" project add "E2E-TP2"
