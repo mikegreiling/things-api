@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { localToday } from "../../src/model/dates.ts";
 import { COMMANDS } from "../../src/write/commands.ts";
 import { evaluateGuards, type GuardBlock } from "../../src/write/guards.ts";
 import {
@@ -206,7 +207,10 @@ describe("vector + gate routing", () => {
 describe("H-REPEAT-REANCHOR — the measured edges", () => {
   it("refuses a date that is not strictly after today (REANCH1 §5: it kills the app)", () => {
     const uuid = seedTemplate();
-    const today = new Date().toISOString().slice(0, 10);
+    // The guard's boundary is the DEVICE-LOCAL calendar day (pre.todayIso via
+    // localToday) — deriving "today" in UTC made this flake on any host whose
+    // local date trails UTC (fails every evening in the Americas).
+    const today = localToday(new Date());
     expect(check("todo.reschedule-repeat", { uuid, next: today })?.hazard).toBe(
       "H-REPEAT-REANCHOR",
     );

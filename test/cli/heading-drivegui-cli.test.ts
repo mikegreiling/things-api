@@ -81,10 +81,11 @@ function envelope(): Record<string, unknown> {
   return JSON.parse(line) as Record<string, unknown>;
 }
 
-/** A source project with a lone heading, plus a distinct destination project. */
+/** A source project with two headings, plus a distinct destination project. */
 function seedHeadingScenario(): { src: string; dest: string } {
   const src = seedProject(fixture.db, { title: "Source" });
   seedHeading(fixture.db, { title: "Phase 1", project: src });
+  seedHeading(fixture.db, { title: "Phase 2", project: src });
   const dest = seedProject(fixture.db, { title: "Destination" });
   return { src, dest };
 }
@@ -97,6 +98,15 @@ const scenarios: Array<{ name: string; argv: (s: { src: string; dest: string }) 
   {
     name: "project move-heading-to-project",
     argv: ({ src, dest }) => ["project", "move-heading-to-project", src, "Phase 1", "--to", dest],
+  },
+  // move-heading rode the private-reorder wire until CHORDMH1 moved it to the
+  // chord ui vector; lab:regress caught the e2e still asserting the OLD refusal
+  // three releases later (the 0.20.0 retro gate run). This row is the CI-visible
+  // tripwire under the same ack/config gate law its siblings already lock — a
+  // genuine move (Phase 2 → first), so no earlier no-op path can short-circuit.
+  {
+    name: "project move-heading",
+    argv: ({ src }) => ["project", "move-heading", src, "Phase 2", "--first"],
   },
 ];
 
