@@ -71,15 +71,18 @@ type GuardFn = (input: GuardInput) => GuardBlock | null;
  * disclosure and emits no undo token. `todo.restore`/`project.restore` STAY here
  * but take a dedicated Put-Back message (a trashed template cannot be revived
  * headlessly — AS move-to-Inbox → 301, RSIM-S S-R3).
+ *
+ * NB: `todo.move`/`project.move` are NOT here either — a template's CONTAINER is
+ * independently mutable (TMOV1, 2026-08-29; the fence they used to sit behind was
+ * a placeholder over an unprobed cell). The one move shape the app refuses is the
+ * built-in-LIST destination, handled below.
  */
 const REPEAT_SENSITIVE = new Set<OperationKind>([
   "todo.complete",
   "todo.cancel",
   "todo.reopen",
-  "todo.move",
   "todo.duplicate", // unvalidated on templates (E07 probed a plain to-do)
   "todo.restore", // a trashed template cannot be restored headlessly (Put Back only)
-  "project.move", // unvalidated on repeating projects (E14 probed a plain project)
   "project.duplicate", // unvalidated on repeating projects (E17 probed a plain project)
   "project.cancel", // unvalidated on repeating projects (P01 probed a plain project)
   "project.reopen", // unvalidated on repeating projects (P02/P05 probed plain projects)
@@ -102,6 +105,27 @@ const GUARDS: Record<HazardId, GuardFn> = {
         remediation:
           "restore the series from the Things app's Trash (Put Back) — this returns the template " +
           "and resumes its schedule",
+      };
+    }
+    // A CONTAINER move is not a schedule write and the app treats it as such
+    // (TMOV1, 2026-08-29, golden-v4 / Things 3.23): project↔project, project↔area
+    // and container↔loose all land on a template on BOTH vectors, leaving the rule
+    // blob byte-identical and both spawn cursors, the spawn tally and `start`
+    // untouched — the only columns that move are the container FK and `umd`. What
+    // the app does refuse is the built-in-LIST destination: `move … to list
+    // "Inbox"` on a template errors 301 with zero row delta, the same wall RSIM-S
+    // §S4/§S-R3 measured on a template-side CHILD. So the Inbox return is the one
+    // move shape still fenced, and it is fenced by DESTINATION, not by op kind.
+    if (op === "todo.move") {
+      if (params["inbox"] !== true) return null;
+      return {
+        hazard: "H-REPEAT-SCHEDULE",
+        detail:
+          "the target is a repeating template, and the app refuses to move one to a built-in " +
+          "list — the Inbox return errors 301 and changes nothing (TMOV1 C1/C3)",
+        remediation:
+          "move the series to a project or an area instead (`--to-project` / `--to-area`), or " +
+          "detach it from every container with `--loose`",
       };
     }
     const touchesSchedule =
@@ -129,10 +153,10 @@ const GUARDS: Record<HazardId, GuardFn> = {
       hazard: "H-REPEAT-SCHEDULE",
       detail:
         "target is a repeating template: URL scheduling writes crash Things (T12/U12); " +
-        "status/move on templates are unvalidated",
+        "status writes on templates are unvalidated",
       remediation:
-        "edit the repeat rule in the Things app; title/notes updates and checklist " +
-        "replacement remain allowed on templates",
+        "edit the repeat rule in the Things app; title/notes updates, checklist replacement " +
+        "and container moves remain allowed on templates",
     };
   },
   "H-TEMPLATE-CHILD-RESTORE": ({ op, pre }) => {

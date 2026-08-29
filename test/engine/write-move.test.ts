@@ -613,6 +613,37 @@ describe("rule 1/4: membership move — selection order = landing order", () => 
     expect(ascending(indexOrder([t3, t1, t2]))).toBe(true);
   });
 
+  it("a repeating TEMPLATE moves between containers, and the Inbox return alone is refused (TMOV1)", async () => {
+    // TMOV1 A1–A5: the container is independently mutable on a template (rule and
+    // both spawn cursors byte-unchanged). TMOV1 C1/C3: `move … to list "Inbox"`
+    // is the one destination the app refuses — 301, zero delta — so the fence is
+    // keyed on the DESTINATION, not on the op.
+    const src = seedProject(fixture.db, { title: "TmplSrc" });
+    const dest = seedProject(fixture.db, { title: "TmplDest" });
+    const tmpl = seedTodo(fixture.db, {
+      title: "Series",
+      project: src,
+      recurrenceRule: true,
+      start: "someday",
+    });
+    seedTodo(fixture.db, { title: "Series", project: src, repeatingTemplate: tmpl });
+    const moved = await runTodoMove(deps(), {
+      uuids: [tmpl],
+      destination: { kind: "project", ref: { uuid: dest } },
+    });
+    expect(moved.kind).toBe("move-ok");
+    expect(containerOf(tmpl).project).toBe(dest);
+
+    const inbox = await runTodoMove(deps(), { uuids: [tmpl], destination: { kind: "inbox" } });
+    expect(inbox.kind).toBe("move-refused");
+    if (inbox.kind === "move-refused") {
+      expect(inbox.hazard).toBe("H-REPEAT-SCHEDULE");
+      expect(inbox.detail).toContain("built-in");
+    }
+    // Refused before the app was touched: the template kept the destination.
+    expect(containerOf(tmpl).project).toBe(dest);
+  });
+
   it("reversal costs nothing — naming them backwards reverses the landing order", async () => {
     // Naming d before c lands d above c (selection order = landing order).
     const dest2 = seedProject(fixture.db, { title: "Dest2" });

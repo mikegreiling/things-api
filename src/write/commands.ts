@@ -994,7 +994,9 @@ const projectSetTags: CommandSpec<"project.set-tags"> = {
 
 const projectMove: CommandSpec<"project.move"> = {
   op: "project.move",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  // No H-REPEAT-SCHEDULE: a repeating project's AREA is independently mutable
+  // (TMOV1 P1/P2), and a project has no built-in-list destination to fence.
+  hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     if ((params.noArea === true) === containerGiven(params.area)) {
       throw new RangeError("project.move needs exactly one of area / --no-area");

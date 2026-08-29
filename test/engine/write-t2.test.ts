@@ -150,17 +150,26 @@ describe("project.move (E14)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("is blocked on repeating projects (unvalidated)", async () => {
+  it("moves a REPEATING project, and discloses that its occurrences stayed behind (TMOV1 P1)", async () => {
+    // The container is independently mutable on a template: the area FK moves and
+    // the rule is byte-unchanged (TMOV1 P1/P2). What the caller cannot see is that
+    // the occurrences ALREADY minted stay in the old area — so the result says it.
     const areaB = seedArea(fixture.db, "AreaB");
     const proj = seedProject(fixture.db, { title: "RepeatProj", recurrenceRule: true });
-    const { vector, calls } = fakeVector("applescript", AS_MATRIX, null);
+    seedProject(fixture.db, { title: "RepeatProj", repeatingTemplate: proj });
+    const { vector, calls } = fakeVector("applescript", AS_MATRIX, () => {
+      touch(proj, `area = '${areaB}'`);
+    });
     const result = await runMutation(deps([vector]), "project.move", {
       uuid: proj,
       area: { uuid: areaB },
     });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") expect(result.hazard).toBe("H-REPEAT-SCHEDULE");
-    expect(calls).toHaveLength(0);
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(`set area of project id "${proj}" to area id "${areaB}"`);
+    if (result.kind === "ok") {
+      expect(result.observed?.["area.uuid"]).toBe(areaB);
+      expect((result.warnings ?? []).join(" ")).toContain("stayed in the previous container");
+    }
   });
 });
 

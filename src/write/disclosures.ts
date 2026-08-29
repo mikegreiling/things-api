@@ -56,6 +56,10 @@ export const DISCLOSURES = {
     tier: "warning",
     why: "`things undo` will refuse this one; recovery needs a manual step in the app",
   },
+  "template-move-occurrences-stay": {
+    tier: "warning",
+    why: "the caller moved a series and its already-visible copies did NOT come along — the split is invisible in the result and is theirs to finish or accept (TMOV1 §6.1)",
+  },
   "transport-recovered": {
     tier: "warning",
     why: "it exists to stop a retry the caller would otherwise make — the most actionable line we emit",

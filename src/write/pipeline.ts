@@ -1911,6 +1911,29 @@ export async function runMutation<K extends OperationKind>(
             `(Put Back on the ${kindNoun})`,
         );
       }
+      // Template-move disclosure (TMOV1 §6): moving a series is fully FORWARD-
+      // effective. Every occurrence minted after the move lands in the new
+      // container — measured on both minting paths, the app's clock spawner and
+      // the CNC composite — but occurrences that ALREADY exist stay where they
+      // were, so the series is split across two containers and nothing else says
+      // so. Only worth saying when there is something left behind.
+      if (
+        (op === "todo.move" || op === "project.move") &&
+        pre.target !== null &&
+        isRepeatingTemplate(pre.target)
+      ) {
+        const series = liveSeriesInstances(deps.db, pre.target.uuid);
+        if (series.count > 0) {
+          disclose(
+            bag,
+            "template-move-occurrences-stay",
+            `${series.count} existing occurrence${series.count === 1 ? "" : "s"} of this ` +
+              "repeating item stayed in the previous container — only occurrences created from " +
+              "now on appear in the new one" +
+              (series.currentUuid !== null ? ` (the current one is ${series.currentUuid})` : ""),
+          );
+        }
+      }
       if (transportRecovered) {
         disclose(
           bag,

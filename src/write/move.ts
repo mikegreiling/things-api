@@ -1287,6 +1287,23 @@ export async function runTodoMove(
       ...(options.dryRun === true && { dryRun: true }),
     });
     membership.push(res);
+    // A blocked FIRST leg is a clean refusal, not a partial move: nothing was
+    // touched, so hoist it to the same `move-refused` shape a direct hazard block
+    // produces (exit 4 + `blocked:<hazard>` + `BLOCKED (<hazard>)`), exactly as
+    // the area path does. A blocked LATER leg is genuine partial progress and
+    // stays a leg failure. Without this a single-target refusal — the repeating
+    // template's Inbox return is the one that remains — reached the caller as a
+    // generic `verify-failed` with the real hazard buried in `detail.failed`.
+    if (res.kind === "blocked" && membership.length === 1) {
+      return {
+        kind: "move-refused",
+        op,
+        refusal: "blocked",
+        detail: res.detail,
+        ...(res.remediation !== undefined && { remediation: res.remediation }),
+        ...(res.hazard !== undefined && { hazard: res.hazard }),
+      };
+    }
     if (res.kind !== "ok" && res.kind !== "dry-run") {
       return {
         kind: "move-leg-failed",

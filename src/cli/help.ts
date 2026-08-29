@@ -454,7 +454,7 @@ repeater), \`… add-repeating "<title>"\` (create + make repeating in one call)
 <daily|weekly|monthly|yearly>\` and \`--interval <n>\` (1 = every unit). These drive the
 app's Repeat dialog, so they require \`--dangerously-drive-gui\`, \`--dry-run\` included.
 
-MOVING a series: \`reschedule-repeat <ref> --when <date>\` with NO --frequency/--interval
+RE-DATING a series: \`reschedule-repeat <ref> --when <date>\` with NO --frequency/--interval
 keeps the rule and needs no --dangerously-drive-gui. The WHOLE series moves (weekly → a
 Thursday repeats on Thursdays), occurrences due before that date are skipped, and it
 cannot be undone here. Refused for a date not after today, a paused, --after-completion
