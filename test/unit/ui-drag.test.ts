@@ -21,11 +21,16 @@ import {
   parseSidebarSnapshot,
   placementSatisfied,
   rowMatchesTitle,
+  sectionBlocks,
   slotPitch,
   sourceGroupSpan,
+  tallestSectionInSpan,
+  usableDragSpan,
   type AreaSidebarState,
   type SidebarPlacement,
+  type SidebarRect,
   type SidebarRowInfo,
+  type SidebarSectionSpan,
 } from "../../src/write/vectors/ui-drag.ts";
 
 // ------------------------------------------------------------- helpers
@@ -507,5 +512,125 @@ describe("placementSatisfied", () => {
     expect(placementSatisfied(state, "b", { kind: "after", uuid: "a", title: "A" })).toBe(true);
     expect(placementSatisfied(state, "a", { kind: "last" })).toBe(false);
     expect(placementSatisfied(state, "a", { kind: "after", uuid: "c", title: "C" })).toBe(false);
+  });
+});
+
+// ------------------------------------------- the tall-section wall (#658)
+//
+// A real sidebar renders every area's PROJECTS beneath it, so ONE area's
+// section can be taller than the whole viewport. Both shipped rungs need the
+// grab point and the drop boundary visible at once, so such a section can never
+// be crossed — the driver must say so up front instead of hopping until no
+// anchor fits and then blaming the window size (AXDRAG5).
+
+const WALL_VIEWPORT: SidebarRect = { x: VIEW_X, y: VIEW_Y, w: 240, h: 346 };
+
+/** A5 at the bottom, A3 carrying `projects` nested rows — the field geometry. */
+function wallRows(projects: number): SidebarRowInfo[] {
+  const rows: SidebarRowInfo[] = [];
+  let y = VIEW_Y;
+  const push = (title: string): void => {
+    rows.push(entityRow(title, y));
+    rows.push(spacerRow(y + ROW_H));
+    y += PITCH;
+  };
+  push("A1");
+  push("A2");
+  push("A3");
+  for (let i = 0; i < projects; i++) push(`Proj-${i}`);
+  push("A4");
+  push("A5");
+  return rows;
+}
+
+describe("tall-section geometry", () => {
+  it("measures each area SECTION (its row plus the rows Things renders under it)", () => {
+    const rows = wallRows(20);
+    const ordered = areaRowsInOrder(rows, ["A1", "A2", "A3", "A4", "A5"]);
+    const src = ordered.find((a) => a.title === "A5") as { row: SidebarRowInfo };
+    const wall = tallestSectionInSpan(
+      ordered,
+      rows,
+      src.row.y + src.row.h / 2,
+      boundaryAboveRow(rows, (ordered[1] as { row: SidebarRowInfo }).row),
+      "A5",
+    );
+    expect(wall?.title).toBe("A3");
+    expect(wall?.height).toBe(21 * PITCH); // A3 + its 20 project rows
+    expect(sectionBlocks(wall as SidebarSectionSpan, WALL_VIEWPORT)).toBe(true);
+  });
+
+  it("does not call a NARROW section a wall, and never counts the source's own", () => {
+    const rows = wallRows(2); // A3 = 3 slots = 120pt, well inside the 322pt span
+    const ordered = areaRowsInOrder(rows, ["A1", "A2", "A3", "A4", "A5"]);
+    const wall = tallestSectionInSpan(ordered, rows, VIEW_Y + 500, VIEW_Y, "A5");
+    expect(wall === null || !sectionBlocks(wall, WALL_VIEWPORT)).toBe(true);
+    expect(usableDragSpan(WALL_VIEWPORT)).toBe(322);
+  });
+});
+
+describe("ladder — the tall-section wall", () => {
+  /** A runner whose sidebar snapshot is fixed; records every primitive it sees. */
+  function wallSim(projects: number): {
+    run: (command: UiCommand) => Promise<UiRunResult>;
+    aux: { areaState: () => AreaSidebarState };
+    log: string[];
+  } {
+    const titles = ["A1", "A2", "A3", "A4", "A5"];
+    const log: string[] = [];
+    const rows = wallRows(projects);
+    return {
+      log,
+      run: (command: UiCommand): Promise<UiRunResult> => {
+        log.push(command.primitive);
+        if (command.primitive === "sidebar-snapshot") {
+          return Promise.resolve({
+            ok: true,
+            stdout: JSON.stringify({ viewport: WALL_VIEWPORT, scroll: 0, rows }),
+            stderr: "",
+          });
+        }
+        return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
+      },
+      aux: {
+        areaState: (): AreaSidebarState => ({
+          areas: titles.map((t, i) => ({ uuid: `u-${t}`, title: t, index: (i + 1) * 10 })),
+          assignmentsDigest: "D",
+        }),
+      },
+    };
+  }
+
+  it("refuses BEFORE any gesture, naming the blocking area and a real remedy", async () => {
+    const sim = wallSim(20);
+    const res = await driveSidebarAreaReorder(
+      { targetUuid: "u-A5", targetTitle: "A5", placement: before("A2") },
+      sim.run,
+      sim.aux,
+      instantSleep,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain('"A3"');
+    expect(res.detail).toContain("taller than the sidebar shows at once");
+    expect(res.detail).toContain("Collapse");
+    // the honest refusal never blames the window size for a geometry no window fixes
+    expect(res.detail).not.toContain("viewport is too small");
+    // and it costs ONE snapshot, not minutes of hops
+    expect(sim.log.filter((p) => p === "sidebar-drag")).toHaveLength(0);
+    expect(sim.log.filter((p) => p === "sidebar-snapshot")).toHaveLength(1);
+  });
+
+  it("leaves a move whose path crosses only NORMAL sections to the ladder", async () => {
+    const sim = wallSim(1); // A3 = 2 slots — crossable
+    const res = await driveSidebarAreaReorder(
+      { targetUuid: "u-A5", targetTitle: "A5", placement: before("A2") },
+      sim.run,
+      sim.aux,
+      instantSleep,
+    );
+    // the fixed snapshot never reflects the drag, so the drive cannot SUCCEED —
+    // what matters is that it reached the gesture instead of refusing up front.
+    expect(sim.log).toContain("sidebar-drag");
+    expect(res.detail).not.toContain("taller than the sidebar shows at once");
   });
 });

@@ -1736,14 +1736,41 @@ export async function runMutation<K extends OperationKind>(
             hint: unreachable.remediation,
           };
         }
+        // The re-verify's OWN verdict decides the reason (#658). A `mismatch`
+        // means asserted rows DID move off their captured pre-values — the
+        // drive landed something before it failed — so reporting `silent-noop`
+        // ("the app accepted the command and changed nothing") would be a false
+        // statement AND an invitation to retry over a partial change that is
+        // already on disk, visible, and syncing. Only a re-read that found
+        // NOTHING moved earns `silent-noop`.
+        const partial = recovery.kind === "mismatch";
+        const transportPrefix =
+          `transport failed (exit ${executeResult.exitCode ?? "?"}${executeResult.timedOut === true ? ", timed out" : ""})` +
+          `${executeResult.stderr.trim() !== "" ? `: ${executeResult.stderr.trim()}` : ""}`;
         audit({
-          result: verifyFailedCode({ reason: "silent-noop" }),
+          result: verifyFailedCode({ reason: partial ? "mismatch" : "silent-noop" }),
           vector: vector.id,
           disruption: effectiveTier,
           invocation: invocation.redactedPayload,
           pre: flattenPreFields(preCapture.fields),
           observed: recovery.observed,
         });
+        if (partial) {
+          return {
+            kind: "verify-failed" as const,
+            op,
+            reason: "mismatch" as const,
+            expected: delta,
+            observed: recovery.observed,
+            ...stepsOf(executeResult),
+            detail:
+              `${transportPrefix} — and a follow-up re-read found the app DID change: part of the ` +
+              "requested change landed before the failure, but the end state is not the one that " +
+              "was asked for. Nothing was rolled back — re-read the target (`observed` carries " +
+              "what the assertion saw) before retrying, or the retry will compound the partial " +
+              "change.",
+          };
+        }
         return withHint(
           {
             kind: "verify-failed" as const,
@@ -1751,10 +1778,7 @@ export async function runMutation<K extends OperationKind>(
             reason: "silent-noop" as const,
             expected: delta,
             observed: recovery.observed,
-            detail:
-              `transport failed (exit ${executeResult.exitCode ?? "?"}${executeResult.timedOut === true ? ", timed out" : ""})` +
-              `${executeResult.stderr.trim() !== "" ? `: ${executeResult.stderr.trim()}` : ""}` +
-              " — and a follow-up re-read found no landed change",
+            detail: `${transportPrefix} — and a follow-up re-read found no landed change`,
           },
           classifyTransportFailure({
             vector: vector.id,

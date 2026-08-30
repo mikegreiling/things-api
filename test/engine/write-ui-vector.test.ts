@@ -506,6 +506,40 @@ describe("ui vector — idempotency + transport recovery (defect (a))", () => {
     }
   });
 
+  it("post-drive-failure with a PARTIAL landed change → mismatch, never silent-noop (#658)", async () => {
+    // The field failure's shape: the drive aborted, but part of what it was
+    // asked to do had already landed. `silent-noop` would tell the caller the
+    // app changed nothing and a retry is safe — over a change that is on disk
+    // and syncing. The re-verify's own verdict must decide the reason.
+    const partialRule = ruleXml("after-completion").replace(
+      "<key>fa</key><integer>2</integer>",
+      "<key>fa</key><integer>3</integer>", // the interval the caller did NOT ask for
+    );
+    const uuid = seedTodo(fixture.db, { title: "R", recurrenceRuleXml: ruleXml("fixed") });
+    const scripted = scriptedUiVector(async () => ({
+      exitCode: 1,
+      effect: () => {
+        fixture.db
+          .prepare(
+            "UPDATE TMTask SET rt1_recurrenceRule = ?, userModificationDate = ? WHERE uuid = ?",
+          )
+          .run(new TextEncoder().encode(partialRule), Math.floor(NOW.getTime() / 1000) + 1, uuid);
+      },
+    }));
+    const res = await runMutation(
+      deps(scripted.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, frequency: "weekly", interval: 2, afterCompletion: true },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    if (res.kind === "verify-failed") {
+      expect(res.reason).toBe("mismatch");
+      expect(res.detail).toContain("the app DID change");
+      expect(res.detail).not.toContain("no landed change");
+    }
+  });
+
   it("post-drive-failure with NO landed change → verify-failed silent-noop (honest failure)", async () => {
     const uuid = seedTodo(fixture.db, { title: "R", recurrenceRuleXml: ruleXml("fixed") });
     const scripted = scriptedUiVector(async () => ({ exitCode: 1 })); // aborts, changes nothing

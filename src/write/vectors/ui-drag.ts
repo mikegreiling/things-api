@@ -646,6 +646,93 @@ export function inBand(y: number, viewport: SidebarRect, pad = BAND_PAD): boolea
 }
 
 /**
+ * The travel a single certified drag can cover inside this viewport: the band
+ * minus the grab/drop margins at both ends. The rung-1 shared-viewport test and
+ * the tall-section pre-flight both measure against this ONE number.
+ */
+export function usableDragSpan(viewport: SidebarRect): number {
+  return viewport.h - 4 * BAND_PAD;
+}
+
+/**
+ * A sidebar SECTION is an area row plus every row Things renders under it (its
+ * projects, and its "Later Projects" row). `bottom` is the next area row's top —
+ * the last section runs to the bottom of the table.
+ */
+export interface SidebarSectionSpan {
+  title: string;
+  /** Section height in points (area row top → next area row top). */
+  height: number;
+  /** How many table rows the section contains (its own row included). */
+  rows: number;
+}
+
+/**
+ * The TALLEST section the gesture would have to climb over, or null when every
+ * one of them fits. #658: an area's projects render beneath it, so a section can
+ * be taller than the whole sidebar viewport — and BOTH shipped rungs need the
+ * source row and the drop boundary visible AT ONCE, so such a section is a wall
+ * no amount of scrolling gets around. Measured over the travel span between the
+ * grab point and the aimed boundary; the source's OWN section is excluded (
+ * lifting it collapses it) and a section is only counted when the snapshot
+ * actually resolved rows inside it, so a partially-materialized AX tree cannot
+ * fabricate a wall out of a gap between two distant rows.
+ */
+export function tallestSectionInSpan(
+  orderedAreaRows: { title: string; row: SidebarRowInfo }[],
+  allRows: SidebarRowInfo[],
+  fromY: number,
+  toY: number,
+  sourceTitle: string,
+): SidebarSectionSpan | null {
+  const lo = Math.min(fromY, toY);
+  const hi = Math.max(fromY, toY);
+  const tableBottom = allRows.reduce((max, r) => Math.max(max, r.y + r.h), -Infinity);
+  let worst: SidebarSectionSpan | null = null;
+  for (let i = 0; i < orderedAreaRows.length; i++) {
+    const section = orderedAreaRows[i];
+    if (section === undefined || section.title === sourceTitle) continue;
+    const top = section.row.y;
+    const bottom = orderedAreaRows[i + 1]?.row.y ?? tableBottom;
+    if (bottom <= lo || top >= hi) continue; // outside the travel span
+    const height = bottom - top;
+    if (worst !== null && height <= worst.height) continue;
+    const rows = allRows.filter((r) => r.y >= top && r.y < bottom).length;
+    worst = { title: section.title, height, rows };
+  }
+  return worst;
+}
+
+/**
+ * Is this section a WALL for the shipped ladder (rung 1 + the multi-hop floor)?
+ * A section taller than one drag's usable span can never be crossed, because
+ * every hop must land the source on the far side of it in ONE gesture.
+ */
+export function sectionBlocks(section: SidebarSectionSpan, viewport: SidebarRect): boolean {
+  return section.height > usableDragSpan(viewport) && section.rows >= 2;
+}
+
+/**
+ * The refusal an unclimbable section earns — the honest twin of the old
+ * "the viewport is too small to make progress" copy, which blamed the window
+ * size for a geometry no window size fixes (#658).
+ */
+export function blockedSectionDetail(
+  section: SidebarSectionSpan,
+  viewport: SidebarRect,
+  destination: string,
+): string {
+  return (
+    `the area "${section.title}" and the ${section.rows - 1} row(s) Things renders under it ` +
+    `stand between this area and ${destination}, and that block is taller than the sidebar ` +
+    `shows at once (about ${Math.round(section.height)}pt of rows against ${Math.round(viewport.h)}pt ` +
+    "of visible list) — a drag has to see where it starts and where it lands at the same time, " +
+    `so no gesture can cross it. Collapse "${section.title}" in the sidebar (click the arrow on ` +
+    "its row) or make the Things window taller, then re-run — or drag the area by hand"
+  );
+}
+
+/**
  * Grab/drop x: a fixed FRACTION of the row's resolved width (≈ the label area
  * NATIVE1 clicked at x+170 on a 240px row), clear of the leading icon and the
  * trailing counters — derived from the frame, not a pixel offset.
@@ -1027,11 +1114,34 @@ export async function driveSidebarAreaReorder(
     }
     resolveRetried = false;
     const grab = grabPoint(finalPlan.source);
+    const spanNeeded = Math.abs(grab.y - finalPlan.dropY);
+
+    // PRE-FLIGHT (#658, AXDRAG5): every shipped rung needs the grab point and
+    // the drop boundary inside the viewport AT ONCE, so a sidebar SECTION taller
+    // than one drag's usable span can never be crossed — not by rung 1, and not
+    // one hop at a time. Detect it from the geometry BEFORE any gesture and
+    // refuse honestly; the old behavior was to hop until no anchor fit and then
+    // blame the window size after minutes of AX round-trips.
+    if (spanNeeded >= usableDragSpan(viewport)) {
+      const orderedNow = areaRowsInOrder(snap.rows, areaTitles);
+      const wall = tallestSectionInSpan(
+        orderedNow,
+        snap.rows,
+        grab.y,
+        finalPlan.dropY,
+        spec.targetTitle,
+      );
+      if (wall !== null && sectionBlocks(wall, viewport)) {
+        const detail = blockedSectionDetail(wall, viewport, describeAnchor(finalPlan.anchor));
+        return hops === 0
+          ? { ok: false, detail }
+          : abortPartial(ctx, spec, hops, `${detail} — so the move stopped part-way`);
+      }
+    }
 
     // Rung 1: both the grab point and the drop boundary visible (or scrollable
     // into simultaneous view) → one certified drag.
-    const spanNeeded = Math.abs(grab.y - finalPlan.dropY);
-    if (spanNeeded < viewport.h - 4 * BAND_PAD) {
+    if (spanNeeded < usableDragSpan(viewport)) {
       let ready: SidebarSnapshot | null = snap;
       if (!inBand(grab.y, viewport) || !inBand(finalPlan.dropY, viewport)) {
         // pre-scroll must land before the drag
@@ -1260,14 +1370,31 @@ export async function driveSidebarAreaReorder(
       }
     }
     if (hopAnchor === null) {
-      return refuseOrRecover(
-        ctx,
-        pre,
-        spec,
-        hops,
-        "no drop slot toward the destination fits the visible sidebar — the viewport is too " +
-          "small to make progress",
-      );
+      // Name the real cause (#658): normally the next area toward the
+      // destination begins a section taller than the visible list, which no
+      // window size fixes. Only fall back to the generic sentence when the
+      // geometry does NOT show such a section.
+      const planNow = planDrop(parked, spec, areaTitles, spec.placement, ranks);
+      const wall =
+        "error" in planNow
+          ? null
+          : tallestSectionInSpan(
+              ordered,
+              parked.rows,
+              grabPoint(planNow.source).y,
+              planNow.dropY,
+              spec.targetTitle,
+            );
+      const why =
+        wall !== null && sectionBlocks(wall, parked.viewport)
+          ? blockedSectionDetail(
+              wall,
+              parked.viewport,
+              describeAnchor("error" in planNow ? "the requested position" : planNow.anchor),
+            )
+          : "no drop slot toward the destination fits the visible sidebar — the nearest area row " +
+            "toward it sits more than one drag away, so the gesture has nowhere to land";
+      return refuseOrRecover(ctx, pre, spec, hops, why);
     }
     const anchorUuid = hopAnchor.uuid;
     // the hop gesture must land before its DB assert
@@ -1338,6 +1465,23 @@ export async function driveSidebarAreaReorder(
   return abortPartial(ctx, spec, hops, "exceeded the hop budget without converging");
 }
 
+/** The destination, as the refusal copy names it. */
+function describeAnchor(anchor: string): string {
+  return anchor === "the end of the sidebar list" || anchor === "the requested position"
+    ? anchor
+    : `"${anchor}"`;
+}
+
+/** Where the area sits RIGHT NOW, for a report that never has to guess. */
+function describePosition(state: AreaSidebarState, uuid: string): string {
+  const pos = positionOf(state, uuid);
+  if (pos < 0) return "the area no longer resolves in the database";
+  return (
+    `the area now sits at sidebar position ${pos + 1} of ${state.areas.length}` +
+    (pos > 0 ? `, below "${state.areas[pos - 1]?.title ?? "?"}"` : ", at the top")
+  );
+}
+
 /**
  * Abort mid-ladder WITHOUT recovery (design amendment: a partially-moved area
  * is benign) — send Escape as a safety valve and report exactly where the
@@ -1354,13 +1498,7 @@ async function abortPartial(
     label: "abort (Escape)",
     script: `tell application "System Events" to key code 53`,
   });
-  const state = ctx.state();
-  const pos = positionOf(state, spec.targetUuid);
-  const where =
-    pos < 0
-      ? "the area no longer resolves in the database"
-      : `the area now sits at sidebar position ${pos + 1} of ${state.areas.length}` +
-        (pos > 0 ? `, below "${state.areas[pos - 1]?.title ?? "?"}"` : ", at the top");
+  const where = describePosition(ctx.state(), spec.targetUuid);
   return {
     ok: false,
     detail:
@@ -1384,10 +1522,26 @@ async function refuseOrRecover(
   const now = ctx.state();
   const orderChanged =
     now.areas.map((a) => a.uuid).join(",") !== pre.areas.map((a) => a.uuid).join(",");
-  if (!orderChanged || hasRankTies(pre)) {
+  if (!orderChanged) {
     return {
       ok: false,
       detail: `${why}. No sidebar change was left behind${hops > 0 ? ` after ${hops} hop(s)` : ""}.`,
+    };
+  }
+  // The order DID change. Tied pre-op ranks (every never-dragged area sits at
+  // `index` 0, so ties are the norm on real data) make the restore anchor
+  // ambiguous, so no recovery drag is attempted — but #658: the change must be
+  // REPORTED, never claimed away. The old code short-circuited on the tie and
+  // emitted "No sidebar change was left behind" over a move that had landed,
+  // was visible in the sidebar, and was syncing to the user's other devices.
+  if (hasRankTies(pre)) {
+    return {
+      ok: false,
+      detail:
+        `${why}. The sidebar order DID change${hops > 0 ? ` over ${hops} hop(s)` : ""} and was ` +
+        `left in place: ${describePosition(now, spec.targetUuid)}. Several areas share the same ` +
+        "stored rank, so putting it back automatically could move the wrong one — re-run the " +
+        "move, or drag it back in the app.",
     };
   }
   // Which area was actually displaced? Normally the target; but a DUPLICATE-title

@@ -1407,6 +1407,28 @@ Edit menu (after the rename):  Undo enabled=false            <- nothing to undo
 
 Evidence: [lab/umdz1-undo-umd.md](lab/umdz1-undo-umd.md) §4–§5.
 
+## 29. Things 3.23: the sidebar is keyboard-unreachable and AX-inert — the ⌘-arrow reorder chords that move every content row decline 1:1 on an area row, and there is no action to press instead (AXDRAG5, 2026-08-30, golden-v4 / Things 3.23 build 32300036)
+
+Things ships a first-class reorder affordance with no menu representation: ⌘↑ / ⌘↓ move the selected row one slot and ⌘⌥↑ / ⌘⌥↓ send it to the top / bottom. [CHORD2](lab/chord2-reorder-laws.md) measured the full law matrix for content rows — headings, to-dos, templates, per view. On the **sidebar** the same chords do nothing, for a reason one layer down: the sidebar is not a focusable pane.
+
+| probe | result |
+|---|---|
+| ⌘↑ / ⌘↓ / ⌘⌥↑ / ⌘⌥↓ on a selected AREA row (`CGEventPostToPid`, Things backgrounded) | zero `TMArea."index"` delta · **one alert beep per chord, 4 for 4** |
+| the same four after HID-clicking the row, Things frontmost | zero delta · one beep each |
+| ⌘↑ / ⌘↓ as a frontmost System Events keystroke | zero delta · one beep each |
+| `AXFocusedUIElement` after clicking a sidebar row | the **content** table (`w=697`) — never the sidebar (`w=242`) |
+| `set focused of (sidebar table) to true` | accepted with no error; focus **stays** on the content table |
+| Tab-key focus cycling | lands on an `AXTextArea`; the sidebar is never in the cycle |
+| plain ↓ (no modifier) after clicking a sidebar row | the sidebar selection **does not move** |
+| sidebar table `AXUIElementCopyActionNames` | **(none)** |
+| sidebar row `AXCustomActions` | attribute present, **empty (count 0)** on every row |
+
+So the keystroke is not being ignored — it is being evaluated against the *content* list, which has nothing to move and beeps. The 1:1 beep is the same decline signature CHORD2 §6 measured, arriving from the wrong pane.
+
+**Expected:** the sidebar should be a focusable list like every other pane — arrow keys to move the selection, and the reorder chords the rest of the app already implements. Failing that, sidebar rows should expose the reorder as an `AXCustomAction` (the attribute is already advertised on every row; it is simply empty), which is what VoiceOver users would reach for too. As it stands, changing the order of areas is a **mouse-only** operation with no keyboard and no accessibility route — and for an area whose projects make its sidebar section taller than the window, even the mouse route is a drag that cannot be seen end-to-end.
+
+Evidence: [lab/axdrag5-field-stall.md](lab/axdrag5-field-stall.md) §4.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
