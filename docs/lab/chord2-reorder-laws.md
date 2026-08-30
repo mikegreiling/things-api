@@ -513,7 +513,7 @@ The 7-for-7 match in cell 6c is also a positive validation of the oracle in this
 ## §11 — What was NOT probed
 
 * **On-device certification** — everything here is `lab-certified` ([ui-certification-runbook](ui-certification-runbook.md)).
-* **Sidebar rows** (the `projects` scope) — no chord was fired at a project row in the sidebar.
+* **Sidebar rows** (the `projects` scope) — no chord was fired at a project row in the sidebar. *(Answered since, for AREA rows: [AXDRAG5](axdrag5-field-stall.md) §4 — **NO**. The sidebar cannot take keyboard focus, so every chord is evaluated against the content list and declines 1:1.)*
 * **Search results** — the Logbook read-only control was run; Quick Find was not.
 * **The `anytime` scope's exact population** — the Anytime arm used AREA-direct rows; area-less loose anytime rows (ANYBNC's population) were not isolated from Inbox membership.
 * **A heading-only multi-selection** — one addressing shape was tried (a cmd-click on the heading row's More element) and it did not extend the selection (§2e).
