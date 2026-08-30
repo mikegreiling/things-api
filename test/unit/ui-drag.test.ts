@@ -601,7 +601,10 @@ describe("ladder — the tall-section wall", () => {
     };
   }
 
-  it("refuses BEFORE any gesture, naming the blocking area and a real remedy", async () => {
+  it("refuses honestly when the chevron will not respond, naming the section AND why", async () => {
+    // This simulator's chevron answers "DONE" rather than a click verdict — the
+    // shape of a toggle that did not actuate. The rung must fast-fail to the
+    // refusal, never proceed on the assumption that the fold worked (SBCOL1).
     const sim = wallSim(20);
     const res = await driveSidebarAreaReorder(
       { targetUuid: "u-A5", targetTitle: "A5", placement: before("A2") },
@@ -612,12 +615,13 @@ describe("ladder — the tall-section wall", () => {
     expect(res.ok).toBe(false);
     expect(res.detail).toContain('"A3"');
     expect(res.detail).toContain("taller than the sidebar shows at once");
-    expect(res.detail).toContain("Collapse");
+    expect(res.detail).toContain("did not work");
     // the honest refusal never blames the window size for a geometry no window fixes
     expect(res.detail).not.toContain("viewport is too small");
-    // and it costs ONE snapshot, not minutes of hops
+    // NO drag is ever attempted across an uncleared wall
     expect(sim.log.filter((p) => p === "sidebar-drag")).toHaveLength(0);
-    expect(sim.log.filter((p) => p === "sidebar-snapshot")).toHaveLength(1);
+    // one chevron attempt, then it stops — it does not click at it again
+    expect(sim.log.filter((p) => p === "sidebar-chevron")).toHaveLength(1);
   });
 
   it("leaves a move whose path crosses only NORMAL sections to the ladder", async () => {
@@ -632,5 +636,240 @@ describe("ladder — the tall-section wall", () => {
     // what matters is that it reached the gesture instead of refusing up front.
     expect(sim.log).toContain("sidebar-drag");
     expect(res.detail).not.toContain("taller than the sidebar shows at once");
+  });
+});
+
+// ------------------------------------------- the collapse rung (SBCOL1)
+//
+// SBCOL1 measured the way out of the AXDRAG5 wall: an area row's disclosure
+// chevron is frame-resolvable, and a synthesized click at its own frame
+// ACTUATES it (an `AXPress` on the node that advertises the action is
+// decorative — REPX1 §1.2). So a section too tall to drag past is not a dead
+// end: it is folded away, crossed, and put back. The disclosure state lives in
+// Things' own preferences and SURVIVES A RELAUNCH, so restoring it is not
+// politeness — an unrestored collapse is a durable change to the user's sidebar.
+
+const SUBJECT = "Zeta";
+const ANCHOR = "Gamma";
+/** Gamma … Zeta with ONE oversized section (Eta) between them. */
+const ONE_WALL = ["Gamma", "Delta", "Eta", "Theta", "Zeta"];
+/** …and a second one (Sigma) on the same travel span. */
+const TWO_WALLS = ["Gamma", "Sigma", "Delta", "Eta", "Theta", "Zeta"];
+
+/**
+ * A sidebar backed by a MODEL rather than a fixed row list: areas with project
+ * counts, a collapsed set the chevron primitive mutates, and an order the drag
+ * primitive rewrites. It is the smallest simulator that can tell the whole
+ * story of the rung — fold, cross, unfold — in one pass.
+ */
+function collapseSim(opts: {
+  /** Area title → how many project rows Things renders under it. */
+  projects: Record<string, number>;
+  order: string[];
+  /** The chevron does nothing (a toggle that will not actuate). */
+  inertChevron?: boolean;
+  /** The drag gesture never completes (forces a failure AFTER the fold). */
+  brokenDrag?: boolean;
+}): {
+  run: (command: UiCommand) => Promise<UiRunResult>;
+  aux: { areaState: () => AreaSidebarState };
+  log: string[];
+  chevrons: string[];
+  collapsedNow: () => string[];
+} {
+  const order = [...opts.order];
+  const collapsed = new Set<string>();
+  const log: string[] = [];
+  const chevrons: string[] = [];
+  const viewport: SidebarRect = { x: VIEW_X, y: VIEW_Y, w: 240, h: 346 };
+  let offset = 0;
+
+  /** Slots the list currently occupies (an area + the rows drawn under it). */
+  const slots = (): number =>
+    order.reduce((n, a) => n + 1 + (collapsed.has(a) ? 0 : (opts.projects[a] ?? 0)), 0);
+
+  const render = (): SidebarRowInfo[] => {
+    const rows: SidebarRowInfo[] = [];
+    let y = VIEW_Y - offset;
+    const push = (title: string): void => {
+      rows.push(entityRow(title, y));
+      rows.push(spacerRow(y + ROW_H));
+      y += PITCH;
+    };
+    for (const area of order) {
+      push(area);
+      if (collapsed.has(area)) continue;
+      for (let i = 0; i < (opts.projects[area] ?? 0); i++) push(`${area}-P${i}`);
+    }
+    return rows;
+  };
+
+  return {
+    log,
+    chevrons,
+    collapsedNow: () => [...collapsed],
+    run: (command: UiCommand): Promise<UiRunResult> => {
+      log.push(command.primitive);
+      if (command.primitive === "sidebar-snapshot") {
+        return Promise.resolve({
+          ok: true,
+          stdout: JSON.stringify({ viewport, scroll: 0, rows: render() }),
+          stderr: "",
+        });
+      }
+      if (command.primitive === "sidebar-scroll") {
+        // Negative clicks reveal lower rows (row y shrinks) — AXDRAG1-b.
+        const m = (command.script ?? "").match(/var n = (-?\d+)/);
+        const clicks = m === null ? 0 : Number(m[1]);
+        const maxOffset = Math.max(0, slots() * PITCH - viewport.h);
+        offset = Math.max(0, Math.min(maxOffset, offset - clicks * 30));
+        return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
+      }
+      if (command.primitive === "sidebar-chevron") {
+        const title = (command.meta as { title: string }).title;
+        chevrons.push(title);
+        if (opts.inertChevron === true) {
+          return Promise.resolve({
+            ok: true,
+            stdout: JSON.stringify({
+              clicked: false,
+              why: "the row exposes no disclosure chevron",
+            }),
+            stderr: "",
+          });
+        }
+        if (collapsed.has(title)) collapsed.delete(title);
+        else collapsed.add(title);
+        return Promise.resolve({ ok: true, stdout: JSON.stringify({ clicked: true }), stderr: "" });
+      }
+      if (command.primitive === "sidebar-drag") {
+        if (opts.brokenDrag === true) {
+          return Promise.resolve({ ok: false, stdout: "", stderr: "the gesture did not complete" });
+        }
+        // The only move this fixture needs: pull the subject out and reinsert
+        // it directly above the anchor.
+        const from = order.indexOf(SUBJECT);
+        if (from >= 0) {
+          order.splice(from, 1);
+          order.splice(order.indexOf(ANCHOR), 0, SUBJECT);
+        }
+        return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
+      }
+      return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
+    },
+    aux: {
+      areaState: (): AreaSidebarState => ({
+        areas: order.map((t, i) => ({ uuid: `u-${t}`, title: t, index: (i + 1) * 10 })),
+        assignmentsDigest: "D",
+      }),
+    },
+  };
+}
+
+const driveWall = (
+  run: (command: UiCommand) => Promise<UiRunResult>,
+  aux: { areaState: () => AreaSidebarState },
+): ReturnType<typeof driveSidebarAreaReorder> =>
+  driveSidebarAreaReorder(
+    { targetUuid: `u-${SUBJECT}`, targetTitle: SUBJECT, placement: before(ANCHOR) },
+    run,
+    aux,
+    instantSleep,
+  );
+
+describe("collapse rung — folding a wall away and putting it back", () => {
+  it("collapses the blocking section, crosses it, and re-expands it", async () => {
+    const sim = collapseSim({ projects: { Eta: 20 }, order: ONE_WALL });
+    const res = await driveWall(sim.run, sim.aux);
+    expect(res.ok).toBe(true);
+    expect(res.collapsed).toEqual(["Eta"]);
+    expect(res.restoreFailed).toBeUndefined();
+    expect(res.detail).toContain("collapsed to clear the path");
+    expect(res.detail).toContain("expanded again afterwards");
+    // the gesture DID happen — the wall stopped being a wall
+    expect(sim.log).toContain("sidebar-drag");
+    // folded once, unfolded once, and the sidebar is left as it was found
+    expect(sim.chevrons).toEqual(["Eta", "Eta"]);
+    expect(sim.collapsedNow()).toEqual([]);
+  });
+
+  it("folds BOTH walls on the span and unwinds them last-in-first-out", async () => {
+    const sim = collapseSim({ projects: { Eta: 20, Sigma: 18 }, order: TWO_WALLS });
+    const res = await driveWall(sim.run, sim.aux);
+    expect(res.ok, res.detail).toBe(true);
+    // tallest first on the way down; reversed on the way back
+    expect(res.collapsed).toEqual(["Eta", "Sigma"]);
+    expect(sim.chevrons).toEqual(["Eta", "Sigma", "Sigma", "Eta"]);
+    expect(sim.collapsedNow()).toEqual([]);
+  });
+
+  it("RESTORES the sidebar even when the move itself fails afterwards", async () => {
+    // The whole point of the epilogue: a drive that folds the sidebar and then
+    // dies must not leave the fold behind — the state survives a relaunch.
+    const sim = collapseSim({ projects: { Eta: 20 }, order: ONE_WALL, brokenDrag: true });
+    const res = await driveWall(sim.run, sim.aux);
+    expect(res.ok).toBe(false);
+    expect(res.collapsed).toEqual(["Eta"]);
+    expect(sim.collapsedNow()).toEqual([]);
+    expect(sim.chevrons).toEqual(["Eta", "Eta"]);
+  });
+
+  it("reports a failed re-expansion instead of leaving it unsaid", async () => {
+    // The chevron works on the way down and stops working on the way back: the
+    // move succeeded, but the sidebar is durably different and must say so.
+    let folds = 0;
+    const base = collapseSim({ projects: { Eta: 20 }, order: ONE_WALL });
+    const run = (command: UiCommand): Promise<UiRunResult> => {
+      if (command.primitive === "sidebar-chevron") {
+        folds += 1;
+        if (folds > 1) {
+          base.chevrons.push((command.meta as { title: string }).title);
+          return Promise.resolve({
+            ok: true,
+            stdout: JSON.stringify({ clicked: false, why: "the chevron is outside the band" }),
+            stderr: "",
+          });
+        }
+      }
+      return base.run(command);
+    };
+    const res = await driveWall(run, base.aux);
+    expect(res.ok).toBe(true);
+    expect(res.restoreFailed).toEqual(["Eta"]);
+    expect(res.detail).toContain("could not be expanded again");
+    expect(base.collapsedNow()).toEqual(["Eta"]);
+  });
+
+  it("answers for a fold whose CONFIRMATION never came back", async () => {
+    // SBCOL1 §6, found by killing Things mid-fold in the clone: the chevron
+    // click landed and the app collapsed the area, then the re-census could not
+    // run. A ledger written only on success held nothing, so a change that
+    // survives a relaunch went unmentioned. The ledger keys off the CLICK.
+    const base = collapseSim({ projects: { Eta: 20 }, order: ONE_WALL });
+    let clicks = 0;
+    const run = (command: UiCommand): Promise<UiRunResult> => {
+      if (command.primitive === "sidebar-chevron") clicks += 1;
+      // the sidebar stops answering the moment the fold has gone out
+      if (clicks > 0 && command.primitive === "sidebar-snapshot") {
+        return Promise.resolve({ ok: false, stdout: "", stderr: "-1719" });
+      }
+      return base.run(command);
+    };
+    const res = await driveWall(run, base.aux);
+    expect(res.ok).toBe(false);
+    // the fold IS reported, and reported as unrestored
+    expect(res.collapsed).toEqual(["Eta"]);
+    expect(res.restoreFailed).toEqual(["Eta"]);
+    expect(res.detail).toContain("could not be expanded again");
+  });
+
+  it("never drags across a wall it could not fold", async () => {
+    const sim = collapseSim({ projects: { Eta: 20 }, order: ONE_WALL, inertChevron: true });
+    const res = await driveWall(sim.run, sim.aux);
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain("no disclosure chevron");
+    expect(sim.log).not.toContain("sidebar-drag");
+    // nothing was folded, so nothing is reported as folded
+    expect(res.collapsed).toBeUndefined();
   });
 });
