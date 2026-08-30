@@ -139,6 +139,12 @@ export type UiCommandPrimitive =
   | "sidebar-scroll"
   | "sidebar-drag"
   | "sidebar-held-drag"
+  /**
+   * Actuate an area row's disclosure chevron, folding its projects out of the
+   * drag path (SBCOL1). A pointer click at the chevron's own resolved frame —
+   * `AXPress` on the node that advertises it is decorative (REPX1 §1.2).
+   */
+  | "sidebar-chevron"
   /** One modifier-bearing key event pair posted straight at the Things process (ui-chord.ts). */
   | "chord-post"
   /**
@@ -2556,6 +2562,7 @@ const POINTER_CLASS: ReadonlySet<UiCommandPrimitive> = new Set<UiCommandPrimitiv
   "sidebar-drag",
   "sidebar-held-drag",
   "sidebar-scroll",
+  "sidebar-chevron",
 ]);
 
 /** What the drive has observed about the dialog it is driving (see {@link oursToDismiss}). */
@@ -3224,6 +3231,8 @@ async function drive(
   const clearNow = (): Promise<ClearResult> =>
     clearDialog(rawRun, latch.sheet, latch.inspectionStalled);
   const done: string[] = [];
+  /** Durable side effects a SUCCESSFUL drive owes the caller (see ExecuteResult.notices). */
+  const notices: string[] = [];
   // The overall-drive WATCHDOG (TRACE1 #487). A drive can outlast the caller's
   // own timeout on a slow production database (large + Things-Cloud syncing
   // commits the Repeat dialog several times slower than the lab golden), which
@@ -3254,6 +3263,9 @@ async function drive(
       stdout: `ui drive watchdog stopped after ${done.length} step(s): ${done.join(" → ") || "nothing"}`,
       stderr: `ui drive exceeded its ${Math.round(budgetMs / 1000)}s budget at "${lastStep}"`,
       steps: [...done],
+      // A watchdog stop is a failure exit like any other: whatever the drive
+      // changed about the sidebar's disclosure state still has to be said.
+      ...(notices.length > 0 && { notices: [...notices] }),
       timedOut: true,
       watchdog: {
         budgetMs,
@@ -3296,7 +3308,17 @@ async function drive(
     // play-by-play, which is what made the field bug reports rich (#632). The
     // step that stopped the drive is named as the last entry so the list reads
     // as the whole attempt, not only the part that worked.
-    const res = { ...refusal(base + cleanup), steps: [...done, `${failed} — FAILED: ${why}`] };
+    // Notices ride EVERY exit, not only the clean one (SBCOL1). A drive that
+    // folded the sidebar and then died is the case where the fold is MOST
+    // likely to have outlived it — dropping the notice here would hide the one
+    // durable side effect precisely when it matters. The pipeline's
+    // transport-recovered path re-shapes such a drive into a SUCCESS, and it
+    // reads the notices from this same result.
+    const res = {
+      ...refusal(base + cleanup),
+      steps: [...done, `${failed} — FAILED: ${why}`],
+      ...(notices.length > 0 && { notices: [...notices] }),
+    };
     if (cause === null) return res;
     return {
       ...res,
@@ -3485,6 +3507,23 @@ async function drive(
       if (step.drag === undefined) return partial(step.label, "no drag spec compiled");
       // the drag ladder depends on the UI state the preamble produced
       const outcome = await driveSidebarAreaReorder(step.drag, run, aux);
+      // SBCOL1: a move that needed the collapse rung changed the sidebar's
+      // disclosure state to get there. That state lives in Things' own
+      // preferences and SURVIVES A RELAUNCH, so the caller is told which areas
+      // were folded — and, above all, if one is still folded. Recorded BEFORE
+      // the failure check: a drive that died part-way is exactly when a fold is
+      // most likely to have outlived it, and that is the last moment to go quiet.
+      if (outcome.collapsed !== undefined && outcome.collapsed.length > 0) {
+        const names = outcome.collapsed.map((t) => `"${t}"`).join(", ");
+        notices.push(
+          outcome.restoreFailed === undefined
+            ? `${names} in the sidebar was collapsed to clear the drag path and expanded again ` +
+                "afterwards; the sidebar looks as it did"
+            : `${names} in the sidebar was collapsed to clear the drag path, and ` +
+                `${outcome.restoreFailed.map((t) => `"${t}"`).join(", ")} could not be expanded ` +
+                "again — click the arrow on that row in Things to put it back",
+        );
+      }
       if (!outcome.ok) return partial(step.label, outcome.detail);
       done.push(`${step.label} (${outcome.detail})`);
       continue;
@@ -3650,6 +3689,7 @@ async function drive(
     // trace and the transport-failure paths already read; `steps` is what the
     // change-history record stores and `--verbose` renders.
     steps: relocationNote === "" ? [...done] : [relocationNote.trim(), ...done],
+    ...(notices.length > 0 && { notices: [...notices] }),
   };
 }
 

@@ -365,6 +365,90 @@ JSON.stringify(result)
 }`;
 }
 
+/**
+ * SBCOL1 — actuate an area row's DISCLOSURE CHEVRON.
+ *
+ * The toggle is two nodes: an inert `AXImage d="Source Toggle Template"` (what
+ * AXDRAG2-b measured and called "not actuatable") inside an `AXUnknown` wrapper
+ * that DOES advertise `AXPress` — and that press is DECORATIVE, exactly as REPX1
+ * §1.2 predicts for Things' custom rows (`AXError = 0`, zero census delta). What
+ * actuates is a synthesized click at the image's OWN resolved frame; SBCOL1
+ * toggled it both directions twice with zero beeps and zero focus steal.
+ *
+ * Fail-closed twice over: the chevron is resolved from the LIVE tree inside this
+ * same script (never a frame carried over from an earlier snapshot generation),
+ * and a chevron whose center lies outside the scroll-area band is REFUSED rather
+ * than clicked — an off-viewport row still exposes a valid virtualized frame
+ * (AXDRAG1), so clicking one would land somewhere else entirely.
+ *
+ * `ordinal` selects among same-titled rows in visual (y) order, the AXDRAG3
+ * disambiguation the rest of the driver uses; -1 means "the only row with this
+ * title", and an ambiguous match refuses.
+ */
+export function jxaSidebarChevronClickScript(title: string, ordinal: number): string {
+  const want = JSON.stringify(title);
+  const ord = Math.trunc(ordinal);
+  return `${JXA_PRELUDE}
+function allText(el, acc, depth){ acc=acc||[]; depth=depth==null?6:depth; if(depth<0) return acc;
+  var v=sv(el,'AXValue'); if(v) acc.push(v); var d=sv(el,'AXDescription'); if(d) acc.push(d);
+  var t=sv(el,'AXTitle'); if(t) acc.push(t); var ch=kids(el); for(var i=0;i<ch.length;i++) allText(ch[i],acc,depth-1); return acc }
+function matches(el, title){ var segs=allText(el,[],6);
+  for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.') return true } return false }
+function chevronOf(el, depth){ if(depth<0) return null; var ch=kids(el);
+  for(var i=0;i<ch.length;i++){
+    if(sv(ch[i],'AXRole')==='AXImage' && sv(ch[i],'AXDescription').indexOf('Toggle')>=0) return ch[i];
+    var r=chevronOf(ch[i], depth-1); if(r) return r }
+  return null }
+var want=${want}, ord=${ord};
+var t = sidebarTable();
+if (t === null) { JSON.stringify({clicked:false, why:'the sidebar table did not resolve'}) } else {
+var w = stdWindow(), vp = null;
+if (w !== null) { var sas=findAll(w,'AXScrollArea',12,[]);
+  for (var i=0;i<sas.length;i++){ var vf=frame(sas[i]); if(vf && vf.w<400){ vp=vf; break } } }
+if (vp === null) { JSON.stringify({clicked:false, why:'the sidebar viewport did not resolve'}) } else {
+var ch = kids(t), hits = [];
+for (var r=0;r<ch.length;r++){ var role=sv(ch[r],'AXRole');
+  if (role!=='AXRow' && role!=='AXTableRow') continue;
+  if (!matches(ch[r], want)) continue;
+  var rf = frame(ch[r]); if (rf) hits.push({el:ch[r], f:rf}) }
+hits.sort(function(p,q){ return p.f.y-q.f.y });
+var pick = ord < 0 ? (hits.length === 1 ? hits[0] : null) : (hits[ord] || null);
+if (pick === null) {
+  JSON.stringify({clicked:false, why:'the area row did not resolve uniquely', rows:hits.length})
+} else {
+  var img = chevronOf(pick.el, 5);
+  if (img === null) { JSON.stringify({clicked:false, why:'the row exposes no disclosure chevron'}) }
+  else {
+    var cf = frame(img);
+    if (cf === null) { JSON.stringify({clicked:false, why:'the chevron exposed no frame'}) }
+    else {
+      var cx = cf.x + cf.w/2, cy = cf.y + cf.h/2;
+      if (cy < vp.y + 6 || cy > vp.y + vp.h - 6) {
+        JSON.stringify({clicked:false, why:'the chevron is outside the visible sidebar band', y:cy})
+      } else {
+        // REPX1 §1.2 rig law: flags set EXPLICITLY on EVERY synthetic event
+        // (zero included), and a MOVED settle before the press.
+        var mv=mev(MOVED,cx,cy,0); $.CGEventSetFlags(mv,0); postHID(mv); sleep(300);
+        var dn=mev(DOWN,cx,cy,1); $.CGEventSetFlags(dn,0); postHID(dn); sleep(90);
+        var up=mev(UP,cx,cy,1); $.CGEventSetFlags(up,0); postHID(up); sleep(250);
+        JSON.stringify({clicked:true, x:cx, y:cy})
+      }
+    }
+  }
+}
+}}`;
+}
+
+function chevronClickCommand(title: string, ordinal: number): UiCommand {
+  return {
+    primitive: "sidebar-chevron",
+    label: `toggle the disclosure arrow on the area row "${title}"`,
+    lang: "javascript",
+    script: jxaSidebarChevronClickScript(title, ordinal),
+    meta: { title, ordinal },
+  };
+}
+
 function heldScrollDragCommand(
   sx: number,
   sy: number,
@@ -665,6 +749,12 @@ export interface SidebarSectionSpan {
   height: number;
   /** How many table rows the section contains (its own row included). */
   rows: number;
+  /**
+   * Which same-titled sidebar row this section belongs to, in visual order
+   * (AXDRAG3); -1 when the title is unique. The collapse rung needs it to
+   * actuate the right chevron when two areas share a name.
+   */
+  ordinal: number;
 }
 
 /**
@@ -678,6 +768,40 @@ export interface SidebarSectionSpan {
  * actually resolved rows inside it, so a partially-materialized AX tree cannot
  * fabricate a wall out of a gap between two distant rows.
  */
+export function sectionsInSpan(
+  orderedAreaRows: { title: string; row: SidebarRowInfo }[],
+  allRows: SidebarRowInfo[],
+  fromY: number,
+  toY: number,
+  sourceTitle: string,
+): SidebarSectionSpan[] {
+  const lo = Math.min(fromY, toY);
+  const hi = Math.max(fromY, toY);
+  const tableBottom = allRows.reduce((max, r) => Math.max(max, r.y + r.h), -Infinity);
+  const out: SidebarSectionSpan[] = [];
+  for (let i = 0; i < orderedAreaRows.length; i++) {
+    const section = orderedAreaRows[i];
+    if (section === undefined || section.title === sourceTitle) continue;
+    const top = section.row.y;
+    const bottom = orderedAreaRows[i + 1]?.row.y ?? tableBottom;
+    if (bottom <= lo || top >= hi) continue; // outside the travel span
+    const rows = allRows.filter((r) => r.y >= top && r.y < bottom).length;
+    // Which same-titled row IS this one, in visual order (AXDRAG3) — the
+    // chevron primitive needs it to click the right one.
+    const ordinal = orderedAreaRows
+      .filter((a) => a.title === section.title)
+      .findIndex((a) => a.row === section.row);
+    out.push({
+      title: section.title,
+      height: bottom - top,
+      rows,
+      ordinal: orderedAreaRows.filter((a) => a.title === section.title).length > 1 ? ordinal : -1,
+    });
+  }
+  return out;
+}
+
+/** The tallest section in the travel span, or null when every one of them fits. */
 export function tallestSectionInSpan(
   orderedAreaRows: { title: string; row: SidebarRowInfo }[],
   allRows: SidebarRowInfo[],
@@ -685,22 +809,30 @@ export function tallestSectionInSpan(
   toY: number,
   sourceTitle: string,
 ): SidebarSectionSpan | null {
-  const lo = Math.min(fromY, toY);
-  const hi = Math.max(fromY, toY);
-  const tableBottom = allRows.reduce((max, r) => Math.max(max, r.y + r.h), -Infinity);
   let worst: SidebarSectionSpan | null = null;
-  for (let i = 0; i < orderedAreaRows.length; i++) {
-    const section = orderedAreaRows[i];
-    if (section === undefined || section.title === sourceTitle) continue;
-    const top = section.row.y;
-    const bottom = orderedAreaRows[i + 1]?.row.y ?? tableBottom;
-    if (bottom <= lo || top >= hi) continue; // outside the travel span
-    const height = bottom - top;
-    if (worst !== null && height <= worst.height) continue;
-    const rows = allRows.filter((r) => r.y >= top && r.y < bottom).length;
-    worst = { title: section.title, height, rows };
+  for (const s of sectionsInSpan(orderedAreaRows, allRows, fromY, toY, sourceTitle)) {
+    if (worst === null || s.height > worst.height) worst = s;
   }
   return worst;
+}
+
+/**
+ * Every section in the travel span the ladder cannot climb — tallest FIRST, so
+ * the collapse rung clears the worst obstruction before spending a gesture on a
+ * marginal one. SBCOL1 §4 measured a two-wall span: collapsing both turned a
+ * ten-position move into an ordinary multi-hop.
+ */
+export function blockingSectionsInSpan(
+  orderedAreaRows: { title: string; row: SidebarRowInfo }[],
+  allRows: SidebarRowInfo[],
+  fromY: number,
+  toY: number,
+  sourceTitle: string,
+  viewport: SidebarRect,
+): SidebarSectionSpan[] {
+  return sectionsInSpan(orderedAreaRows, allRows, fromY, toY, sourceTitle)
+    .filter((s) => sectionBlocks(s, viewport))
+    .toSorted((a, b) => b.height - a.height);
 }
 
 /**
@@ -713,22 +845,27 @@ export function sectionBlocks(section: SidebarSectionSpan, viewport: SidebarRect
 }
 
 /**
- * The refusal an unclimbable section earns — the honest twin of the old
- * "the viewport is too small to make progress" copy, which blamed the window
- * size for a geometry no window size fixes (#658).
+ * The refusal an unclimbable section earns once the COLLAPSE RUNG has failed on
+ * it (SBCOL1) — the honest twin of the old "the viewport is too small to make
+ * progress" copy, which blamed the window size for a geometry no window size
+ * fixes (#658). `whyCollapseFailed` names what stopped the driver from folding
+ * the section away itself, so the advice to do it by hand is not offered blind.
  */
 export function blockedSectionDetail(
   section: SidebarSectionSpan,
   viewport: SidebarRect,
   destination: string,
+  whyCollapseFailed?: string,
 ): string {
   return (
     `the area "${section.title}" and the ${section.rows - 1} row(s) Things renders under it ` +
     `stand between this area and ${destination}, and that block is taller than the sidebar ` +
     `shows at once (about ${Math.round(section.height)}pt of rows against ${Math.round(viewport.h)}pt ` +
     "of visible list) — a drag has to see where it starts and where it lands at the same time, " +
-    `so no gesture can cross it. Collapse "${section.title}" in the sidebar (click the arrow on ` +
-    "its row) or make the Things window taller, then re-run — or drag the area by hand"
+    `so no gesture can cross it. Collapsing "${section.title}" out of the way did not work` +
+    `${whyCollapseFailed === undefined ? "" : ` (${whyCollapseFailed})`}. Collapse it in the ` +
+    "sidebar with the arrow on its row, or make the Things window taller, then re-run — or drag " +
+    "the area by hand"
   );
 }
 
@@ -798,7 +935,42 @@ export interface DragDriveResult {
   detail: string;
   /** A gesture may have landed before the failure — recovery state, honestly. */
   recovered?: boolean;
+  /**
+   * The collapse rung folded these sidebar areas away to clear the path, and put
+   * every one of them back. Present only when the rung actually ran, so an
+   * ordinary move carries nothing (SBCOL1).
+   */
+  collapsed?: string[];
+  /**
+   * A collapsed area the driver could NOT re-expand. The disclosure state lives
+   * in the app's own preferences and SURVIVES a relaunch (SBCOL1 §3), so a
+   * failed restore is a durable change to the user's sidebar and is never
+   * silent — even on an otherwise successful move.
+   */
+  restoreFailed?: string[];
 }
+
+/** One area the collapse rung folded away, with what it looked like beforehand. */
+interface CollapsedArea {
+  title: string;
+  /** Which same-titled row (visual order), or -1 when the title is unique. */
+  ordinal: number;
+  /**
+   * Rows the section rendered while expanded — the re-expansion oracle. Null
+   * when the fold's own re-census never answered: the click went out, so the
+   * area must still be put back, but there is no measured "before" to aim at.
+   */
+  rowsExpanded: number | null;
+}
+
+/**
+ * What one chevron actuation did. `clicked` and `ok` are DELIBERATELY separate:
+ * a click that went out but could not be verified has still changed the app,
+ * and the ledger keys off `clicked` so such a fold is never forgotten.
+ */
+type ToggleOutcome =
+  | { clicked: true; ok: true; rowsBefore: number; rowsAfter: number }
+  | { clicked: boolean; ok: false; why: string };
 
 interface DriveCtx {
   run: UiRunner;
@@ -881,6 +1053,183 @@ async function pollState(
     await ctx.sleep(ASSERT_DELAY_MS);
   }
   return null;
+}
+
+// ------------------------------------------------- the collapse rung (SBCOL1)
+
+/** How many table rows a titled section currently renders (its own row included). */
+function sectionRowCount(
+  snap: SidebarSnapshot,
+  areaTitles: readonly string[],
+  title: string,
+  ordinal: number,
+): number | null {
+  const ordered = areaRowsInOrder(snap.rows, areaTitles);
+  const i =
+    ordinal < 0 ? ordered.findIndex((a) => a.title === title) : nthByTitle(ordered, title, ordinal);
+  const section = ordered[i];
+  if (i < 0 || section === undefined) return null;
+  const tableBottom = snap.rows.reduce((max, r) => Math.max(max, r.y + r.h), -Infinity);
+  const bottom = ordered[i + 1]?.row.y ?? tableBottom;
+  return snap.rows.filter((r) => r.y >= section.row.y && r.y < bottom).length;
+}
+
+/**
+ * Scroll the named area's row into the visible band, then actuate its chevron
+ * and CONFIRM the section changed size.
+ *
+ * The scrutiny doctrine's probe law in production form: a re-census follows the
+ * one input step, and a click that did not move the section fast-fails — the
+ * ladder must never proceed on the assumption that a gesture worked. `want`
+ * says which direction counts as success, so the same primitive collapses and
+ * re-expands.
+ */
+async function toggleDisclosure(
+  ctx: DriveCtx,
+  areaTitles: readonly string[],
+  title: string,
+  ordinal: number,
+  want: "fewer" | "more",
+): Promise<ToggleOutcome> {
+  // The row must be inside the band before the chevron can be clicked: an
+  // off-viewport row still exposes a valid virtualized frame (AXDRAG1), so an
+  // unscrolled click would land outside the sidebar entirely.
+  const ready = await scrollUntil(ctx, (s) => {
+    if (s.viewport === null) return null;
+    const row = resolveAreaRow(s.rows, title, ordinal);
+    if (row === null) return null;
+    const center = row.y + row.h / 2;
+    if (inBand(center, s.viewport)) return null;
+    return s.viewport.y + s.viewport.h / 2 - center;
+  });
+  if (ready === null) {
+    return { clicked: false, ok: false, why: `"${title}"'s row could not be scrolled into view` };
+  }
+  const rowsBefore = sectionRowCount(ready, areaTitles, title, ordinal);
+  if (rowsBefore === null) {
+    return { clicked: false, ok: false, why: `"${title}"'s row did not resolve` };
+  }
+  // the gesture must land before the re-census that judges it
+  const res = await runCmd(ctx, chevronClickCommand(title, ordinal));
+  let clicked = false;
+  let why = "the disclosure arrow did not respond";
+  if (res.ok) {
+    try {
+      const parsed = JSON.parse(res.stdout.trim()) as { clicked?: boolean; why?: string };
+      clicked = parsed.clicked === true;
+      if (typeof parsed.why === "string") why = parsed.why;
+    } catch {
+      /* keep the default reason */
+    }
+  }
+  if (!clicked) return { clicked: false, ok: false, why };
+  // The click WENT OUT. Everything below reports `clicked: true` even when it
+  // fails, because the app has already changed its state and a verification
+  // that could not run is not evidence that nothing happened. SBCOL1 §6 found
+  // this the hard way: quitting Things during the re-census left the area
+  // collapsed on disk while the ledger — written only on success — held
+  // nothing, so a durable change to the sidebar went unmentioned. The ledger
+  // records what the driver DID, not what it managed to confirm.
+  //
+  // RE-CENSUS after the input step — a gesture whose effect we cannot see is
+  // still never allowed to carry the ladder forward.
+  await ctx.sleep(600);
+  const after = await takeSnapshot(ctx);
+  if (after === null) {
+    return { clicked: true, ok: false, why: "the sidebar did not resolve after the click" };
+  }
+  const rowsAfter = sectionRowCount(after, areaTitles, title, ordinal);
+  if (rowsAfter === null) {
+    return { clicked: true, ok: false, why: `"${title}"'s row did not resolve after the click` };
+  }
+  const moved = want === "fewer" ? rowsAfter < rowsBefore : rowsAfter > rowsBefore;
+  if (!moved) {
+    return {
+      clicked: true,
+      ok: false,
+      why: `the click left "${title}" rendering ${rowsAfter} row(s) — the section did not ${
+        want === "fewer" ? "collapse" : "re-expand"
+      }`,
+    };
+  }
+  return { clicked: true, ok: true, rowsBefore, rowsAfter };
+}
+
+/**
+ * Fold every blocking section away, recording what to put back. Stops at the
+ * FIRST section it cannot collapse — a half-cleared path is not a path, and the
+ * caller falls through to the honest refusal (with the already-collapsed areas
+ * restored by the epilogue like any other exit).
+ */
+async function collapseWalls(
+  ctx: DriveCtx,
+  walls: SidebarSectionSpan[],
+  areaTitles: readonly string[],
+  collapsed: CollapsedArea[],
+): Promise<{ ok: boolean; why?: string }> {
+  for (const wall of walls) {
+    // Already folded and STILL measuring as a wall: the gesture is not working
+    // on this section, so stop rather than clicking at it again.
+    if (collapsed.some((c) => c.title === wall.title && c.ordinal === wall.ordinal)) {
+      return { ok: false, why: `"${wall.title}" stayed oversized after it was collapsed` };
+    }
+    // each collapse must be verified before the next one is attempted
+    const outcome = await toggleDisclosure(ctx, areaTitles, wall.title, wall.ordinal, "fewer");
+    // Ledger on the CLICK, not on the confirmation (SBCOL1 §6): a fold that
+    // went out and could not be verified is still a fold to answer for.
+    if (outcome.clicked) {
+      collapsed.push({
+        title: wall.title,
+        ordinal: wall.ordinal,
+        rowsExpanded: outcome.ok ? outcome.rowsBefore : null,
+      });
+    }
+    if (!outcome.ok) return { ok: false, why: outcome.why };
+  }
+  return { ok: true };
+}
+
+/**
+ * Put the sidebar back — in REVERSE order, so the list reflows the way it was
+ * folded. Runs on EVERY exit path (success, refusal, abort, throw): the
+ * disclosure state lives in the app's preferences and survives a relaunch
+ * (SBCOL1 §3), so an unrestored collapse is a durable change to the user's
+ * sidebar that they never asked for.
+ */
+async function restoreDisclosure(
+  ctx: DriveCtx,
+  areaTitles: readonly string[],
+  collapsed: CollapsedArea[],
+): Promise<string[]> {
+  const failed: string[] = [];
+  for (const entry of collapsed.toReversed()) {
+    // each re-expansion must be verified before the next one is attempted
+    const outcome = await toggleDisclosure(ctx, areaTitles, entry.title, entry.ordinal, "more");
+    if (!outcome.ok) failed.push(entry.title);
+  }
+  return failed;
+}
+
+/** Append the collapse rung's own account to whatever the ladder concluded. */
+function withCollapseOutcome(
+  result: DragDriveResult,
+  collapsed: CollapsedArea[],
+  restoreFailed: string[],
+): DragDriveResult {
+  if (collapsed.length === 0) return result;
+  const names = collapsed.map((c) => `"${c.title}"`).join(", ");
+  const restored =
+    restoreFailed.length === 0
+      ? "and expanded again afterwards"
+      : `but ${restoreFailed.map((t) => `"${t}"`).join(", ")} could not be expanded again — ` +
+        "the sidebar is left collapsed there until you click the arrow (or Things is relaunched, " +
+        "which keeps it collapsed)";
+  return {
+    ...result,
+    detail: `${result.detail} (${names} collapsed to clear the path, ${restored})`,
+    collapsed: collapsed.map((c) => c.title),
+    ...(restoreFailed.length > 0 && { restoreFailed }),
+  };
 }
 
 interface PlannedDrop {
@@ -997,6 +1346,29 @@ export async function driveSidebarAreaReorder(
     };
   }
   const ctx: DriveCtx = { run, state: aux.areaState, sleep };
+  // The collapse rung's ledger, owned OUT HERE so the restore epilogue covers
+  // every way the ladder can end — including a throw (FGRD2 cleanup shape).
+  const collapsed: CollapsedArea[] = [];
+  const areaTitlesForRestore = ctx.state().areas.map((a) => a.title);
+  try {
+    const result = await runDragLadder(ctx, spec, collapsed);
+    // the ladder (and any recovery drag inside it) must finish before the
+    // sidebar is folded back — the recovery needs the cleared path too
+    const restoreFailed = await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
+    return withCollapseOutcome(result, collapsed, restoreFailed);
+  } catch (err) {
+    // the sidebar is put back even when the ladder blew up
+    await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
+    throw err;
+  }
+}
+
+/** The ladder proper. Its caller owns the collapse ledger and the restore. */
+async function runDragLadder(
+  ctx: DriveCtx,
+  spec: SidebarDragSpec,
+  collapsed: CollapsedArea[],
+): Promise<DragDriveResult> {
   const pre = ctx.state();
   const preTies = hasRankTies(pre);
   const areaTitles = pre.areas.map((a) => a.title);
@@ -1124,15 +1496,29 @@ export async function driveSidebarAreaReorder(
     // blame the window size after minutes of AX round-trips.
     if (spanNeeded >= usableDragSpan(viewport)) {
       const orderedNow = areaRowsInOrder(snap.rows, areaTitles);
-      const wall = tallestSectionInSpan(
+      const walls = blockingSectionsInSpan(
         orderedNow,
         snap.rows,
         grab.y,
         finalPlan.dropY,
         spec.targetTitle,
+        viewport,
       );
-      if (wall !== null && sectionBlocks(wall, viewport)) {
-        const detail = blockedSectionDetail(wall, viewport, describeAnchor(finalPlan.anchor));
+      if (walls.length > 0) {
+        // COLLAPSE RUNG (SBCOL1). A wall is not a dead end: fold the blocking
+        // section(s) away with their disclosure chevrons — each collapse
+        // verified by a re-census — and re-plan against the shorter sidebar.
+        // The epilogue puts every one of them back.
+        // the sidebar must actually fold before the ladder re-plans against it
+        const folded = await collapseWalls(ctx, walls, areaTitles, collapsed);
+        if (folded.ok) continue; // re-plan from a fresh snapshot
+        const wall = walls[0] as SidebarSectionSpan;
+        const detail = blockedSectionDetail(
+          wall,
+          viewport,
+          describeAnchor(finalPlan.anchor),
+          folded.why,
+        );
         return hops === 0
           ? { ok: false, detail }
           : abortPartial(ctx, spec, hops, `${detail} — so the move stopped part-way`);
@@ -1375,26 +1761,47 @@ export async function driveSidebarAreaReorder(
       // window size fixes. Only fall back to the generic sentence when the
       // geometry does NOT show such a section.
       const planNow = planDrop(parked, spec, areaTitles, spec.placement, ranks);
-      const wall =
+      const wallsHere =
         "error" in planNow
-          ? null
-          : tallestSectionInSpan(
+          ? []
+          : blockingSectionsInSpan(
               ordered,
               parked.rows,
               grabPoint(planNow.source).y,
               planNow.dropY,
               spec.targetTitle,
-            );
-      const why =
-        wall !== null && sectionBlocks(wall, parked.viewport)
-          ? blockedSectionDetail(
-              wall,
               parked.viewport,
-              describeAnchor("error" in planNow ? "the requested position" : planNow.anchor),
-            )
-          : "no drop slot toward the destination fits the visible sidebar — the nearest area row " +
-            "toward it sits more than one drag away, so the gesture has nowhere to land";
-      return refuseOrRecover(ctx, pre, spec, hops, why);
+            );
+      if (wallsHere.length > 0) {
+        // The same collapse rung, reached from the hop side: the next area
+        // toward the destination begins a section taller than the visible list.
+        // the fold must land before the ladder re-plans
+        const folded = await collapseWalls(ctx, wallsHere, areaTitles, collapsed);
+        if (folded.ok) {
+          hops -= 1; // the fold is not a hop; the re-plan gets the slot back
+          continue;
+        }
+        return refuseOrRecover(
+          ctx,
+          pre,
+          spec,
+          hops,
+          blockedSectionDetail(
+            wallsHere[0] as SidebarSectionSpan,
+            parked.viewport,
+            describeAnchor("error" in planNow ? "the requested position" : planNow.anchor),
+            folded.why,
+          ),
+        );
+      }
+      return refuseOrRecover(
+        ctx,
+        pre,
+        spec,
+        hops,
+        "no drop slot toward the destination fits the visible sidebar — the nearest area row " +
+          "toward it sits more than one drag away, so the gesture has nowhere to land",
+      );
     }
     const anchorUuid = hopAnchor.uuid;
     // the hop gesture must land before its DB assert

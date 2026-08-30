@@ -566,6 +566,16 @@ export interface ExecuteResult {
    * opts a success back into it, and a failure always carries it.
    */
   steps?: string[];
+  /**
+   * Things a SUCCESSFUL drive has to say for itself that outlive the drive — a
+   * side effect on the app's own state that the caller is entitled to know
+   * about, as opposed to the play-by-play in {@link steps}. Currently: the
+   * sidebar areas the collapse rung folded away and re-expanded (SBCOL1).
+   *
+   * The pipeline routes these through the disclosure registry as `note`-tier
+   * lines, so they ride a success result rather than being failure-only.
+   */
+  notices?: string[];
   /** The transport was killed by its own deadline — the signature of an unanswered consent dialog. */
   timedOut?: boolean;
   /**

@@ -383,6 +383,18 @@ Things caps a URL-scheme `notes` value at 10,000 characters and every title/name
 
 The one place the care runs out is the notes body's second ceiling, 40,000 UTF-16 units, which only text with unusually wide clusters can reach. A ZWJ emoji family is one cluster but eleven units, and a 40,006-unit family payload was cut at exactly 40,000 — surrogate-safe (it stopped rather than split 👧) but not cluster-safe, leaving a dangling zero-width joiner. That reads like a buffer bound sitting underneath the character-aware path rather than a second deliberate rule, and it is the one case where the cut can produce a sequence the writer did not write. Evidence: [lab/notecap1-notes-ceiling.md](lab/notecap1-notes-ceiling.md) §2–§4, §8. Things 3.23.
 
+## 8. A disclosure state that knows it is not data
+
+Collapsing an area in the sidebar is the kind of thing an app gets subtly wrong all the time — by storing it next to the data, by keying it on a position, or by syncing it. Things gets all three right.
+
+**It is not in the database.** A full-table capture across a collapse — every table, row count and content digest — comes back **byte-identical**. No column moves, no `userModificationDate` bump, nothing for the sync layer to notice. The state lives alone in the group-container preferences plist as `collapsedAreaUUIDs`.
+
+**It is keyed by uuid, not by index.** The stored value is the area's identity, so reordering the sidebar, renaming an area, or adding one above it cannot silently transfer a fold onto a different area. The obvious cheap implementation — remembering "row 4 is collapsed" — breaks the moment the very feature it sits next to (drag-reordering areas) is used.
+
+**And it is per-device on purpose.** Because it is a preference rather than a record, a Mac with a laptop-sized window can keep a big area folded while the same account on another machine shows it open. Collapsing is a statement about *this screen*, and Things treats it as one. The flip side — that it therefore survives a relaunch, silently and locally — is exactly what makes it safe to borrow: a driver can fold a section, do its work, and hand the sidebar back with nothing having reached the user's other devices in between.
+
+The toggle itself is honest too: a persistent AX node with a real 18×18 frame (not a hover-drawn affordance that vanishes when automation looks at it), and a click on it is exactly reversible — a 22-row section to 2 and back, four times running, with no alert beep, no focus change, and no window churn. Evidence: [lab/sbcol1-sidebar-collapse.md](lab/sbcol1-sidebar-collapse.md) §2–§3. Things 3.23.
+
 ---
 
 ## Edge cases this project routed through

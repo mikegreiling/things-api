@@ -76,6 +76,10 @@ export const DISCLOSURES = {
     tier: "failure-only",
     why: "the drive play-by-play made the field bug reports rich, and costs context on every success; the change-history record keeps it, `--verbose` opts back in, failures always carry it",
   },
+  "sidebar-auto-collapse": {
+    tier: "note",
+    why: "how the move was made room for, and the state was put back — the caller has nothing to do unless the restore failed, and that case says so in its own words",
+  },
   "ui-recipe-uncertified": {
     tier: "note",
     why: "a lab-certification caveat about the recipe, not about this result — nothing to act on",
