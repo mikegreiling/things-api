@@ -34,6 +34,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { addDaysIso, decodePackedDate, encodePackedDate, localToday } from "../model/dates.ts";
+import { todayPlacement } from "../model/today-placement.ts";
 import {
   TEMPLATE_PROJECTION_COLUMNS,
   type TemplateProjectionRow,
@@ -281,7 +282,14 @@ function packedTomorrowOf(packedToday: number): number {
 function scheduleBucket(row: MoveeRow, packedToday: number): string {
   if (row.start === 0) return "inbox";
   if (row.startDate !== null) {
-    if (row.startDate <= packedToday) return row.startBucket === 1 ? "evening" : "today";
+    // Arrived rows classify by the ONE Today/Evening placement law
+    // ({@link todayPlacement}): the evening flag is live only while `startDate`
+    // is exactly today, so a STALE bucket-1 row buckets `today` — which is where
+    // the app renders it (STEV1 cell 1) and the scope that can reorder it. This
+    // is what `--in today` matches against (`describeSetLocation`/`viewOf`), so
+    // the axis check, the route below, and the reader now agree (#657).
+    const placement = todayPlacement(row, packedToday);
+    if (placement !== null) return placement;
     return `scheduled:${row.startDate}`;
   }
   if (row.start === 2) return "someday";
@@ -428,10 +436,12 @@ function reorderTargetOf(
     // misrouted an arrived member into a future day-group compound.
     if (bucket === "today") return { scope: "today" };
     if (bucket === "evening") {
-      // Evening flag is live (startBucket=1) only while startDate == today (§9n);
-      // scheduleBucket already gates this — an arrived evening member front-inserts
-      // via the shipped `evening` bounce (container FK + startBucket=1 preserved,
-      // R07 reminder-loss caveat inherited). Same scope for loose and every child.
+      // The evening flag is live (startBucket=1) only while startDate == today
+      // (§9n), and `scheduleBucket` gates on exactly that — so only a LIVE evening
+      // member reaches here; a stale one bucketed `today` above and routes to the
+      // today scope. A live evening member front-inserts via the shipped `evening`
+      // bounce (container FK + startBucket=1 preserved, R07 reminder-loss caveat
+      // inherited). Same scope for loose and every child.
       return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
     }
     if (row.heading !== null) {

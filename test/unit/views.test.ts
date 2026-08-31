@@ -87,9 +87,13 @@ describe("todayView", () => {
       todayIndex: 1,
     });
     seedTodo(fx.db, { title: "tonight", startDate: "2026-07-02", evening: true, todayIndex: 2 });
+    // A same-day daytime row, to pin the RANK the app gives the stale one: STEV1
+    // cell 1 measured it BELOW every current-day daytime row and ABOVE the "This
+    // Evening" header (its `startBucket=1` byte sorts it last in Today proper).
+    seedTodo(fx.db, { title: "daytime", startDate: "2026-07-02", todayIndex: 3 });
 
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title)).toEqual(["stale-evening"]);
+    expect(view.today.map((i) => i.title)).toEqual(["daytime", "stale-evening"]);
     expect(view.evening.map((i) => i.title)).toEqual(["tonight"]);
     // The evening marker expires daily (set only when startDate is exactly today):
     // the stale row is Today proper (today marker, no evening); tonight is evening.

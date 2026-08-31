@@ -16,6 +16,7 @@ import {
 } from "./entities.ts";
 import { decodeEpochReal, decodePackedDate, decodeReminderTime, type IsoDate } from "./dates.ts";
 import { templateProjectionDay, type TemplateProjectionRow } from "./template-projection.ts";
+import { todayPlacement } from "./today-placement.ts";
 import { reminderIsLive } from "../read/stage.ts";
 
 /**
@@ -145,26 +146,29 @@ function mapRepeating(row: TaskRow): RepeatingInfo {
  * agrees with the view: a SCHEDULED arm (a `startDate <= today` on a start=active
  * or start=someday row) OR a DEADLINE arm (an undated row whose deadline is
  * due/overdue and not dismissed — the `deadlineSuppressionDate` guard, oddities
- * §8e). Evening is the This-Evening sub-section (`startBucket=1` AND `startDate`
- * exactly today), and implies today. Repeating templates are never in Today
- * (the view excludes them), so they never mark. The closed-and-swept (logged)
- * gate is applied downstream at the emit boundary (which knows `stage`), since
- * the logbook boundary is not visible here.
+ * §8e). Evening is the This-Evening sub-section, derived by the ONE placement law
+ * ({@link todayPlacement}) the reorder scopes and the move planner also consult —
+ * so a STALE evening row (`startBucket=1` whose day has passed) marks `today`,
+ * never `evening`, exactly as the app renders it. Repeating templates are never
+ * in Today (the view excludes them), so they never mark. The closed-and-swept
+ * (logged) gate is applied downstream at the emit boundary (which knows `stage`),
+ * since the logbook boundary is not visible here.
  */
 function todayMarkers(row: TaskRow, packedToday: number): { today?: true; evening?: true } {
   const isTemplate = row.rt1_recurrenceRule !== null || row.repeater !== null;
   if (isTemplate) return {};
   const start = row.start ?? 0;
-  const scheduledArm =
-    row.startDate !== null && row.startDate <= packedToday && (start === 1 || start === 2);
+  const placement = todayPlacement(
+    { start, startDate: row.startDate, startBucket: row.startBucket },
+    packedToday,
+  );
   const deadlineArm =
     row.startDate === null &&
     row.deadline !== null &&
     row.deadline <= packedToday &&
     (row.deadlineSuppressionDate === null || row.deadlineSuppressionDate < row.deadline);
-  if (!scheduledArm && !deadlineArm) return {};
-  const evening = row.startBucket === 1 && start === 1 && row.startDate === packedToday;
-  return evening ? { today: true, evening: true } : { today: true };
+  if (placement === null && !deadlineArm) return {};
+  return placement === "evening" ? { today: true, evening: true } : { today: true };
 }
 
 function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday: number) {

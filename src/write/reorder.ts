@@ -48,6 +48,7 @@ import { randomBytes } from "node:crypto";
 
 import type { AuditRecord } from "../audit/schema.ts";
 import { addDaysIso, decodePackedDate, localToday, encodePackedDate } from "../model/dates.ts";
+import { todayPlacement } from "../model/today-placement.ts";
 import {
   TEMPLATE_PROJECTION_COLUMNS,
   type TemplateProjectionRow,
@@ -1110,6 +1111,24 @@ async function runBounce(
     direction === "back" ? targetOrder.slice(firstMoved) : targetOrder.slice(0, lastMoved + 1);
   const touchedUnnamed = coBounce.filter((u) => !named.has(u));
 
+  // STEV1 cell 3 — the `today` bounce NORMALIZES a past-dated movee's schedule.
+  // Its away leg is `when=evening`, and This Evening is definitionally the
+  // device's CURRENT day (TIMEZ-NODATE), so the leg re-dates any movee whose
+  // `startDate` has passed; the `when=today` back leg then stamps its
+  // `todayIndexReferenceDate` to today. Measured 2026-07-05 → 2026-07-06 on a
+  // stale evening row (whose day has passed by definition) and on an overdue
+  // daytime one. The ordering lands as asked, but the row's DATE changes too —
+  // captured here, before the legs, so the ok result can say so.
+  const pastDated =
+    bounceKind === "today"
+      ? coBounce.filter((u) => {
+          const r = deps.db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(u) as
+            | { startDate: number | null }
+            | undefined;
+          return r?.startDate != null && r.startDate < encodePackedDate(localToday(now()));
+        })
+      : [];
+
   // FLAG-AWARE protocol routing (SIT6). The three json-collapsible index bounces
   // (`heading` BOUNCE2-h, `anytime` ANYBNC, `projects` P8e) are when=someday →
   // when=anytime round-trips whose `when=` legs OVERWRITE the Today/Evening flag:
@@ -1598,6 +1617,15 @@ async function runBounce(
   // template left as the untouched suffix moved not at all — surface both so the caller
   // never mistakes a umd-silent placement for a no-op.
   const bag = newDisclosures();
+  if (pastDated.length > 0) {
+    disclose(
+      bag,
+      "reorder-today-redate",
+      `${pastDated.length} row(s) whose day had already passed are now dated today — a Today-section ` +
+        "reorder re-enters each row through This Evening, which is always the current day (STEV1): " +
+        pastDated.join(", "),
+    );
+  }
   if (templatesPresent) {
     const tt = coBounce.filter((u) => isTmpl(u) && !isProjectTemplate(u));
     const pt = coBounce.filter(isProjectTemplate);
@@ -3451,15 +3479,14 @@ function checkStillMember(
       return null;
     case "today":
     case "evening": {
-      const inToday =
-        row.startDate !== null &&
-        row.startDate <= packedToday &&
-        (row.start === 1 || row.start === 2);
-      if (!inToday) return "the item left the Today list";
-      if (bounceKind === "today" && row.startBucket !== 0) return "the item moved to This Evening";
-      if (bounceKind === "evening" && (row.startBucket !== 1 || row.startDate !== packedToday)) {
-        return "the item left This Evening";
-      }
+      // The ONE placement law ({@link todayPlacement}): a STALE bucket-1 row is a
+      // Today-proper member (STEV1), so it does NOT read as "moved to This
+      // Evening" here — the today bounce's own away leg would otherwise trip its
+      // own re-check on the movee it was handed (#657).
+      const placement = todayPlacement(row, packedToday);
+      if (placement === null) return "the item left the Today list";
+      if (bounceKind === "today" && placement !== "today") return "the item moved to This Evening";
+      if (bounceKind === "evening" && placement !== "evening") return "the item left This Evening";
       return null;
     }
     case "day": {

@@ -5,6 +5,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { encodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
+import { todayPlacement } from "../model/today-placement.ts";
 import {
   TEMPLATE_PROJECTION_COLUMNS,
   type TemplateProjectionRow,
@@ -1115,17 +1116,22 @@ interface MemberRow {
   startBucket: number | null;
   type: number;
   isTemplate: boolean;
+  /** `start` + `startDate`, so the today/evening scopes can apply {@link todayPlacement} without a per-row re-read. */
+  start: number;
+  startDate: number | null;
 }
 
 /**
  * Scope membership + full wire list for `reorder`. Eligibility mirrors the
  * lab evidence exactly:
- *  - today:   Today members with raw startBucket=0, to-dos AND projects
- *             (O01/O03/O12), by todayIndex. Bucket-1 members are listed as
- *             rejected candidates — including one silently de-evenings it
- *             (O03), so the guard refuses.
- *  - evening: raw startBucket=1 AND startDate == today exactly (evening
- *             membership expires daily), by todayIndex. Bounce-only (O03).
+ *  - today:   Today members whose {@link todayPlacement} is `today` — to-dos AND
+ *             projects (O01/O03/O12), by todayIndex. That includes a STALE
+ *             evening row (bucket-1, day passed), which is where the app renders
+ *             it (STEV1). LIVE evening members are listed as rejected candidates —
+ *             including one silently de-evenings it (O03), so the guard refuses.
+ *  - evening: {@link todayPlacement} `evening` — raw startBucket=1 AND startDate
+ *             == today exactly (evening membership expires daily), by todayIndex.
+ *             Bounce-only (O03).
  *  - project: un-headed open to-do children, by "index" (O04/O09/O11);
  *             headed children are rejected candidates (O06 rips them out).
  *  - area:    direct open area to-dos (O05/O10) AND projects (O14), by
@@ -1232,7 +1238,7 @@ export function computeReorderPre(
     (
       db
         .prepare(
-          `SELECT uuid, title, ${rankCol} AS rank, startBucket, type, ${TEMPLATE_ROW} AS isTemplate${
+          `SELECT uuid, title, ${rankCol} AS rank, startBucket, start, startDate, type, ${TEMPLATE_ROW} AS isTemplate${
             projectionDay === undefined ? "" : `, ${TEMPLATE_PROJECTION_COLUMNS}`
           }
            FROM TMTask
@@ -1254,6 +1260,8 @@ export function computeReorderPre(
           title: r.title,
           rank: r.rank,
           startBucket: r.startBucket,
+          start: r.start,
+          startDate: r.startDate,
           type: r.type,
           isTemplate: r.isTemplate === 1,
         };
@@ -1302,10 +1310,16 @@ export function computeReorderPre(
         [packedToday],
         "todayIndex",
       );
+      // ONE law for both scopes ({@link todayPlacement}, STEV1): an arrived row is
+      // a Today member, and it is a This-Evening member only while its bucket-1
+      // flag is LIVE (startDate exactly today). A STALE bucket-1 row therefore
+      // belongs to the `today` scope — which is where the app renders it (STEV1
+      // cell 1) and the only scope whose write shape moves it (STEV1 cell 3) —
+      // and the `evening` scope points at it rather than at a reschedule (#657).
       if (params.scope === "today") {
-        members = all.filter((m) => m.startBucket === 0);
+        members = all.filter((m) => todayPlacement(m, packedToday) === "today");
         for (const m of all) {
-          if (m.startBucket === 1) {
+          if (todayPlacement(m, packedToday) === "evening") {
             rejectedCandidates.set(
               m.uuid,
               "is an evening-bucket item — a native Today reorder would silently de-evening " +
@@ -1314,17 +1328,15 @@ export function computeReorderPre(
           }
         }
       } else {
-        // Evening membership expires daily: only exact-today bucket-1 rows.
-        members = all.filter(
-          (m) => m.startBucket === 1 && rowStartDate(db, m.uuid) === packedToday,
-        );
+        // Evening membership expires daily: only LIVE bucket-1 rows.
+        members = all.filter((m) => todayPlacement(m, packedToday) === "evening");
         for (const m of all) {
-          if (!members.some((e) => e.uuid === m.uuid)) {
+          if (todayPlacement(m, packedToday) !== "evening") {
             rejectedCandidates.set(
               m.uuid,
               m.startBucket === 1
-                ? "is a STALE evening item (startDate in the past) — it renders in Today " +
-                    "proper; re-schedule it before reordering"
+                ? "is a STALE evening item (its evening day has passed) — the app renders it " +
+                    "in Today proper; reorder it with scope 'today'"
                 : "is in the Today section, not This Evening — use scope 'today'",
             );
           }
@@ -1740,10 +1752,13 @@ export function computeReorderPre(
   // `result = [named in wire order] ++ [unnamed in prior VISIBLE order]` (TODWIRE
   // EXP1/EXP2) — so the smallest wire realizing the request is
   // `minimalReorderWire(currentVisibleOrder, targetVisibleOrder)` on the reader's
-  // Today comparator. currentVisibleOrder = the open bucket-0 members in visible
-  // order (unswept-canceled / stale-evening rows are never named and stay put); the
-  // target = the requested prefix (`params.uuids`) followed by the remaining members
-  // in visible order (mirrors the full-`wireList` model, but visible not raw).
+  // Today comparator. currentVisibleOrder = the open Today-proper members in
+  // visible order — every row the placement law calls `today`, which INCLUDES a
+  // stale evening row (bucket-1, day passed) since the app ranks it in Today
+  // proper (STEV1 cell 1); only LIVE evening rows are excluded, with unswept-
+  // canceled rows never named and staying put. The target = the requested prefix
+  // (`params.uuids`) followed by the remaining members in visible order (mirrors
+  // the full-`wireList` model, but visible not raw).
   let todayVisibleOrder: string[] | null = null;
   let todayWire: string[] | null = null;
   let todayRestampNonMovees: string[] = [];
@@ -1754,10 +1769,10 @@ export function computeReorderPre(
           `SELECT uuid FROM TMTask
            WHERE trashed = 0 AND ${CONTAINER_UNTRASHED} AND status = 0 AND ${NOT_TEMPLATE_ROW}
              AND type IN (0, 1) AND startDate IS NOT NULL AND startDate <= ? AND start IN (1, 2)
-             AND startBucket = 0
+             AND NOT (startBucket = 1 AND startDate = ?)
            ORDER BY ${todayOrderBy()}`,
         )
-        .all(packedToday) as { uuid: string }[]
+        .all(packedToday, packedToday) as { uuid: string }[]
     ).map((r) => r.uuid);
     const requestedInBucket = params.uuids.filter((u) => todayVisibleOrder?.includes(u));
     const requestedSet = new Set(requestedInBucket);
@@ -1801,23 +1816,16 @@ function hostLocalIsoDate(epochSeconds: number): IsoDate {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}` as IsoDate;
 }
 
-function rowStartDate(db: DatabaseSync, uuid: string): number | null {
-  const row = db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(uuid) as
-    | { startDate: number | null }
-    | undefined;
-  return row?.startDate ?? null;
-}
-
 /**
- * A row's live Today/Evening flag — `"today"`, `"evening"`, or `null` — read
- * from the SAME marker the `today`/`evening` reorder membership uses
- * ({@link computeReorderPre}, O01/O03/§9n): an ARRIVED scheduled row
- * (`start IN (1,2)` AND `startDate <= today`) carries the flag — `evening` at
- * raw `startBucket=1` (a live evening flag expires daily, so a stale past-dated
- * bucket-1 row reads `today` proper), `today` otherwise. Someday, anytime,
- * inbox, and future-scheduled rows carry NO flag. Single-sourced here so any
- * de-Today guard (e.g. the `projects` bounce's de-star refusal in reorder.ts)
- * keys off the one marker and can never drift from the membership query.
+ * A row's live Today/Evening flag — `"today"`, `"evening"`, or `null` — from the
+ * ONE placement law ({@link todayPlacement}) the `today`/`evening` reorder
+ * membership, the reader's markers and the move planner's axis check all share:
+ * an ARRIVED scheduled row (`start IN (1,2)` AND `startDate <= today`) carries
+ * the flag — `evening` only while raw `startBucket=1` is LIVE (evening expires
+ * daily, so a stale past-dated bucket-1 row reads `today` proper), `today`
+ * otherwise. Someday, anytime, inbox, and future-scheduled rows carry NO flag.
+ * A uuid-addressed wrapper, so any de-Today guard (e.g. the `projects` bounce's
+ * de-star refusal in reorder.ts) reads the flag without re-deriving it.
  */
 export function todayEveningFlagOf(
   db: DatabaseSync,
@@ -1829,7 +1837,5 @@ export function todayEveningFlagOf(
     .prepare("SELECT start, startDate, startBucket FROM TMTask WHERE uuid = ?")
     .get(uuid) as { start: number; startDate: number | null; startBucket: number } | undefined;
   if (row === undefined) return null;
-  if (row.start !== 1 && row.start !== 2) return null; // inbox (start=0)
-  if (row.startDate === null || row.startDate > packedToday) return null; // someday / anytime / future
-  return row.startBucket === 1 && row.startDate === packedToday ? "evening" : "today";
+  return todayPlacement(row, packedToday);
 }

@@ -124,6 +124,10 @@ export const DISCLOSURES = {
     tier: "warning",
     why: "rows the caller never named had their Today grouping changed — collateral they may need to inspect",
   },
+  "reorder-today-redate": {
+    tier: "warning",
+    why: "the caller asked to reorder and the row's SCHEDULE moved too (an overdue or stale-evening day became today) — a state change beyond the order, theirs to keep or re-date",
+  },
   "reorder-templates-silent": {
     tier: "warning",
     why: "a change-date-diffing sync or watcher will MISS this move; a caller relying on one must reconcile another way",
