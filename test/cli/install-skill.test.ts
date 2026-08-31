@@ -77,6 +77,7 @@ describe("install-skill: built-in copy fallback", () => {
         "ordering.md",
         "errors.md",
         "banner.md",
+        "bug-reports.md",
       ]) {
         expect(existsSync(join(loc.dir, "references", ref)), `${loc.label}: ${ref}`).toBe(true);
       }
