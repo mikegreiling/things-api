@@ -88,6 +88,55 @@ function justified(lines: string[], index: number): boolean {
   return false;
 }
 
+/**
+ * The GEOMETRY marker's fence (SBRES1, issues #665/#651) — the same doctrine one
+ * axis over. A positional address says "the element in slot N"; a geometric one
+ * says "the element that is about this big", and it fails the same way: silently,
+ * on a layout the author never saw. The sidebar locator identified its target as
+ * "the narrowest AXTable under 400pt wide", so a user who dragged the sidebar
+ * divider past 400pt — measured in-lab, the divider goes to at least 790 — got
+ * "the sidebar did not resolve (is the window open and the sidebar visible?)"
+ * forever, on a sidebar sitting there in plain sight.
+ *
+ * The rule: a frame dimension compared against a magic number is an ADDRESS, and
+ * it either carries a measured justification or it does not ship. Small padding
+ * constants (band insets, half-row nudges) are not addresses — the threshold is
+ * two digits and up, which is where "about this big" begins.
+ */
+const GEOMETRY_MARKER = "geometry-ok:";
+const GEOMETRY_PATTERN = /\b(?:[a-z]+\.)?([whxy])\s*[<>]=?\s*(\d{2,})/g;
+
+describe("ui vector: element identity is never a size (SBRES1)", () => {
+  for (const file of FILES) {
+    it(`${file} identifies no element by its dimensions`, () => {
+      const lines = readFileSync(join(VECTORS, file), "utf8").split("\n");
+      const violations: string[] = [];
+      lines.forEach((line, i) => {
+        if (isComment(line)) return;
+        for (const m of line.matchAll(GEOMETRY_PATTERN)) {
+          if ((lines[i] ?? "").includes(GEOMETRY_MARKER)) continue;
+          const above = lines[i - 1] ?? "";
+          if (isComment(above) && above.includes(GEOMETRY_MARKER)) continue;
+          violations.push(
+            `${file}:${i + 1}: \`${m[1]} ${m[0].includes("<") ? "<" : ">"} ${m[2]}\` identifies ` +
+              `an element by its size. Match it structurally (its container, its role, the rows ` +
+              `it holds) or add a \`// ${GEOMETRY_MARKER} <measured reason>\` comment.`,
+          );
+        }
+      });
+      expect(violations).toEqual([]);
+    });
+  }
+
+  it("the scanner catches the exact shape that shipped in #665", () => {
+    const bug = ["if (f.w < 400) { best = tables[i] }"];
+    expect([...(bug[0] as string).matchAll(GEOMETRY_PATTERN)]).toHaveLength(1);
+    // padding constants are not addresses
+    const padding = ["var bandTop = vp.y + 6, bandBot = vp.y + vp.h - 6;"];
+    expect([...(padding[0] as string).matchAll(GEOMETRY_PATTERN)]).toHaveLength(0);
+  });
+});
+
 describe("ui vector: positional element addressing is fenced (CGRD1)", () => {
   for (const file of FILES) {
     it(`${file} has no unjustified positional address`, () => {

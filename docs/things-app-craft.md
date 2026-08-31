@@ -395,6 +395,16 @@ Collapsing an area in the sidebar is the kind of thing an app gets subtly wrong 
 
 The toggle itself is honest too: a persistent AX node with a real 18×18 frame (not a hover-drawn affordance that vanishes when automation looks at it), and a click on it is exactly reversible — a 22-row section to 2 and back, four times running, with no alert beep, no focus change, and no window churn. Evidence: [lab/sbcol1-sidebar-collapse.md](lab/sbcol1-sidebar-collapse.md) §2–§3. Things 3.23.
 
+## The content list virtualizes its accessibility tree; the sidebar deliberately does not
+
+Two lists, two opposite choices, and both are the right one.
+
+Open a project holding **400 to-dos** and ask its `AXTable` for its rows: you get **one**. Open Anytime — every unscheduled item in the database — and you get **27**, roughly a screenful. The content list materializes accessibility rows for what is on screen and nothing more. The **sidebar**, sitting beside it, exposes **all 85 of its rows at once**, including the ones scrolled far out of view, each with a real, correct, off-screen frame (an `AXTable` whose own frame is 1,899 pt tall inside a 613 pt viewport).
+
+That asymmetry is not sloppiness on one side. A content list is unbounded — it is the user's data — so materializing it eagerly would make every assistive client pay for the size of the database. A sidebar is bounded by the number of areas and projects a person keeps, and it is the app's *navigation*: a screen reader needs to know what is in it without scrolling through it, and a drag needs to know where a row will land before it gets there. Things gave each list the treatment its role calls for.
+
+The practical consequence for anything automating Things: **the cost of reading the sidebar is a function of the sidebar, not of what the user happens to have open.** We assumed the opposite and built a campaign cell to prove it — a 400-item project versus a small area view, with `AXEnhancedUserInterface` forced on and off — and the numbers came back flat, because the app had already handled it. Evidence: [lab/sbres1-sidebar-resolution.md](lab/sbres1-sidebar-resolution.md) §5. Things 3.23 / 3.23.1.
+
 ---
 
 ## Edge cases this project routed through
