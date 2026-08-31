@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.2 — 2026-08-31
+
 - **Added — the bundled agent skill now teaches every install how to write a bug report worth reading.** A new reference page, `references/bug-reports.md`, carries the checklist: state the intent, then every command verbatim with its complete output and exit code, expected versus observed as two separate claims, and the reasoning for calling it a defect rather than intended behavior — plus the environment block (`things --version`, the Things and macOS versions, `things helpers status`, `things config get ui-enabled`, the relevant part of `things doctor`, and `things op-result` when a write's outcome was uncertain). It also carries the redaction rules for a public tracker: substitute invented names, keep the structure that matters (counts, nesting, ordering, name collisions), never paste local trace files, and say in the report that the data is synthetic. `SKILL.md` gains a pointer to it from the section on not routing around the CLI, so the guidance is one hop away without spending context on every session.
 
   Until now this advice reached only source checkouts — an agent running a `-dev` build got a "file it, and redact it" section appended at install time, and a published install got nothing beyond a single sentence. The checklist is now universal; the dev-only section stays as the extra push to actually file, and points at the same page.
