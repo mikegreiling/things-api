@@ -148,44 +148,170 @@ function pidOf(n){ return Application('System Events').processes.byName(n).unixI
 function sleep(ms){ $.NSThread.sleepForTimeInterval(ms/1000) }
 function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]) }
 function sv(el,name){ var v=attr(el,name); return v? v.js : '' }
-function frame(el){ var p=attr(el,'AXPosition'), z=attr(el,'AXSize'); if(!p||!z) return null;
+function rectOf(p,z){ if(!p||!z) return null;
   var pd=ObjC.castRefToObject($.CFCopyDescription(p)).js, zd=ObjC.castRefToObject($.CFCopyDescription(z)).js;
   var pm=pd.match(/x:([-0-9.]+) y:([-0-9.]+)/), zm=zd.match(/w:([-0-9.]+) h:([-0-9.]+)/);
   return (pm&&zm)?{x:+pm[1],y:+pm[2],w:+zm[1],h:+zm[2]}:null }
+function frame(el){ return rectOf(attr(el,'AXPosition'), attr(el,'AXSize')) }
 function kids(el){ var c=attr(el,'AXChildren'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a }
 function findAll(el, wantRole, depth, acc){ acc=acc||[]; if(depth<0) return acc; var ch=kids(el);
   for(var i=0;i<ch.length;i++){ if(sv(ch[i],'AXRole')===wantRole) acc.push(ch[i]); findAll(ch[i], wantRole, depth-1, acc) } return acc }
 function appEl(){ return $.AXUIElementCreateApplication(pidOf('Things3')) }
-function stdWindow(){ var ws=kids(appEl()); for(var i=0;i<ws.length;i++){ if(sv(ws[i],'AXSubrole')==='AXStandardWindow') return ws[i] } return ws.length?ws[0]:null }
-function sidebarTable(){ var w=stdWindow(); if(!w) return null; var tables=findAll(w,'AXTable',12,[]); var best=null;
-  for(var i=0;i<tables.length;i++){ var f=frame(tables[i]); if(!f) continue; if(f.w<400){ if(!best||f.w<best.f.w) best={el:tables[i],f:f} } }
-  return best?best.el:null }
+function mainWindow(){ var ws=kids(appEl()), std=[];
+  for(var i=0;i<ws.length;i++){ if(sv(ws[i],'AXRole')==='AXWindow' && sv(ws[i],'AXSubrole')==='AXStandardWindow') std.push(ws[i]) }
+  for(var k=0;k<std.length;k++){ if(sv(std[k],'AXMain')===true) return std[k] }
+  return std.length? std[0] : null }
+var NODE_ATTRS=$(['AXValue','AXDescription','AXTitle','AXChildren','AXPosition','AXSize','AXRole']);
+function node(el){ var out=Ref();
+  if($.AXUIElementCopyMultipleAttributeValues(el,NODE_ATTRS,0,out)!==0) return null;
+  var a=ObjC.castRefToObject(out[0]); if(!a||Number(a.count)<7) return null;
+  function s(i){ var v=a.objectAtIndex(i); if(!v) return ''; var j; try{ j=v.js }catch(e){ return '' } return typeof j==='string'? j:'' }
+  var ch=[], c=a.objectAtIndex(3);
+  try{ var n=Number(c.count); for(var i=0;i<n;i++) ch.push(c.objectAtIndex(i)) }catch(e){ ch=[] }
+  var f=null; try{ f=rectOf(a.objectAtIndex(4), a.objectAtIndex(5)) }catch(e){ f=null }
+  return { value:s(0), desc:s(1), title:s(2), children:ch, frame:f, role:s(6) } }
+function textOf(n, acc, depth){ if(n===null||depth<0) return acc;
+  if(n.value) acc.push(n.value); if(n.desc) acc.push(n.desc); if(n.title) acc.push(n.title);
+  for(var i=0;i<n.children.length;i++) textOf(node(n.children[i]), acc, depth-1); return acc }
+function isList(role){ return role==='AXTable'||role==='AXOutline'||role==='AXList' }
+function listPanes(el, depth, acc, sa){ if(depth<0) return acc; var ch=kids(el);
+  for(var i=0;i<ch.length;i++){ var role=sv(ch[i],'AXRole');
+    if(isList(role)){ acc.push({table:ch[i], scroll:sa}); continue }
+    if(role==='AXRow'||role==='AXCell') continue;
+    listPanes(ch[i], depth-1, acc, role==='AXScrollArea'? ch[i] : sa) }
+  return acc }
+function harvestRows(tableEl, depth){ var out=[], ch=kids(tableEl);
+  for(var i=0;i<ch.length;i++){ var n=node(ch[i]); if(n===null) continue;
+    if(n.role!=='AXRow'&&n.role!=='AXTableRow') continue;
+    var f=n.frame;
+    out.push({ text: textOf(n,[],depth).join('|'), x:f?f.x:null, y:f?f.y:null, w:f?f.w:null, h:f?f.h:null }) }
+  return out }
+function segMatch(text, title){ var segs=text.split('|');
+  for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.') return true } return false }
+function countTitles(rows, titles){ var n=0;
+  for(var t=0;t<titles.length;t++){ for(var r=0;r<rows.length;r++){ if(segMatch(rows[r].text,titles[t])){ n++; break } } }
+  return n }
+function overlapPx(a,b){ if(!a||!b) return 0; return Math.min(a.x+a.w,b.x+b.w) - Math.max(a.x,b.x) }
+/*
+ * The scroll bar is a DIRECT child of the scroll area (measured), so this reads
+ * the children and stops. It used to be a findAll to depth 4, which walked the
+ * whole table and every row underneath it — the last full-subtree enumeration
+ * in the snapshot, and worth ~0.8s of its ~1.2s on an 85-row sidebar.
+ */
+function scrollFraction(sa){ if(!sa) return null; var ch=kids(sa);
+  for(var b=0;b<ch.length;b++){ if(sv(ch[b],'AXRole')!=='AXScrollBar') continue;
+    var v=attr(ch[b],'AXValue'); if(v===null) continue;
+    var d=ObjC.castRefToObject($.CFCopyDescription(v)).js; var m=d.match(/value = ([+\\-0-9.]+)/);
+    if(m) return +m[1] }
+  return null }
+/*
+ * THE SIDEBAR LOCATOR (SBRES1). Structural + semantic, never geometric:
+ *  - the window is the one carrying AXMain (measured: exactly one does, and it
+ *    is the front one) — never the 40x40 untitled placeholder that always sits
+ *    in the app's AXChildren beside the menu bar;
+ *  - candidate lists are collected by a walk that STOPS at every list container
+ *    and never enters a row, so its cost is a function of window chrome rather
+ *    than of the user's data (measured 125 AX calls vs the old walk's ~3,900);
+ *  - the sidebar is the candidate whose rows carry the caller's own AREA TITLES,
+ *    which is what a sidebar IS. No width threshold: the old w < 400 test
+ *    silently unresolved every sidebar dragged past 400pt (issues #665/#651).
+ */
+function resolveSidebar(titles, depth){
+  var w = mainWindow();
+  if (w === null) return { ok:false, why:'no-window' };
+  var panes = listPanes(w, 8, [], null);
+  if (panes.length === 0) return { ok:false, why:'no-list-candidates', windowFrame:frame(w) };
+  var scored = [], i;
+  for (i=0;i<panes.length;i++){
+    var rows = harvestRows(panes[i].table, depth);
+    scored.push({ pane:panes[i], rows:rows, hits:countTitles(rows,titles), frame:frame(panes[i].table) });
+  }
+  var best=null, tie=false;
+  for (i=0;i<scored.length;i++){
+    if (best===null || scored[i].hits>best.hits){ best=scored[i]; tie=false }
+    else if (scored[i].hits===best.hits && best.hits>0) tie=true;
+  }
+  if (best===null || best.hits===0){
+    var seen=[]; for(i=0;i<scored.length;i++) seen.push({frame:scored[i].frame, rows:scored[i].rows.length});
+    return { ok:false, why:'no-title-match', searched:seen, titles:titles.length };
+  }
+  if (tie) return { ok:false, why:'ambiguous-sidebar', titles:titles.length };
+  // HIDDEN-SIDEBAR SIGNATURE (measured): View > Hide Sidebar leaves the sidebar
+  // scroll area in the tree with its old frame while the content pane slides
+  // over it, so the two list panes OVERLAP horizontally by the sidebar's width.
+  // Visible (and full-screen) states never overlap. No AX attribute marks it.
+  var vp = best.pane.scroll===null? null : frame(best.pane.scroll);
+  for (i=0;i<scored.length;i++){
+    if (scored[i]===best || scored[i].pane.scroll===null) continue;
+    if (overlapPx(vp, frame(scored[i].pane.scroll)) > 1) return { ok:false, why:'sidebar-hidden' };
+  }
+  if (vp === null) return { ok:false, why:'no-viewport' };
+  if (best.rows.length === 0) return { ok:false, why:'no-rows' };
+  return { ok:true, table:best.pane.table, scroll:best.pane.scroll, viewport:vp, rows:best.rows, hits:best.hits };
+}
 var MOVED=5, DOWN=1, UP=2, DRAG=6;
 function mev(t,x,y,cs){ var e=$.CGEventCreateMouseEvent($(), t, $.CGPointMake(x,y), 0); if(cs) $.CGEventSetIntegerValueField(e,1,cs); return e }
 function postHID(ev){ $.CGEventPost($.kCGHIDEventTap, ev) }`;
 
-/** Snapshot: sidebar rows (text + frames), viewport rect, scroll fraction. */
-export function jxaSidebarSnapshotScript(): string {
+/**
+ * How deep the per-row text walk goes on the FAST path, and on the fallback.
+ *
+ * MEASURED (SBRES1, 84-row sidebar): the driver consumes a row's text in exactly
+ * two ways — `text === ''` (spacer detection) and an exact segment match against
+ * a known area title — and depth 2 agrees with the old depth-6 walk on BOTH for
+ * every row, at 235 AX calls / 197ms instead of 3,376 / 1,675ms. Depth 4 and up
+ * is byte-identical to the old output, so the escalation below can never lose
+ * information the ladder used to have.
+ */
+const ROW_TEXT_DEPTH_FAST = 2;
+const ROW_TEXT_DEPTH_FULL = 6;
+
+/**
+ * Snapshot: sidebar rows (text + frames), viewport rect, scroll fraction.
+ *
+ * `areaTitles` is what makes the locator semantic — the sidebar is identified as
+ * the list that holds the caller's own areas. It is also the ESCALATION oracle:
+ * every area always renders a sidebar row (AXDRAG1: even off-viewport rows
+ * expose valid virtualized frames), so a shallow harvest that finds fewer titles
+ * than the database holds is re-run at full depth before the ladder sees it.
+ */
+export function jxaSidebarSnapshotScript(areaTitles: readonly string[]): string {
   return `${JXA_PRELUDE}
-function allText(el, acc, depth){ acc=acc||[]; depth=depth==null?6:depth; if(depth<0) return acc;
-  var v=sv(el,'AXValue'); if(v) acc.push(v); var d=sv(el,'AXDescription'); if(d) acc.push(d);
-  var t=sv(el,'AXTitle'); if(t) acc.push(t); var ch=kids(el); for(var i=0;i<ch.length;i++) allText(ch[i],acc,depth-1); return acc }
-var t = sidebarTable();
-var out = { viewport: null, scroll: null, rows: [] };
-if (t !== null) {
-  var w = stdWindow();
-  var areas = findAll(w,'AXScrollArea',12,[]);
-  for (var i=0;i<areas.length;i++){ var f=frame(areas[i]); if(f && f.w<400){ out.viewport=f;
-    var bars=findAll(areas[i],'AXScrollBar',4,[]);
-    for (var b=0;b<bars.length;b++){ var v=attr(bars[b],'AXValue'); if(v===null) continue;
-      var d=ObjC.castRefToObject($.CFCopyDescription(v)).js; var m=d.match(/value = ([+\\-0-9.]+)/);
-      if(m){ out.scroll = +m[1]; break } }
-    break } }
-  var ch = kids(t);
-  for (var r=0;r<ch.length;r++){ var role=sv(ch[r],'AXRole');
-    if (role==='AXRow'||role==='AXTableRow'){ var rf=frame(ch[r]);
-      out.rows.push({ text: allText(ch[r],[],6).join('|'), x: rf?rf.x:null, y: rf?rf.y:null, w: rf?rf.w:null, h: rf?rf.h:null }) } }
+var TITLES = ${JSON.stringify([...areaTitles])};
+var r = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST});
+var out;
+if (r.ok !== true) { out = { ok:false, why:r.why, searched:r.searched||null, titles:r.titles||null, windowFrame:r.windowFrame||null } }
+else {
+  var deep = false;
+  if (r.hits < TITLES.length) {
+    var full = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FULL});
+    if (full.ok === true && full.hits > r.hits) { r = full; deep = true }
+  }
+  out = { ok:true, viewport:r.viewport, scroll:scrollFraction(r.scroll), rows:r.rows,
+          deep:deep, matched:r.hits, expected:TITLES.length };
 }
+JSON.stringify(out)`;
+}
+
+/**
+ * Show or hide the sidebar through Things' own View menu (SBRES1 normalization
+ * rung). English-pinned and fail-closed: a menu without the item — a localized
+ * app, or a Things update that moved it — refuses and names what it did find,
+ * rather than clicking whatever sits in that position (UIC1 precedent).
+ */
+export function jxaSidebarVisibilityScript(want: "show" | "hide"): string {
+  const wanted = want === "show" ? "Show Sidebar" : "Hide Sidebar";
+  return `var se = Application('System Events');
+var out = { clicked:false, why:'', items:[] };
+try {
+  var items = se.processes.byName('Things3').menuBars[0].menuBarItems.byName('View').menus[0].menuItems;
+  for (var i = 0; i < items.length; i++) {
+    var name = items[i].name();
+    if (name) out.items.push(name);
+    if (name === ${JSON.stringify(wanted)}) { items[i].click(); out.clicked = true }
+  }
+  if (!out.clicked) out.why = 'the View menu has no "${wanted}" item';
+} catch (e) { out.why = 'the View menu did not respond: ' + e }
 JSON.stringify(out)`;
 }
 
@@ -195,13 +321,12 @@ JSON.stringify(out)`;
  * Positive clicks move the CONTENT down (earlier rows return, row y grows);
  * negative clicks reveal lower rows (row y shrinks) — AXDRAG1-b.
  */
-export function jxaSidebarScrollScript(clicks: number): string {
+export function jxaSidebarScrollScript(clicks: number, areaTitles: readonly string[]): string {
   const n = Math.trunc(clicks);
   return `${JXA_PRELUDE}
-var w = stdWindow();
-var sb = null;
-if (w !== null) { var sas = findAll(w,'AXScrollArea',12,[]);
-  for (var i=0;i<sas.length;i++){ var f=frame(sas[i]); if(f && f.w<400){ sb=f; break } } }
+var TITLES = ${JSON.stringify([...areaTitles])};
+var r = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST});
+var sb = r.ok === true ? r.viewport : null;
 if (sb === null) { 'NO_SIDEBAR' } else {
   postHID(mev(MOVED, sb.x + sb.w/2, sb.y + sb.h/2, 0)); sleep(50);
   var n = ${n}, dir = n < 0 ? -1 : 1;
@@ -232,21 +357,30 @@ postHID(mev(UP, tx, ty, 1));
 'DONE'`;
 }
 
-function snapshotCommand(): UiCommand {
+function snapshotCommand(areaTitles: readonly string[]): UiCommand {
   return {
     primitive: "sidebar-snapshot",
     label: "read the sidebar rows and viewport",
     lang: "javascript",
-    script: jxaSidebarSnapshotScript(),
+    script: jxaSidebarSnapshotScript(areaTitles),
   };
 }
 
-function scrollCommand(clicks: number): UiCommand {
+function sidebarVisibilityCommand(want: "show" | "hide"): UiCommand {
+  return {
+    primitive: "sidebar-visibility",
+    label: want === "show" ? "show the sidebar (View menu)" : "hide the sidebar again (View menu)",
+    lang: "javascript",
+    script: jxaSidebarVisibilityScript(want),
+  };
+}
+
+function scrollCommand(clicks: number, areaTitles: readonly string[]): UiCommand {
   return {
     primitive: "sidebar-scroll",
     label: `scroll the sidebar (${clicks} clicks)`,
     lang: "javascript",
-    script: jxaSidebarScrollScript(clicks),
+    script: jxaSidebarScrollScript(clicks, areaTitles),
   };
 }
 
@@ -274,22 +408,20 @@ export function jxaSidebarHeldScrollDragScript(
   sy: number,
   anchorTitle: string | null, // null = drop below the last row (to-last)
   maxTicks: number,
+  areaTitles: readonly string[],
 ): string {
   const [a, b] = [sx, sy].map(Math.round) as [number, number];
   const anchor = JSON.stringify(anchorTitle);
   return `${JXA_PRELUDE}
-function allText(el, acc, depth){ acc=acc||[]; depth=depth==null?6:depth; if(depth<0) return acc;
-  var v=sv(el,'AXValue'); if(v) acc.push(v); var d=sv(el,'AXDescription'); if(d) acc.push(d);
-  var t=sv(el,'AXTitle'); if(t) acc.push(t); var ch=kids(el); for(var i=0;i<ch.length;i++) allText(ch[i],acc,depth-1); return acc }
-function liveRows(){ var t=sidebarTable(); if(!t) return []; var out=[]; var ch=kids(t);
-  for(var r=0;r<ch.length;r++){ var role=sv(ch[r],'AXRole');
-    if(role==='AXRow'||role==='AXTableRow'){ var f=frame(ch[r]);
-      if(f) out.push({text:allText(ch[r],[],6).join('|'), f:f}) } }
+var TITLES = ${JSON.stringify([...areaTitles])};
+function liveRows(){ var r=resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST}); if(r.ok!==true) return [];
+  var out=[]; for(var i=0;i<r.rows.length;i++){ var w=r.rows[i];
+    if(w.y===null||w.h===null) continue;
+    out.push({text:w.text, f:{x:w.x,y:w.y,w:w.w,h:w.h}}) }
   out.sort(function(p,q){ return p.f.y-q.f.y }); return out }
 function matches(text, title){ var segs=text.split('|');
   for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.') return true } return false }
-function viewportRect(){ var w=stdWindow(); if(!w) return null; var sas=findAll(w,'AXScrollArea',12,[]);
-  for(var i=0;i<sas.length;i++){ var f=frame(sas[i]); if(f && f.w<400) return f } return null }
+function viewportRect(){ var r=resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST}); return r.ok===true? r.viewport : null }
 var sx=${a}, sy=${b}, anchorTitle=${anchor}, maxTicks=${Math.trunc(maxTicks)};
 var vp = viewportRect();
 if (vp === null) { JSON.stringify({aborted:true, why:'no sidebar viewport'}) } else {
@@ -336,8 +468,8 @@ if (b0 === null) {
     // Post-wheel SETTLE: the list can drift a few px after the last tick
     // (AXDRAG2-a saw ~8px). Wait until the live boundary is stable across
     // two consecutive reads before aiming.
-    var stable = 0, lastY = null, w = 0;
-    for (w = 0; w < 12 && stable < 2; w++) {
+    var stable = 0, lastY = null, settleTick = 0;
+    for (settleTick = 0; settleTick < 12 && stable < 2; settleTick++) {
       postHID(mev(DRAG, sx, sy, 1)); sleep(140);
       var bs = boundaryNow(); if (bs === null) break;
       if (lastY !== null && Math.abs(bs.y - lastY) < 1) stable++;
@@ -385,10 +517,15 @@ JSON.stringify(result)
  * disambiguation the rest of the driver uses; -1 means "the only row with this
  * title", and an ambiguous match refuses.
  */
-export function jxaSidebarChevronClickScript(title: string, ordinal: number): string {
+export function jxaSidebarChevronClickScript(
+  title: string,
+  ordinal: number,
+  areaTitles: readonly string[],
+): string {
   const want = JSON.stringify(title);
   const ord = Math.trunc(ordinal);
   return `${JXA_PRELUDE}
+var TITLES = ${JSON.stringify([...areaTitles])};
 function allText(el, acc, depth){ acc=acc||[]; depth=depth==null?6:depth; if(depth<0) return acc;
   var v=sv(el,'AXValue'); if(v) acc.push(v); var d=sv(el,'AXDescription'); if(d) acc.push(d);
   var t=sv(el,'AXTitle'); if(t) acc.push(t); var ch=kids(el); for(var i=0;i<ch.length;i++) allText(ch[i],acc,depth-1); return acc }
@@ -400,11 +537,9 @@ function chevronOf(el, depth){ if(depth<0) return null; var ch=kids(el);
     var r=chevronOf(ch[i], depth-1); if(r) return r }
   return null }
 var want=${want}, ord=${ord};
-var t = sidebarTable();
-if (t === null) { JSON.stringify({clicked:false, why:'the sidebar table did not resolve'}) } else {
-var w = stdWindow(), vp = null;
-if (w !== null) { var sas=findAll(w,'AXScrollArea',12,[]);
-  for (var i=0;i<sas.length;i++){ var vf=frame(sas[i]); if(vf && vf.w<400){ vp=vf; break } } }
+var sb = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST});
+if (sb.ok !== true) { JSON.stringify({clicked:false, why:'the sidebar did not resolve (' + sb.why + ')'}) } else {
+var t = sb.table, vp = sb.viewport;
 if (vp === null) { JSON.stringify({clicked:false, why:'the sidebar viewport did not resolve'}) } else {
 var ch = kids(t), hits = [];
 for (var r=0;r<ch.length;r++){ var role=sv(ch[r],'AXRole');
@@ -439,12 +574,16 @@ if (pick === null) {
 }}`;
 }
 
-function chevronClickCommand(title: string, ordinal: number): UiCommand {
+function chevronClickCommand(
+  title: string,
+  ordinal: number,
+  areaTitles: readonly string[],
+): UiCommand {
   return {
     primitive: "sidebar-chevron",
     label: `toggle the disclosure arrow on the area row "${title}"`,
     lang: "javascript",
-    script: jxaSidebarChevronClickScript(title, ordinal),
+    script: jxaSidebarChevronClickScript(title, ordinal, areaTitles),
     meta: { title, ordinal },
   };
 }
@@ -454,12 +593,13 @@ function heldScrollDragCommand(
   sy: number,
   anchorTitle: string | null,
   maxTicks: number,
+  areaTitles: readonly string[],
 ): UiCommand {
   return {
     primitive: "sidebar-held-drag",
     label: "held-scroll drag toward the destination",
     lang: "javascript",
-    script: jxaSidebarHeldScrollDragScript(sx, sy, anchorTitle, maxTicks),
+    script: jxaSidebarHeldScrollDragScript(sx, sy, anchorTitle, maxTicks, areaTitles),
     meta: { sx, sy, anchorTitle, maxTicks },
   };
 }
@@ -537,20 +677,81 @@ export function boundaryBelowLast(allRows: SidebarRowInfo[]): number | null {
   return last.y + last.h + half;
 }
 
-export function parseSidebarSnapshot(stdout: string): SidebarSnapshot | null {
+/**
+ * Why a snapshot did not come back. These were ONE sentence until SBRES1 — "the
+ * sidebar did not resolve (is the window open and the sidebar visible?)" — which
+ * is how a 30-second timeout, a locator that never matched, and a sidebar the
+ * user had genuinely hidden all reached the field wearing the same words, none
+ * of them true for two of the three cases (issues #665, #651).
+ */
+export type SnapshotFailure =
+  | "timeout"
+  | "dispatch-failed"
+  | "unparsable"
+  | "no-window"
+  | "no-list-candidates"
+  | "no-title-match"
+  | "ambiguous-sidebar"
+  | "sidebar-hidden"
+  | "no-viewport"
+  | "no-rows";
+
+export interface SnapshotRefusal {
+  ok: false;
+  why: SnapshotFailure;
+  /** What the locator looked at, when it has something to name. */
+  searched?: { frame: SidebarRect | null; rows: number }[];
+  /** How many area titles the locator was hunting for. */
+  titles?: number;
+  /** The dispatcher's own words, for `dispatch-failed`. */
+  stderr?: string;
+}
+
+export type SnapshotOutcome = { ok: true; snapshot: SidebarSnapshot } | SnapshotRefusal;
+
+const SNAPSHOT_FAILURES: ReadonlySet<string> = new Set<SnapshotFailure>([
+  "no-window",
+  "no-list-candidates",
+  "no-title-match",
+  "ambiguous-sidebar",
+  "sidebar-hidden",
+  "no-viewport",
+  "no-rows",
+]);
+
+export function parseSidebarSnapshot(stdout: string): SnapshotOutcome {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(stdout.trim()) as SidebarSnapshot;
-    if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.rows)) return null;
-    return {
-      viewport: parsed.viewport ?? null,
-      scroll: parsed.scroll ?? null,
-      rows: parsed.rows.filter(
-        (r) => typeof r.y === "number" && typeof r.x === "number" && typeof r.h === "number",
-      ),
-    };
+    parsed = JSON.parse(stdout.trim());
   } catch {
-    return null;
+    return { ok: false, why: "unparsable" };
   }
+  if (typeof parsed !== "object" || parsed === null) return { ok: false, why: "unparsable" };
+  const obj = parsed as Record<string, unknown>;
+  if (obj["ok"] !== true) {
+    const why =
+      typeof obj["why"] === "string" && SNAPSHOT_FAILURES.has(obj["why"]) ? obj["why"] : null;
+    if (why === null) return { ok: false, why: "unparsable" };
+    return {
+      ok: false,
+      why: why as SnapshotFailure,
+      ...(Array.isArray(obj["searched"]) && {
+        searched: obj["searched"] as { frame: SidebarRect | null; rows: number }[],
+      }),
+      ...(typeof obj["titles"] === "number" && { titles: obj["titles"] }),
+    };
+  }
+  if (!Array.isArray(obj["rows"])) return { ok: false, why: "unparsable" };
+  const rows = (obj["rows"] as SidebarRowInfo[]).filter(
+    (r) => typeof r.y === "number" && typeof r.x === "number" && typeof r.h === "number",
+  );
+  const viewport = (obj["viewport"] as SidebarRect | null) ?? null;
+  if (viewport === null) return { ok: false, why: "no-viewport" };
+  if (rows.length === 0) return { ok: false, why: "no-rows" };
+  return {
+    ok: true,
+    snapshot: { viewport, scroll: (obj["scroll"] as number | null) ?? null, rows },
+  };
 }
 
 /**
@@ -976,18 +1177,87 @@ interface DriveCtx {
   run: UiRunner;
   state: () => AreaSidebarState;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * The caller's own area titles — what makes the sidebar locator SEMANTIC
+   * rather than geometric (SBRES1). Read once per drive from the pre-state.
+   */
+  areaTitles: readonly string[];
 }
 
 async function runCmd(ctx: DriveCtx, cmd: UiCommand): Promise<UiRunResult> {
   return ctx.run(cmd, STEP_TIMEOUT_MS);
 }
 
-async function takeSnapshot(ctx: DriveCtx): Promise<SidebarSnapshot | null> {
-  const res = await runCmd(ctx, snapshotCommand());
-  if (!res.ok) return null;
-  const snap = parseSidebarSnapshot(res.stdout);
-  if (snap === null || snap.viewport === null || snap.rows.length === 0) return null;
-  return snap;
+async function takeSnapshot(ctx: DriveCtx): Promise<SnapshotOutcome> {
+  const res = await runCmd(ctx, snapshotCommand(ctx.areaTitles));
+  if (res.timedOut === true) return { ok: false, why: "timeout" };
+  if (!res.ok) {
+    return { ok: false, why: "dispatch-failed", ...(res.stderr.trim() && { stderr: res.stderr }) };
+  }
+  return parseSidebarSnapshot(res.stdout);
+}
+
+/** The snapshot when only its presence matters (scroll loops, re-censuses). */
+async function snapshotOrNull(ctx: DriveCtx): Promise<SidebarSnapshot | null> {
+  const out = await takeSnapshot(ctx);
+  return out.ok ? out.snapshot : null;
+}
+
+/**
+ * One honest sentence per real cause, each naming the thing to change. The
+ * remediation matters as much as the diagnosis: the old copy told a user with a
+ * plainly-open sidebar to check whether the sidebar was open.
+ */
+export function describeSnapshotFailure(refusal: SnapshotRefusal): string {
+  switch (refusal.why) {
+    case "timeout":
+      return (
+        `reading the sidebar took longer than ${Math.round(STEP_TIMEOUT_MS / 1000)}s and was ` +
+        "stopped — nothing was dragged. This is a very large sidebar, a busy Mac, or both; " +
+        "collapse some areas or close other windows and re-run"
+      );
+    case "dispatch-failed":
+      return `the sidebar read did not run${refusal.stderr ? `: ${refusal.stderr.trim()}` : ""}`;
+    case "unparsable":
+      return "the sidebar read returned output this version cannot read";
+    case "no-window":
+      return (
+        "Things is running but has no open window — only the placeholder it keeps in the " +
+        "background. Open the Things window (click its Dock icon) and re-run"
+      );
+    case "no-list-candidates":
+      return (
+        "the Things window exposes no list at all — it may still be opening. Wait for it to " +
+        "finish drawing and re-run"
+      );
+    case "sidebar-hidden":
+      return (
+        "the sidebar is hidden in this Things window — show it with View ▸ Show Sidebar (⌘/) " +
+        "and re-run"
+      );
+    case "no-title-match": {
+      const where =
+        refusal.searched === undefined
+          ? ""
+          : ` (searched ${refusal.searched.length} list(s): ${refusal.searched
+              .map((s) => `${s.rows} row(s)${s.frame ? ` at ${Math.round(s.frame.w)}pt wide` : ""}`)
+              .join(", ")})`;
+      return (
+        `none of the lists in the Things window holds a row for any of your ${refusal.titles ?? 0} ` +
+        `area(s)${where} — the sidebar may be scrolled inside a different window, or a Things ` +
+        "update may have changed how it exposes rows"
+      );
+    }
+    case "ambiguous-sidebar":
+      return (
+        "two lists in the Things window both look like the sidebar, so nothing was dragged — " +
+        "close the extra Things window (File ▸ Close) and re-run"
+      );
+    case "no-viewport":
+      return "the sidebar's scrolling container did not resolve";
+    case "no-rows":
+      return "the sidebar resolved but exposed no rows — quit and reopen Things, then retry";
+  }
 }
 
 /**
@@ -1009,7 +1279,7 @@ async function scrollUntil(
   let stalls = 0;
   for (let iter = 0; iter < MAX_SCROLL_ITER; iter++) {
     // each scroll must observe the frames the previous scroll produced
-    const snap = await takeSnapshot(ctx);
+    const snap = await snapshotOrNull(ctx);
     if (snap === null) return null;
     const err = wanted(snap);
     if (err === null) return snap;
@@ -1035,7 +1305,7 @@ async function scrollUntil(
       Math.max(-12, Math.min(12, Math.round(err / pxPerClick) || Math.sign(err))) * dirFactor;
     lastClicks = clicks;
     // strictly sequential scroll-and-remeasure loop
-    const res = await runCmd(ctx, scrollCommand(clicks));
+    const res = await runCmd(ctx, scrollCommand(clicks, ctx.areaTitles));
     if (!res.ok) return null;
   }
   return null;
@@ -1110,7 +1380,7 @@ async function toggleDisclosure(
     return { clicked: false, ok: false, why: `"${title}"'s row did not resolve` };
   }
   // the gesture must land before the re-census that judges it
-  const res = await runCmd(ctx, chevronClickCommand(title, ordinal));
+  const res = await runCmd(ctx, chevronClickCommand(title, ordinal, ctx.areaTitles));
   let clicked = false;
   let why = "the disclosure arrow did not respond";
   if (res.ok) {
@@ -1135,10 +1405,10 @@ async function toggleDisclosure(
   // still never allowed to carry the ladder forward.
   await ctx.sleep(600);
   const after = await takeSnapshot(ctx);
-  if (after === null) {
-    return { clicked: true, ok: false, why: "the sidebar did not resolve after the click" };
+  if (!after.ok) {
+    return { clicked: true, ok: false, why: describeSnapshotFailure(after) };
   }
-  const rowsAfter = sectionRowCount(after, areaTitles, title, ordinal);
+  const rowsAfter = sectionRowCount(after.snapshot, areaTitles, title, ordinal);
   if (rowsAfter === null) {
     return { clicked: true, ok: false, why: `"${title}"'s row did not resolve after the click` };
   }
@@ -1345,22 +1615,93 @@ export async function driveSidebarAreaReorder(
         "only run through the full client",
     };
   }
-  const ctx: DriveCtx = { run, state: aux.areaState, sleep };
+  const areaTitlesForRestore = aux.areaState().areas.map((a) => a.title);
+  const ctx: DriveCtx = {
+    run,
+    state: aux.areaState,
+    sleep,
+    areaTitles: areaTitlesForRestore,
+  };
   // The collapse rung's ledger, owned OUT HERE so the restore epilogue covers
   // every way the ladder can end — including a throw (FGRD2 cleanup shape).
   const collapsed: CollapsedArea[] = [];
-  const areaTitlesForRestore = ctx.state().areas.map((a) => a.title);
+  // The chrome ledger, same shape and for the same reason: a sidebar this drive
+  // revealed is hidden again on EVERY exit path. The user's window chrome is
+  // theirs; a move must not silently leave it changed (SBCOL1 precedent).
+  const chrome: ChromeLedger = { revealedSidebar: false };
   try {
-    const result = await runDragLadder(ctx, spec, collapsed);
+    const result = await runDragLadder(ctx, spec, collapsed, chrome);
     // the ladder (and any recovery drag inside it) must finish before the
     // sidebar is folded back — the recovery needs the cleared path too
     const restoreFailed = await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
-    return withCollapseOutcome(result, collapsed, restoreFailed);
+    const chromeNote = await restoreChrome(ctx, chrome);
+    return withChromeOutcome(withCollapseOutcome(result, collapsed, restoreFailed), chromeNote);
   } catch (err) {
     // the sidebar is put back even when the ladder blew up
     await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
+    await restoreChrome(ctx, chrome);
     throw err;
   }
+}
+
+/** Window chrome this drive changed to make the sidebar drivable (SBRES1). */
+interface ChromeLedger {
+  /** The drive ran View ▸ Show Sidebar; the epilogue must hide it again. */
+  revealedSidebar: boolean;
+}
+
+/**
+ * NORMALIZATION RUNG (SBRES1): a hidden sidebar is not a dead end.
+ *
+ * Things' View ▸ Show Sidebar is a real, documented command, so the drive uses
+ * it — and then CLOSES THE LOOP, exactly as the determinism doctrine requires:
+ * the reveal only counts once a fresh snapshot resolves. A click that went out
+ * is ledgered whether or not it verified, because the app has already changed.
+ */
+async function revealSidebar(
+  ctx: DriveCtx,
+  chrome: ChromeLedger,
+): Promise<{ ok: true; snapshot: SidebarSnapshot } | { ok: false; why: string }> {
+  const res = await runCmd(ctx, sidebarVisibilityCommand("show"));
+  let clicked = false;
+  let why = "the View menu did not respond";
+  if (res.ok) {
+    try {
+      const parsed = JSON.parse(res.stdout.trim()) as { clicked?: boolean; why?: string };
+      clicked = parsed.clicked === true;
+      if (typeof parsed.why === "string" && parsed.why !== "") why = parsed.why;
+    } catch {
+      /* keep the default reason */
+    }
+  }
+  if (!clicked) return { ok: false, why };
+  chrome.revealedSidebar = true;
+  await ctx.sleep(600);
+  const after = await takeSnapshot(ctx);
+  if (after.ok) return { ok: true, snapshot: after.snapshot };
+  return { ok: false, why: describeSnapshotFailure(after) };
+}
+
+/** Put the window chrome back. Runs on every exit path. */
+async function restoreChrome(ctx: DriveCtx, chrome: ChromeLedger): Promise<string | null> {
+  if (!chrome.revealedSidebar) return null;
+  const res = await runCmd(ctx, sidebarVisibilityCommand("hide"));
+  let clicked = false;
+  if (res.ok) {
+    try {
+      clicked = (JSON.parse(res.stdout.trim()) as { clicked?: boolean }).clicked === true;
+    } catch {
+      clicked = false;
+    }
+  }
+  return clicked
+    ? "the sidebar was shown to run the move and hidden again afterwards"
+    : "the sidebar was shown to run the move and could NOT be hidden again — hide it with " +
+        "View ▸ Hide Sidebar (⌘/)";
+}
+
+function withChromeOutcome(result: DragDriveResult, note: string | null): DragDriveResult {
+  return note === null ? result : { ...result, detail: `${result.detail} (${note})` };
 }
 
 /** The ladder proper. Its caller owns the collapse ledger and the restore. */
@@ -1368,6 +1709,7 @@ async function runDragLadder(
   ctx: DriveCtx,
   spec: SidebarDragSpec,
   collapsed: CollapsedArea[],
+  chrome: ChromeLedger,
 ): Promise<DragDriveResult> {
   const pre = ctx.state();
   const preTies = hasRankTies(pre);
@@ -1455,16 +1797,28 @@ async function runDragLadder(
 
   for (let attempt = 0; attempt <= MAX_HOPS_CEILING; attempt++) {
     // every hop depends on the layout the previous hop produced
-    const snap = await takeSnapshot(ctx);
-    if (snap === null) {
-      return refuseOrRecover(
-        ctx,
-        pre,
-        spec,
-        hops,
-        "the sidebar did not resolve (is the window open and the sidebar visible?)",
-      );
+    let snapOutcome = await takeSnapshot(ctx);
+    // A HIDDEN sidebar is normalized, not refused: Things' own View menu shows
+    // it, the epilogue hides it again, and the refusal below is reached only
+    // when that fails. Everything else is reported as the cause it actually is.
+    if (!snapOutcome.ok && snapOutcome.why === "sidebar-hidden") {
+      const revealed = await revealSidebar(ctx, chrome);
+      snapOutcome = revealed.ok
+        ? { ok: true, snapshot: revealed.snapshot }
+        : {
+            ok: false,
+            why: "sidebar-hidden",
+            ...({ stderr: revealed.why } as { stderr: string }),
+          };
     }
+    if (!snapOutcome.ok) {
+      const why =
+        snapOutcome.why === "sidebar-hidden" && snapOutcome.stderr !== undefined
+          ? `the sidebar is hidden in this Things window and showing it did not work (${snapOutcome.stderr})`
+          : describeSnapshotFailure(snapOutcome);
+      return refuseOrRecover(ctx, pre, spec, hops, why);
+    }
+    const snap = snapOutcome.snapshot;
     const viewport = snap.viewport as SidebarRect;
     {
       // ceil(areas / visible-slots) + 2, from the frame-derived slot pitch.
@@ -1650,7 +2004,10 @@ async function runDragLadder(
           if (travel > viewport.h * 1.5) continue;
           const maxTicks = Math.min(400, Math.max(20, Math.ceil(travel / 15)));
           // the held gesture must complete before its DB assert
-          const res = await runCmd(ctx, heldScrollDragCommand(g.x, g.y, anchor, maxTicks));
+          const res = await runCmd(
+            ctx,
+            heldScrollDragCommand(g.x, g.y, anchor, maxTicks, ctx.areaTitles),
+          );
           const parsed = parseHeldDragResult(res);
           if (parsed.dropped) {
             // the final assert gates success

@@ -1431,6 +1431,29 @@ So the keystroke is not being ignored — it is being evaluated against the *con
 
 Evidence: [lab/axdrag5-field-stall.md](lab/axdrag5-field-stall.md) §4.
 
+## 30. Things 3.23/3.23.1: a HIDDEN sidebar is still in the Accessibility tree, at its old frame, underneath the content list — and nothing distinguishes the two states (SBRES1, 2026-08-31, golden-v4 / Things 3.23 build 32300036 and 3.23.1 build 32301002)
+
+`View ▸ Hide Sidebar` (⌘/) is a real, reversible command — the menu item's title flips to `Show Sidebar` — and visually it does exactly what it says. In the Accessibility tree it does **nothing of the kind**: the sidebar's `AXScrollArea` stays, still 190×566, still carrying all 85 of its rows with valid frames. What changes is that the CONTENT pane moves to the sidebar's origin and is drawn over it.
+
+| | sidebar visible | sidebar hidden |
+|---|---|---|
+| window frame | `[34,25 990×640]` | `[34,25 800×640]` |
+| content pane | `[224,63 800×566]`, 12 rows | `[34,63 800×566]`, 12 rows |
+| sidebar pane | `[34,63 190×566]`, **85 rows** | `[34,63 190×566]`, **85 rows** |
+| panes overlap horizontally | 0 pt | **190 pt** |
+| `AXHidden` / `AXEnabled` / `AXFocused` on the sidebar pane | empty / empty / false | empty / empty / false — **identical** |
+
+So an automation that asks "is the sidebar there?" is told yes, is handed a frame, and — because the frame is now the content list's real estate — **synthesizes its gesture into the content list**. Measured through the shipped driver: 27 s of work, a `verify-failed:silent-noop`, and a message about scrolling that had nothing to do with the cause. This is the same class of trap as [CNCAC1](lab/cncac1-after-completion-checkoff.md)'s off-screen row frame, one level up: a *pane* whose frame is a loaded gun.
+
+The only signal we could find is the geometric one — the overlap — which is a coincidence of layout, not an interface. Two smaller neighbours make the same point about the application element's own children:
+
+- Things always exposes an untitled **40×40 `AXWindow/AXUnknown` at `[0,728]`** with no children, alongside its real windows; a locator that falls back to "the first window" gets that one.
+- Because it comes first, **System Events' `window 1` of Things is that placeholder**, with `scroll areas = 0` — so `table 1 of scroll area 2 of window 1` is not merely fragile, it is addressing the wrong window from the start.
+
+**Expected:** a hidden pane should either leave the tree or be marked (`AXHidden = true` would do; the attribute is already advertised and always empty). A pane that is invisible on screen but present, sized and populated in the accessibility tree is indistinguishable from a visible one to every assistive client, not just to ours — VoiceOver included. And the placeholder window would be better with a subrole an enumerator can skip.
+
+Evidence: [lab/sbres1-sidebar-resolution.md](lab/sbres1-sidebar-resolution.md) §2, §4.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

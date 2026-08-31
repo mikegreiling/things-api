@@ -15,5 +15,5 @@
   "env": {
     "builtin": true
   },
-  "ignorePatterns": ["dist", "coverage", "lab/artifacts", ".claude"]
+  "ignorePatterns": ["dist", "coverage", "lab/artifacts", ".claude", "**/*.jxa.js"]
 }

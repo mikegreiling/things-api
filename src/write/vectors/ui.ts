@@ -145,6 +145,13 @@ export type UiCommandPrimitive =
    * `AXPress` on the node that advertises it is decorative (REPX1 §1.2).
    */
   | "sidebar-chevron"
+  /**
+   * Show or hide the sidebar through Things' own View menu (SBRES1). The drag
+   * ladder's normalization rung: a hidden sidebar is revealed for the move and
+   * hidden again in the epilogue, so a drive never leaves the user's window
+   * chrome changed.
+   */
+  | "sidebar-visibility"
   /** One modifier-bearing key event pair posted straight at the Things process (ui-chord.ts). */
   | "chord-post"
   /**
@@ -2996,7 +3003,9 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         primitive: "sidebar-snapshot",
         label: step.label,
         lang: "javascript",
-        script: jxaSidebarSnapshotScript(),
+        // The rendered form only has to compile and read: the real dispatch
+        // builds this script with the caller's live area titles (SBRES1).
+        script: jxaSidebarSnapshotScript([]),
       };
     case "chord-reorder":
       // Composite step: drive() hands it to the heading-chord driver, which
