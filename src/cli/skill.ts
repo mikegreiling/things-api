@@ -140,8 +140,10 @@ export function isDevVersion(v: string | null): boolean {
  * The "Filing bugs and feature requests" section `install-skill` appends to the
  * installed SKILL.md when (and only when) the installing binary is a dev
  * checkout. It tells an agent running live source where defects and missing
- * capabilities go, gives the exact non-interactive `gh` command, and carries the
- * redaction rail: the tracker is public, so repro data must be synthetic. A
+ * capabilities go, gives the exact non-interactive `gh` command, carries the
+ * redaction rail (the tracker is public, so repro data must be synthetic), and
+ * points at `references/bug-reports.md` — the report checklist EVERY install
+ * carries; this section is the extra, dev-only push to actually file. A
  * published install never receives this — a real release version has no `-dev`
  * suffix, so the section is absent from tarball installs.
  */
@@ -156,6 +158,8 @@ gh issue create --repo mikegreiling/things-api \\
 \`\`\`
 
 **The tracker is PUBLIC.** Use synthetic, redacted repro data ONLY — never real task titles, notes, project or area names, tags, or anything else copied from the user's Things database. Reproduce the behavior with invented throwaway examples.
+
+Write the report from the checklist in [references/bug-reports.md](references/bug-reports.md) — intent, every command verbatim with its complete output, expected vs observed, why it is a defect, and the environment block.
 `;
 
 /**
