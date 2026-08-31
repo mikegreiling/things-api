@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.1 — 2026-08-31
+
 - **Fixed — an evening to-do whose day has passed can be reordered again, in Today, where the app already shows it.** Assign a to-do to This Evening and leave it undone, and Things quietly rolls it back into Today the next day: it draws it with the rest of Today's list, above the This Evening heading. The item's evening marker is still sitting in the database — the app simply ignores it from that day on — and `things reorder` believed the marker instead of the app. `--in today` refused it as an evening item; `--in evening` refused it as an expired one and told you to re-schedule it first. Both doors were shut on the same to-do.
 
   `--in today` now takes it, and moves it exactly as it moves any other Today item. `--in evening` still declines — it genuinely is not in This Evening any more — but it points at the scope that works instead of sending you off to re-schedule. Reordering an evening item on the day you set it is completely unchanged: it still belongs to `--in evening`, and `--in today` still refuses it, because moving it there would silently take it out of This Evening.
