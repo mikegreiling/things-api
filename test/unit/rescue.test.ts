@@ -7,10 +7,14 @@
  * That is deliberate — the properties worth locking are decisions ("did it
  * refuse, and did it press anything before refusing?"), not osascript.
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { EXPECTED_HELPERS_VERSION, readerSocketPath } from "../../src/deputy/protocol.ts";
+import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { UiCapability } from "../../src/capability.ts";
@@ -344,6 +348,8 @@ function relaunchHarness(opts: {
   screen?: FakeScreen;
   launchOk?: boolean;
   schemaOk?: boolean;
+  /** The #664 shape: no standing to open the container, so the check is skipped. */
+  schemaUnchecked?: boolean;
 }) {
   let alive = [...opts.pids];
   const signals: string[] = [];
@@ -373,11 +379,21 @@ function relaunchHarness(opts: {
       detail:
         opts.launchOk === false ? "Things would not start" : "Things was started in the background",
     }),
-    schemaStatus: () => ({
-      ok: opts.schemaOk !== false,
-      detail:
-        opts.schemaOk === false ? "the database no longer matches" : "the database reads fine",
-    }),
+    schemaStatus: () =>
+      opts.schemaUnchecked === true
+        ? {
+            checked: false,
+            ok: null,
+            detail: "the database was not checked — Terminal cannot open the Things data folder",
+          }
+        : {
+            checked: true,
+            ok: opts.schemaOk !== false,
+            detail:
+              opts.schemaOk === false
+                ? "the database no longer matches"
+                : "the database reads fine",
+          },
     run: async (c: UiCommand): Promise<UiRunResult> => {
       if ((c.script ?? "").includes("to quit")) {
         if (opts.diesOn === "quit") alive = [];
@@ -388,6 +404,14 @@ function relaunchHarness(opts: {
   };
   return { deps, signals, records, alivePids: () => alive };
 }
+
+/** Mock readers started by a cell; torn down after each test. */
+const workers: Worker[] = [];
+
+afterEach(async () => {
+  resetDeputyRoutingForTests();
+  while (workers.length > 0) await workers.pop()?.terminate();
+});
 
 describe("rescue relaunch", () => {
   it("refuses without --yes, signalling nothing", async () => {
@@ -483,6 +507,110 @@ describe("rescue relaunch", () => {
 
     expect(result.outcome).toBe("relaunched");
     expect(result.warnings.join(" ")).toContain("things doctor");
+  });
+
+  // ---- issue #664: the database check must never be the price of the verb ----
+
+  it("relaunches, and says so, when the database check could not run", async () => {
+    const { deps, records } = relaunchHarness({
+      pids: [10],
+      diesOn: "SIGTERM",
+      schemaUnchecked: true,
+    });
+    const result = await rescueRelaunch({ yes: true }, deps);
+
+    // The core job still happened.
+    expect(result.outcome).toBe("relaunched");
+    expect(result.endedBy).toBe("sigterm");
+    // The skip is DISCLOSED, on the ladder, where every other step is.
+    expect(result.ladder.join(" ")).toContain("was not checked");
+    // And it is not dressed up as a finding: an unchecked database has not
+    // "stopped reading as the expected shape".
+    expect(result.warnings.join(" ")).not.toContain("things doctor");
+    expect(records[0]?.observed).toMatchObject({ schemaChecked: false, schemaOk: null });
+  });
+
+  it("takes the read verdict BEFORE it would touch the group container", async () => {
+    // The #664 regression guard, and the reason it uses the REAL schema check
+    // rather than the injected seam: what broke was that the default
+    // implementation globbed and opened inside
+    // `~/Library/Group Containers/JLMPQHK86H.…` with no gate at all — silent on
+    // a host holding Full Disk Access (every terminal this was developed in),
+    // an "access data from other apps" modal on a host without one, and a
+    // syscall parked in the kernel behind that modal for as long as nobody
+    // answered it.
+    //
+    // `helpers-enabled true` with no reader anywhere is a verdict that is
+    // decided BEFORE any host-specific probe runs, so it is the same on the
+    // maintainer's granted Mac and in CI: reads are expected to ride helpers
+    // that are not there, which is `helpers-unavailable` — not allowed, and
+    // nothing may be opened on it. Without the gate this test reads the real
+    // container instead, and the detail says something else entirely.
+    const dir = stateDir();
+    const { deps } = relaunchHarness({ pids: [10], diesOn: "SIGTERM" });
+    delete deps.schemaStatus;
+    deps.env = {
+      THINGS_API_STATE_DIR: dir,
+      THINGS_API_CONFIG_DIR: dir,
+      THINGS_API_READER_DIR: join(dir, "no-reader-here"),
+      THINGS_API_PROFILE: "dedicated-server",
+      THINGS_API_HELPERS: "true",
+    };
+    const result = await rescueRelaunch({ yes: true }, deps);
+
+    expect(result.outcome).toBe("relaunched");
+    expect(result.ladder.join(" ")).toContain("the database was not checked");
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("routes the check through the READER when the helpers are serving (#664)", async () => {
+    // THE HEADLINE of #664, and the shape it was reported from: helpers
+    // installed AND granted. `readAllowed` says yes on such a machine — a read
+    // IS authorized — but the authority is the READER's bookmark, not this
+    // process's, so a container touch here is a routing bypass that prompts a
+    // fully-onboarded user.
+    //
+    // The mock reader answers every query with NO rows, so a schema check that
+    // came back through it necessarily disagrees with the baselines. That
+    // disagreement is the assertion: this verdict cannot be produced by the
+    // host's own database, so the check demonstrably went over the socket and
+    // `locateThingsDb()` — whose glob is the call that raised the modal in the
+    // field — was never reached.
+    const dir = stateDir();
+    const readerDir = join(dir, "reader");
+    mkdirSync(readerDir, { recursive: true });
+    writeFileSync(join(readerDir, "token"), "unit-token");
+    const env: NodeJS.ProcessEnv = {
+      THINGS_API_STATE_DIR: dir,
+      THINGS_API_CONFIG_DIR: join(dir, "config"),
+      THINGS_API_READER_DIR: readerDir,
+      THINGS_API_PROFILE: "dedicated-server",
+      THINGS_API_HELPERS: "true",
+    };
+    const worker = new Worker(new URL("./helpers/mock-deputy-worker.ts", import.meta.url), {
+      workerData: {
+        socketPath: readerSocketPath(env),
+        token: "unit-token",
+        deputyVersion: EXPECTED_HELPERS_VERSION,
+        protocol: 1,
+        dbPath: "/mock/container/main.sqlite",
+        helloDbPath: "/mock/container/main.sqlite",
+        reader: { granted: true },
+        sqlRows: [],
+        osaResult: { exitCode: 0, stdout: "", stderr: "" },
+      },
+    });
+    workers.push(worker);
+    await new Promise((resolve) => worker.once("message", resolve));
+
+    const { deps } = relaunchHarness({ pids: [10], diesOn: "SIGTERM" });
+    delete deps.schemaStatus;
+    deps.env = env;
+    const result = await rescueRelaunch({ yes: true }, deps);
+
+    expect(result.outcome).toBe("relaunched");
+    expect(result.ladder.join(" ")).toContain("the database opened but no longer matches");
+    expect(result.ladder.join(" ")).not.toContain("was not checked");
   });
 
   it("clears a dialog no dismissal could touch — the §26 cure", async () => {

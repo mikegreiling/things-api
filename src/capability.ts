@@ -180,6 +180,33 @@ export function readAllowed(capability: ReadCapability): boolean {
   return capability.mode !== "none" && capability.mode !== "helpers-unavailable";
 }
 
+/**
+ * True when THIS process may reach into the Things group container with its
+ * OWN file syscalls — a `stat`, an `open`, a sqlite connect.
+ *
+ * NOT the same question as {@link readAllowed}, and conflating the two is the
+ * bug class of issue #664. `helpers` means the READER may open the container on
+ * our behalf, under the security-scoped bookmark it holds; it says nothing
+ * about this process. A host app with no Full Disk Access that stats a
+ * container file itself gets the "access data from other apps" modal for its
+ * trouble — and, because the app-data class parks the syscall in the kernel
+ * while the dialog stands (TCCDUR1), a syscall that nobody is there to answer
+ * for never returns at all.
+ *
+ * Only the three standings that cover this process's own syscalls qualify: an
+ * explicit path (Article VI — outside the doctrine entirely), the host app's
+ * Full Disk Access, or a session app-data grant still live for this app
+ * instance. Everything else must route the touch through the reader
+ * ({@link readContainerFileSync}, the deputy db facade) or go without.
+ */
+export function directContainerAccessAllowed(capability: ReadCapability): boolean {
+  return (
+    capability.mode === "explicit-db" ||
+    capability.mode === "direct-fda" ||
+    capability.mode === "session-grant"
+  );
+}
+
 /** True when this verdict permits driving the Things window. */
 export function uiAllowed(capability: UiCapability): boolean {
   return capability.mode === "helpers" || capability.mode === "direct-escape";
