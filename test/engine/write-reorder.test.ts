@@ -415,6 +415,118 @@ describe("native reorder (private command through the pipeline)", () => {
     expect(calls).toHaveLength(0);
   });
 
+  // ---------------------------------------------------------------- STEV1 / #657
+  //
+  // A STALE evening row — `startBucket=1` whose day has PASSED. The app never
+  // cleans the byte (SIT3 REMSTALE) but renders the row in Today PROPER, above the
+  // This Evening header (STEV1 cell 1), so the `today` scope owns it and the
+  // `evening` scope points there. Before the fix both scopes refused it.
+  const seedStaleEvening = (title: string, todayIndex: number) =>
+    seedToday(title, todayIndex, { evening: true, startDate: "2026-07-04" });
+
+  it("today scope ACCEPTS a stale evening member and bounces it like any Today row", async () => {
+    const stale = seedStaleEvening("SE", 30);
+    const a = seedToday("A", 10);
+    const { vector, calls } = bounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "today",
+      uuids: [stale],
+      named: [stale],
+    });
+    expect(result.kind).toBe("ok");
+    // The shipped two-leg today bounce (STEV1 cell 3: the one-leg `when=today` is
+    // INERT on an arrived row — it only clears the bucket, it does not re-rank).
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain(`id=${stale}`);
+    expect(calls[0]).toContain("when=evening");
+    expect(calls[1]).toContain("when=today");
+    const [rStale, rA] = ranks([stale, a]);
+    expect(rStale).toBeLessThan(rA as number);
+    // …and it lands in Today proper, not This Evening.
+    const row = fixture.db.prepare("SELECT startBucket FROM TMTask WHERE uuid = ?").get(stale) as {
+      startBucket: number;
+    };
+    expect(row.startBucket).toBe(0);
+  });
+
+  it("the today bounce DISCLOSES that a past-dated movee's day became today", async () => {
+    const stale = seedStaleEvening("SE", 30);
+    seedToday("A", 10);
+    const { vector } = bounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "today",
+      uuids: [stale],
+      named: [stale],
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.warnings?.join(" ")).toContain("dated today");
+      expect(result.warnings?.join(" ")).toContain(stale);
+    }
+  });
+
+  it("a SAME-DAY movee earns no re-date disclosure", async () => {
+    const a = seedToday("A", 10);
+    const b = seedToday("B", 20);
+    const { vector } = bounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "today",
+      uuids: [b, a],
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") expect(result.warnings?.join(" ") ?? "").not.toContain("dated today");
+  });
+
+  it("evening scope REFUSES a stale evening member and points at the today scope", async () => {
+    const stale = seedStaleEvening("SE", 30);
+    const { vector, calls } = bounceVector();
+    const result = await runReorder(deps([vector]), { scope: "evening", uuids: [stale] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.hazard).toBe("H-REORDER-SCOPE");
+      expect(result.detail).toContain("STALE evening item");
+      expect(result.detail).toContain("scope 'today'");
+      // The old copy sent the caller off to re-schedule the item first; the today
+      // scope takes it directly now, so that workaround is gone.
+      expect(result.detail).not.toContain("re-schedule");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("evening scope still takes a LIVE evening member (the same-day case is untouched)", async () => {
+    const live = seedToday("EV", 10, { evening: true });
+    const { vector } = bounceVector();
+    const result = await runReorder(deps([vector]), { scope: "evening", uuids: [live] });
+    expect(result.kind).toBe("ok");
+  });
+
+  it("today scope still REFUSES a LIVE evening member (O03 stands)", async () => {
+    const live = seedToday("EV", 10, { evening: true });
+    const a = seedToday("A", 20);
+    const { vector, calls } = nativeVector();
+    const result = await runReorder(deps([vector]), { scope: "today", uuids: [live, a] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("de-evening");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the native today wire ranks a stale evening row among the daytime rows", async () => {
+    const a = seedToday("A", 10);
+    const stale = seedStaleEvening("SE", 30);
+    const live = seedToday("EV", 40, { evening: true });
+    const { vector } = nativeVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "today",
+      uuids: [stale],
+      named: [stale],
+    });
+    expect(result.kind).toBe("ok");
+    const [rStale, rA] = ranks([stale, a]);
+    expect(rStale).toBeLessThan(rA as number);
+    // The LIVE evening row is not on the today wire at all — its rank is untouched.
+    expect(ranks([live])[0]).toBe(40);
+  });
+
   it("H-REORDER-SCOPE rejects headed children in a project reorder (O06)", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });

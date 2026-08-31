@@ -2018,6 +2018,53 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
     if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=evening");
   });
 
+  // STEV1 / #657 — the evening flag EXPIRES daily, so a bucket-1 row whose day has
+  // passed buckets `today`: the app renders it in Today proper, and `--in today`
+  // has to accept it (before the fix the axis check called it an evening item and
+  // the evening scope then called it stale — both scopes refused).
+  it("a STALE evening movee routes to the TODAY scope, and --in today accepts it", async () => {
+    const t = seedTodo(fixture.db, {
+      title: "stale",
+      start: "active",
+      startDate: "2026-07-04", // yesterday — the evening flag has expired
+      evening: true,
+    });
+    const routed = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [t], position: { at: "first" } },
+      { dryRun: true },
+    );
+    expect(routed.kind).toBe("move-dry-run");
+    if (routed.kind === "move-dry-run") expect(routed.plan.placement).toContain("scope=today");
+
+    const named = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [t], position: { at: "first" }, in: "today" },
+      { dryRun: true },
+    );
+    expect(named.kind).toBe("move-dry-run");
+    if (named.kind === "move-dry-run") expect(named.plan.placement).toContain("scope=today");
+  });
+
+  it("--in evening REFUSES a stale evening movee (it is no longer a This Evening member)", async () => {
+    const t = seedTodo(fixture.db, {
+      title: "stale",
+      start: "active",
+      startDate: "2026-07-04",
+      evening: true,
+    });
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [t], position: { at: "first" }, in: "evening" },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("not This Evening members");
+  });
+
   it("the single-bucket rule separates a dated start=2 row from an undated someday sibling", async () => {
     // Both loose, both start=2, but different display buckets post-fix: the dated
     // row is in its scheduled day-group, the undated one in Someday. A joint
