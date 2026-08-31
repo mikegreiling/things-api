@@ -9,6 +9,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  directContainerAccessAllowed,
   hostApp,
   readAllowed,
   readCapability,
@@ -98,6 +99,35 @@ describe("readCapability — Article VI takes precedence over everything", () =>
     const deps = bareMachine();
     expect(readCapability({ dbPath: "/tmp/x.sqlite" }, deps).mode).toBe("explicit-db");
     expect(readCapability({}, deps).mode).toBe("none");
+  });
+});
+
+/** A bare verdict of one mode — every other field is irrelevant to the predicate. */
+function verdictOfMode(mode: string) {
+  return { mode, detail: "", remediation: [], host: { bundleId: null, name: "x" } } as never;
+}
+
+describe("directContainerAccessAllowed — whose syscall is it, anyway (#664)", () => {
+  it("admits only the standings that cover THIS process's own file syscalls", () => {
+    expect(directContainerAccessAllowed(verdictOfMode("direct-fda"))).toBe(true);
+    expect(directContainerAccessAllowed(verdictOfMode("session-grant"))).toBe(true);
+    expect(directContainerAccessAllowed(verdictOfMode("explicit-db"))).toBe(true);
+  });
+
+  it("REFUSES `helpers` — the reader holds the grant, and the reader is not us", () => {
+    // The whole bug class of #664 in one assertion. `readAllowed` says yes here
+    // and is right to: a read IS authorized, through the reader's bookmark. But
+    // a `stat` or an `open` issued by THIS process still crosses into another
+    // app's container on its own lineage, and on a host app without Full Disk
+    // Access that is a modal — with the syscall parked behind it.
+    const helpers = verdictOfMode("helpers");
+    expect(readAllowed(helpers)).toBe(true);
+    expect(directContainerAccessAllowed(helpers)).toBe(false);
+  });
+
+  it("refuses the two standings that authorize nothing at all", () => {
+    expect(directContainerAccessAllowed(verdictOfMode("none"))).toBe(false);
+    expect(directContainerAccessAllowed(verdictOfMode("helpers-unavailable"))).toBe(false);
   });
 });
 

@@ -126,6 +126,25 @@ describe("WAL staleness verdict (injected clock)", () => {
     expect(sh.wal.mtime).toBeNull();
     expect(sh.wal.verdict).toContain("sidecar");
   });
+
+  // ---- issue #664: the WAL `stat` is a container touch, and stays ungated ----
+
+  it("still reports WAL freshness — the app-data class does not gate a bare stat", () => {
+    // APDG1 h0 measured this on the shape #664 was reported from: helpers
+    // serving, host app holding nothing, `statSync` on `<db>-wal` returning the
+    // real mtime with no dialog and no EPERM — in the same clone where a
+    // directory enumeration prompts. Gating this "to be safe" was tried and
+    // reverted, because it deleted a working signal from exactly those hosts.
+    // If a future macOS starts gating `stat`, this is the test that should be
+    // rewritten — after measuring it, not on suspicion.
+    const sh = computeSyncHealth(fakeDb({}), "/x/main.sqlite", {
+      ...base,
+      isAppRunning: () => true,
+      walMtimeMs: () => NOW_MS - 5_000,
+    });
+    expect(sh.wal.mtime).not.toBeNull();
+    expect(sh.wal.verdict).toContain("fresh");
+  });
 });
 
 describe("cloud last-sync signal", () => {

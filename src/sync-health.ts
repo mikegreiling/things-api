@@ -154,6 +154,26 @@ export function selectNearestNsDate(candidates: number[], nowNsDate: number): nu
   );
 }
 
+/**
+ * The write-ahead log's mtime — a direct `stat(2)` on a file inside the Things
+ * group container, and MEASURED SAFE (APDG1 h0, macOS 15.7.7 / golden-v4).
+ *
+ * It looks like it should be gated: it is the same container the app-data class
+ * guards, and #664 proved that reaching into it uninvited raises a modal that
+ * parks the caller. But the class does not hook `stat`. From a Terminal.app
+ * with no Full Disk Access and no grant of any kind, this call returns the real
+ * mtime — no dialog, no EPERM — in the very same clone where a directory
+ * enumeration one call away prompts. The distinction is operation-shaped:
+ * enumerating or opening inside the container is gated, asking for metadata on
+ * a path you already hold is not.
+ *
+ * Which is why this is deliberately NOT gated. Under the helpers the path comes
+ * from the reader, so nothing has to be enumerated to get here; without them
+ * and without FDA, `diagnose` has already refused at the read gate and this
+ * never runs. Gating it anyway was tried and reverted: it cost the WAL signal
+ * on exactly the machines that have the helpers and no FDA — the shape #664 was
+ * reported from — to prevent a dialog that does not happen.
+ */
 function defaultWalMtimeMs(walPath: string): number | null {
   try {
     return statSync(walPath).mtimeMs;
@@ -321,7 +341,8 @@ export function computeSyncHealth(
         "`auto-launch` is turned off",
   };
 
-  // WAL freshness.
+  // WAL freshness (a direct `stat` on a container file — see defaultWalMtimeMs
+  // for why that is measured-safe and deliberately ungated).
   const walMtimeMs = (deps.walMtimeMs ?? defaultWalMtimeMs)(`${dbPath}-wal`);
   const walAge = ageSecondsFrom(nowMs, walMtimeMs);
   let wal: SyncHealth["wal"];

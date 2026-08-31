@@ -427,6 +427,7 @@ export type { ShortcutsState } from "./write/availability.ts";
 // Prompt-free capability detection and the direct-path ceremony
 // (docs/design/permissions-doctrine.md).
 export {
+  directContainerAccessAllowed,
   fdaGranted,
   hostApp,
   hostDisplayName,

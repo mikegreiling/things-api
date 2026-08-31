@@ -116,6 +116,18 @@ The consequence, as it stood that morning: **the helpers did not make reads host
 
 **The lesson to keep.** The bug was invisible for the life of the arc because every probe was run from a terminal holding Full Disk Access, which silently answers the very consent class the code was accidentally depending on. A capability the developer's own host happens to hold is not a capability the design has — and the doctrine's Article I is unenforceable from a machine where the forbidden dialog cannot appear. Testing a permissions claim means testing it from a host that lacks the permission.
 
+#### The second finding (2026-08-31, #664) — a shipped verb that never asked the routing seam
+
+`things rescue relaunch` raised the same modal, from the same class, on a machine that had **the helpers installed and granted**. Measured in-clone end to end ([APDG1](../lab/apdg1-container-touch-gating.md)).
+
+**The mechanism.** Rung 5 of the relaunch ladder confirms the database still reads as a known shape. It did so through `locateThingsDb()` + `openConnection()` — with no capability verdict, and, crucially, **no consultation of the routing seam**. Every other caller of those two functions (`openThings`, `diagnose`) checks `deputyRoutesDb()` first and hands the work to the reader; this one did not exist when that pattern was set and never joined it. So on a fully-onboarded helpers household — where reads *are* authorized, by a reader holding a durable bookmark — the verb went to the container itself, on the host app's own lineage, which holds nothing. It is a **routing bypass**, and the no-fallback rule (Article III amendment; the `osa.ts` refusal family, #620/#627) exists to prevent exactly this: consent must never silently re-attach to the terminal mid-operation.
+
+**Why it also hung.** The app-data class does not fail a forbidden access; it **parks the syscall in the kernel until the dialog is answered** ([TCCDUR1](../lab/tccdur1-appdata-durability.md)). Unattended, that is not a slow command, it is a permanent one — and the report's "no structured result" is the same event as the dialog, not a second symptom. Any container touch outside a ceremony is therefore both an Article I violation *and* an unbounded wait, which is why the answer is a pre-flight verdict rather than a timeout: a synchronous syscall parked in the kernel cannot be timed out from inside the process that issued it.
+
+**The distinction that was missing**, now named in code as `directContainerAccessAllowed()`: `readAllowed()` asks *whether a read is authorized*; the new predicate asks *whether **this process** may issue the syscall*. The `helpers` verdict answers **yes** to the first and **no** to the second, and treating them as one question is the whole bug class. `helpers` → route it; `direct-fda` / `session-grant` / `explicit-db` → this process may; anything else → do without, and say so.
+
+**And a correction to the doctrine's own instincts.** The class is **operation-shaped, not path-shaped** (APDG1 §2, macOS 15.7.7): enumerating or opening inside another app's group container is gated; a bare `stat(2)` on a path you already hold is **not** — measured in identical grant-less instances, one returning a real mtime with no dialog and no TCC row while the other was stopped dead. A gate added to `sync-health`'s WAL `stat` on suspicion was **reverted** on that evidence, because it deleted a working signal from exactly the hosts this issue came from. The standing rule follows: **do not gate on suspicion of a consent class — measure which operation it hooks.** Over-caution about consent is cheap to assume and not free to ship.
+
 ### Consent classes per write vector
 
 | Vector | macOS consent class | Gated how |

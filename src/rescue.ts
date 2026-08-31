@@ -37,16 +37,32 @@
  * rather than
  * prompted. {@link rescueRelaunch} is the deliberate exception to needing that
  * grant at all — see its own note.
+ *
+ * TWO consent classes are in play here, not one, and #664 was what happens when
+ * only the first is remembered. The GUI grant covers the census and the polite
+ * quit; the app-data grant covers the group container, which the post-relaunch
+ * database check reaches. They are held by different things and are missing
+ * independently, so each touch is gated on its own verdict — see
+ * {@link realSchemaStatus}.
  */
 import { createAuditWriter, type AuditWriter } from "./audit/log.ts";
 import type { AuditRecord } from "./audit/schema.ts";
-import { uiAllowed, uiCapability as uiCapabilityDefault, type UiCapability } from "./capability.ts";
+import {
+  directContainerAccessAllowed,
+  readAllowed,
+  readCapability,
+  uiAllowed,
+  uiCapability as uiCapabilityDefault,
+  type UiCapability,
+} from "./capability.ts";
 import { loadConfig, type Profile } from "./config.ts";
 import { PKG_VERSION } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
+import { createDeputyDbFacade } from "./deputy/db-facade.ts";
+import { deputyDbPath, deputyRoutesDb } from "./deputy/routing.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { formatHeldFor, readLockHolder } from "./write/lock.ts";
 import {
@@ -68,6 +84,7 @@ import {
   type UiRunner,
 } from "./write/vectors/ui.ts";
 import { execFile } from "node:child_process";
+import type { DatabaseSync } from "node:sqlite";
 
 // ---------------------------------------------------------------- timings
 
@@ -95,8 +112,14 @@ const CANCEL_TIMEOUT_MS = 10_000;
 
 /** What a relaunch could establish about the database it left behind. */
 export interface RescueSchemaVerdict {
-  /** Did the database open and read as a shape this build understands? */
-  ok: boolean;
+  /**
+   * Was the check performed at all? False on a host with no standing to open
+   * the group container — the relaunch still happens, the check is skipped, and
+   * `detail` says so (issue #664).
+   */
+  checked: boolean;
+  /** Did the database open and read as a shape this build understands? Null when unchecked. */
+  ok: boolean | null;
   /** One sentence, for the report. */
   detail: string;
 }
@@ -164,12 +187,56 @@ async function livePids(): Promise<number[]> {
     .filter((n) => Number.isInteger(n) && n > 0);
 }
 
-function realSchemaStatus(): RescueSchemaVerdict {
+/**
+ * The post-relaunch database check — and the one place in this module that
+ * touches the group container at all.
+ *
+ * IT IS AN ENRICHMENT, NEVER THE JOB (issue #664). `rescue relaunch` exists to
+ * end a wedged Things and start it again; whether the database still reads as a
+ * known shape afterwards is worth saying and is worth nothing at the price of
+ * the verb. So the container is opened only behind a prompt-free standing that
+ * already covers it, and a host without one is TOLD the check was skipped.
+ *
+ * What went wrong without this gate: `locateThingsDb()` globs and stats inside
+ * `~/Library/Group Containers/JLMPQHK86H.…`, and `openConnection()` opens the
+ * database there. Both are `kTCCServiceSystemPolicyAppData` accesses. From a
+ * host app holding Full Disk Access — every terminal this project was ever
+ * developed in — macOS answers them silently. From a host app without it (the
+ * report was an MCP/agent runner) the FIRST of them raises the "access data
+ * from other apps" modal outside any ceremony, which is an Article I violation
+ * on its own; and because that class PARKS the syscall in the kernel until the
+ * dialog is answered, the command that was already past the point of relaunch
+ * simply never returned. One missing gate, both halves of the report.
+ *
+ * Three ways it can be answered, in the order they are consulted:
+ *
+ *   - the helpers are serving — the reader opens the database under its own
+ *     bookmark grant and we never touch the container (full behavior);
+ *   - this process's own standing covers the container (Full Disk Access, a
+ *     live session grant, or an explicit path) — open it locally, as before;
+ *   - otherwise — skip, and report the skip.
+ */
+function unchecked(why: string): RescueSchemaVerdict {
+  return { checked: false, ok: null, detail: `the database was not checked — ${why}` };
+}
+
+function realSchemaStatus(env: NodeJS.ProcessEnv = process.env): RescueSchemaVerdict {
+  const standing = readCapability({}, { env });
+  if (!readAllowed(standing)) return unchecked(standing.detail);
+
+  // The reader's own path when it is serving; null when this process must open
+  // the file itself — and then only on a standing that covers its own syscalls.
+  const routed = deputyRoutesDb(undefined, env) ? deputyDbPath(env) : null;
+  if (routed === null && !directContainerAccessAllowed(standing)) {
+    return unchecked(standing.detail);
+  }
+
   let path: string;
   try {
-    path = locateThingsDb().path;
+    path = routed ?? locateThingsDb().path;
   } catch (err) {
     return {
+      checked: true,
       ok: false,
       detail:
         err instanceof ThingsDbNotFoundError
@@ -177,11 +244,13 @@ function realSchemaStatus(): RescueSchemaVerdict {
           : "the Things database could not be located",
     };
   }
-  let conn: ReturnType<typeof openConnection>;
+  let conn: { db: DatabaseSync; close: () => void };
   try {
-    conn = openConnection(path);
+    conn =
+      routed !== null ? { db: createDeputyDbFacade(env), close: () => {} } : openConnection(path);
   } catch (err) {
     return {
+      checked: true,
       ok: false,
       detail:
         err instanceof ThingsDbOpenError
@@ -192,8 +261,13 @@ function realSchemaStatus(): RescueSchemaVerdict {
   try {
     const status = compareToBaseline(observeSchema(conn.db), BASELINES);
     return status.kind === "ok"
-      ? { ok: true, detail: "the database opened and reads as the shape this version expects" }
+      ? {
+          checked: true,
+          ok: true,
+          detail: "the database opened and reads as the shape this version expects",
+        }
       : {
+          checked: true,
           ok: false,
           detail: "the database opened but no longer matches the shape this version expects",
         };
@@ -238,7 +312,7 @@ function resolve(deps: RescueDeps): Resolved {
           detail: res.ok ? "Things was started in the background" : "Things would not start",
         };
       }),
-    schemaStatus: deps.schemaStatus ?? (() => realSchemaStatus()),
+    schemaStatus: deps.schemaStatus ?? (() => realSchemaStatus(env)),
     sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     audit:
       deps.audit ??
@@ -936,13 +1010,19 @@ export async function rescueRelaunch(
       : after !== null && after.sheetOpen
         ? "Things was ended and started again, and a dialog is open again"
         : "Things was ended and started again; whether a dialog is open could not be confirmed from here",
-    remediation: back && schema.ok ? [] : ["run `things rescue status` to see the current state"],
+    remediation:
+      back && schema.ok !== false ? [] : ["run `things rescue status` to see the current state"],
     notes,
-    warnings: schema.ok
-      ? []
-      : [
-          "the Things database no longer reads as the shape this version expects — run `things doctor`",
-        ],
+    // Only a check that RAN can fail. A SKIPPED one is a gap in what we know,
+    // not a finding about the database — and rendering an unmeasured default as
+    // a measurement beside rows that were measured is exactly the mistake #629
+    // already cost us once.
+    warnings:
+      schema.ok === false
+        ? [
+            "the Things database no longer reads as the shape this version expects — run `things doctor`",
+          ]
+        : [],
   };
   recordRescue(d, {
     op: "rescue.relaunch",
@@ -956,6 +1036,7 @@ export async function rescueRelaunch(
     observed: {
       ...(after === null ? {} : censusRecord(after)),
       endedBy: endedBy ?? "unknown",
+      schemaChecked: schema.checked,
       schemaOk: schema.ok,
     },
   });
