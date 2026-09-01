@@ -1779,6 +1779,11 @@ export async function runMutation<K extends OperationKind>(
             expected: delta,
             observed: recovery.observed,
             detail: `${transportPrefix} — and a follow-up re-read found no landed change`,
+            // The one verify-failed exit that used to DROP the play-by-play.
+            // Every other site spreads it; this one did not, so the failure a
+            // field report is most likely to hit — a drive that died leaving
+            // nothing behind — arrived with no steps at all (#672).
+            ...stepsOf(executeResult),
           },
           classifyTransportFailure({
             vector: vector.id,

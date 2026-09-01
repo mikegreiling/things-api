@@ -166,13 +166,29 @@ const PROFILE_DEFAULT_TIER: Record<Profile, DisruptionTier> = {
  * `falseToken` let THINGS_API_AUDIT keep its legacy on/off vocabulary while
  * the vectors use true/false.
  */
+/**
+ * The spellings every boolean environment override accepts, beyond the pair a
+ * given knob names for itself.
+ *
+ * `THINGS_API_TRACE=1` used to be SILENTLY IGNORED — only the exact string
+ * `true` enabled tracing, so a field agent asked to capture diagnostics ran the
+ * whole session with tracing off and no indication of it (#672). A diagnostic
+ * switch that quietly does nothing is worse than no switch, so the common
+ * spellings all work and the ones that do not are still refused rather than
+ * guessed at.
+ */
+const BOOL_ENV_TRUE: ReadonlySet<string> = new Set(["1", "true", "yes", "on"]);
+const BOOL_ENV_FALSE: ReadonlySet<string> = new Set(["0", "false", "no", "off"]);
+
 function boolEnvOverride(
   raw: string | undefined,
   trueToken: string,
   falseToken: string,
 ): boolean | undefined {
-  if (raw === trueToken) return true;
-  if (raw === falseToken) return false;
+  if (raw === undefined) return undefined;
+  const token = raw.trim().toLowerCase();
+  if (token === trueToken || BOOL_ENV_TRUE.has(token)) return true;
+  if (token === falseToken || BOOL_ENV_FALSE.has(token)) return false;
   return undefined;
 }
 

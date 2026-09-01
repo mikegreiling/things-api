@@ -160,4 +160,45 @@ describe("installCliTrace", () => {
     });
     expect(sink).toBeNull();
   });
+
+  // #672: a field agent was asked to capture a trace, ran `THINGS_API_TRACE=1`,
+  // and the whole diagnostic session came back without one — only the exact
+  // string `true` was ever parsed. A diagnostic switch that quietly does
+  // nothing is worse than no switch at all.
+  for (const on of ["1", "true", "TRUE", "yes", "on", " 1 "]) {
+    it(`THINGS_API_TRACE=${JSON.stringify(on)} turns tracing ON`, () => {
+      const sink = installCliTrace({
+        argv: ["area", "reorder", "ABC-1"],
+        version: "0.20.2",
+        isDev: false,
+        env: { THINGS_API_STATE_DIR: dir, THINGS_API_TRACE: on },
+      });
+      expect(sink).not.toBeNull();
+      closeCliTrace();
+    });
+  }
+
+  for (const off of ["0", "false", "no", "off"]) {
+    it(`THINGS_API_TRACE=${JSON.stringify(off)} forces tracing OFF`, () => {
+      const sink = installCliTrace({
+        argv: ["area", "reorder", "ABC-1"],
+        version: "0.16.0-dev",
+        isDev: true,
+        env: { THINGS_API_STATE_DIR: dir, THINGS_API_TRACE: off },
+      });
+      expect(sink).toBeNull();
+    });
+  }
+
+  it("still refuses a spelling it cannot read, rather than guessing", () => {
+    // `maybe` is not an opinion about tracing — it must fall through to the
+    // file/default answer, which for a non-dev build is off.
+    const sink = installCliTrace({
+      argv: ["area", "reorder", "ABC-1"],
+      version: "0.20.2",
+      isDev: false,
+      env: { THINGS_API_STATE_DIR: dir, THINGS_API_TRACE: "maybe" },
+    });
+    expect(sink).toBeNull();
+  });
 });

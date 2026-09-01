@@ -8,7 +8,13 @@
  * live tree immediately before the gesture — never a guessed pixel. Slot-
  * boundary offsets computed FROM resolved frames are geometry, not guessing.
  * Scroll-wheel synthesis is positionless and allowed. Fail-closed: an
- * unresolvable sidebar/row refuses BEFORE any synthesis; every hop is followed
+ * unresolvable sidebar/row refuses BEFORE any synthesis. NOTE: that scroll line
+ * was WRONG and SBSCR1 measured it so — a synthesized wheel event is delivered
+ * to the view under the POINTER and nowhere else (0px moved with the cursor off
+ * the sidebar against 180px with it on). Scrolling is now done by setting the
+ * sidebar scroll bar's own `AXValue`, which is genuinely positionless; the wheel
+ * survives only as the fallback for a scroll area that exposes no bar, and it
+ * moves the pointer first because it has to. Every hop is followed
  * by a database assert (order progressed as aimed; the area count and every
  * to-do/project area assignment are unchanged), and an assert failure triggers
  * one verified recovery drag back to the pre-op position before the op errors.
@@ -57,6 +63,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { trace } from "../../trace/tracer.ts";
 import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
 import type { UiCommand, UiRunner, UiRunResult } from "./ui.ts";
 
@@ -134,6 +141,17 @@ export interface SidebarSnapshot {
   /** Vertical scroll fraction 0..1 from the AXScrollBar, when exposed. */
   scroll: number | null;
   rows: SidebarRowInfo[];
+  /**
+   * The row-text harvest depth this read actually used, and whether it had to
+   * ESCALATE to reach it. The escalation used to be invisible — it doubles the
+   * read's cost and nothing said so (#672 hit its 30s budget without a word
+   * about which depth had been paid for).
+   */
+  depth?: number;
+  escalated?: boolean;
+  /** Area titles the harvest matched, against how many the database holds. */
+  matched?: number;
+  expected?: number;
 }
 
 // -------------------------------------------------- JXA command shapes
@@ -170,8 +188,17 @@ function node(el){ var out=Ref();
   try{ var n=Number(c.count); for(var i=0;i<n;i++) ch.push(c.objectAtIndex(i)) }catch(e){ ch=[] }
   var f=null; try{ f=rectOf(a.objectAtIndex(4), a.objectAtIndex(5)) }catch(e){ f=null }
   return { value:s(0), desc:s(1), title:s(2), children:ch, frame:f, role:s(6) } }
-function textOf(n, acc, depth){ if(n===null||depth<0) return acc;
+/*
+ * The depth guard is BEFORE the fetch, not after it (SBSCR1). The old shape
+ * recursed into a generation whose own guard (\`depth<0\`) returned it before it
+ * pushed any text — so an entire generation of \`node()\` calls was made and
+ * thrown away. Each of those is a synchronous IPC round-trip into Things' main
+ * thread, and the snapshot's cost is round-trips, not arithmetic. Same output,
+ * one generation fewer calls.
+ */
+function textOf(n, acc, depth){ if(n===null) return acc;
   if(n.value) acc.push(n.value); if(n.desc) acc.push(n.desc); if(n.title) acc.push(n.title);
+  if(depth<=0) return acc;
   for(var i=0;i<n.children.length;i++) textOf(node(n.children[i]), acc, depth-1); return acc }
 function isList(role){ return role==='AXTable'||role==='AXOutline'||role==='AXList' }
 function listPanes(el, depth, acc, sa){ if(depth<0) return acc; var ch=kids(el);
@@ -198,12 +225,13 @@ function overlapPx(a,b){ if(!a||!b) return 0; return Math.min(a.x+a.w,b.x+b.w) -
  * whole table and every row underneath it — the last full-subtree enumeration
  * in the snapshot, and worth ~0.8s of its ~1.2s on an 85-row sidebar.
  */
-function scrollFraction(sa){ if(!sa) return null; var ch=kids(sa);
-  for(var b=0;b<ch.length;b++){ if(sv(ch[b],'AXRole')!=='AXScrollBar') continue;
-    var v=attr(ch[b],'AXValue'); if(v===null) continue;
-    var d=ObjC.castRefToObject($.CFCopyDescription(v)).js; var m=d.match(/value = ([+\\-0-9.]+)/);
-    if(m) return +m[1] }
+function scrollBarOf(sa){ if(!sa) return null; var ch=kids(sa);
+  for(var b=0;b<ch.length;b++){ if(sv(ch[b],'AXRole')==='AXScrollBar') return ch[b] }
   return null }
+function barValue(bar){ if(!bar) return null; var v=attr(bar,'AXValue'); if(v===null) return null;
+  var d=ObjC.castRefToObject($.CFCopyDescription(v)).js; var m=d.match(/value = ([+\\-0-9.]+)/);
+  return m? +m[1] : null }
+function scrollFraction(sa){ return barValue(scrollBarOf(sa)) }
 /*
  * THE SIDEBAR LOCATOR (SBRES1). Structural + semantic, never geometric:
  *  - the window is the one carrying AXMain (measured: exactly one does, and it
@@ -275,20 +303,34 @@ const ROW_TEXT_DEPTH_FULL = 6;
  * expose valid virtualized frames), so a shallow harvest that finds fewer titles
  * than the database holds is re-run at full depth before the ladder sees it.
  */
-export function jxaSidebarSnapshotScript(areaTitles: readonly string[]): string {
+export function jxaSidebarSnapshotScript(
+  areaTitles: readonly string[],
+  depthHint?: number,
+): string {
+  const start = depthHint === ROW_TEXT_DEPTH_FULL ? ROW_TEXT_DEPTH_FULL : ROW_TEXT_DEPTH_FAST;
   return `${JXA_PRELUDE}
 var TITLES = ${JSON.stringify([...areaTitles])};
-var r = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST});
+var START = ${start};
+var r = resolveSidebar(TITLES, START);
 var out;
 if (r.ok !== true) { out = { ok:false, why:r.why, searched:r.searched||null, titles:r.titles||null, windowFrame:r.windowFrame||null } }
 else {
-  var deep = false;
-  if (r.hits < TITLES.length) {
-    var full = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FULL});
-    if (full.ok === true && full.hits > r.hits) { r = full; deep = true }
+  /*
+   * CONFINED ESCALATION (SBSCR1, #672). The escalation used to re-run
+   * resolveSidebar outright — a second window walk plus a full re-harvest of
+   * EVERY candidate list pane, including the content pane, at depth 6. The
+   * sidebar has already been identified by this point, so the deep read is
+   * confined to its own table and nothing else is touched twice.
+   */
+  var deep = START === ${ROW_TEXT_DEPTH_FULL};
+  if (r.hits < TITLES.length && !deep) {
+    var rows2 = harvestRows(r.table, ${ROW_TEXT_DEPTH_FULL});
+    var hits2 = countTitles(rows2, TITLES);
+    if (hits2 > r.hits) { r.rows = rows2; r.hits = hits2; deep = true }
   }
   out = { ok:true, viewport:r.viewport, scroll:scrollFraction(r.scroll), rows:r.rows,
-          deep:deep, matched:r.hits, expected:TITLES.length };
+          deep:deep, depth:(deep? ${ROW_TEXT_DEPTH_FULL} : START),
+          matched:r.hits, expected:TITLES.length };
 }
 JSON.stringify(out)`;
 }
@@ -316,10 +358,49 @@ JSON.stringify(out)`;
 }
 
 /**
- * Scroll: move the pointer over the sidebar center (wheel events target the
- * surface under the cursor), then post `clicks` line-unit wheel events.
- * Positive clicks move the CONTENT down (earlier rows return, row y grows);
- * negative clicks reveal lower rows (row y shrinks) — AXDRAG1-b.
+ * Scroll, POINTERLESSLY: set the sidebar scroll bar's own `AXValue` (SBSCR1).
+ *
+ * This is the primary scroll mechanism and it is deterministic in a way the
+ * wheel never was. Measured on golden-v4/3.23: the sidebar's `AXScrollBar`
+ * exposes a SETTABLE `AXValue`, the write returns `AXError = 0`, the mapping
+ * from fraction to pixels is exactly linear over the full range, and the list
+ * moves with the pointer parked in a screen corner throughout. It is also
+ * present and settable under all three `AppleShowScrollBars` settings —
+ * including `WhenScrolling`, the laptop default, where the bar is invisible on
+ * screen but fully live in the AX tree.
+ *
+ * Why this replaces the wheel: a synthesized wheel event is delivered to the
+ * view under the POINTER and nowhere else (SBSCR1 §1 — 0px moved with the
+ * cursor off the sidebar against 180px with it on). That made every scroll
+ * depend on hidden global state, and the wheel path could only learn its own
+ * sign convention by MEASURING travel, so at a scroll boundary — where a
+ * wrong-way scroll moves nothing — it could never learn it at all.
+ *
+ * Reports what it did, so the caller can tell a rejected write from an accepted
+ * write that moved nothing (#672 wanted exactly this distinction).
+ */
+export function jxaSidebarScrollToScript(fraction: number, areaTitles: readonly string[]): string {
+  const want = Math.max(0, Math.min(1, fraction));
+  return `${JXA_PRELUDE}
+var TITLES = ${JSON.stringify([...areaTitles])};
+var r = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST});
+if (r.ok !== true) { JSON.stringify({ok:false, why:'no-sidebar', detail:r.why}) } else {
+var bar = scrollBarOf(r.scroll);
+if (bar === null) { JSON.stringify({ok:false, why:'no-scrollbar'}) } else {
+var before = barValue(bar);
+var err = $.AXUIElementSetAttributeValue(bar, $('AXValue'), $.NSNumber.numberWithDouble(${want}));
+sleep(250);
+JSON.stringify({ ok: err === 0, axError: err, wanted: ${want}, before: before, after: barValue(bar) })
+}}`;
+}
+
+/**
+ * Scroll by WHEEL — the fallback for a scroll area that exposes no
+ * `AXScrollBar` at all. Moves the pointer over the sidebar center first,
+ * because a wheel event goes to the view under the cursor and nowhere else
+ * (SBSCR1 §1); this is not an optimization, it is the only reason the fallback
+ * works. Positive clicks move the CONTENT down (earlier rows return, row y
+ * grows); negative clicks reveal lower rows (row y shrinks) — AXDRAG1-b.
  */
 export function jxaSidebarScrollScript(clicks: number, areaTitles: readonly string[]): string {
   const n = Math.trunc(clicks);
@@ -357,12 +438,13 @@ postHID(mev(UP, tx, ty, 1));
 'DONE'`;
 }
 
-function snapshotCommand(areaTitles: readonly string[]): UiCommand {
+function snapshotCommand(areaTitles: readonly string[], depthHint?: number): UiCommand {
   return {
     primitive: "sidebar-snapshot",
     label: "read the sidebar rows and viewport",
     lang: "javascript",
-    script: jxaSidebarSnapshotScript(areaTitles),
+    script: jxaSidebarSnapshotScript(areaTitles, depthHint),
+    ...(depthHint !== undefined && { meta: { depthHint } }),
   };
 }
 
@@ -381,6 +463,17 @@ function scrollCommand(clicks: number, areaTitles: readonly string[]): UiCommand
     label: `scroll the sidebar (${clicks} clicks)`,
     lang: "javascript",
     script: jxaSidebarScrollScript(clicks, areaTitles),
+    meta: { mechanism: "wheel", clicks },
+  };
+}
+
+function scrollToCommand(fraction: number, areaTitles: readonly string[]): UiCommand {
+  return {
+    primitive: "sidebar-scroll",
+    label: `scroll the sidebar (to ${fraction.toFixed(3)} of its range)`,
+    lang: "javascript",
+    script: jxaSidebarScrollToScript(fraction, areaTitles),
+    meta: { mechanism: "scrollbar", fraction },
   };
 }
 
@@ -750,7 +843,15 @@ export function parseSidebarSnapshot(stdout: string): SnapshotOutcome {
   if (rows.length === 0) return { ok: false, why: "no-rows" };
   return {
     ok: true,
-    snapshot: { viewport, scroll: (obj["scroll"] as number | null) ?? null, rows },
+    snapshot: {
+      viewport,
+      scroll: (obj["scroll"] as number | null) ?? null,
+      rows,
+      ...(typeof obj["depth"] === "number" && { depth: obj["depth"] }),
+      ...(typeof obj["deep"] === "boolean" && { escalated: obj["deep"] }),
+      ...(typeof obj["matched"] === "number" && { matched: obj["matched"] }),
+      ...(typeof obj["expected"] === "number" && { expected: obj["expected"] }),
+    },
   };
 }
 
@@ -1129,6 +1230,14 @@ const PX_PER_CLICK_SEED = 30;
 const ASSERT_ATTEMPTS = 12;
 const ASSERT_DELAY_MS = 250;
 const STEP_TIMEOUT_MS = 30_000;
+/**
+ * The sidebar read's budget scales with the sidebar (see `snapshotTimeoutMs`).
+ * MEASURED (SBSCR1, golden-v4): a 178-row sidebar reads in ~2.1s in a VM, so
+ * 400ms/row is ~34x headroom for a busy Mac — and the ceiling still stops a
+ * genuinely wedged read well inside the drive's own watchdog.
+ */
+const SNAPSHOT_MS_PER_ROW = 400;
+const SNAPSHOT_TIMEOUT_CEILING_MS = 90_000;
 
 export interface DragDriveResult {
   ok: boolean;
@@ -1182,19 +1291,72 @@ interface DriveCtx {
    * rather than geometric (SBRES1). Read once per drive from the pre-state.
    */
   areaTitles: readonly string[];
+  /**
+   * Live per-drive read state, carried so a cost paid once is not paid again.
+   * `depth` is the harvest depth the last read had to escalate to (see
+   * SNAPSHOT_TIMEOUT_MS); `rows` is the sidebar's measured size, which is what
+   * the snapshot budget scales from.
+   */
+  read: { depth?: number; rows?: number; scrollbar?: boolean };
 }
 
 async function runCmd(ctx: DriveCtx, cmd: UiCommand): Promise<UiRunResult> {
   return ctx.run(cmd, STEP_TIMEOUT_MS);
 }
 
+/**
+ * The sidebar read's own budget, scaled by the sidebar's MEASURED size.
+ *
+ * A flat 30s was the #672 field failure: a 174-row sidebar on real hardware
+ * blew through it and the drive died before a single gesture, with copy that
+ * blamed the machine. The read's cost is dominated by synchronous AX
+ * round-trips into Things' main thread, so it scales with row count — and a
+ * budget that does not scale with the same thing is a budget that fails on
+ * exactly the large sidebars this rung exists to serve.
+ *
+ * The first read has nothing measured yet and gets the ceiling; every later one
+ * is sized from what the first actually found. Raising a budget is the weaker
+ * half of the fix — the confined escalation and the `textOf` depth guard are
+ * what made the read fast — but a large sidebar on a busy Mac still deserves
+ * headroom rather than a refusal.
+ */
+export function snapshotTimeoutMs(rows: number | undefined): number {
+  if (rows === undefined) return SNAPSHOT_TIMEOUT_CEILING_MS;
+  return Math.min(
+    SNAPSHOT_TIMEOUT_CEILING_MS,
+    Math.max(STEP_TIMEOUT_MS, Math.round(rows * SNAPSHOT_MS_PER_ROW)),
+  );
+}
+
 async function takeSnapshot(ctx: DriveCtx): Promise<SnapshotOutcome> {
-  const res = await runCmd(ctx, snapshotCommand(ctx.areaTitles));
+  const res = await ctx.run(
+    snapshotCommand(ctx.areaTitles, ctx.read.depth),
+    snapshotTimeoutMs(ctx.read.rows),
+  );
   if (res.timedOut === true) return { ok: false, why: "timeout" };
   if (!res.ok) {
     return { ok: false, why: "dispatch-failed", ...(res.stderr.trim() && { stderr: res.stderr }) };
   }
-  return parseSidebarSnapshot(res.stdout);
+  const out = parseSidebarSnapshot(res.stdout);
+  if (out.ok) {
+    // Remember what this read cost so the next one does not rediscover it.
+    ctx.read.rows = out.snapshot.rows.length;
+    if (out.snapshot.escalated === true && out.snapshot.depth !== undefined) {
+      ctx.read.depth = out.snapshot.depth;
+    }
+    if (out.snapshot.scroll !== null) ctx.read.scrollbar = true;
+    trace(() => ({
+      phase: "sidebar-snapshot",
+      rows: out.snapshot.rows.length,
+      depth: out.snapshot.depth ?? null,
+      escalated: out.snapshot.escalated ?? false,
+      matched: out.snapshot.matched ?? null,
+      expected: out.snapshot.expected ?? null,
+      scroll: out.snapshot.scroll,
+      budgetMs: snapshotTimeoutMs(ctx.read.rows),
+    }));
+  }
+  return out;
 }
 
 /** The snapshot when only its presence matters (scroll loops, re-censuses). */
@@ -1261,54 +1423,284 @@ export function describeSnapshotFailure(refusal: SnapshotRefusal): string {
 }
 
 /**
- * Scroll until `wanted(snapshot)` returns a zero-ish error, re-resolving
- * frames after every scroll (AXDRAG1: frames must be re-read post-scroll).
- * `wanted` returns the pixel error to correct (positive = rows must move down)
- * or null when satisfied. Self-calibrating: if a scroll moves the rows the
- * wrong way, the direction factor flips once.
+ * Why a scroll loop stopped. These were ONE sentence until SBSCR1 — every one
+ * of them reached the field as `"X"'s row could not be scrolled into view`,
+ * which is how #672 could not say whether the wheel had been rejected, accepted
+ * and ignored, or never sent at all. `reached` is the success case.
+ */
+export type ScrollStop =
+  | "reached"
+  | "snapshot-failed"
+  | "scroll-dispatch-failed"
+  | "scroll-no-effect"
+  | "pinned-at-boundary"
+  | "iteration-limit";
+
+/** One turn of the scroll loop, recorded whether or not anyone is listening. */
+export interface ScrollIteration {
+  iteration: number;
+  /** The frame the loop was aiming at, and the band it was aiming into. */
+  targetRow: SidebarRect | null;
+  viewport: SidebarRect;
+  pixelError: number;
+  mechanism: "scrollbar" | "wheel";
+  /** Scrollbar: the fraction asked for. Wheel: the signed click count. */
+  requested: number;
+  direction: 1 | -1;
+  dispatch: "ok" | "failed" | "timeout";
+  /** The dispatcher's own words when it refused. */
+  dispatchDetail?: string;
+  targetRowAfter?: SidebarRect | null;
+  /** Pixels the content actually travelled since the previous turn. */
+  measuredMovement: number | null;
+  scrollBefore: number | null;
+  scrollAfter: number | null;
+  /** First/last row index inside the visible band, before and after. */
+  visibleRowsBefore: [number, number] | null;
+  visibleRowsAfter: [number, number] | null;
+  stalls: number;
+}
+
+export interface ScrollOutcome {
+  /** The satisfied snapshot, or null on every terminal reason but `reached`. */
+  snapshot: SidebarSnapshot | null;
+  reason: ScrollStop;
+  iterations: ScrollIteration[];
+}
+
+/** Index range of the rows whose centers lie inside the band. */
+function visibleRowRange(snap: SidebarSnapshot): [number, number] | null {
+  if (snap.viewport === null) return null;
+  const ordered = snap.rows.toSorted((a, b) => a.y - b.y);
+  let first = -1;
+  let last = -1;
+  for (const [i, row] of ordered.entries()) {
+    if (!inBand(row.y + row.h / 2, snap.viewport, 0)) continue;
+    if (first < 0) first = i;
+    last = i;
+  }
+  return first < 0 ? null : [first, last];
+}
+
+/** The scrollable travel this snapshot implies, in pixels (never below 1). */
+function scrollableSpan(snap: SidebarSnapshot): number {
+  if (snap.viewport === null || snap.rows.length === 0) return 1;
+  const top = Math.min(...snap.rows.map((r) => r.y));
+  const bottom = Math.max(...snap.rows.map((r) => r.y + r.h));
+  return Math.max(1, bottom - top - snap.viewport.h);
+}
+
+/**
+ * Scroll until `wanted(snapshot)` returns a zero-ish error, re-resolving frames
+ * after every scroll (AXDRAG1: frames must be re-read post-scroll). `wanted`
+ * returns the pixel error to correct (positive = rows must move down) or null
+ * when satisfied.
+ *
+ * The mechanism is the scroll bar's own `AXValue` when the sidebar exposes one
+ * (SBSCR1 §2) — deterministic, linear, and independent of where the pointer
+ * happens to be. The wheel remains as the fallback for a scroll area with no
+ * bar, and it keeps the self-calibration it always had, plus the fix for the
+ * trap that calibration contained: the loop could only learn its sign
+ * convention from MEASURED travel, so a wrong-way scroll into a boundary moved
+ * nothing, taught it nothing, and was declared "pinned" after two turns. A
+ * stall now flips the direction and tries the other way before giving up.
  */
 async function scrollUntil(
   ctx: DriveCtx,
   wanted: (snap: SidebarSnapshot) => number | null,
   goodEnough?: (snap: SidebarSnapshot) => boolean,
-): Promise<SidebarSnapshot | null> {
-  let dirFactor = 1;
+): Promise<ScrollOutcome> {
+  const iterations: ScrollIteration[] = [];
+  const done = (snapshot: SidebarSnapshot | null, reason: ScrollStop): ScrollOutcome => {
+    const outcome: ScrollOutcome = { snapshot, reason, iterations };
+    trace(() => ({ phase: "sidebar-scroll-loop", reason, iterations }));
+    return outcome;
+  };
+
+  let dirFactor: 1 | -1 = 1;
   let pxPerClick = PX_PER_CLICK_SEED; // replaced by measured travel after scroll 1
   let lastErr: number | null = null;
-  let lastClicks = 0;
+  let lastRequest = 0;
   let stalls = 0;
+  let flipped = false;
+
   for (let iter = 0; iter < MAX_SCROLL_ITER; iter++) {
     // each scroll must observe the frames the previous scroll produced
     const snap = await snapshotOrNull(ctx);
-    if (snap === null) return null;
+    if (snap === null) return done(null, "snapshot-failed");
     const err = wanted(snap);
-    if (err === null) return snap;
-    if (lastErr !== null && lastClicks !== 0) {
+    if (err === null) return done(snap, "reached");
+    if (snap.viewport === null) return done(null, "snapshot-failed");
+
+    const useBar = snap.scroll !== null;
+    const before = visibleRowRange(snap);
+    const rec: ScrollIteration = {
+      iteration: iter,
+      targetRow: null,
+      viewport: snap.viewport,
+      pixelError: err,
+      mechanism: useBar ? "scrollbar" : "wheel",
+      requested: 0,
+      direction: err < 0 ? -1 : 1,
+      dispatch: "ok",
+      measuredMovement: null,
+      scrollBefore: snap.scroll,
+      scrollAfter: null,
+      visibleRowsBefore: before,
+      visibleRowsAfter: null,
+      stalls,
+    };
+
+    if (lastErr !== null && lastRequest !== 0) {
       const moved = lastErr - err; // px the content actually travelled
+      rec.measuredMovement = moved;
       if (Math.abs(moved) < 2) {
         stalls += 1;
-        if (stalls >= 2) {
-          // Pinned at the end of the scroll range: settle for the achieved
-          // state when the caller says it is workable.
-          return goodEnough !== undefined && goodEnough(snap) ? snap : null;
+        rec.stalls = stalls;
+        // A wheel scroll that moved nothing teaches the calibration nothing —
+        // including whether it was pushing the right way. Try the other way
+        // ONCE before concluding the list is pinned (SBSCR1 §7).
+        if (!useBar && !flipped) {
+          flipped = true;
+          dirFactor = dirFactor === 1 ? -1 : 1;
+        } else if (stalls >= 2) {
+          // Two distinct facts wear one word unless they are separated. The
+          // scroll POSITION either moved or it did not: a bar that accepted a
+          // new value while the rows stayed put is a surface that ignored us
+          // (`scroll-no-effect`); a bar that would not leave its value is a list
+          // already at the end of its range (`pinned-at-boundary`). Settle for
+          // the achieved state either way when the caller says it is workable.
+          const ok = goodEnough !== undefined && goodEnough(snap);
+          const positionMoved =
+            rec.scrollBefore !== null &&
+            iterations.at(-1)?.scrollBefore !== null &&
+            iterations.at(-1)?.scrollBefore !== rec.scrollBefore;
+          iterations.push(rec);
+          if (ok) return done(snap, "reached");
+          return done(null, positionMoved ? "scroll-no-effect" : "pinned-at-boundary");
         }
       } else {
         stalls = 0;
-        // Calibrate from the MEASURED travel of the previous scroll.
-        pxPerClick = Math.min(120, Math.max(4, Math.abs(moved / lastClicks)));
-        // Moved the wrong way → the wheel sign convention is flipped here.
-        if (Math.sign(moved) !== Math.sign(lastClicks)) dirFactor = -dirFactor;
+        rec.stalls = 0;
+        if (useBar) {
+          pxPerClick = Math.max(1, Math.abs(moved / lastRequest));
+        } else {
+          // Calibrate from the MEASURED travel of the previous scroll.
+          pxPerClick = Math.min(120, Math.max(4, Math.abs(moved / lastRequest)));
+          // Moved the wrong way → the wheel sign convention is flipped here.
+          if (Math.sign(moved) !== Math.sign(lastRequest)) dirFactor = dirFactor === 1 ? -1 : 1;
+        }
       }
     }
     lastErr = err;
-    const clicks =
-      Math.max(-12, Math.min(12, Math.round(err / pxPerClick) || Math.sign(err))) * dirFactor;
-    lastClicks = clicks;
-    // strictly sequential scroll-and-remeasure loop
-    const res = await runCmd(ctx, scrollCommand(clicks, ctx.areaTitles));
-    if (!res.ok) return null;
+
+    let res: UiRunResult;
+    if (useBar) {
+      // The scroll bar is an ABSOLUTE position, so there is no sign convention
+      // to learn and no direction to get wrong: compute the fraction the error
+      // asks for and write it. `pxPerClick` here is px per unit of fraction,
+      // seeded from the snapshot's own geometry and then measured.
+      if (lastRequest === 0) pxPerClick = scrollableSpan(snap);
+      const delta = -err / pxPerClick;
+      const current = snap.scroll ?? 0;
+      const target = Math.max(0, Math.min(1, current + delta));
+      lastRequest = target - current;
+      rec.requested = target;
+      rec.direction = lastRequest < 0 ? -1 : 1;
+      if (Math.abs(lastRequest) < 1e-6) {
+        // Already at the boundary the error points toward — no write can help.
+        iterations.push(rec);
+        const ok = goodEnough !== undefined && goodEnough(snap);
+        return done(ok ? snap : null, ok ? "reached" : "pinned-at-boundary");
+      }
+      res = await runCmd(ctx, scrollToCommand(target, ctx.areaTitles));
+    } else {
+      // A wheel click is a QUANTUM: below half of one, the smallest step
+      // available overshoots and the loop can only oscillate around the aim
+      // until its budget runs out. Stop and say so — an 18-iteration burn that
+      // ends in `iteration-limit` describes the budget, not the geometry.
+      if (lastRequest !== 0 && Math.abs(err) < pxPerClick / 2) {
+        iterations.push(rec);
+        const ok = goodEnough !== undefined && goodEnough(snap);
+        return done(ok ? snap : null, ok ? "reached" : "scroll-no-effect");
+      }
+      const clicks =
+        Math.max(-12, Math.min(12, Math.round(err / pxPerClick) || Math.sign(err))) * dirFactor;
+      lastRequest = clicks;
+      rec.requested = clicks;
+      rec.direction = clicks < 0 ? -1 : 1;
+      res = await runCmd(ctx, scrollCommand(clicks, ctx.areaTitles));
+    }
+
+    if (res.timedOut === true) {
+      rec.dispatch = "timeout";
+      iterations.push(rec);
+      return done(null, "scroll-dispatch-failed");
+    }
+    if (!res.ok) {
+      rec.dispatch = "failed";
+      if (res.stderr.trim()) rec.dispatchDetail = res.stderr.trim();
+      iterations.push(rec);
+      return done(null, "scroll-dispatch-failed");
+    }
+    // The scrollbar primitive REPORTS its own write. An accepted command whose
+    // AX write was refused is a different failure from a wheel event that went
+    // nowhere, and the field must be able to tell them apart (#672).
+    if (useBar) {
+      const said = readScrollReport(res.stdout);
+      if (said !== null) {
+        rec.scrollAfter = said.after;
+        if (!said.ok) {
+          rec.dispatch = "failed";
+          rec.dispatchDetail = said.detail;
+          iterations.push(rec);
+          return done(null, "scroll-dispatch-failed");
+        }
+      }
+    }
+    iterations.push(rec);
   }
-  return null;
+  return done(null, "iteration-limit");
+}
+
+/** What the pointerless scroll primitive said about its own write. */
+function readScrollReport(
+  stdout: string,
+): { ok: boolean; after: number | null; detail: string } | null {
+  try {
+    const p = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    const why = typeof p["why"] === "string" ? p["why"] : null;
+    const ax = typeof p["axError"] === "number" ? p["axError"] : null;
+    return {
+      ok: p["ok"] === true,
+      after: typeof p["after"] === "number" ? p["after"] : null,
+      detail: why ?? (ax === null ? "the scroll bar refused the write" : `AXError ${ax}`),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The scroll loop's own account, in one clause: what stopped it, how far it
+ * got, and what the last turn measured. This rides the FAILURE payload
+ * unconditionally (the diagnostic ladder's middle rung), so a field report
+ * never again has to guess which of five causes it hit.
+ */
+export function describeScrollStop(outcome: ScrollOutcome): string {
+  const last = outcome.iterations.at(-1);
+  const parts = [`scroll-stop=${outcome.reason}`, `${outcome.iterations.length} iteration(s)`];
+  if (last !== undefined) {
+    parts.push(
+      `mechanism ${last.mechanism}`,
+      `last error ${Math.round(last.pixelError)}pt`,
+      `last movement ${last.measuredMovement === null ? "n/a" : `${Math.round(last.measuredMovement)}pt`}`,
+      `dispatch ${last.dispatch}`,
+      `scroll ${last.scrollBefore === null ? "n/a" : last.scrollBefore.toFixed(3)}`,
+    );
+    if (last.dispatchDetail !== undefined) parts.push(last.dispatchDetail);
+  }
+  return parts.join("; ");
 }
 
 /** Poll the DB until `check` passes or the attempts run out. */
@@ -1364,7 +1756,7 @@ async function toggleDisclosure(
   // The row must be inside the band before the chevron can be clicked: an
   // off-viewport row still exposes a valid virtualized frame (AXDRAG1), so an
   // unscrolled click would land outside the sidebar entirely.
-  const ready = await scrollUntil(ctx, (s) => {
+  const scrolled = await scrollUntil(ctx, (s) => {
     if (s.viewport === null) return null;
     const row = resolveAreaRow(s.rows, title, ordinal);
     if (row === null) return null;
@@ -1372,8 +1764,15 @@ async function toggleDisclosure(
     if (inBand(center, s.viewport)) return null;
     return s.viewport.y + s.viewport.h / 2 - center;
   });
+  const ready = scrolled.snapshot;
   if (ready === null) {
-    return { clicked: false, ok: false, why: `"${title}"'s row could not be scrolled into view` };
+    // The human sentence stays; the STRUCTURED reason rides beside it, because
+    // five distinct causes wearing one sentence is what made #672 unanswerable.
+    return {
+      clicked: false,
+      ok: false,
+      why: `"${title}"'s row could not be scrolled into view (${describeScrollStop(scrolled)})`,
+    };
   }
   const rowsBefore = sectionRowCount(ready, areaTitles, title, ordinal);
   if (rowsBefore === null) {
@@ -1621,6 +2020,7 @@ export async function driveSidebarAreaReorder(
     state: aux.areaState,
     sleep,
     areaTitles: areaTitlesForRestore,
+    read: {},
   };
   // The collapse rung's ledger, owned OUT HERE so the restore epilogue covers
   // every way the ladder can end — including a throw (FGRD2 cleanup shape).
@@ -1885,15 +2285,17 @@ async function runDragLadder(
       let ready: SidebarSnapshot | null = snap;
       if (!inBand(grab.y, viewport) || !inBand(finalPlan.dropY, viewport)) {
         // pre-scroll must land before the drag
-        ready = await scrollUntil(ctx, (s) => {
-          const p = planDrop(s, spec, areaTitles, spec.placement, ranks);
-          if ("error" in p || s.viewport === null) return null;
-          const g = grabPoint(p.source);
-          if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
-          const mid = (g.y + p.dropY) / 2;
-          const bandMid = s.viewport.y + s.viewport.h / 2;
-          return bandMid - mid;
-        });
+        ready = (
+          await scrollUntil(ctx, (s) => {
+            const p = planDrop(s, spec, areaTitles, spec.placement, ranks);
+            if ("error" in p || s.viewport === null) return null;
+            const g = grabPoint(p.source);
+            if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
+            const mid = (g.y + p.dropY) / 2;
+            const bandMid = s.viewport.y + s.viewport.h / 2;
+            return bandMid - mid;
+          })
+        ).snapshot;
       }
       if (ready !== null) {
         const plan = planDrop(ready, spec, areaTitles, spec.placement, ranks);
@@ -1969,22 +2371,24 @@ async function runDragLadder(
       heldScrollTried = true;
       // The source must be grabbable first.
       // the pre-grab scroll must land before the gesture
-      const grabbable = await scrollUntil(
-        ctx,
-        (s) => {
-          if (s.viewport === null) return null;
-          const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
-          if (src === null) return null;
-          const g = grabPoint(src);
-          if (inBand(g.y, s.viewport)) return null;
-          return s.viewport.y + s.viewport.h / 2 - g.y;
-        },
-        (s) => {
-          if (s.viewport === null) return false;
-          const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
-          return src !== null && inBand(grabPoint(src).y, s.viewport);
-        },
-      );
+      const grabbable = (
+        await scrollUntil(
+          ctx,
+          (s) => {
+            if (s.viewport === null) return null;
+            const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
+            if (src === null) return null;
+            const g = grabPoint(src);
+            if (inBand(g.y, s.viewport)) return null;
+            return s.viewport.y + s.viewport.h / 2 - g.y;
+          },
+          (s) => {
+            if (s.viewport === null) return false;
+            const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
+            return src !== null && inBand(grabPoint(src).y, s.viewport);
+          },
+        )
+      ).snapshot;
       if (grabbable !== null && grabbable.viewport !== null) {
         const src = resolveAreaRow(grabbable.rows, spec.targetTitle, ranks.sourceRank);
         const anchor = rung2AnchorTitle(
@@ -2078,10 +2482,20 @@ async function runDragLadder(
         return src !== null && inBand(grabPoint(src).y, s.viewport);
       },
     );
-    if (parked === null || parked.viewport === null) {
-      return refuseOrRecover(ctx, pre, spec, hops, "could not scroll the area's row into view");
+    const parkedSnap = parked.snapshot;
+    if (parkedSnap === null || parkedSnap.viewport === null) {
+      // The structured reason rides here too: this is the OTHER site a
+      // #672-shaped failure exits from, and a flattened sentence at either one
+      // leaves the field guessing exactly as it did before.
+      return refuseOrRecover(
+        ctx,
+        pre,
+        spec,
+        hops,
+        `could not scroll the area's row into view (${describeScrollStop(parked)})`,
+      );
     }
-    const ordered = areaRowsInOrder(parked.rows, areaTitles);
+    const ordered = areaRowsInOrder(parkedSnap.rows, areaTitles);
     const srcIdx =
       ranks.sourceRank < 0
         ? ordered.findIndex((a) => a.title === spec.targetTitle)
@@ -2090,7 +2504,7 @@ async function runDragLadder(
     if (srcIdx < 0 || source === undefined) {
       return refuseOrRecover(ctx, pre, spec, hops, "the area's row vanished after scrolling");
     }
-    const span = sourceGroupSpan(ordered, spec.targetTitle, parked.rows);
+    const span = sourceGroupSpan(ordered, spec.targetTitle, parkedSnap.rows);
     const sourceCenter = source.row.y + source.row.h / 2;
     // Candidate anchors: area rows toward the target whose corrected boundary
     // stays inside the visible band; take the furthest for maximum progress.
@@ -2105,8 +2519,8 @@ async function runDragLadder(
       // Dropping ABOVE the anchor: downward needs ≥2 rows of travel to be a
       // real move; upward ≥1.
       if (down && visualDelta < 2) continue;
-      const dropY = correctedDropY(boundaryAboveRow(parked.rows, cand.row), sourceCenter, span);
-      if (!inBand(dropY, parked.viewport)) continue;
+      const dropY = correctedDropY(boundaryAboveRow(parkedSnap.rows, cand.row), sourceCenter, span);
+      if (!inBand(dropY, parkedSnap.viewport)) continue;
       const uuid = pre.areas.find((a) => a.title === cand.title)?.uuid ?? "";
       if (hopAnchor === null || visualDelta > hopAnchor.visualDelta) {
         hopAnchor = { title: cand.title, uuid, dropY, visualDelta };
@@ -2117,17 +2531,17 @@ async function runDragLadder(
       // destination begins a section taller than the visible list, which no
       // window size fixes. Only fall back to the generic sentence when the
       // geometry does NOT show such a section.
-      const planNow = planDrop(parked, spec, areaTitles, spec.placement, ranks);
+      const planNow = planDrop(parkedSnap, spec, areaTitles, spec.placement, ranks);
       const wallsHere =
         "error" in planNow
           ? []
           : blockingSectionsInSpan(
               ordered,
-              parked.rows,
+              parkedSnap.rows,
               grabPoint(planNow.source).y,
               planNow.dropY,
               spec.targetTitle,
-              parked.viewport,
+              parkedSnap.viewport,
             );
       if (wallsHere.length > 0) {
         // The same collapse rung, reached from the hop side: the next area
@@ -2145,7 +2559,7 @@ async function runDragLadder(
           hops,
           blockedSectionDetail(
             wallsHere[0] as SidebarSectionSpan,
-            parked.viewport,
+            parkedSnap.viewport,
             describeAnchor("error" in planNow ? "the requested position" : planNow.anchor),
             folded.why,
           ),
@@ -2349,13 +2763,15 @@ async function refuseOrRecover(
   const areaTitles = pre.areas.map((a) => a.title);
   let recovered = false;
   // A bounded, single-pass recovery: same rung-1 mechanics, no hop budget.
-  const snap = await scrollUntil(ctx, (s) => {
-    const p = planDrop(s, restoreSpec, areaTitles, placement, restoreRanks());
-    if ("error" in p || s.viewport === null) return null;
-    const g = grabPoint(p.source);
-    if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
-    return s.viewport.y + s.viewport.h / 2 - (g.y + p.dropY) / 2;
-  });
+  const snap = (
+    await scrollUntil(ctx, (s) => {
+      const p = planDrop(s, restoreSpec, areaTitles, placement, restoreRanks());
+      if ("error" in p || s.viewport === null) return null;
+      const g = grabPoint(p.source);
+      if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
+      return s.viewport.y + s.viewport.h / 2 - (g.y + p.dropY) / 2;
+    })
+  ).snapshot;
   if (snap !== null && snap.viewport !== null) {
     const plan = planDrop(snap, restoreSpec, areaTitles, placement, restoreRanks());
     if (!("error" in plan)) {

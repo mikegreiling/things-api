@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Fixed — `things area reorder` no longer depends on where you left the mouse pointer, and can read a big sidebar without giving up.** Two separate problems in the same command, both of which made it fail on a large sidebar and neither of which said what was really wrong.
+
+  The command scrolls the sidebar to bring rows into view. It did that by sending scroll-wheel events — and macOS delivers those to whatever is under the pointer, so unless your cursor happened to be sitting over the sidebar, the sidebar did not move at all. No error, no warning: six wheel clicks moved it exactly zero pixels. It now scrolls by setting the sidebar's scroll position directly, which works no matter where the pointer is and gets there in one step instead of a dozen. The wheel is kept only for the case where a sidebar exposes no scroll position at all, and it moves the pointer first — because that is the only way it ever worked.
+
+  Separately, reading a large sidebar could take longer than the command's fixed 30-second allowance and stop the whole move before a single thing was dragged, with a message blaming your Mac. Reading a 174-row sidebar is now substantially cheaper — the read was fetching a whole layer of the accessibility tree it then threw away, and the fallback for an unusual sidebar re-read *everything*, including your task list, a second time. Measured on a 178-row sidebar: 2.09 seconds down to 0.82. What is left of the allowance now grows with the size of your sidebar instead of being the same number for everyone, so a big sidebar gets the time a big sidebar needs.
+
+  Fixes #672.
+
+- **Fixed — when the command cannot scroll a row into view, it now says which of five things went wrong.** *"…'s row could not be scrolled into view"* was the single sentence for a sidebar read that failed, a scroll command that was rejected, a scroll that was accepted and did nothing, a list already at the end of its range, and simply running out of attempts. All five now name themselves alongside that sentence, together with what the last attempt measured — how far off the row still was, whether anything moved, and where the scroll position stood. If you are filing a report, that line is the one worth quoting.
+
+  A failure that leaves nothing behind also carries its step list again. That is the most common kind of failure to report and it was the one case in the whole package that dropped it.
+
+- **Fixed — `THINGS_API_TRACE=1` turns tracing on.** Only the exact word `true` used to work; `1` was ignored without a word, so a diagnostic run made specifically to capture a trace could quietly produce nothing. `1`, `true`, `yes` and `on` all enable it now, and `0`, `false`, `no` and `off` all disable it (the same spellings work for every `THINGS_API_*` on/off variable). A value that is none of those is still refused rather than guessed at. When a GUI-driving command fails without tracing on, its message now names the variable.
+
 ## 0.20.2 — 2026-08-31
 
 - **Added — the bundled agent skill now teaches every install how to write a bug report worth reading.** A new reference page, `references/bug-reports.md`, carries the checklist: state the intent, then every command verbatim with its complete output and exit code, expected versus observed as two separate claims, and the reasoning for calling it a defect rather than intended behavior — plus the environment block (`things --version`, the Things and macOS versions, `things helpers status`, `things config get ui-enabled`, the relevant part of `things doctor`, and `things op-result` when a write's outcome was uncertain). It also carries the redaction rules for a public tracker: substitute invented names, keep the structure that matters (counts, nesting, ordering, name collisions), never paste local trace files, and say in the report that the data is synthetic. `SKILL.md` gains a pointer to it from the section on not routing around the CLI, so the guidance is one hop away without spending context on every session.

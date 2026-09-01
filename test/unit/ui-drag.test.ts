@@ -20,12 +20,14 @@ import {
   findAreaRow,
   findAreaRowNth,
   jxaSidebarSnapshotScript,
+  describeScrollStop,
   jxaSidebarVisibilityScript,
   parseSidebarSnapshot,
   placementSatisfied,
   rowMatchesTitle,
   sectionBlocks,
   slotPitch,
+  snapshotTimeoutMs,
   sourceGroupSpan,
   tallestSectionInSpan,
   usableDragSpan,
@@ -33,6 +35,9 @@ import {
   type SidebarPlacement,
   type SidebarRect,
   type SidebarRowInfo,
+  type ScrollIteration,
+  type ScrollOutcome,
+  type ScrollStop,
   type SidebarSectionSpan,
 } from "../../src/write/vectors/ui-drag.ts";
 
@@ -228,6 +233,12 @@ interface SimOptions {
   corruptDigestAfterDrag?: boolean;
   /** Make snapshots fail (fail-closed test). */
   failSnapshots?: boolean;
+  /** The scroll bar accepts the command but REFUSES the AXValue write (SBSCR1). */
+  scrollbarRefuses?: boolean;
+  /** The scroll area exposes NO AXScrollBar — the wheel fallback's condition. */
+  noScrollBar?: boolean;
+  /** Snapshots succeed N times, then start failing (mid-loop read failure). */
+  failSnapshotsAfter?: number;
   /** Make the scroll-while-held gesture Escape-abort (rung-3 fall-through). */
   failHeldDrag?: boolean;
   /** Make the held gesture land ONE SLOT SHORT (benign off-slot landing). */
@@ -245,6 +256,8 @@ interface Sim {
   run: (command: UiCommand, timeoutMs: number) => Promise<UiRunResult>;
   aux: { areaState: () => AreaSidebarState };
   log: string[];
+  /** Every command as dispatched — `meta` carries the scroll MECHANISM. */
+  commands: UiCommand[];
   order: () => string[];
 }
 
@@ -268,7 +281,7 @@ function makeSim(options: SimOptions): Sim {
     JSON.stringify({
       ok: true,
       viewport: { x: VIEW_X, y: VIEW_Y, w: 240, h: options.viewportH },
-      scroll: maxOffset === 0 ? 0 : offset / maxOffset,
+      scroll: options.noScrollBar === true ? null : maxOffset === 0 ? 0 : offset / maxOffset,
       rows: [
         ...BUILTINS.flatMap((t, i) => [
           entityRow(t, builtinTop(i)),
@@ -303,11 +316,18 @@ function makeSim(options: SimOptions): Sim {
 
   let hidden = options.sidebarHidden === true;
 
+  const commands: UiCommand[] = [];
+  let snapshots = 0;
   const run = (command: UiCommand): Promise<UiRunResult> => {
     log.push(command.primitive);
+    commands.push(command);
     const script = command.script ?? "";
     if (command.primitive === "sidebar-snapshot") {
+      snapshots += 1;
       if (options.failSnapshots === true) {
+        return Promise.resolve({ ok: false, stdout: "", stderr: "-1719" });
+      }
+      if (options.failSnapshotsAfter !== undefined && snapshots > options.failSnapshotsAfter) {
         return Promise.resolve({ ok: false, stdout: "", stderr: "-1719" });
       }
       if (hidden) {
@@ -335,6 +355,27 @@ function makeSim(options: SimOptions): Sim {
       return Promise.resolve({ ok: true, stdout: JSON.stringify({ clicked: true }), stderr: "" });
     }
     if (command.primitive === "sidebar-scroll") {
+      const mech = (command.meta as { mechanism?: string } | undefined)?.mechanism;
+      if (mech === "scrollbar") {
+        // SBSCR1: the pointerless primitive writes an ABSOLUTE fraction of the
+        // scroll range and reports what the bar read before and after.
+        const want = (command.meta as { fraction: number }).fraction;
+        const before = maxOffset === 0 ? 0 : offset / maxOffset;
+        if (options.scrollbarRefuses === true) {
+          return Promise.resolve({
+            ok: true,
+            stdout: JSON.stringify({ ok: false, axError: -25200, before, after: before }),
+            stderr: "",
+          });
+        }
+        offset = Math.round(want * maxOffset);
+        const after = maxOffset === 0 ? 0 : offset / maxOffset;
+        return Promise.resolve({
+          ok: true,
+          stdout: JSON.stringify({ ok: true, axError: 0, wanted: want, before, after }),
+          stderr: "",
+        });
+      }
       const m = script.match(/var n = (-?\d+)/);
       const clicks = m === null ? 0 : Number(m[1]);
       // Negative clicks reveal lower rows (row y shrinks) — AXDRAG1-b.
@@ -380,6 +421,7 @@ function makeSim(options: SimOptions): Sim {
   return {
     run,
     log,
+    commands,
     order: () => [...order],
     aux: {
       areaState: (): AreaSidebarState => ({
@@ -801,15 +843,40 @@ function collapseSim(opts: {
       if (command.primitive === "sidebar-snapshot") {
         return Promise.resolve({
           ok: true,
-          stdout: JSON.stringify({ ok: true, viewport, scroll: 0, rows: render() }),
+          stdout: JSON.stringify({
+            ok: true,
+            viewport,
+            scroll: (() => {
+              const max = Math.max(0, slots() * PITCH - viewport.h);
+              return max === 0 ? 0 : offset / max;
+            })(),
+            rows: render(),
+          }),
           stderr: "",
         });
       }
       if (command.primitive === "sidebar-scroll") {
+        const maxOffset = Math.max(0, slots() * PITCH - viewport.h);
+        const mech = (command.meta as { mechanism?: string } | undefined)?.mechanism;
+        if (mech === "scrollbar") {
+          const want = (command.meta as { fraction: number }).fraction;
+          const wasAt = maxOffset === 0 ? 0 : offset / maxOffset;
+          offset = Math.round(want * maxOffset);
+          return Promise.resolve({
+            ok: true,
+            stdout: JSON.stringify({
+              ok: true,
+              axError: 0,
+              wanted: want,
+              before: wasAt,
+              after: maxOffset === 0 ? 0 : offset / maxOffset,
+            }),
+            stderr: "",
+          });
+        }
         // Negative clicks reveal lower rows (row y shrinks) — AXDRAG1-b.
         const m = (command.script ?? "").match(/var n = (-?\d+)/);
         const clicks = m === null ? 0 : Number(m[1]);
-        const maxOffset = Math.max(0, slots() * PITCH - viewport.h);
         offset = Math.max(0, Math.min(maxOffset, offset - clicks * 30));
         return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
       }
@@ -1037,5 +1104,202 @@ describe("the sidebar locator script", () => {
   it("builds show/hide from Things' own View-menu items", () => {
     expect(jxaSidebarVisibilityScript("show")).toContain('"Show Sidebar"');
     expect(jxaSidebarVisibilityScript("hide")).toContain('"Hide Sidebar"');
+  });
+});
+
+// ------------------------------------- the scroll mechanism (SBSCR1, #672)
+/** A sidebar with more areas than any one viewport can hold. */
+const tall = (n: number): string[] => Array.from({ length: n }, (_, i) => `A${i + 1}`);
+
+describe("scrolling — the pointerless mechanism and its terminal reasons", () => {
+  it("drives the scroll bar's own AXValue, never a wheel, when a bar is exposed", async () => {
+    // The whole point of #672's fix: a synthesized wheel event is delivered to
+    // the view under the POINTER and nowhere else (MEASURED: 0px moved with the
+    // cursor off the sidebar against 180px with it on), so a scroll that depends
+    // on where the user last left the mouse is not a mechanism. The scroll bar's
+    // AXValue is one — deterministic, linear, and pointer-independent.
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    const res = await drive(sim, "A2", { kind: "last" });
+    expect(res.ok, res.detail).toBe(true);
+    const scrolls = sim.commands.filter((c) => c.primitive === "sidebar-scroll");
+    expect(scrolls.length).toBeGreaterThan(0);
+    for (const c of scrolls) {
+      expect((c.meta as { mechanism: string }).mechanism).toBe("scrollbar");
+      expect(c.script ?? "").toContain("AXUIElementSetAttributeValue");
+    }
+  });
+
+  it("falls back to the wheel — pointer moved FIRST — when no bar is exposed", async () => {
+    const sim = makeSim({ titles: tall(20), viewportH: 200, noScrollBar: true });
+    const res = await drive(sim, "A2", { kind: "last" });
+    expect(res.ok, res.detail).toBe(true);
+    const scrolls = sim.commands.filter((c) => c.primitive === "sidebar-scroll");
+    expect(scrolls.length).toBeGreaterThan(0);
+    for (const c of scrolls) {
+      expect((c.meta as { mechanism: string }).mechanism).toBe("wheel");
+    }
+    // The pointer move is not an optimization — it is the only reason a wheel
+    // event reaches the sidebar at all.
+    expect(scrolls[0]?.script ?? "").toContain("postHID(mev(MOVED");
+  });
+
+  it("names scroll-dispatch-failed when the bar REFUSES the AXValue write", async () => {
+    // An accepted command whose AX write was rejected is a different failure
+    // from an accepted write that moved nothing, and the field must be able to
+    // tell them apart — that distinction is the whole telemetry ask in #672.
+    const sim = makeSim({ titles: tall(20), viewportH: 200, scrollbarRefuses: true });
+    const res = await drive(sim, "A2", { kind: "last" });
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain("scroll-stop=scroll-dispatch-failed");
+    expect(res.detail).toContain("AXError -25200");
+  });
+
+  it("names snapshot-failed when the sidebar read stops answering mid-loop", async () => {
+    const sim = makeSim({ titles: tall(20), viewportH: 200, failSnapshotsAfter: 2 });
+    const res = await drive(sim, "A2", { kind: "last" });
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain("scroll-stop=snapshot-failed");
+  });
+
+  it("keeps the human sentence AND the structured reason side by side", async () => {
+    // #672's ask, exactly: the copy may stay, but never alone.
+    const outcome: ScrollOutcome = {
+      snapshot: null,
+      reason: "pinned-at-boundary",
+      iterations: [],
+    };
+    const why = `"Hobbies"'s row could not be scrolled into view (${describeScrollStop(outcome)})`;
+    expect(why).toContain("could not be scrolled into view");
+    expect(why).toContain("scroll-stop=pinned-at-boundary");
+  });
+
+  it("every terminal reason is distinct — none collapses into another", () => {
+    const reasons: ScrollStop[] = [
+      "reached",
+      "snapshot-failed",
+      "scroll-dispatch-failed",
+      "scroll-no-effect",
+      "pinned-at-boundary",
+      "iteration-limit",
+    ];
+    expect(new Set(reasons).size).toBe(reasons.length);
+    for (const reason of reasons) {
+      expect(describeScrollStop({ snapshot: null, reason, iterations: [] })).toBe(
+        `scroll-stop=${reason}; 0 iteration(s)`,
+      );
+    }
+  });
+
+  it("the telemetry record carries every field #672 asked for", () => {
+    const viewport: SidebarRect = { x: VIEW_X, y: VIEW_Y, w: 240, h: 346 };
+    const iteration: ScrollIteration = {
+      iteration: 3,
+      targetRow: { x: VIEW_X, y: 900, w: 240, h: ROW_H },
+      viewport,
+      pixelError: -664,
+      mechanism: "scrollbar",
+      requested: 0.42,
+      direction: -1,
+      dispatch: "ok",
+      targetRowAfter: { x: VIEW_X, y: 240, w: 240, h: ROW_H },
+      measuredMovement: -660,
+      scrollBefore: 0.1,
+      scrollAfter: 0.42,
+      visibleRowsBefore: [0, 8],
+      visibleRowsAfter: [12, 20],
+      stalls: 0,
+    };
+    // The issue's "Requested telemetry" list, field for field: iteration number,
+    // target row frame, viewport frame, pixel error, requested amount and
+    // direction, dispatch status, post-event row frame, measured movement,
+    // scrollbar value before + after, visible row range before + after, and the
+    // stall counter.
+    expect(Object.keys(iteration).toSorted()).toEqual(
+      [
+        "dispatch",
+        "direction",
+        "iteration",
+        "measuredMovement",
+        "mechanism",
+        "pixelError",
+        "requested",
+        "scrollAfter",
+        "scrollBefore",
+        "stalls",
+        "targetRow",
+        "targetRowAfter",
+        "viewport",
+        "visibleRowsAfter",
+        "visibleRowsBefore",
+      ].toSorted(),
+    );
+    const line = describeScrollStop({
+      snapshot: null,
+      reason: "pinned-at-boundary",
+      iterations: [iteration],
+    });
+    expect(line).toContain("scroll-stop=pinned-at-boundary");
+    expect(line).toContain("1 iteration(s)");
+    expect(line).toContain("mechanism scrollbar");
+    expect(line).toContain("last error -664pt");
+    expect(line).toContain("last movement -660pt");
+    expect(line).toContain("dispatch ok");
+    expect(line).toContain("scroll 0.100");
+  });
+});
+
+// --------------------------------- the sidebar read's cost + budget (SBSCR1)
+describe("the sidebar read scales with the sidebar", () => {
+  it("escalates DEPTH inside the sidebar's own table, never over the window again", () => {
+    // The escalation used to re-run the whole locator: a second window walk plus
+    // a full re-harvest of EVERY candidate pane, the content list included. On
+    // the #672 field host that doubling is paid on every single read.
+    const script = jxaSidebarSnapshotScript(["Work", "Home"]);
+    expect(script).toContain("harvestRows(r.table, 6)");
+    expect(script.match(/resolveSidebar\(TITLES/g) ?? []).toHaveLength(1);
+  });
+
+  it("starts at the escalated depth when the drive already paid for it once", () => {
+    expect(jxaSidebarSnapshotScript(["Work"])).toContain("var START = 2");
+    expect(jxaSidebarSnapshotScript(["Work"], 6)).toContain("var START = 6");
+  });
+
+  it("reports the depth it used, and whether it had to escalate", () => {
+    const out = parseSidebarSnapshot(
+      JSON.stringify({
+        ok: true,
+        viewport: { x: 0, y: 0, w: 240, h: 300 },
+        scroll: 0.25,
+        rows: [{ text: "Work", x: 0, y: 10, w: 240, h: 24 }],
+        deep: true,
+        depth: 6,
+        matched: 3,
+        expected: 4,
+      }),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.snapshot.depth).toBe(6);
+    expect(out.snapshot.escalated).toBe(true);
+    expect(out.snapshot.matched).toBe(3);
+    expect(out.snapshot.expected).toBe(4);
+  });
+
+  it("fetches no generation of AX nodes it will not read", () => {
+    // Every node() is a synchronous round-trip into Things' main thread, and the
+    // old guard recursed into a generation whose own guard returned it before it
+    // pushed any text. MEASURED (SBSCR1, 178-row sidebar): 2.09s -> 0.82s.
+    const script = jxaSidebarSnapshotScript(["Work"]);
+    expect(script).toContain("if(depth<=0) return acc;");
+    expect(script).not.toContain("function textOf(n, acc, depth){ if(n===null||depth<0)");
+  });
+
+  it("budgets the read from the sidebar's MEASURED size, not a flat number", () => {
+    // #672: a 174-row sidebar on real hardware blew a flat 30s and the drive
+    // died before a single gesture, with copy that blamed the user's machine.
+    expect(snapshotTimeoutMs(undefined)).toBe(90_000);
+    expect(snapshotTimeoutMs(10)).toBe(30_000); // never below the generic step
+    expect(snapshotTimeoutMs(174)).toBe(69_600);
+    expect(snapshotTimeoutMs(10_000)).toBe(90_000); // and never unbounded
   });
 });
