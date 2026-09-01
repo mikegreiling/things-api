@@ -405,6 +405,16 @@ That asymmetry is not sloppiness on one side. A content list is unbounded — it
 
 The practical consequence for anything automating Things: **the cost of reading the sidebar is a function of the sidebar, not of what the user happens to have open.** We assumed the opposite and built a campaign cell to prove it — a 400-item project versus a small area view, with `AXEnhancedUserInterface` forced on and off — and the numbers came back flat, because the app had already handled it. Evidence: [lab/sbres1-sidebar-resolution.md](lab/sbres1-sidebar-resolution.md) §5. Things 3.23 / 3.23.1.
 
+## 9. A scroll bar that is hidden from you but never from automation
+
+macOS has hidden scroll bars by default on trackpad Macs for over a decade. The overlay bar fades in when you scroll and disappears again, and a great many apps let their accessibility tree fade with it — the element is gone, or present with a value nothing will accept.
+
+Things' sidebar scroll bar is there the whole time. Under `AppleShowScrollBars` set to `Always`, `Automatic`, or `WhenScrolling` — the laptop default, where the bar is invisible on screen — the `AXScrollBar` is a direct child of the scroll area, reports its position, answers `AXUIElementIsAttributeSettable(AXValue)` with YES, and **accepts a write**. Setting it moves the list, `AXError = 0`, on a mapping that is exactly linear across the whole range: 0.0 → 0.5 and 0.5 → 1.0 each moved the content 1,172pt, and 1.0 → 0.0 returned all 2,344pt of it.
+
+That is the difference between a decoration and a control. A screen-reader user driving Things by keyboard, a switch-control user, and an automation client all need to move a list without a pointer, and the visual treatment of the scroll bar is irrelevant to every one of them. Things kept the two questions separate — *should this be drawn?* and *should this work?* — and answered the second one yes.
+
+It mattered here more than usual. The driver had been scrolling the sidebar with synthesized wheel events, which macOS delivers to whatever the pointer happens to be over; with the cursor anywhere else, six clicks moved the sidebar zero pixels, silently. The app had a better mechanism exposed the entire time. Evidence: [lab/sbscr1-sidebar-scroll.md](lab/sbscr1-sidebar-scroll.md) §2, §4. Things 3.23.
+
 ---
 
 ## Edge cases this project routed through

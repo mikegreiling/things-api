@@ -3306,6 +3306,14 @@ async function drive(
   ): ExecuteResult => {
     const base = `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}.`;
     const cleanup = clear === undefined ? "" : ` ${describeCleanup(clear)}`;
+    // Name the deeper record and a spelling that WORKS. #672's field agent was
+    // asked for a trace, ran `THINGS_API_TRACE=1`, and got nothing — the parser
+    // took only `true` at the time — so the whole diagnostic session came back
+    // without the one artifact it existed to produce.
+    const deeper = traceActive()
+      ? ""
+      : " For a step-by-step record of the next attempt, re-run with THINGS_API_TRACE=1 in the" +
+        " environment (or `things config set trace true`).";
     // #512: name an environment failure as one. A cleanup that had to run BLIND
     // is direct evidence the session went AX-blind mid-drive; a step killed by
     // its own deadline is the window not answering. Either way the app was not
@@ -3324,7 +3332,7 @@ async function drive(
     // transport-recovered path re-shapes such a drive into a SUCCESS, and it
     // reads the notices from this same result.
     const res = {
-      ...refusal(base + cleanup),
+      ...refusal(base + cleanup + deeper),
       steps: [...done, `${failed} — FAILED: ${why}`],
       ...(notices.length > 0 && { notices: [...notices] }),
     };

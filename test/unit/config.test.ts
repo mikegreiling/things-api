@@ -106,11 +106,25 @@ describe("boolean env overrides are bidirectional", () => {
 
   it("an unrecognized boolean env value falls through to stored/default", () => {
     saveConfigKey("uiEnabled", true, env());
-    expect(loadConfig(env({ THINGS_API_UI_ENABLED: "yes" })).ui.enabled).toBe(true); // stored
+    expect(loadConfig(env({ THINGS_API_UI_ENABLED: "maybe" })).ui.enabled).toBe(true); // stored
     // No stored value + garbage env → built-in default (false).
     rmSync(configDir, { recursive: true, force: true });
     configDir = mkdtempSync(join(tmpdir(), "things-api-config-unit-"));
-    expect(loadConfig(env({ THINGS_API_UI_ENABLED: "1" })).ui.enabled).toBe(false);
+    expect(loadConfig(env({ THINGS_API_UI_ENABLED: "sometimes" })).ui.enabled).toBe(false);
+  });
+
+  it("the common boolean spellings all work — 1/yes/on as well as true", () => {
+    // This test used to assert the OPPOSITE for "1": that it fell through as
+    // garbage. That was the bug, not the contract. A field agent asked to
+    // capture diagnostics ran `THINGS_API_TRACE=1`, got no trace, and no part
+    // of the system said why (#672).
+    for (const on of ["1", "true", "TRUE", "yes", "on", " on "]) {
+      expect(loadConfig(env({ THINGS_API_UI_ENABLED: on })).ui.enabled, on).toBe(true);
+    }
+    saveConfigKey("uiEnabled", true, env());
+    for (const off of ["0", "false", "no", "off"]) {
+      expect(loadConfig(env({ THINGS_API_UI_ENABLED: off })).ui.enabled, off).toBe(false);
+    }
   });
 });
 
