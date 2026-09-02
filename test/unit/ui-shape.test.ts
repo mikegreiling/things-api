@@ -110,13 +110,21 @@ describe("cadenceExpectationFor — advisory, and only where it discriminates", 
     expect(e).toEqual({ fields: 2, requiredLabels: ["Every", "Ends:"], forbiddenLabels: [] });
   });
 
-  it("a plain fixed frequency gets NO expectation — it would not discriminate", () => {
-    // This is the safety property, not an omission. A fixed frequency switching
-    // to another fixed frequency looks identical either side of the rebuild
-    // (`Every` + `Ends:`, one field), so a match could be satisfied by the group
-    // the switch has not replaced yet — exactly the state the settle exists to
-    // wait out. Where the manifest cannot tell the two apart it says nothing.
-    expect(cadenceExpectationFor({ afterCompletion: false, endsAfter: false }, "3.23")).toBeNull();
+  it("a plain fixed frequency asserts the LABELS but not the field count", () => {
+    // The count is not something this step can know — a reschedule opens the
+    // dialog pre-populated, so a rule that already ends after N shows two fields
+    // before anything is touched, and asserting one would refuse a good drive.
+    // The labels ARE knowable, and they are what makes this a real transition
+    // detector: `make-repeating` opens on the dialog's after-completion default,
+    // which carries neither label, so waiting for them is waiting for the
+    // frequency switch to have actually rebuilt the group. Against a group that
+    // was already fixed it matches at once, giving back exactly the guarantee
+    // the agreement rule gave alone.
+    expect(cadenceExpectationFor({ afterCompletion: false, endsAfter: false }, "3.23")).toEqual({
+      fields: null,
+      requiredLabels: ["Every", "Ends:"],
+      forbiddenLabels: [],
+    });
   });
 
   it("says nothing at all on an app generation it was not measured against", () => {

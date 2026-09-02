@@ -162,8 +162,18 @@ export function matchRepeatShell(
  * addressing rules turn on.
  */
 export interface CadenceExpectation {
-  /** How many numeric fields the group must show. */
-  fields: number;
+  /**
+   * How many numeric fields the group must show, or null when the count is not
+   * something the step can know.
+   *
+   * A step that has just SELECTED an ends bound knows the count (the bound
+   * inserts the ends field, so it is two). A step driving the interval does NOT:
+   * a reschedule opens the dialog pre-populated, so a rule that already ends
+   * after N presents both fields before anything is touched. Asserting a count
+   * there would refuse a perfectly good drive, which is why this is nullable and
+   * why the interval step leaves it null and checks only the labels.
+   */
+  fields: number | null;
   /** Labels that must be present (matched exactly, as `cgLabelY` matches). */
   requiredLabels: readonly string[];
   /** Labels that must be absent. */
@@ -211,12 +221,24 @@ export function cadenceExpectationFor(
 ): CadenceExpectation | null {
   if (!shapeManifestCoversVersion(version)) return null;
   if (state.afterCompletion) {
+    // CGRD1 §A law 2: after-completion carries NEITHER anchor label and offers
+    // exactly one field. Nothing else in the dialog looks like this.
     return { fields: 1, requiredLabels: [], forbiddenLabels: ["Every", "Ends:"] };
   }
   if (state.endsAfter) {
+    // §A law 3: the `after` bound INSERTS the count ahead of the interval, so the
+    // step that has just selected it knows there are two fields.
     return { fields: 2, requiredLabels: ["Every", "Ends:"], forbiddenLabels: [] };
   }
-  return null;
+  // Every FIXED frequency carries both anchor labels (§A law 1) — but the field
+  // COUNT depends on an ends bound this step may not have set and cannot see
+  // coming, so only the labels are asserted. That is still a true transition
+  // detector for the case that matters: `make-repeating` opens on the dialog's
+  // after-completion default, which carries neither label, so waiting for them
+  // is waiting for the frequency switch to have actually rebuilt the group.
+  // Against a fixed group that was ALREADY fixed it matches at once and adds
+  // nothing — which is exactly the guarantee the agreement rule gave alone.
+  return { fields: null, requiredLabels: ["Every", "Ends:"], forbiddenLabels: [] };
 }
 
 /** What the dialog-open snapshot hop reports back. */

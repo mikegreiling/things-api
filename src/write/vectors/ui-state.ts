@@ -415,6 +415,11 @@ ${AX_DIALOG_SHELL_SNIPPET}
 						set nBt to 0
 						set nGp to 0
 						set nTf to 0
+						-- The children this enumeration realized (RDLAT2). Counted
+						-- conservatively: "role" itself is free, but reaching the
+						-- children at all is an AXChildren touch, and the five
+						-- per-class counts this replaced made five of them.
+						log "${AX_ELEMS_LOG_PREFIX}" & (count of rls)
 						repeat with rlRef in rls
 							set rlv to (contents of rlRef) as text
 							if rlv is "AXCheckBox" then
@@ -449,6 +454,7 @@ ${AX_DIALOG_SHELL_SNIPPET}
 							-- ran, and the MODALX1 preflight and the cleanup ladder
 							-- silently stopped knowing which dialog was theirs).
 							set grs to (role of UI elements of g)
+							log "${AX_ELEMS_LOG_PREFIX}" & (count of grs)
 							repeat with rlRef in grs
 								set rlv to (contents of rlRef) as text
 								if rlv is "AXTextField" or rlv is "AXPopUpButton" then set groupOk to true
@@ -546,6 +552,15 @@ end if`;
 function censusRecord(sep: string): string {
   return `"front=" & frontName & ${sep} & "isfront=" & frontIsThings & ${sep} & "running=" & thingsRunning & ${sep} & "form=" & sheetForm & ${sep} & "depth=" & sheetDepth & ${sep} & "kind=" & sheetKind & ${sep} & "census=" & census & ${sep} & "role=" & focusRole & ${sep} & "subrole=" & focusSub & ${sep} & "inspectable=" & canInspect & ${sep} & "stalled=" & stalled & ${sep} & "failed=" & failed`;
 }
+
+/**
+ * The stderr line prefix carrying an ELEMENT-REALIZATION count (RDLAT2). Lives
+ * here rather than beside its parser in `ui.ts` so the census can emit it
+ * without a value-level import cycle; see {@link parseElemLog} for what it
+ * counts and why it, not the Apple-event count, is what predicts a field wall
+ * time.
+ */
+export const AX_ELEMS_LOG_PREFIX = "#AXELEMS ";
 
 /** The stderr line prefix carrying a folded guard's census record. */
 export const GUARD_LOG_PREFIX = "#FGCENSUS ";

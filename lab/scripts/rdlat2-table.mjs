@@ -26,13 +26,14 @@ const stages = rows.filter((r) => r.phase === "stage");
 const inv = rows.find((r) => r.phase === "invocation-end");
 
 console.log(`  ================= ${tag} — per-HOP dispatch table =================`);
-console.log("  |  # | at ms | gap ms | dur ms | ax | primitive | label |");
-console.log("  | ---: | ---: | ---: | ---: | ---: | --- | --- |");
+console.log("  |  # | at ms | gap ms | dur ms | ax | elem | primitive | label |");
+console.log("  | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |");
 
 let prevEnd = null;
 let totalDur = 0;
 let totalGap = 0;
 let totalAx = 0;
+let totalElems = 0;
 let axKnown = 0;
 for (let i = 0; i < ends.length; i += 1) {
   const end = ends[i];
@@ -46,10 +47,11 @@ for (let i = 0; i < ends.length; i += 1) {
     totalAx += end.axOps;
     axKnown += 1;
   }
+  if (typeof end.axElems === "number") totalElems += end.axElems;
   console.log(
     `  | ${i + 1} | ${at} | ${gap} | ${end.durationMs ?? "?"} | ${end.axOps ?? "—"} | ${
-      end.primitive
-    } | ${end.label}${end.ok === false ? " [FAILED]" : ""} |`,
+      end.axElems ?? "—"
+    } | ${end.primitive} | ${end.label}${end.ok === false ? " [FAILED]" : ""} |`,
   );
 }
 
@@ -57,19 +59,23 @@ for (let i = 0; i < ends.length; i += 1) {
 const byPrim = new Map();
 const byPrimMs = new Map();
 const byPrimAx = new Map();
+const byPrimEl = new Map();
 for (const e of ends) {
   byPrim.set(e.primitive, (byPrim.get(e.primitive) ?? 0) + 1);
   byPrimMs.set(e.primitive, (byPrimMs.get(e.primitive) ?? 0) + (e.durationMs ?? 0));
   byPrimAx.set(e.primitive, (byPrimAx.get(e.primitive) ?? 0) + (e.axOps ?? 0));
+  byPrimEl.set(e.primitive, (byPrimEl.get(e.primitive) ?? 0) + (e.axElems ?? 0));
 }
 
 console.log(`  --- ${tag} hop budget ---`);
-console.log("  | primitive | hops | total ms | ax round-trips |");
-console.log("  | --- | ---: | ---: | ---: |");
+console.log("  | primitive | hops | total ms | ax round-trips | elements |");
+console.log("  | --- | ---: | ---: | ---: | ---: |");
 for (const [p, n] of [...byPrim].toSorted(
   (a, b) => (byPrimMs.get(b[0]) ?? 0) - (byPrimMs.get(a[0]) ?? 0),
 )) {
-  console.log(`  | ${p} | ${n} | ${byPrimMs.get(p) ?? 0} | ${byPrimAx.get(p) ?? 0} |`);
+  console.log(
+    `  | ${p} | ${n} | ${byPrimMs.get(p) ?? 0} | ${byPrimAx.get(p) ?? 0} | ${byPrimEl.get(p) ?? 0} |`,
+  );
 }
 
 // The census hops are the per-step focus guard + the MODALX1 preflight; they are
@@ -83,6 +89,10 @@ console.log(
 );
 console.log(`  census hops: ${censusHops.length} (${censusMs} ms)`);
 console.log(`  ax round-trips: ${totalAx} (reported by ${axKnown}/${ends.length} hops)`);
+console.log(
+  `  ELEMENT REALIZATIONS: ${totalElems}  ->  at 115 ms/element that is ` +
+    `${Math.round((totalElems * 115) / 100) / 10} s of a field drive`,
+);
 if (totalAx > 0) {
   // The FIELD PREDICTION. Everything that is not an AX round-trip — the process
   // spawns, the in-script settles, the app's own animation time — is taken as

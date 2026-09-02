@@ -1,6 +1,6 @@
 # RDLAT2 — the Repeat dialog's latency, counted in AX round-trips
 
-**Probed under: `things-lab-golden-v4` · Things 3.23 (build 32300036) · macOS 15.7.7 · DB schema v27 · pinned clock 2026-07-05 12:00 (trial wall 2026-07-18, never rolled).** ONE disposable clone of golden-v4 (the golden is never booted), airgapped, guest muted, beep sentinel default-on, destroyed at teardown. Fixtures fully synthetic (`RDLAT2*` titles). Both lab escapes exported (`THINGS_API_UI_DIRECT=1 THINGS_API_WRITE_DIRECT=1`). Driver: [`lab/scripts/research-rdlat2.sh`](../../lab/scripts/research-rdlat2.sh) (`setup` · `ship` · `shipnew` · `micro` · `micro2` · `aeprobe` · `profile` · `census` · `s1diag` · `s1rep` · `states` · `cells` · `chord` · `teardown`); calibration [`lab/scripts/rdlat2-micro.sh`](../../lab/scripts/rdlat2-micro.sh) + [`rdlat2-micro2.sh`](../../lab/scripts/rdlat2-micro2.sh); per-hop table renderer [`lab/scripts/rdlat2-table.mjs`](../../lab/scripts/rdlat2-table.mjs). Artifacts (gitignored): `lab/artifacts/rdlat2/`.
+**Probed under: `things-lab-golden-v4` · Things 3.23 (build 32300036) · macOS 15.7.7 · DB schema v27 · pinned clock 2026-07-05 12:00 (trial wall 2026-07-18, never rolled).** ONE disposable clone of golden-v4 (the golden is never booted), airgapped, guest muted, beep sentinel default-on, destroyed at teardown. Fixtures fully synthetic (`RDLAT2*` titles). Both lab escapes exported (`THINGS_API_UI_DIRECT=1 THINGS_API_WRITE_DIRECT=1`). Driver: [`lab/scripts/research-rdlat2.sh`](../../lab/scripts/research-rdlat2.sh) (`setup` · `ship` · `shipnew` · `micro` · `micro2` · `aeprobe` · `elem` · `elemcheck` · `profile` · `census` · `s1diag` · `s1rep` · `states` · `cells` · `chord` · `teardown`); calibration [`lab/scripts/rdlat2-micro.sh`](../../lab/scripts/rdlat2-micro.sh) + [`rdlat2-micro2.sh`](../../lab/scripts/rdlat2-micro2.sh); element probe [`lab/scripts/rdlat2-elem.jxa.js`](../../lab/scripts/rdlat2-elem.jxa.js); per-hop table renderer [`lab/scripts/rdlat2-table.mjs`](../../lab/scripts/rdlat2-table.mjs). Artifacts (gitignored): `lab/artifacts/rdlat2/`.
 
 Sequel to [DRVLAT1](drvlat1-drive-latency.md) ([#633](https://github.com/mikegreiling/things-api/issues/633)), which cut the drive from 20 osascript hops to 15 and removed the fixed post-preamble settle — a 33% win on a clone that the field never saw. The maintainer's `todo make-repeating … --after-completion` was still around eleven seconds on his M1. This campaign asks why, in the only unit that transfers between machines.
 
@@ -174,13 +174,13 @@ The maintainer's proposal was to cache the dialog's tree. The dialog does not ha
 
 **1. The SHELL census — an ASSERTION, checked once, at the open.** The Repeat dialog's control census is the one thing about it that does NOT depend on the rule state: exactly two checkboxes, one direct pop-up, two buttons, one group, and at most one direct text field — measured across every state in [CGRD1 §B](cgrd1-precommit-audit.md), and the same for the detached editor ([DRVLAT1 §5](drvlat1-drive-latency.md)). It is therefore assertable exactly at the open, and a shell that does not present it fails the drive closed, naming what it saw. This is new: the drive previously satisfied itself that `pop up button 1` resolved and pressed on.
 
-**2. The CADENCE-GROUP shape — ADVISORY, and only where it discriminates.** This is where the manifest could have done harm, and where the campaign's second self-inflicted bug lives (§7c). The settle's whole job is to wait out a group that is being rebuilt; letting a shape MATCH end that wait is sound only when the shape is one the PREVIOUS state could not also have had. Two states qualify:
+**2. The CADENCE-GROUP shape — ADVISORY, and only where it discriminates.** This is where the manifest could have done harm, and where the campaign's second self-inflicted bug lives (§7c). The settle's whole job is to wait out a group that is being rebuilt; letting a shape MATCH end that wait is sound only when the shape is one the PREVIOUS state could not also have had. Three cases, and the third was got wrong first time (§E.4):
 
 | state | expectation | why it discriminates |
 | --- | --- | --- |
 | after completion | 1 field, and NEITHER `Every` nor `Ends:` | no fixed frequency can look like it (CGRD1 §A law 2) |
 | ends-after | **2** fields, `Every` + `Ends:` present | no other state shows two — the bound inserts the count (§A law 3) |
-| any other fixed frequency | **none** | `Every` + `Ends:` + one field either side of the rebuild — indistinguishable, so the manifest says nothing and the two-agreeing-reads rule decides alone |
+| any other fixed frequency | the two LABELS, and no field count | *(corrected in §E.4)* — `Every` + `Ends:` are absent from the after-completion default every `make-repeating` starts on, so waiting for them IS a transition detector; the field COUNT cannot be asserted because a reschedule opens pre-populated and may already show the ends field |
 
 Where an expectation exists the settle now WAITS for it *and* for it to hold still, and refuses if it never arrives. That is strictly stronger than what shipped: agreement alone is the absence of movement, which is also what a group looks like before the step's own input has taken effect.
 
@@ -213,6 +213,9 @@ The fix is not to slow the reads down. The readiness is now waited for POSITIVEL
 The same class bit the ends-count step once more: the settle returned a *stable, stale* one-field group before the `Ends: after` selection had inserted the second field, and the step refused with `0 field(s) on the "Ends:" row`. That is what made the manifest's cadence expectation a WAIT rather than a shortcut (§6).
 
 ## 8. The cost model, and what it predicts for the field
+
+> **SUPERSEDED IN PART, 2026-09-02 — read §E with this.** The per-Apple-event model below was fitted before the maintainer's sidebar probe measured what an AX sweep actually costs on his M1: not the IPC (0.12 ms a read) and not the call count, but the app REALIZING each element's content, ~115 ms apiece. §E re-parameterizes the model per element, measures whether the Repeat SHEET behaves that way (it shows no such signature on the clone, and it is 12–22 elements wide against the sidebar's 174 rows), and reports what the drive touches. This section is kept because its per-hop budget and its fitted number are still the honest record of what was measured here — but the field parameter it fits is a fitted one, and §E's is measured independently.
+
 
 ```
 wall  =  spawns x S  +  round-trips x C  +  in-script settles  +  the app's own time
@@ -248,9 +251,89 @@ Carried across at that fitted rate:
 
 **The next field trace settles it**, and it can be read directly against this table: `THINGS_API_TRACE=1` gives per-hop `durationMs`, and `THINGS_API_TRACE=1 THINGS_API_AX_COUNT=1` (with `helpers-enabled false`, per §1) gives `axOps` beside it. If the per-hop counts match §5 and the durations divide out to ~47 ms per round-trip, the model holds.
 
+## 8b. §E — the element model, and why the sheet is not the sidebar
+
+**Added 2026-09-02, after the maintainer's sidebar probe on the M1 rewrote the cost model.** That probe found three things, and the third disqualifies the model §8 was originally built on:
+
+1. **IPC is not the bottleneck.** A single attribute read is 0.12 ms through the JXA bridge and 0.05 ms through native ctypes. A native helper-side AX driver is *not* justified by this data, and is not recommended.
+2. **The cost is per UI ELEMENT REALIZED on content access**, independent of depth and of call count: a 174-row sidebar sweep cost ~20 s at depth 2 (507 nodes / 1,841 calls) and ~20 s at depth 6 (2,079 nodes / 2,081 calls) — the call count moved 13% and the wall time did not move at all. That is ~115 ms per row, paid on the first content-bearing touch (AXChildren / AXDescription / AXValue), and paid AGAIN on a repeat sweep, because the app discards what it realized.
+3. **Geometry is free** — `AXRows` plus `AXFrame` for all 174 rows is ~2 ms.
+
+So the lever is *how many distinct controls a step touches the content of*, not how many calls it makes — and a PLURAL read, the very thing §4(a) used to make this driver cheap in Apple events, touches N controls in ONE event. An event count under-reports precisely where the field pays most.
+
+### E.1 The driver now counts elements, and the count survives the deputy
+
+`axElems` rides each hop's own stderr (`#AXELEMS`, summed and stripped by the dispatch seam) rather than an environment variable, so unlike `axOps` it needs nothing but `THINGS_API_TRACE=1` and it works on a helper-routed host. Value/title/description reads are counted; `position`, `size` and `role` are not.
+
+Attribution is checked rather than assumed (`elemcheck`): with a dialog open in a known state, the shipped guard prelude reports `8` and `3` for an after-completion dialog and `8` and `13` for a monthly one — exactly the shell's and the cadence group's direct-child counts, read live in the same cell.
+
+### E.2 Does the Repeat sheet realize per element? (`elem`)
+
+Measured on the clone, over every element in the open sheet:
+
+| state | elements | enumerate | geometry sweep | content sweep | repeat content sweep |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| after completion | **12** | 3.5 ms | 2.7 ms (0.23 ms/el) | 2.6 ms (0.22 ms/el) | 2.4 ms, then 2.3 ms |
+| monthly | **22** | 5.4 ms | 4.6 ms (0.21 ms/el) | 4.8 ms (0.22 ms/el) | 4.6 ms, then 4.4 ms |
+
+Content costs what geometry costs (ratio 0.96 / 1.04), and a repeat sweep costs what the first did (0.96 / 0.92) — **no realize-and-discard signature at all**. The clone CANNOT turn that into a field statement: the sidebar is cheap in a VM too, which is the whole reason the field measurement exists. What it can say is that the sheet shows no *structural* difference between the two kinds of read, where the sidebar's cost is defined by one.
+
+**The decisive fact is the size.** The Repeat dialog is **12 elements wide, 22 at its widest** — against 174 sidebar rows. Even under the most aggressive reading, where every element is realized on every touch at the field's 115 ms, realizing the WHOLE dialog once is **1.4 s (after-completion) to 2.5 s (monthly)**. The element term is bounded by the dialog's size, and that bound is well under the 11.3 s the field measured. On this surface the element term cannot be the whole story, however it behaves.
+
+### E.3 Elements touched per drive — measured, and what it does and does not prove
+
+Measured with `axElems`, per hop:
+
+| hop | field shape (`--after-completion`) | wide shape (`--frequency monthly --interval 3`) |
+| --- | ---: | ---: |
+| frequency pop-up (menu items realized by the title search) | 6 | 6 |
+| after-completion unit pop-up | 4 | — |
+| `set-group-number` | 17 | **33** |
+| pre-commit audit + commit | 7 | 18 |
+| everything else (censuses with no dialog open, presses, waits) | 0 | 0 |
+| **total** | **34** | **57** |
+
+Against the pre-RDLAT2 code on the same shapes, derived from the old scripts' own reads and the measured inventory (8 shell children, 3 or 13 group children, 1 or 7 static texts), the answer depends entirely on **whether a child enumeration realizes content**, and honesty requires giving both:
+
+| reading | old → new, field shape | old → new, wide shape |
+| --- | ---: | ---: |
+| **aggressive** — every `count of <class>` enumeration realizes its container's children | ~111 → **34** | ~314 → **57** |
+| **conservative** — only value/title/description reads realize | ~6 → **6** (neutral) | ~30 → **18** |
+
+Both readings agree on the wide shape and disagree completely on the narrow one — which is the field's own command. Under the conservative reading the plural snapshot actually reads *slightly more* content than the loop it replaced (it takes field VALUES as well as positions, where the old settle took only positions), and the saving comes entirely from doing **two group scans instead of four**, not from batching them. That is worth stating plainly: **the plural read was a round-trip optimization; the scan reduction was the element optimization.** They are different levers and only the second one moves the term the field probe measured.
+
+### E.4 What this found: the interval step was reading a group that had not rebuilt yet
+
+Counting elements exposed a defect that counting events could not. On a `--frequency monthly` drive the `set-group-number` hop reported **17** elements where the arithmetic demanded ~39, and the missing ones were the monthly group's: at the moment the step censused and discriminated, the cadence group still had the **after-completion default's 3 children**. The frequency switch had been clicked and had not yet rebuilt the group.
+
+Nothing failed, and nothing ever had. The step took the after-completion *uniqueness* branch instead of the `Every`-row match, typed into the sole field it found, the app carried the value across the rebuild, and the pre-commit audit then read the correct value out of the rebuilt group. But the ADDRESSING DECISION was made against a stale picture — which is exactly the #589 error class the whole guard family exists to prevent, surviving only because the value happened to be right.
+
+The cause was §6's own rule, applied one step too literally. The manifest supplied no expectation for a fixed frequency on the grounds that a fixed→fixed switch is indistinguishable either side of the rebuild. True — but "supply nothing" was the wrong conclusion, because supplying the LABELS is never worse than the agreement rule and is strictly better whenever the previous state was after-completion, which is **every `make-repeating` drive**: the dialog opens on its after-completion default and every fixed-frequency drive transitions out of it.
+
+What could not be supplied is the field COUNT: a reschedule opens pre-populated, so a rule that already ends after N shows two fields before anything is touched, and asserting one would refuse a good drive. So `CadenceExpectation.fields` is now nullable, and the settle carries two sentinels — `-2` for no expectation, `-1` for "check the labels, not the count".
+
+Confirmed by re-measurement: the same drive now reports **33** elements in that hop instead of 17, because it waits for `Every` and `Ends:` to appear before discriminating. Same wall time (the wait had previously been paid inside the typing loop's retries instead), same landed rule, and re-certified across the full state matrix.
+
+### E.5 The settle audit
+
+With reads minimized, the fixed in-script delays are the other term. Every one in this drive, and what pays it:
+
+| delay | where | paid | evidence |
+| ---: | --- | --- | --- |
+| 0.30 s | `alreadyHoldsBlock` — the two reads of the read-back-first skip | whenever the field already holds the value (**the field's own command shape**) | UIC7 re-layout revert gate (#620 item 7) |
+| 0.10 s | `cgSettle` poll, between the two agreeing reads | every settle — twice per drive (the setter and the audit) | BEEP1 |
+| 0.15 + 0.10 + 0.20 s | the typing loop: focus → keystroke → Tab-commit | only when a keystroke actually goes out | FGRD1 |
+| 0.30 s | the typing loop's inter-attempt gap | only on a retry | FGRD1 |
+| 0.05 s/round | candidate prelude, dialog-open, pop-up open | only while the awaited thing is absent — closed loops, not settles | DRVLAT1 |
+| 0.10 s cadence | the post-commit verify poll | after the commit | DRVLAT1 §3(d) |
+
+**Unconditional total: 0.5 s** for the field's command shape (0.3 + 0.1 + 0.1), 0.65 s plus retries for a shape that types. Against a predicted field wall of several seconds that is ~7–10% — real, but not the dominant term the sidebar's numbers might suggest, because this drive has two settles rather than one per row.
+
+**The largest single item is the 0.3 s read-back-first gap, and it is deliberately NOT touched here.** It is a certified gate (UIC7: read, wait, read again, to catch a re-layout that reverts the field), and the settle above it now hands back a snapshot that already carries the field's value from a proven-stable instant ≥0.1 s earlier — so in principle `v0` could come from there and the 0.3 s could go. That is a change to a certified safety gate, and the evidence that would justify it is a probe this campaign did not run: **drive a frequency switch and sample the interval field's value every 50 ms for 2 s, to measure how long after the rebuild a revert can still land.** Until that exists, the gate keeps its wait.
+
 ## 9. Certification
 
-Everything below on the NEW bundle, in the same clone, through the production CLI, against the guest SQLite oracle. **0 alert beeps** across every cell set.
+Everything below on the NEW bundle, through the production CLI, against the guest SQLite oracle. **0 alert beeps** across every cell set. Run twice: once for the round-trip recut, and again on a second clone after §E's element work widened the cadence expectation — the results below are the second sitting's.
 
 ### The state matrix (`states`) — every dialog state the manifest describes
 
