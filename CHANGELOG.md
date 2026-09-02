@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Improved — the bundled agent skill now says to look at the open issues before filing a new one.** `references/bug-reports.md` gains a short passage under "Where to file": start with `gh issue list --state open`, and when an open issue already describes the same command failing with the same symptom, add the new run's data to it as a comment — versions, complete output, trace excerpt — instead of opening a second issue for the same defect. A genuinely distinct failure — a different step, command, or underlying operation — still earns its own issue, cross-referenced by number.
+
+- **Changed — a PR that addresses a tracked issue now references it as `Refs #N`, never `Fixes #N`.** The repo conventions in `AGENTS.md` spell out the issue lifecycle: `Fixes`/`Closes`/`Resolves` auto-close an issue the moment the PR merges, and a merge is not confirmation that the defect is gone. A field-reported bug is closed only once the reporter's own re-run on the machine that hit it says the fix resolves it, because lab certification cannot reproduce real-hardware conditions.
+
 ## 0.20.3 — 2026-09-01
 
 - **Fixed — `things area reorder` no longer depends on where you left the mouse pointer, and can read a big sidebar without giving up.** Two separate problems in the same command, both of which made it fail on a large sidebar and neither of which said what was really wrong.
