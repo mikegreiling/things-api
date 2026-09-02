@@ -369,6 +369,27 @@ The recipe drives no date at all — the dialog has no first-occurrence control 
 
 That is the §1 derivation discipline solving a modelling problem the hard way and getting it right: the awkward input is normalized into the existing model at write time, instead of being carried alongside it forever. Evidence: [lab/acfut1-after-completion-future-anchor.md](lab/acfut1-after-completion-future-anchor.md) §1–§2; [lab/vmres1-residuals.md](lab/vmres1-residuals.md) §1. Things 3.23.
 
+### 6m. The Repeat dialog derives a whole coherent rule from the one date the row already has
+
+The dialog could reasonably open blank and make the user fill in seven controls. Instead it computes an entire self-consistent cadence from a single fact — the row's own scheduled date (or, when the row has none, today) — and recomputes the whole thing from scratch on every frequency change:
+
+```
+a to-do scheduled Thursday 2026-07-09, switched to…
+  daily    Next: Thu, Jul 9, 2026                                          every 1 day
+  weekly   Next: Thu, Jul 9, 2026   on Thursday                            every 1 week
+  monthly  Next: Thu, Jul 9, 2026   on the day 9th                         every 1 month
+  yearly   Next: Thu, Jul 9, 2026   in July, on the day 9th                every 1 year
+  preview  ",  8/9/26,  9/9/26,  10/9/26,  11/9/26, …"
+```
+
+Three details lift this above "it fills in a default":
+
+- **The derivation follows the row's whole scheduling state, not just its date.** A row that also carries a **deadline** anchors the cadence on the *deadline* rather than the start, ticks `Add deadlines`, and pre-fills `and start N days earlier` with the measured gap — the exact geometry a deadlined series needs ([YANCH1](lab/yanch1-derived-anchor.md): `of=` holds the due date, the start is derived as due − N), computed for you. A row carrying a **reminder time** opens with `Add reminders` ticked. Both hold under `after completion` too, which has no first-occurrence control at all and where a lesser implementation would simply have skipped the question.
+- **The pre-fill is atomic with the rebuild.** Switching the frequency tears the cadence group down and builds a new one, and the new controls appear — measured at 100 ms resolution over 3 s, four frequencies — **already carrying their final values**. There is no instant at which the group exists and is wrong. (That is a notably stronger guarantee than the `Next:` pop-up's own asynchronous recompute after a *user* anchor change, which is a real race and is filed next door as [oddities §21](things-app-oddities.md).)
+- **It shows its work.** The occurrence-preview static beside the row lists the first four dates the derived rule actually produces, so the inference is checkable at a glance rather than taken on trust — and it agreed with the pre-fill in all seventy cells measured.
+
+The payoff is that accepting the defaults is a *correct* action, not a lazy one: committing the dialog untouched after picking only a frequency lands a rule blob equivalent to the one produced by clicking every control by hand (11/11 cells, rule blobs decoded out of SQLite). Evidence: [lab/defaults1-repeat-dialog-defaults.md](lab/defaults1-repeat-dialog-defaults.md) §3–§7. Things 3.23.
+
 ---
 
 ## 7. Truncation that respects the reader, not the buffer

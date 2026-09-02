@@ -1454,6 +1454,24 @@ The only signal we could find is the geometric one — the overlap — which is 
 
 Evidence: [lab/sbres1-sidebar-resolution.md](lab/sbres1-sidebar-resolution.md) §2, §4.
 
+## 31. Things 3.23: the Repeat dialog silently flattens a deadline that PRECEDES the start — it ticks "Add deadlines" and pre-fills a zero offset, discarding the date the row holds (DEFAULTS1, 2026-09-02, golden-v4 / Things 3.23 build 32300036)
+
+The Repeat dialog pre-fills itself from the row it was opened on, and it does so well (see [craft §6m](things-app-craft.md)): a to-do with `startDate = 2026-07-09` and `deadline = 2026-07-12` opens with `Add deadlines` ticked and `and start 3 days earlier` filled in, which is exactly right. Give it a row whose deadline is *before* its start and the same machinery produces a confident wrong answer.
+
+| row | `Add deadlines` | `and start N days earlier` | the cadence row anchors on |
+|---|---:|---:|---|
+| `startDate 2026-07-09`, `deadline 2026-07-12` | 1 | **3** | Jul 12 — the deadline (correct) |
+| `startDate 2026-07-09`, `deadline 2026-07-09` | 1 | **0** | Jul 9 (correct) |
+| `startDate 2026-07-09`, **`deadline 2026-07-06`** | 1 | **0** | Jul 9 — **the deadline date is gone** |
+
+There is no refusal, no empty field, no negative number and nothing on screen to say that the `0` being shown is not the offset the row implies. A user who opens the dialog on such a to-do and accepts the defaults converts "due three days before it starts" into "due the day it starts" without being told. The contradiction is the row's, not the dialog's — but the dialog is the only place it could be surfaced, and it chooses to overwrite instead.
+
+A second, quieter case in the same family: a row with a **deadline and no start date at all** pre-fills an anchor and an offset that agree with neither the deadline nor today. With the clock at 2026-07-05 and `deadline = 2026-07-16`, every fixed frequency comes up `Next: = Sat, Jul 18, 2026` with `and start 11 days earlier` (`11` is `deadline − today`; `Jul 18 − 11` is `Jul 7`, which is nothing in the row), while `after completion` on the same row shows an offset of `6`. The `Next:` menu for that state opens on Jul 16 as its first item and has no `Today` item, yet the selected value is the third. Self-consistent internally, unexplained from outside.
+
+**Expected:** a deadline earlier than the start is either refused (the app refuses plenty of other impossible geometry) or shown as what it is; silently substituting the start date for it, in the one dialog whose whole job is to make that offset explicit, is the worst of the three options. And a deadline-only row should anchor on its deadline.
+
+Evidence: [lab/defaults1-repeat-dialog-defaults.md](lab/defaults1-repeat-dialog-defaults.md) §4, §10.2, §10.3.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
