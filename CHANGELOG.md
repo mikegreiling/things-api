@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.5 — 2026-09-02
+
 - **Improved — making a to-do repeat is faster, and the speed came from asking the dialog fewer questions.** Every command that drives Things' Repeat dialog — `make-repeating`, `add-repeating`, `reschedule-repeat`, and the project versions of each — now reads the dialog in a fraction of the round-trips it used to.
 
   The driver used to inspect the dialog one control at a time: how many labels are there, what does label 1 say, label 2, label 3, and so on, then the same again for the fields, then the same again for the next step. Each of those is a separate round-trip into Things, and on a real Mac each one costs an order of magnitude more than it does in the lab — which is why an earlier round of work that removed whole steps barely moved the needle on the machine it was meant to help. It now reads the whole set in one go, per property, however many controls there are. The same checks are made, from a single snapshot rather than a series of reads taken over a tenth of a second.
@@ -19,6 +21,7 @@
 - **Added — the Repeat dialog is now checked against its expected shape the moment it opens.** The command used to satisfy itself that one control was there and press on. It now takes the dialog's full control census as it opens and compares it with the shape this version was certified against; a dialog that does not match is a Things update that has redesigned it, and the command stops with nothing entered rather than pressing controls it can no longer vouch for. On a version of Things this package has not been certified against, nothing is assumed and the command does the full per-step checking it always did.
 
 - **Added — `THINGS_API_AX_COUNT=1` records how many accessibility round-trips each step of a GUI-driving command made.** With tracing on (`THINGS_API_TRACE=1`), each step's trace record already carried how long it took; it can now carry how many questions it asked, which is the number that means the same thing on every Mac. Useful when reporting that a command is slow: the durations say what your machine cost, the counts say what any machine would. It is off unless you ask for it. One caveat: the counting happens in whichever process runs the automation, so on a machine with the helpers carrying automation you will need `things config set helpers-enabled false` for the run that captures it.
+
 ## 0.20.4 — 2026-09-02
 
 - **Improved — the bundled agent skill now says to look at the open issues before filing a new one.** `references/bug-reports.md` gains a short passage under "Where to file": start with `gh issue list --state open`, and when an open issue already describes the same command failing with the same symptom, add the new run's data to it as a comment — versions, complete output, trace excerpt — instead of opening a second issue for the same defect. A genuinely distinct failure — a different step, command, or underlying operation — still earns its own issue, cross-referenced by number.
