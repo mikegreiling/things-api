@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.7 — 2026-09-02
+
 - **Improved — making a to-do repeat now reads the Repeat dialog instead of retyping what it already says.** The dialog fills itself in from the to-do it was opened on: give it a to-do scheduled for a Thursday and ask for a weekly repeat, and it comes up already saying "every 1 week, on Thursday, next occurrence that Thursday". The command used to click every one of those controls anyway. It now checks them — one look at the dialog, comparing each control against what you asked for — and only touches the ones that disagree.
 
   Nothing is taken on trust. A control that does not already say the right thing is set exactly as it was before, and the dialog is still audited control by control before anything is committed, whether the value was typed or found. The commands land the same series either way: every shape was run twice, once reading and once typing, and the stored rules came out byte for byte identical.
