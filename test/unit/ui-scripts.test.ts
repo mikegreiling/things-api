@@ -274,9 +274,23 @@ describe("axProbeDialogShapeScript — the STRUCTURAL version fork (RDLG2)", () 
   it("anchors on the Next: LABEL's row, not on the label's mere presence", () => {
     // RDLG2d measured 3.22.14: it carries the same "Next:" static text as 3.23 —
     // only the control beside it changed, so presence alone misreads 3.22 as 3.23.
-    expect(script).toContain('if v is "Next:" then');
-    expect(script).toContain("set nextY to item 2 of p");
+    expect(script).toContain('if (v as text) is "Next:" then set nextY to');
     expect(script).toContain('if nextY is missing value then return "unknown"');
+  });
+
+  it("takes the whole inventory in PLURAL reads (VOPAT2)", () => {
+    // 15 Apple events for one structural question is ~700ms on the maintainer's
+    // M1 at RDLAT2's fitted per-round-trip rate. The plural form asks three.
+    expect(script).toContain("set sv to (value of static texts of g)");
+    expect(script).toContain("set sp to (position of static texts of g)");
+    expect(script).toContain("set pp to (position of pop up buttons of g)");
+    expect(script).not.toContain("count of static texts of g");
+    expect(script).not.toContain("value of static text i of g");
+    // A tree that changed between the two class reads is a half-picture, and a
+    // half-picture is not a shape (cgSnap's own rule).
+    expect(script).toContain('if ((count of sv) is not (count of sp)) then return "unknown"');
+    // And it reports what the value read realized (RDLAT2 §E.1).
+    expect(script).toContain('log "#AXELEMS " & (count of sv)');
   });
 
   it("decides by the CONTROL CLASS sharing that row — both branches a positive match", () => {

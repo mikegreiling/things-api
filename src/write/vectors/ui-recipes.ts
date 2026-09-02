@@ -42,6 +42,7 @@ import type {
 } from "../operations.ts";
 import type { HeadingChordSpec } from "./ui-chord.ts";
 import type { SidebarPlacement } from "./ui-drag.ts";
+import type { SettleSpec } from "./ui-observer.ts";
 import type { DialogAuditControl, UiRecipe, UiStep } from "./types.ts";
 
 /**
@@ -107,13 +108,78 @@ function preamble(targetUuid: string): UiStep[] {
   ];
 }
 
+/**
+ * THE MEASURED OBSERVABLES the Repeat-dialog steps settle on (VOPAT2, #676 —
+ * evidence in docs/lab/vopat1-screen-reader-pattern.md §4.2, re-certified in
+ * vopat2-screen-reader-build.md).
+ *
+ * Both are SOFT settles: each step keeps the closed-loop verdict it always had
+ * (`dialog-open`'s census, `cgSettle`'s agreement rule), and the notification
+ * only decides WHEN the waiting stops. So a build of Things that posts neither
+ * costs a fallback, never a wrong answer.
+ */
+
+/**
+ * The Repeat dialog's arrival. `AXSheetCreated` and `AXCreated` both fire on the
+ * new `AXSheet` at 581 ms, of which **438 ms is the app's own presentation time**
+ * — the rest was the probe's process spawn (VOPAT1 §4.2 e, within 4 % of
+ * RDLAT2's independent stopwatch). `AXWindowCreated` rides along for the DETACHED
+ * repeat editor, which is a window rather than a sheet (oddities §26); the
+ * attached form is what a foregrounded drive gets.
+ *
+ * What this replaces is not wall time — the app takes what it takes — but the
+ * `dialog-open` hop's poll, which asked `exists sheet 1` and then
+ * `exists <detached window>` every 50 ms until one answered. Nine rounds of two
+ * probes is eighteen System Events round-trips at ~47 ms apiece on the field
+ * (RDLAT2's fitted rate), spent learning something the app says once.
+ */
+const SETTLE_DIALOG_OPEN: SettleSpec = {
+  what: "the Repeat dialog opening",
+  want: ["AXSheetCreated", "AXCreated:AXSheet", "AXWindowCreated"],
+  timeoutMs: 8_000,
+};
+
+/**
+ * A pop-up reporting the value the step selected — `AXValueChanged` on that very
+ * `AXPopUpButton`, 535 ms after the menu item is pressed (VOPAT1 §4.2 g).
+ *
+ * For the FREQUENCY pop-up this arrival is also the cadence group's rebuild
+ * finishing: the `AXUIElementDestroyed` burst that tears the old three controls
+ * down lands in the same millisecond (535.1 / 535.2 ms). *The control I set now
+ * reports the value I set, and the children it had are gone.* That is a strictly
+ * better gate than "two reads of the group agreed", because agreement is also
+ * what a group that has NOT STARTED changing looks like — which is exactly how
+ * the interval step came to discriminate its target against a stale picture
+ * (RDLAT2 §E.4, the #589 error class surviving on luck).
+ *
+ * The burst is deliberately NOT in `require`. A reschedule can re-select the
+ * frequency the rule already has, and AX posts no `AXValueChanged` for a value
+ * that did not change and destroys nothing — requiring the burst would make that
+ * good drive wait out the whole budget. Being soft, it simply falls through to
+ * `cgSettle`, which is the certified oracle either way; the burst is recorded in
+ * the ledger and shows up in the trace regardless.
+ */
+const SETTLE_POPUP_APPLIED: SettleSpec = {
+  what: "the pop-up reporting the value this step selected",
+  want: ["AXValueChanged:AXPopUpButton"],
+  // MEASURED at 341 ms (VOPAT2, golden-v4, the after-completion unit pop-up) and
+  // 535 ms (VOPAT1 §4.2 g, the frequency pop-up), so ~2x the slower observation.
+  // It is deliberately not more generous: the settle is soft, so an over-long
+  // budget buys nothing and costs exactly itself on the one shape where the app
+  // legitimately announces nothing (see the value-unchanged skip in
+  // `axSelectPopupCandidatesScript`).
+  timeoutMs: 1_200,
+  quietMs: 80,
+};
+
 /** A static menu-item press (canary-resolvable up front). */
-function menuPress(label: string, path: string, canaryPath?: string): UiStep {
+function menuPress(label: string, path: string, canaryPath?: string, settle?: SettleSpec): UiStep {
   return {
     primitive: "press",
     label,
     path,
     ...(canaryPath !== undefined && { canaryPath }),
+    ...(settle !== undefined && { settle }),
     addressing: "title",
   };
 }
@@ -572,6 +638,7 @@ function selectPopup(label: string, pathCandidates: string[], value: string): Ui
     pathCandidates,
     value,
     dynamic: true,
+    settle: SETTLE_POPUP_APPLIED,
     addressing: "title",
   };
 }
@@ -585,7 +652,15 @@ function selectPopupShaped(
   shaped: NonNullable<UiStep["shaped"]>,
   value: string,
 ): UiStep {
-  return { primitive: "select-popup", label, shaped, value, dynamic: true, addressing: "title" };
+  return {
+    primitive: "select-popup",
+    label,
+    shaped,
+    value,
+    dynamic: true,
+    settle: SETTLE_POPUP_APPLIED,
+    addressing: "title",
+  };
 }
 /**
  * A select-popup that clicks the FIRST of several candidate menu-item LABELS
@@ -602,6 +677,7 @@ function selectPopupAny(
     pathCandidates,
     valueCandidates,
     dynamic: true,
+    settle: SETTLE_POPUP_APPLIED,
     addressing: "title",
   };
 }
@@ -1167,7 +1243,12 @@ export function makeRepeatingRecipe(
       // opens and the drive died opaquely at the dialog-wait timeout. Assert the
       // eligible selection FIRST, failing early + named on a miss.
       assertEligible(targetUuid, `menu item "Repeat…" of ${ITEMS_MENU}`),
-      menuPress("Items ▸ Repeat…", `menu item "Repeat…" of ${ITEMS_MENU}`),
+      menuPress(
+        "Items ▸ Repeat…",
+        `menu item "Repeat…" of ${ITEMS_MENU}`,
+        undefined,
+        SETTLE_DIALOG_OPEN,
+      ),
       ...repeatDialogEntry({ frequency, interval, ...extras }),
     ],
   };
@@ -1238,6 +1319,7 @@ export function projectMakeRepeatingRecipe(
         label: "Items ▸ Repeat…",
         path: `menu item "Repeat…" of ${ITEMS_MENU}`,
         dynamic: true,
+        settle: SETTLE_DIALOG_OPEN,
         addressing: "title",
       },
       ...repeatDialogEntry({ frequency, interval, ...extras }),
@@ -1277,6 +1359,7 @@ export function rescheduleRepeatRecipe(
           `menu item "Reschedule…" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`,
         ],
         dynamic: true,
+        settle: SETTLE_DIALOG_OPEN,
         addressing: "title",
       },
       ...repeatDialogEntry({ frequency, interval, ...extras }),

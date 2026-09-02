@@ -471,6 +471,24 @@ export interface UiStep {
    * A step carrying this field whose probed shape has no entry fails closed.
    */
   shaped?: Partial<Record<RepeatDialogShape, { pathCandidates?: string[]; value?: string }>>;
+  /**
+   * WHAT THIS STEP'S ACTUATION ANNOUNCES (VOPAT2, #676) — the Accessibility
+   * notification the app was MEASURED to post for it, which the settle observer
+   * waits on instead of the driver polling for the outcome
+   * (`src/write/vectors/ui-observer.ts`).
+   *
+   * A step declares this only where a campaign measured the observable: the
+   * `Items ▸ Repeat…` press announces `AXSheetCreated`, a frequency selection
+   * announces `AXValueChanged` on the pop-up it set together with the
+   * `AXUIElementDestroyed` burst of the cadence group it rebuilt. Every step
+   * without it settles exactly as it did before, and every step WITH it still
+   * carries its own closed-loop verdict — a notification says WHEN, not WHAT.
+   *
+   * Inert on a machine with no settle sidecar (no Command Line Tools, or the
+   * observer switched off): the generated script is then byte-identical to the
+   * polling one.
+   */
+  settle?: import("./ui-observer.ts").SettleSpec;
 }
 
 /**

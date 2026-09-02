@@ -52,6 +52,11 @@ import {
   axTypeTextScript,
   commandForStep,
 } from "../../src/write/vectors/ui.ts";
+import {
+  inertSettleInjector,
+  type SettleInjector,
+  settleInjectorFor,
+} from "../../src/write/vectors/ui-observer.ts";
 import { axFocusGuardPrelude, axUiStateScript } from "../../src/write/vectors/ui-state.ts";
 
 const DARWIN = process.platform === "darwin";
@@ -102,18 +107,38 @@ function everyScript(): { label: string; script: string; lang: string }[] {
   ];
   const out: { label: string; script: string; lang: string }[] = [];
   const seen = new Set<string>();
+  // BOTH SETTLE SHAPES (VOPAT2). Every step compiles twice: once with no settle
+  // sidecar — the polling script that shipped before that campaign — and once
+  // with one live, where the same step carries the observer handlers and its
+  // `nc -U` waits. A settle snippet that does not parse would fail mid-dialog,
+  // which is precisely the class this suite exists for.
+  const injectors: { tag: string; obs: SettleInjector }[] = [
+    { tag: "polling", obs: inertSettleInjector() },
+    {
+      tag: "observed",
+      obs: settleInjectorFor({
+        socketPath: "/tmp/things-api-observer/s-0123abcd.sock",
+        token: "0123456789abcdef0123456789abcdef",
+        logPath: "/tmp/things-api-observer/observer.log",
+        registered: "16/16",
+        pid: 4242,
+      }),
+    },
+  ];
   for (const recipe of recipes) {
     for (const shape of ["next-popup", "legacy"] as const) {
-      for (const step of forShape(recipe.steps, shape)) {
-        const cmd = commandForStep(step, recipe.targetUuid);
-        if (typeof cmd.script !== "string") continue;
-        if (seen.has(cmd.script)) continue;
-        seen.add(cmd.script);
-        out.push({
-          label: `${recipe.op} · ${shape} · ${cmd.label}`,
-          script: cmd.script,
-          lang: cmd.lang ?? "applescript",
-        });
+      for (const { tag, obs } of injectors) {
+        for (const step of forShape(recipe.steps, shape)) {
+          const cmd = commandForStep(step, recipe.targetUuid, obs);
+          if (typeof cmd.script !== "string") continue;
+          if (seen.has(cmd.script)) continue;
+          seen.add(cmd.script);
+          out.push({
+            label: `${recipe.op} · ${shape} · ${tag} · ${cmd.label}`,
+            script: cmd.script,
+            lang: cmd.lang ?? "applescript",
+          });
+        }
       }
     }
   }

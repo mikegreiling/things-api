@@ -41,6 +41,20 @@ import {
 } from "./session-reachability.ts";
 import { certificationOf } from "./ui-certification.ts";
 import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
+import {
+  AX_SETTLE_LOG_PREFIX,
+  inertSettleInjector,
+  observerAwait,
+  observerCount,
+  observerMark,
+  type ObserverSession,
+  parseSettleLog,
+  type SettleInjector,
+  type SettleSpec,
+  settleInjectorFor,
+  startObserver,
+  stopObserver,
+} from "./ui-observer.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import {
   type CadenceExpectation,
@@ -169,7 +183,14 @@ export type UiCommandPrimitive =
    * actuations and the cleanup's are never confused — in a trace, in a test, or
    * in the completed-steps trail.
    */
-  | "dismiss-dialog";
+  | "dismiss-dialog"
+  /**
+   * Arm the AX settle observer (VOPAT2, ui-observer.ts): read the Things pid and
+   * background the `python3` ctypes sidecar from INSIDE the hop, so it inherits
+   * the Accessibility identity that already holds the grant. Reads no control,
+   * presses nothing, and answers `no-process` rather than guessing.
+   */
+  | "observer-spawn";
 
 /** A single primitive dispatch — one stable shape per primitive. */
 export interface UiCommand {
@@ -211,6 +232,17 @@ export interface UiRunResult {
    * it themselves.
    */
   axElems?: number;
+  /**
+   * NOTIFICATION SETTLES this hop performed (VOPAT2) — one record per in-script
+   * wait, `<what> ~ <the sidecar's reply>`, carrying the notification that fired
+   * and its latency from the mark. Absent when the hop settled on nothing (the
+   * polling fallback, or a hop with no settle at all).
+   *
+   * This is the third quantity a field trace needs, beside {@link axOps} and
+   * {@link axElems}: how long the APP took to announce, which is the term the
+   * drive cannot make smaller and the one it should end up bound by.
+   */
+  settles?: string[];
 }
 
 /**
@@ -679,6 +711,115 @@ on fgAssertFront(what)
 	error "refused to " & what & ": " & f & " is frontmost, not Things — a keystroke goes to whatever owns the screen, so nothing was typed"
 end fgAssertFront`;
 
+/**
+ * THE MEASURED OBSERVABLES (VOPAT1 §4, docs/lab/vopat1-screen-reader-pattern.md).
+ *
+ * Every spec below names a notification Things was MEASURED to post for the
+ * actuation it settles, and a budget generous against that measurement — never a
+ * guess, and never a class the same campaign found silent (`AXLayoutChanged`
+ * never fires, for anything, VOPAT1-12). `fallbackDelayS` is the fixed delay the
+ * settle replaces, so a machine with no sidecar generates the script that
+ * shipped before this campaign, byte for byte.
+ */
+
+/** A pop-up's menu announces itself in 5.1 ms (VOPAT1 §4.2 f). */
+const SETTLE_MENU_OPEN: SettleSpec = {
+  what: "the pop-up's menu opening",
+  want: ["AXMenuOpened"],
+  timeoutMs: 1_500,
+};
+/**
+ * THE CLICK WAS CONSUMED — `AXMenuClosed`, measured at 348 ms inside the
+ * frequency selection's own sequence (VOPAT1 §4.2 g).
+ *
+ * This is the settle for a selection that changes NOTHING: clicking the item a
+ * pop-up already shows posts no `AXValueChanged`, because nothing changed. The
+ * menu still closes, and that is the observable — the app confirming it has
+ * taken the click and put its menu away.
+ *
+ * IT IS NOT COSMETIC, AND VOPAT2 LEARNED THAT THE HARD WAY. The first cut
+ * skipped the settle outright in the unchanged case, which took the
+ * `--after-completion` drive's frequency hop from 2244 ms to 140 ms — and MOVED
+ * the cost, because the next hop's first click on the unit pop-up was then
+ * dispatched while the app was still closing the menu, and was SWALLOWED: that
+ * hop's menu-open settle timed out at 1515 ms and the retry's click opened the
+ * menu in 4.1 ms. It is the RDLAT2 §7c lesson arriving from a third direction —
+ * an accidental settle was holding a real dependency together, and making the
+ * driver faster exposed it. The remedy is never to put the accident back: wait
+ * for the thing itself.
+ */
+const SETTLE_MENU_CLOSED: SettleSpec = {
+  what: "the pop-up's menu closing on the value it already held",
+  want: ["AXMenuClosed"],
+  timeoutMs: 1_500,
+};
+/**
+ * THE `Next:` POP-UP ABSORBING THE RULE (NEXTPOP1) — the one settle in this
+ * drive that is a WHOLE HOP, and the one the field could see.
+ *
+ * The maintainer watched a `make-repeating` on his M1 (2026-09-02, elapsed
+ * 10.5 s) and reported "a ~1.5 s visible pause between selecting the frequency
+ * and touching the `Next:` pop-up". That pause is this settle, and the reason it
+ * costs its whole budget is structural: the recompute is announced ~0.4 s after
+ * the ANCHOR step (DIAG4), and by the time this hop's own process has been
+ * spawned the announcement has already been and gone — so a wait that starts
+ * HERE has nothing left to see and re-reads the control twelve times to find
+ * that out.
+ *
+ * An observer does not have that problem, because it was already listening. The
+ * settle awaits `AXValueChanged` on an `AXPopUpButton` **since the mark taken
+ * before the step that CHANGED THE RULE** — an arrival that has already landed
+ * satisfies it instantly out of the ledger, which is the whole reason the mark
+ * is taken before an actuation rather than after it. That makes this the
+ * campaign's only CROSS-HOP settle, and the only one node performs itself: with
+ * a sidecar live the hop dispatches no osascript at all and reads no control,
+ * against one process spawn and up to thirteen content reads.
+ *
+ * SOFT, like every settle here. A recompute that never fires (a rule change that
+ * does not move the first occurrence — there is nothing to observe, NEXTPOP1's
+ * own note) spends the budget and proceeds, exactly as the polling form did.
+ */
+const SETTLE_OCCURRENCE_RECOMPUTE: SettleSpec = {
+  what: "the first-occurrence pop-up absorbing the rule change",
+  want: ["AXValueChanged:AXPopUpButton"],
+  timeoutMs: OCCURRENCE_SETTLE_MS,
+  // A QUIET WINDOW, not the first arrival — and this is the one place in the
+  // campaign where that distinction is load-bearing. An anchor selection
+  // announces its OWN pop-up value change immediately, and the `Next:` pop-up's
+  // recompute follows ~0.4 s later (DIAG4); both are `AXValueChanged` on an
+  // `AXPopUpButton` and a notification carries only a name and a role, so they
+  // are INDISTINGUISHABLE to the matcher. Returning on the first arrival would
+  // therefore return on the anchor's own change and let the next input land
+  // inside the recompute window — which is precisely the defect NEXTPOP1 exists
+  // to prevent, and a cancelled recompute never retries. So the settle waits
+  // until the app has stopped announcing pop-up changes for 250 ms, which spans
+  // both whatever their order, and still returns in ~300 ms when the anchor
+  // moved nothing further.
+  quietMs: 250,
+};
+/**
+ * Asking a field for focus is a closed loop: `AXFocusedUIElementChanged` arrives
+ * on the field in 27.6 ms (VOPAT1-13). This is what the 0.15 s sleep was for.
+ */
+const SETTLE_FOCUS: SettleSpec = {
+  what: "the field taking keyboard focus",
+  want: ["AXFocusedUIElementChanged:AXTextField", "AXFocusedUIElementChanged"],
+  timeoutMs: 1_000,
+  fallbackDelayS: 0.15,
+};
+/**
+ * A keystroke announces itself only if it LANDS: `AXValueChanged` on the field in
+ * 78.6 ms, and NOTHING AT ALL when focus is elsewhere (VOPAT1-14) — so the
+ * silence is itself the signal that the character went somewhere else, and the
+ * step's own read-back is what refuses. This is what the 0.1 s sleep was for.
+ */
+const SETTLE_TYPED: SettleSpec = {
+  what: "the field taking the typed value",
+  want: ["AXValueChanged:AXTextField"],
+  timeoutMs: 1_500,
+  fallbackDelayS: 0.1,
+};
+
 /** resolve-element: does the element exist right now? Returns "true"/"false". */
 export function axResolveScript(path: string): string {
   return `${SE} to return (exists (${path}))`;
@@ -827,9 +968,35 @@ end tell`;
 function pollSeconds(timeoutMs: number): number {
   return Math.max(1, Math.round(timeoutMs / 1000));
 }
-/** press: AXPress the element. */
-export function axPressScript(path: string): string {
-  return `${SE} to click (${path})`;
+/**
+ * press: AXPress the element — and, when the recipe declares what the press
+ * ANNOUNCES, wait to be told (VOPAT2).
+ *
+ * The step that matters here is `Items ▸ Repeat…`. Its dialog takes ~438 ms of
+ * the app's own time to present (VOPAT1 §4.2 e, within 4 % of RDLAT2's
+ * stopwatch), and the `dialog-open` step that follows used to discover that by
+ * asking `exists sheet 1` — and then `exists <detached window>` — every 50 ms
+ * until one answered. Nine rounds of two probes is eighteen System Events
+ * round-trips on a host where each one costs ~47 ms, spent learning something
+ * `AXSheetCreated` says once. The press now waits for that notification, and the
+ * census hop's first probe hits.
+ *
+ * SOFT (see {@link SettleInjector.soft}): the `dialog-open` step's own poll is
+ * retained as the oracle and is what refuses, in the words it always used. What
+ * the notification changes is when the drive stops waiting, not who decides.
+ */
+export function axPressScript(
+  path: string,
+  obs: SettleInjector = inertSettleInjector(),
+  settle?: SettleSpec,
+): string {
+  if (!obs.live || settle === undefined) return `${SE} to click (${path})`;
+  return `${obs.handlers()}
+
+${obs.mark("obsSeq", "")}
+${SE} to click (${path})
+${obs.soft("obsSeq", settle, "")}
+return "true"`;
 }
 /**
  * set-field-value: enter a value into the dialog's numeric text field (interval,
@@ -878,30 +1045,20 @@ export function axPressScript(path: string): string {
  * re-reads every control through its own address before the OK press, so a
  * wrongly-skipped field cannot commit.
  */
-export function axSetValueScript(path: string, value: string, attempts = 3): string {
+export function axSetValueScript(
+  path: string,
+  value: string,
+  attempts = 3,
+  obs: SettleInjector = inertSettleInjector(),
+): string {
   const v = escapeAppleScript(value);
   const n = Math.max(1, Math.trunc(attempts));
   return `${AX_FOCUS_GUARD_HANDLERS}
-
+${obs.live ? `\n${obs.handlers()}\n` : ""}
 ${SE}
   set tf to (${path})
 ${alreadyHoldsBlock("tf", v)}
-  set gotFocus to false
-  repeat ${n} times
-    my fgAssertFront("type \\"${v}\\" into the field")
-    set focused of tf to true
-    delay 0.15
-${focusedAssertBlock("tf")}
-      keystroke "${v}"
-      delay 0.1
-      key code 48
-      delay 0.2
-      try
-        if ((value of tf) as text) is "${v}" then return "OK"
-      end try
-    end if
-    delay 0.3
-  end repeat
+${typeLoopBlock("tf", v, `type \\"${v}\\" into the field`, n, obs)}
 ${focusRefusalTail(v)}
   error "field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
@@ -973,6 +1130,50 @@ function focusedAssertBlock(ref: string): string {
 function focusRefusalTail(escapedValue: string): string {
   return `  if not gotFocus then error "refused to type \\"${escapedValue}\\": the field did not take keyboard focus, so the keystrokes would have gone somewhere else"`;
 }
+
+/**
+ * THE TYPING LOOP, shared by all three typing primitives — focus, prove focus,
+ * type, Tab-commit, read the value back, retry (FGRD1 / UIC7 / BEEP1). One
+ * shape, so the law is in one place; `what` is only the phrase the frontmost
+ * guard's refusal uses.
+ *
+ * TWO OF ITS FOUR SLEEPS ARE NOW OBSERVABLES (VOPAT2). The 0.15 s after asking
+ * for focus becomes `AXFocusedUIElementChanged` on the field (measured 27.6 ms,
+ * VOPAT1-13), and the 0.1 s after the keystroke becomes `AXValueChanged` on the
+ * field (78.6 ms, VOPAT1-14). Both are SOFT: the `focused` assertion and the
+ * value read-back are the certified gates and still decide, so the notification
+ * only ends the wait early — a settle that hears nothing costs the loop one
+ * ordinary retry, exactly as a too-short sleep did.
+ *
+ * THE OTHER TWO SLEEPS STAY, deliberately. The 0.2 s after Tab is the commit
+ * itself, and the 0.3 s inter-attempt gap is FGRD1's. Neither has a measured
+ * observable, and a settle may not be written against a notification nobody has
+ * seen fire.
+ */
+function typeLoopBlock(
+  ref: string,
+  escapedValue: string,
+  what: string,
+  attempts: number,
+  obs: SettleInjector,
+): string {
+  return `  set gotFocus to false
+  repeat ${attempts} times
+    my fgAssertFront("${what}")
+${obs.mark("obsSeq", "    ")}${obs.live ? "\n" : ""}    set focused of ${ref} to true
+${obs.soft("obsSeq", SETTLE_FOCUS, "    ")}
+${focusedAssertBlock(ref)}
+${obs.mark("obsSeq", "      ")}${obs.live ? "\n" : ""}      keystroke "${escapedValue}"
+${obs.soft("obsSeq", SETTLE_TYPED, "      ")}
+      key code 48
+      delay 0.2
+      try
+        if ((value of ${ref}) as text) is "${escapedValue}" then return "OK"
+      end try
+    end if
+    delay 0.3
+  end repeat`;
+}
 /**
  * set-group-number: drive ONE of the Repeat dialog's two numeric fields —
  * the cadence INTERVAL or the ENDS-AFTER COUNT — addressed by the LABEL ROW it
@@ -1015,6 +1216,7 @@ export function axSetGroupNumberScript(
   attempts = 3,
   rowTolerance = ROW_TOLERANCE,
   expectation: CadenceExpectation | null = null,
+  obs: SettleInjector = inertSettleInjector(),
 ): string {
   const v = escapeAppleScript(value);
   const n = Math.max(1, Math.trunc(attempts));
@@ -1022,28 +1224,13 @@ export function axSetGroupNumberScript(
   return `${AX_CADENCE_HANDLERS}
 
 ${AX_FOCUS_GUARD_HANDLERS}
-
+${obs.live ? `\n${obs.handlers()}\n` : ""}
 ${SE}
   set g to (${groupPath})
   set cgSnapshot to my cgSettle(g, ${settleArgs(expectation)})
   set tf to my cgField(g, cgSnapshot, "${target}", ${tol})
 ${alreadyHoldsBlock("tf", v)}
-  set gotFocus to false
-  repeat ${n} times
-    my fgAssertFront("type \\"${v}\\" into the ${target} field")
-    set focused of tf to true
-    delay 0.15
-${focusedAssertBlock("tf")}
-      keystroke "${v}"
-      delay 0.1
-      key code 48
-      delay 0.2
-      try
-        if ((value of tf) as text) is "${v}" then return "OK"
-      end try
-    end if
-    delay 0.3
-  end repeat
+${typeLoopBlock("tf", v, `type \\"${v}\\" into the ${target} field`, n, obs)}
 ${focusRefusalTail(v)}
   error "the ${target} field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
@@ -1075,6 +1262,7 @@ export function axSetRowFieldScript(
   value: string,
   attempts = 3,
   rowTolerance = ROW_TOLERANCE,
+  obs: SettleInjector = inertSettleInjector(),
 ): string {
   const v = escapeAppleScript(value);
   const label = escapeAppleScript(rowLabel);
@@ -1083,28 +1271,13 @@ export function axSetRowFieldScript(
   return `${AX_CADENCE_HANDLERS}
 
 ${AX_FOCUS_GUARD_HANDLERS}
-
+${obs.live ? `\n${obs.handlers()}\n` : ""}
 ${SE}
   set c to (${containerPath})
   set rfSnapshot to my cgSnap(c)
   set tf to my rfField(c, rfSnapshot, "${label}", ${tol})
 ${alreadyHoldsBlock("tf", v)}
-  set gotFocus to false
-  repeat ${n} times
-    my fgAssertFront("type \\"${v}\\" into the \\"${label}\\" field")
-    set focused of tf to true
-    delay 0.15
-${focusedAssertBlock("tf")}
-      keystroke "${v}"
-      delay 0.1
-      key code 48
-      delay 0.2
-      try
-        if ((value of tf) as text) is "${v}" then return "OK"
-      end try
-    end if
-    delay 0.3
-  end repeat
+${typeLoopBlock("tf", v, `type \\"${v}\\" into the \\"${label}\\" field`, n, obs)}
 ${focusRefusalTail(v)}
   error "the \\"${label}\\" field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
@@ -1496,8 +1669,13 @@ end tell`;
  * (never once it is open) opens it reliably without toggling it back shut. One
  * stable command shape per primitive.
  */
-export function axSelectPopupScript(path: string, value: string): string {
-  return axSelectPopupCandidatesScript(path, [value]);
+export function axSelectPopupScript(
+  path: string,
+  value: string,
+  obs: SettleInjector = inertSettleInjector(),
+  settle?: SettleSpec,
+): string {
+  return axSelectPopupCandidatesScript(path, [value], obs, settle);
 }
 /**
  * select-popup with a CANDIDATE LABEL LIST: open the pop-up (self-healing, as
@@ -1511,22 +1689,83 @@ export function axSelectPopupScript(path: string, value: string): string {
  * found`). Trying both labels makes the selection order-independent and
  * plural-safe. One stable command shape per primitive.
  */
-export function axSelectPopupCandidatesScript(path: string, values: string[]): string {
+export function axSelectPopupCandidatesScript(
+  path: string,
+  values: string[],
+  obs: SettleInjector = inertSettleInjector(),
+  settle?: SettleSpec,
+): string {
   const list = values.map((v) => `"${escapeAppleScript(v)}"`).join(", ");
   // The menu is WAITED FOR, not slept on (DRVLAT1, issue #633): the old loop paid
   // a flat 0.3s after every click before it would look again, so the common case —
   // one click, menu up in well under that — spent the remainder of the settle
   // doing nothing. The click cadence is unchanged (one click per round, never a
   // second click into a menu that is opening — BEEP1); only the looking is finer.
-  return `${SE}
-  set pu to (${path})
-  repeat 20 times
-    if (exists menu 1 of pu) then exit repeat
+  //
+  // AND NOW IT IS TOLD (VOPAT2). The menu announces `AXMenuOpened` 5.1 ms after
+  // the press (VOPAT1-11) — against an inner poll that could not answer sooner
+  // than its own 50 ms floor and asked the tree once per round to find out. The
+  // `exists menu 1` check stays as the round's verdict: a notification says WHEN,
+  // not WHAT, and BEEP1's one-click-per-round cadence is unchanged.
+  const openRound = obs.live
+    ? `${obs.mark("obsSeq", "    ")}
     click pu
+${obs.soft("obsSeq", SETTLE_MENU_OPEN, "    ")}`
+    : `    click pu
     repeat 6 times
       if (exists menu 1 of pu) then exit repeat
       delay ${IN_SCRIPT_POLL_S}
-    end repeat
+    end repeat`;
+  // WHAT THE SELECTION ANNOUNCES, when the recipe knows (VOPAT2). Picking a
+  // frequency REBUILDS the cadence group — three controls become nine — and the
+  // step that types the interval next used to discover that by re-reading the
+  // group until two reads agreed, which is the gate RDLAT2 §7c found was sized by
+  // its own read cost. The rebuild's observable is `AXValueChanged` on the pop-up
+  // this step just set arriving together with the `AXUIElementDestroyed` burst
+  // that tears the old children down (both ~535 ms, VOPAT1-12): *the control I
+  // set now reports the value I set, and the children it had are gone*. Waiting
+  // for it HERE means the next step's `cgSettle` finds a group that has finished
+  // moving and agrees on its first pair of reads.
+  //
+  // SOFT: `cgSettle` is retained unchanged as the oracle and is what refuses.
+  //
+  // AND IT IS SKIPPED WHEN THE VALUE DOES NOT CHANGE (VOPAT2 §trace). `AXValue
+  // Changed` means the value CHANGED: clicking the item a pop-up already shows
+  // posts nothing at all, and the settle then burns its whole budget on a drive
+  // that is behaving perfectly. MEASURED on golden-v4: the `--after-completion`
+  // shape — the maintainer's own command — opens the dialog on `after completion`
+  // and selects `after completion`, and the settle timed out at 2005 ms having
+  // seen 3 unrelated arrivals. That is not a hazard (the settle is soft, so
+  // `cgSettle` still decided), but it is two wasted seconds on the commonest
+  // shape.
+  //
+  // So the pop-up's value is READ ONCE before the click and the settle is armed
+  // only when the click will actually move it. One content read against two
+  // seconds, and it is the same read-back-first discipline the typing primitives
+  // already use for the same reason (issue #620 item 7).
+  const willSettle = obs.live && settle !== undefined;
+  const preread = willSettle
+    ? `  set puWas to ""
+  try
+    set puWas to (value of pu) as text
+  end try
+  log "${AX_ELEMS_LOG_PREFIX}1"
+${obs.mark("obsSeq", "  ")}
+`
+    : "";
+  const afterSelect = willSettle
+    ? `
+      if (contents of candidate) is not puWas then
+${obs.soft("obsSeq", settle as SettleSpec, "        ")}
+      else
+${obs.soft("obsSeq", SETTLE_MENU_CLOSED, "        ")}
+      end if`
+    : "";
+  return `${obs.live ? `${obs.handlers()}\n\n` : ""}${SE}
+  set pu to (${path})
+  repeat 20 times
+    if (exists menu 1 of pu) then exit repeat
+${openRound}
   end repeat
   -- The menu's items are realized by the search below, which matches them by
   -- TITLE — so the whole menu is content-touched however early the match hits
@@ -1534,9 +1773,9 @@ export function axSelectPopupCandidatesScript(path: string, values: string[]): s
   try
     log "${AX_ELEMS_LOG_PREFIX}" & (count of menu items of menu 1 of pu)
   end try
-  repeat with candidate in {${list}}
+${preread}  repeat with candidate in {${list}}
     if (exists menu item candidate of menu 1 of pu) then
-      click menu item candidate of menu 1 of pu
+      click menu item candidate of menu 1 of pu${afterSelect}
       return
     end if
   end repeat
@@ -1568,37 +1807,65 @@ end tell`;
  */
 export function axProbeDialogShapeScript(groupPath: string, rowTolerance = 8): string {
   const tol = Math.max(1, Math.trunc(rowTolerance));
+  // ONE INVENTORY, FOUR APPLE EVENTS (the RDLAT2 §4(a) plural-read law, applied
+  // to the one script in this drive that never got it). It used to ask the tree
+  // `count of static texts`, then `value of static text i` and `position of
+  // static text i` for each, then `count of pop up buttons`, then a position per
+  // pop-up — MEASURED at 15 Apple events for a weekly cadence group, which is
+  // ~700 ms on the maintainer's M1 at RDLAT2's fitted ~47 ms per round-trip, to
+  // answer one structural question. AppleScript answers a PLURAL property in one
+  // event, so the same discrimination — which row the `Next:` label sits on and
+  // what class of control shares it — costs three, or four when it has to look at
+  // the legacy date areas.
+  //
+  // THE ORDER IS DELIBERATE AND FIELD-CONFIRMED: `next-popup` is tested first
+  // because it is the norm (Things 3.23+, "in almost all scenarios" — the
+  // maintainer, 2026-09-02), and `legacy` is the retained fallback for ≤3.22.
+  // Both remain POSITIVE matches and an unrecognized third dialog still returns
+  // "unknown" so the drive refuses rather than pressing structural indices into a
+  // tree it cannot identify — that property is what the step is for, and it is
+  // not worth one hop to assume instead.
   return `${SE}
   set g to (${groupPath})
+  set sv to {}
+  set sp to {}
+  try
+    set sv to (value of static texts of g)
+    set sp to (position of static texts of g)
+  end try
+  -- Two reads of a class are two events, so a tree that changed between them can
+  -- return mismatched lengths. That is not a shape, it is a half-picture, and it
+  -- fails closed (cgSnap's own rule).
+  if ((count of sv) is not (count of sp)) then return "unknown"
+  log "${AX_ELEMS_LOG_PREFIX}" & (count of sv)
   set nextY to missing value
-  set nStatic to (count of static texts of g)
-  repeat with i from 1 to nStatic
-    set v to ""
-    try
-      set v to (value of static text i of g) as text
-    end try
-    if v is "Next:" then
-      set p to position of static text i of g
-      set nextY to item 2 of p
+  repeat with i from 1 to (count of sv)
+    set v to contents of (item i of sv)
+    if v is not missing value then
+      try
+        if (v as text) is "Next:" then set nextY to (item 2 of (contents of (item i of sp)))
+      end try
     end if
   end repeat
   if nextY is missing value then return "unknown"
-  set nPop to (count of pop up buttons of g)
-  repeat with i from 1 to nPop
-    set p to position of pop up button i of g
-    set dy to (item 2 of p) - nextY
+  set pp to {}
+  try
+    set pp to (position of pop up buttons of g)
+  end try
+  repeat with p in pp
+    set dy to (item 2 of (contents of p)) - nextY
     if dy < 0 then set dy to -dy
     if dy <= ${tol} then return "next-popup"
   end repeat
+  set ap to {}
   try
-    set areas to (every UI element of g whose role is "AXDateTimeArea")
-    repeat with i from 1 to (count of areas)
-      set p to position of (item i of areas)
-      set dy to (item 2 of p) - nextY
-      if dy < 0 then set dy to -dy
-      if dy <= ${tol} then return "legacy"
-    end repeat
+    set ap to (position of (every UI element of g whose role is "AXDateTimeArea"))
   end try
+  repeat with p in ap
+    set dy to (item 2 of (contents of p)) - nextY
+    if dy < 0 then set dy to -dy
+    if dy <= ${tol} then return "legacy"
+  end repeat
   return "unknown"
 end tell`;
 }
@@ -1652,6 +1919,46 @@ set rightNow to current date
 set isToday to ((year of rightNow) is wantY and ((month of rightNow) as integer) is wantM and (day of rightNow) is wantD)
 ${SE}
   set pu to (${popupPath})
+  -- READ THE POP-UP BEFORE OPENING IT (field report, 2026-09-02: "the drive
+  -- opens the Next: pop-up only to select the option that was ALREADY
+  -- selected"). The commonest first occurrence a caller asks for is the one the
+  -- rule already produces, and the whole menu walk below then exists to click
+  -- the item the control is already showing — a menu open, a cascade of title
+  -- reads, a click, a settle and a read-back, to arrive where it started.
+  --
+  -- ONE content read on the ONE control decides it. This is the same
+  -- read-back-first discipline as the typing primitives (issue #620 item 7), and
+  -- it weakens no verification: nothing is skipped except an ACTUATION whose
+  -- outcome is already the current state, and the drive's oracles are unchanged
+  -- — the pre-commit audit still re-reads this pop-up through its own address,
+  -- and the write pipeline still verifies the honored first occurrence against
+  -- the database (#508).
+  log "${AX_ELEMS_LOG_PREFIX}1"
+  set already to ""
+  try
+    set already to (value of pu) as text
+  end try
+  set alreadyYMD to my parsedYMD(already)
+  set alreadySatisfied to false
+  if alreadyYMD is not missing value then
+    if (item 1 of alreadyYMD) is wantY and (item 2 of alreadyYMD) is wantM and (item 3 of alreadyYMD) is wantD then
+      set alreadySatisfied to true
+    end if
+  else if isToday then
+    -- THE "Today" LABEL. The pop-up's own options are the localized word for
+    -- today, then the rule's upcoming occurrences as dates, then a More… item;
+    -- so a value that will not PARSE as a date is the today item, and the app is
+    -- saying the first occurrence is today. That inference is not new here — the
+    -- menu walk below already takes an unparseable FIRST ITEM to be today and
+    -- clicks it — this applies the same law to the same control's value, which
+    -- matters because make-repeating defaults its first occurrence to the item's
+    -- own scheduled date and "today" is the commonest one there is.
+    if already is not "" then set alreadySatisfied to true
+  end if
+  if alreadySatisfied then
+    log "${AX_SETTLE_LOG_PREFIX}the Next: pop-up already showed the requested first occurrence ~ skip reason=next-already-satisfied"
+    return "${OK_ALREADY}"
+  end if
   repeat 20 times
     if (exists menu 1 of pu) then exit repeat
     click pu
@@ -1763,6 +2070,7 @@ export function axSettleOccurrencesScript(
   popupPath: string,
   budgetMs = OCCURRENCE_SETTLE_MS,
   pollMs = OCCURRENCE_POLL_MS,
+  obs: SettleInjector = inertSettleInjector(),
 ): string {
   const poll = Math.max(50, Math.trunc(pollMs)) / 1000;
   const reads = Math.max(1, Math.ceil(Math.max(1, Math.trunc(budgetMs)) / Math.max(50, pollMs)));
@@ -1770,6 +2078,26 @@ export function axSettleOccurrencesScript(
   // taken too — `set before to …` does not even COMPILE (osacompile: "Expected
   // expression but found “to”"), and osascript reports that as a drive failure at
   // run time, mid-dialog. Hence the deliberately dull variable names.
+  if (obs.live) {
+    // THE SAME QUESTION, ASKED ONCE (VOPAT2). The poll below re-READS the pop-up
+    // up to twelve times to notice a recompute the app announces with a single
+    // `AXValueChanged` on that very control. Two reads replace thirteen, and the
+    // verdict is still decided by the VALUE rather than by the notification: a
+    // recompute that landed before this hop began reads back identical either
+    // way, which is exactly what the polling form reported too.
+    return `${obs.handlers()}
+
+${SE}
+  set wasValue to (value of ${popupPath}) as text
+end tell
+${obs.mark("obsSeq", "")}
+${obs.soft("obsSeq", { what: "the first-occurrence pop-up recomputing", want: ["AXValueChanged:AXPopUpButton"], timeoutMs: Math.max(1, Math.trunc(budgetMs)) }, "")}
+${SE}
+  set curValue to (value of ${popupPath}) as text
+  if curValue is not wasValue then return "moved: " & wasValue & " -> " & curValue
+  return "unchanged: " & wasValue
+end tell`;
+  }
   return `${SE}
   set wasValue to (value of ${popupPath}) as text
   repeat ${reads} times
@@ -2900,13 +3228,17 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
   // log them unconditionally (so the count survives deputy routing), and a
   // refusal a caller reads must never carry the machinery.
   const elems = parseElemLog(err === null ? res.stderr : err.text);
+  // The settle records come off the SAME stream and are stripped the same way,
+  // for the same reason: a refusal a caller reads must never carry machinery.
+  const settled = parseSettleLog(elems.stderr);
   return {
     ok: res.exitCode === 0 && res.timedOut !== true,
     stdout: out === null ? res.stdout : out.text,
-    stderr: elems.stderr,
+    stderr: settled.stderr,
     ...(res.timedOut === true && { timedOut: true }),
     ...(out !== null && err !== null && { axOps: out.axOps + err.axOps }),
     ...(elems.axElems !== null && { axElems: elems.axElems }),
+    ...(settled.settles.length > 0 && { settles: settled.settles }),
   };
 }
 
@@ -2970,6 +3302,9 @@ function tracingRun(inner: UiRunner): UiRunner {
       // The elements whose content this hop realized — the term the field pays
       // ~115 ms each for, and the one a plural read hides from an event count.
       ...(res.axElems !== undefined && { axElems: res.axElems }),
+      // Every notification this hop waited on, with the latency the APP took to
+      // announce (VOPAT2) — the term a settled drive should end up bound by.
+      ...(res.settles !== undefined && { settles: res.settles }),
       ok: res.ok,
       timedOut: res.timedOut === true,
     }));
@@ -3274,7 +3609,11 @@ function refusal(detail: string): ExecuteResult {
  * the acting hop. Steps whose script is JXA, or that resolve their own target,
  * are unaffected.
  */
-export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
+export function commandForStep(
+  step: UiStep,
+  targetUuid: string,
+  obs: SettleInjector = inertSettleInjector(),
+): UiCommand {
   if (step.primitive === "wait") {
     // The whole wait is ONE hop: the candidates are polled in-script until one of
     // them exists or the step's own window elapses (DRVLAT1).
@@ -3296,7 +3635,7 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
   }
   if (step.pathCandidates !== undefined && step.path === undefined) {
     const candidates = step.pathCandidates;
-    const inner = commandForStep({ ...step, path: STEP_ELEMENT_REF }, targetUuid);
+    const inner = commandForStep({ ...step, path: STEP_ELEMENT_REF }, targetUuid, obs);
     // Only an AppleScript body can take the AppleScript prelude; a JXA step
     // (set-datetime, the pointer primitives) resolves its own target anyway.
     if (inner.lang === "javascript" || typeof inner.script !== "string" || inner.script === "") {
@@ -3313,14 +3652,18 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
     case "activate":
       return { primitive: "activate", label: step.label, script: axActivateScript() };
     case "press":
-      return { primitive: "press", label: step.label, script: axPressScript(step.path ?? "") };
+      return {
+        primitive: "press",
+        label: step.label,
+        script: axPressScript(step.path ?? "", obs, step.settle),
+      };
     case "resolve":
       return { primitive: "resolve", label: step.label, script: axResolveScript(step.path ?? "") };
     case "set-value":
       return {
         primitive: "set-value",
         label: step.label,
-        script: axSetValueScript(step.path ?? "", step.value ?? ""),
+        script: axSetValueScript(step.path ?? "", step.value ?? "", undefined, obs),
       };
     case "set-group-number":
       return {
@@ -3335,13 +3678,21 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
           step.cadence === undefined
             ? null
             : cadenceExpectationFor(step.cadence, installedThingsVersion()),
+          obs,
         ),
       };
     case "set-row-field":
       return {
         primitive: "set-row-field",
         label: step.label,
-        script: axSetRowFieldScript(step.path ?? "", step.rowLabel ?? "", step.value ?? ""),
+        script: axSetRowFieldScript(
+          step.path ?? "",
+          step.rowLabel ?? "",
+          step.value ?? "",
+          undefined,
+          undefined,
+          obs,
+        ),
       };
     case "audit-dialog":
       // Compiled by driveDialogAudit, which resolves the live dialog shell and the
@@ -3364,8 +3715,8 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         label: step.label,
         script:
           step.valueCandidates !== undefined
-            ? axSelectPopupCandidatesScript(step.path ?? "", step.valueCandidates)
-            : axSelectPopupScript(step.path ?? "", step.value ?? ""),
+            ? axSelectPopupCandidatesScript(step.path ?? "", step.valueCandidates, obs, step.settle)
+            : axSelectPopupScript(step.path ?? "", step.value ?? "", obs, step.settle),
       };
     case "set-datetime":
       return {
@@ -3396,7 +3747,7 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
       return {
         primitive: "settle-occurrences",
         label: step.label,
-        script: axSettleOccurrencesScript(step.path ?? ""),
+        script: axSettleOccurrencesScript(step.path ?? "", undefined, undefined, obs),
       };
     case "converge-weekdays":
       return {
@@ -3716,6 +4067,25 @@ function auditFailureText(res: UiRunResult): string {
   return "the Repeat dialog could not be re-read before committing; nothing was committed";
 }
 
+/**
+ * Does this recipe ask to be TOLD about anything? Only a recipe with at least
+ * one measured observable is worth a sidecar — a menu-only pause/resume drive
+ * spawns nothing (VOPAT2).
+ */
+function recipeWantsObserver(recipe: UiRecipe): boolean {
+  return recipe.steps.some((step) => step.settle !== undefined);
+}
+
+/**
+ * The drive, with the settle sidecar's LIFETIME wrapped around it (VOPAT2).
+ *
+ * The sidecar is an observing process, and the one thing an observing process
+ * must never do is outlive what it was observing. So it is stopped in a
+ * `finally` that no return path, refusal, watchdog stop or thrown error can
+ * skip — and, because a `finally` is not a guarantee against SIGKILL, the
+ * sidecar independently bounds itself with an absolute TTL and a no-request
+ * idle timeout. Belt, braces, and a third thing.
+ */
 async function drive(
   recipe: UiRecipe,
   rawRun: UiRunner,
@@ -3723,6 +4093,28 @@ async function drive(
   budgetMs: number = DEFAULT_UI_DRIVE_BUDGET_MS,
   reachCache: ReachabilityProbeCache = createReachabilityCache(),
 ): Promise<ExecuteResult> {
+  const observer: { session: ObserverSession | null } = { session: null };
+  try {
+    return await driveSteps(recipe, rawRun, aux, budgetMs, reachCache, observer);
+  } finally {
+    if (observer.session !== null) await stopObserver(observer.session);
+  }
+}
+
+async function driveSteps(
+  recipe: UiRecipe,
+  rawRun: UiRunner,
+  aux: UiDriveAux,
+  budgetMs: number,
+  reachCache: ReachabilityProbeCache,
+  observer: { session: ObserverSession | null },
+): Promise<ExecuteResult> {
+  /**
+   * The settle injector, read FRESH at every use: the sidecar is armed part-way
+   * through this function, so a captured value would be the inert one for the
+   * whole drive.
+   */
+  const obs = (): SettleInjector => settleInjectorFor(observer.session);
   // Every step below dispatches through the PER-STEP FOCUS GUARD (issue #620);
   // the latch records the dialog this drive is observed driving, so the cleanup
   // ladder can tell our own half-open dialog from one the user opened after us.
@@ -3859,7 +4251,7 @@ async function drive(
   ) {
     const step = recipe.steps[idx] as UiStep;
     // the preamble steps are strictly sequential (select, then foreground) and each must land before the next
-    const res = await run(commandForStep(step, recipe.targetUuid), STEP_TIMEOUT_MS);
+    const res = await run(commandForStep(step, recipe.targetUuid, obs()), STEP_TIMEOUT_MS);
     if (!res.ok) {
       return partial(
         step.label,
@@ -3912,6 +4304,27 @@ async function drive(
         "app disables its menu bar, ignores keyboard input aimed at anything else, and " +
         `${SYNC_GATE_WARNING}. Dismiss it in Things (click Cancel, or press Escape with Things in ` +
         "front), then run the same command again. Nothing was pressed.",
+    );
+  }
+
+  // 0⅞. ARM THE SETTLE OBSERVER (VOPAT2, #676). Here and nowhere earlier: the
+  //      preamble has proved Things is running and reachable, the preflight has
+  //      proved no foreign dialog is standing, and nothing has been pressed yet —
+  //      so the ledger starts empty and every arrival from this point belongs to
+  //      an actuation this drive made (VOPAT1-6: Things is silent when nothing
+  //      happens). A recipe with no measured observable spawns nothing.
+  //
+  //      A NULL SESSION IS NOT A FAILURE. No Command Line Tools, no python3, the
+  //      observer switched off, a socket that never answered — each leaves every
+  //      generated script byte-identical to the polling one that shipped before
+  //      this campaign, with one trace record naming the reason. Only an ARMED
+  //      settle that times out fails closed.
+  if (recipeWantsObserver(recipe)) {
+    observer.session = await startObserver((command, timeoutMs) =>
+      rawRun(
+        { primitive: "observer-spawn", label: command.label, script: command.script },
+        timeoutMs,
+      ),
     );
   }
 
@@ -3968,6 +4381,14 @@ async function drive(
   // pre-commit audit spends a hop resolving one — the behavior that shipped
   // before this campaign, and the behavior an unrecognized app build keeps.
   let shellIndex: number | null = null;
+  /**
+   * The settle observer's ledger sequence marked immediately BEFORE the step just
+   * dispatched, and before the one before it (VOPAT2). A cross-hop settle awaits
+   * since the EARLIER of the two, because the actuation whose announcement it
+   * wants for was the previous step's.
+   */
+  let markBeforeStep: number | null = null;
+  let markBeforePrev: number | null = null;
   for (let i = idx; i < recipe.steps.length; i += 1) {
     let step = recipe.steps[i] as UiStep;
     // Shape-gated step: the recipe emits BOTH the legacy and the 3.23 drive for a
@@ -4017,7 +4438,7 @@ async function drive(
       // dialog opening as an attached sheet OR a detached AXUnknown window) — the
       // whole poll inside ONE hop (DRVLAT1).
       // steps are strictly sequential: this wait must resolve before the step that acts on the awaited element runs
-      const res = await run(commandForStep(step, recipe.targetUuid), STEP_TIMEOUT_MS);
+      const res = await run(commandForStep(step, recipe.targetUuid, obs()), STEP_TIMEOUT_MS);
       const ok = res.ok && res.stdout.trim() === "true";
       if (!ok) {
         // the abort keystroke must land (and be verified) before returning the partial-state report
@@ -4034,7 +4455,7 @@ async function drive(
       // an app update has redesigned it, and structural indices must not be
       // pressed into an unknown tree); or it matched, and the rest of the drive
       // addresses the shell that opened instead of re-discovering it.
-      const res = await run(commandForStep(step, recipe.targetUuid), STEP_TIMEOUT_MS);
+      const res = await run(commandForStep(step, recipe.targetUuid, obs()), STEP_TIMEOUT_MS);
       const snapshot = res.ok ? parseDialogOpenSnapshot(res.stdout) : null;
       if (snapshot === null) {
         const clear = await clearNow();
@@ -4126,7 +4547,46 @@ async function drive(
     // commandForStep / axCandidatePrelude. A miss raises CANDIDATES_MISSED there
     // and lands on this step's ordinary failure path, with the same wording and
     // the same clean abort it had when the resolution was its own hop (DRVLAT1).
-    const command = commandForStep(step, recipe.targetUuid);
+    // THE LEDGER MARK, TAKEN BEFORE THE ACTUATION (VOPAT2). A settle whose
+    // observable belongs to an EARLIER step — the `Next:` pop-up's recompute is
+    // announced ~0.4 s after the anchor selection, long before the hop that waits
+    // for it exists — can only be satisfied if something was already listening at
+    // the moment the actuation happened. So every step's dispatch is bracketed by
+    // a mark, and the previous step's mark is kept: a cross-hop settle awaits
+    // since THAT, and an arrival that has already landed satisfies it out of the
+    // ledger instantly. One sub-millisecond socket round-trip per step.
+    if (observer.session !== null) {
+      markBeforePrev = markBeforeStep;
+      markBeforeStep = await observerMark(observer.session);
+    }
+    if (step.primitive === "settle-occurrences" && observer.session !== null) {
+      // The whole hop IS the wait, so with a sidecar live it dispatches NOTHING:
+      // no osascript, no content read. See SETTLE_OCCURRENCE_RECOMPUTE.
+      const since = markBeforePrev ?? markBeforeStep ?? 0;
+      // AND IT IS SKIPPED WHEN THE PREVIOUS STEP ACTUATED NOTHING. Things says
+      // nothing when nothing happens (VOPAT1-6), so zero arrivals since the mark
+      // taken before that step means it changed no state — a weekday set that
+      // already matched, an anchor already on the requested day — and a rule that
+      // did not change has no recompute to absorb. MEASURED: the field's own
+      // command shape reaches here with `seen=0` (the scheduled date's weekday is
+      // already the weekly default), and the polling form spent its whole 1.66 s
+      // hop discovering that by re-reading the control twelve times.
+      const seen = await observerCount(observer.session, since);
+      if (seen === 0) {
+        trace(() => ({
+          phase: "ui-settle",
+          what: SETTLE_OCCURRENCE_RECOMPUTE.what,
+          ok: true,
+          skipped: "nothing-announced",
+          since,
+        }));
+      } else {
+        await observerAwait(observer.session, since, SETTLE_OCCURRENCE_RECOMPUTE);
+      }
+      done.push(step.label);
+      continue;
+    }
+    const command = commandForStep(step, recipe.targetUuid, obs());
     if (step.primitive === "probe-dialog-shape") {
       // MEASURE the dialog (RDLG2) before any shape-dependent control is touched.
       // A shape we do not recognize refuses the drive with the dialog cleared —
@@ -4151,6 +4611,18 @@ async function drive(
         );
       }
       dialogShape = verdict;
+      // THE VERDICT, IN THE TRACE (RDLAT2's census law: a change to what the
+      // driver READS is certified by reading it back). VOPAT2 rewrote this probe
+      // from 15 singular Apple events into three plural ones, so what it decides
+      // has to be visible per drive rather than only in the step trail.
+      trace(() => ({
+        phase: "dialog-shape",
+        event: "probe",
+        label: step.label,
+        shape: verdict,
+        ...(res.axOps !== undefined && { axOps: res.axOps }),
+        ...(res.axElems !== undefined && { axElems: res.axElems }),
+      }));
       done.push(`${step.label} (${verdict})`);
       continue;
     }
