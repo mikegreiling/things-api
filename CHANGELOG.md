@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fixed — setting a repeat frequency and its interval no longer races the dialog's own rebuild.** Changing the frequency makes Things rebuild that section of the Repeat dialog. The command went looking for the interval field before the rebuild had happened, found the *previous* layout, and picked its target out of that. It worked — the value it typed survived the rebuild, and the check before committing read the correct number back out — but the field was chosen from a stale picture of the dialog, which is precisely the class of mistake that once wrote an interval into the wrong box. It now waits for the rebuilt section to actually appear before deciding which field to type into.
+
+  Found by counting, not by a failure: a new per-step count of how many controls each step reads came back at 17 where the dialog's own structure demanded about 39, and the missing ones were the controls the rebuild had not created yet.
+
+- **Added — `THINGS_API_TRACE=1` now records how many controls each step of a GUI-driving command reads.** Alongside how long a step took, its trace record now carries how many distinct dialog controls it read the content of. On a real Mac that count is the better predictor of how long a step will take: reading a control's *contents* makes the app build that part of its interface on demand, while reading positions and sizes is free. Unlike the accessibility round-trip counter added in the same release, this one needs no extra switch and works with the helpers running.
+
+  If you are reporting that a repeat command is slow, a run with `THINGS_API_TRACE=1` now says both what your machine cost and what any machine would.
+
 ## 0.20.5 — 2026-09-02
 
 - **Improved — making a to-do repeat is faster, and the speed came from asking the dialog fewer questions.** Every command that drives Things' Repeat dialog — `make-repeating`, `add-repeating`, `reschedule-repeat`, and the project versions of each — now reads the dialog in a fraction of the round-trips it used to.

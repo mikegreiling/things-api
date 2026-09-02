@@ -51,6 +51,7 @@ import {
   shapeManifestCoversVersion,
 } from "./ui-shape.ts";
 import {
+  AX_ELEMS_LOG_PREFIX,
   AX_DIALOG_SHELL_SNIPPET,
   axFocusGuardPrelude,
   CENSUS_TIMEOUT_MS,
@@ -202,6 +203,14 @@ export interface UiRunResult {
    * them is therefore the only per-hop number that transfers between hosts.
    */
   axOps?: number;
+  /**
+   * DISTINCT CONTROLS whose CONTENT this hop read (RDLAT2). Absent when the hop
+   * reported none. This is the term that predicts a field wall time — see
+   * {@link AX_ELEMS_LOG_PREFIX} — and unlike {@link axOps} it needs no
+   * environment switch and survives deputy routing, because the scripts report
+   * it themselves.
+   */
+  axElems?: number;
 }
 
 /**
@@ -225,6 +234,57 @@ export interface UiRunResult {
  * spawns osascript itself and the counts appear.
  */
 export const AX_COUNT_ENV = "THINGS_API_AX_COUNT";
+
+/**
+ * THE ELEMENT-REALIZATION COUNTER (RDLAT2, field measurement 2026-09-02).
+ *
+ * Counting Apple events was the wrong unit, and the maintainer's sidebar probe
+ * says why. A single attribute read costs 0.12 ms through the JXA bridge and
+ * 0.05 ms through native ctypes — the IPC is not the cost. What costs is the app
+ * REALIZING a view's content when Accessibility asks what is in it: ~115 ms per
+ * element on a real Retina display, paid on the first content-bearing touch
+ * (AXChildren / AXDescription / AXValue), paid AGAIN on a repeat sweep because
+ * the app discards what it realized, and INDEPENDENT of tree depth and of how
+ * many calls the sweep makes. A 174-row sidebar cost ~20 s at depth 2 (1,841
+ * calls) and ~20 s at depth 6 (2,081 calls): the call count moved 13% and the
+ * wall time did not move at all.
+ *
+ * So the number that predicts a field wall time is HOW MANY DISTINCT CONTROLS A
+ * STEP READS THE CONTENT OF — and a plural read, the very thing that makes this
+ * driver cheap in Apple events, touches N of them in ONE event. An event count
+ * therefore under-reports exactly where the field pays most.
+ *
+ * Every script that reads control CONTENT logs how many controls that was.
+ * Geometry (`position`, `size`) and `role` are NOT counted: they are answered
+ * out of the layout the app already holds, and measured free — a 174-row
+ * geometry sweep is ~2 ms against ~20 s for the same rows' content.
+ *
+ * Unlike {@link AX_COUNT_ENV}, this rides the script's own stderr rather than an
+ * environment variable, so it works through the deputy and needs nothing but
+ * `THINGS_API_TRACE=1`.
+ */
+export { AX_ELEMS_LOG_PREFIX };
+
+/**
+ * Sum every element-realization line out of a hop's stderr, and REMOVE them — a
+ * refusal a caller reads must never carry the machinery. Returns null when the
+ * hop logged none, so "touched no content" and "does not report" stay
+ * distinguishable.
+ */
+export function parseElemLog(stderr: string): { axElems: number | null; stderr: string } {
+  const kept: string[] = [];
+  let total: number | null = null;
+  for (const line of stderr.split(/\r?\n/)) {
+    const at = line.indexOf(AX_ELEMS_LOG_PREFIX);
+    if (at >= 0) {
+      const n = Number.parseInt(line.slice(at + AX_ELEMS_LOG_PREFIX.length).trim(), 10);
+      if (Number.isFinite(n)) total = (total ?? 0) + n;
+      continue;
+    }
+    kept.push(line);
+  }
+  return { axElems: total, stderr: kept.join("\n").trim() };
+}
 
 /** One `AEDebugSends` line: `{core,cnte target='psn '[System Events] {…}`. */
 const AE_SEND_LINE = /^\{\S+\s+target=/;
@@ -383,6 +443,12 @@ const AX_CADENCE_HANDLERS = `on cgSnap(c)
     end try
   end tell
   set ok to ((count of sv) is (count of sp)) and ((count of fv) is (count of fp))
+  -- REPORT WHAT THIS COST (RDLAT2). The two VALUE reads realize every static
+  -- text and every numeric field in the container; the two POSITION reads are
+  -- answered out of the layout the app already holds and are free. On the
+  -- maintainer's Mac the realized ones are ~115 ms each, so this line is the
+  -- only per-hop number that predicts a field wall time.
+  log "${AX_ELEMS_LOG_PREFIX}" & ((count of sv) + (count of fv))
   return {my cgTexts(sv), my cgYs(sp), my cgTexts(fv), my cgYs(fp), ok}
 end cgSnap
 
@@ -480,9 +546,11 @@ on cgMatches(snap, wantFields, need, forbid)
   -- THE SHAPE MANIFEST'S CHECK (RDLAT2, src/write/vectors/ui-shape.ts): does this
   -- inventory look like the state the drive has just produced? \`wantFields\` < 0
   -- means the caller has no expectation for this state, so nothing is asserted.
-  if wantFields < 0 then return false
+  if wantFields < -1 then return false
   if not (my cgValid(snap)) then return false
-  if (count of (item 3 of snap)) is not wantFields then return false
+  if wantFields > -1 then
+    if (count of (item 3 of snap)) is not wantFields then return false
+  end if
   repeat with w in need
     if (my cgLabelY(snap, contents of w)) is missing value then return false
   end repeat
@@ -526,11 +594,11 @@ on cgSettle(c, wantFields, need, forbid)
     set sig to my cgSig(snap)
     set matched to my cgMatches(snap, wantFields, need, forbid)
     if (sig is prevSig) and (my cgValid(snap)) then
-      if (wantFields < 0) or matched then return snap
+      if (wantFields < -1) or matched then return snap
     end if
     delay ${SETTLE_POLL_S}
   end repeat
-  if wantFields > -1 then error "the Repeat dialog's cadence group never took the shape this step expects (" & wantFields & " numeric field(s)) — the control the step was about to drive is not the one the dialog is showing; numeric fields:" & my cgInventory(snap)
+  if wantFields > -2 then error "the Repeat dialog's cadence group never took the shape this step expects — the control the step was about to drive is not the one the dialog is showing; numeric fields:" & my cgInventory(snap)
   error "the Repeat dialog's cadence group is still re-laying out — its shape changed on every read; last seen" & sig
 end cgSettle
 
@@ -852,7 +920,8 @@ export const OK_ALREADY = "OK-ALREADY";
  * Shared verbatim by all three typing primitives so the law is one shape.
  */
 function alreadyHoldsBlock(ref: string, escapedValue: string): string {
-  return `  set v0 to ""
+  return `  log "${AX_ELEMS_LOG_PREFIX}2"
+  set v0 to ""
   try
     set v0 to ((value of ${ref}) as text)
   end try
@@ -1109,8 +1178,12 @@ function asList(values: readonly string[]): string {
  * the BEEP1 two-agreeing-reads rule deciding alone (RDLAT2).
  */
 function settleArgs(expectation: CadenceExpectation | null): string {
-  if (expectation === null) return "-1, {}, {}";
-  return `${expectation.fields}, ${asList(expectation.requiredLabels)}, ${asList(
+  // Two sentinels, because "no expectation" and "an expectation that does not
+  // constrain the field count" are different things (RDLAT2):
+  //   -2  no expectation at all — the agreement rule decides alone
+  //   -1  check the labels, not the count
+  if (expectation === null) return "-2, {}, {}";
+  return `${expectation.fields ?? -1}, ${asList(expectation.requiredLabels)}, ${asList(
     expectation.forbiddenLabels,
   )}`;
 }
@@ -1159,6 +1232,14 @@ export function axAuditDialogScript(spec: AuditScriptSpec, rowTolerance = ROW_TO
   // (the "and start N days earlier" offset is the sole one), so the ordinary
   // audit costs four Apple events for the cadence group and none for the shell.
   const needsShellSnapshot = spec.controls.some((c) => c.kind === "row-field");
+  // How many CONTROLS this audit reads the content of, for the element counter
+  // (RDLAT2). A weekday check reads every row pop-up from its base, so it is
+  // counted as the set it compares; every other kind re-reads exactly one
+  // control. The cadence group's own inventory reports itself, from `cgSnap`.
+  const auditContentReads = spec.controls.reduce(
+    (n, c) => n + (c.kind === "weekdays" ? Math.max(1, c.expected.length) : 1),
+    0,
+  );
   // The commit, pressed only past the mismatch check above it. Its own failure
   // carries a distinct tag: "the audit refused" and "the OK button would not
   // press" are different outcomes and must not be reported as each other.
@@ -1320,6 +1401,7 @@ ${SE}
     needsShellSnapshot ? "\n  set rfSnapshot to my cgSnap(sh)" : ""
   }
   set bad to {}
+  log "${AX_ELEMS_LOG_PREFIX}${auditContentReads}"
 ${body}
   if (count of bad) is not 0 then error "the Repeat dialog does not hold what this drive entered — " & (count of bad) & " control(s) differ: " & my aqJoin(bad, "; ")
 ${commitTail}  return "OK"
@@ -1446,6 +1528,12 @@ export function axSelectPopupCandidatesScript(path: string, values: string[]): s
       delay ${IN_SCRIPT_POLL_S}
     end repeat
   end repeat
+  -- The menu's items are realized by the search below, which matches them by
+  -- TITLE — so the whole menu is content-touched however early the match hits
+  -- (RDLAT2). Reported here, where they have just been realized by the open.
+  try
+    log "${AX_ELEMS_LOG_PREFIX}" & (count of menu items of menu 1 of pu)
+  end try
   repeat with candidate in {${list}}
     if (exists menu item candidate of menu 1 of pu) then
       click menu item candidate of menu 1 of pu
@@ -2808,12 +2896,17 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
   const res = await osaExec(command.script ?? "", { lang, timeoutMs });
   const out = counting ? splitAeDebug(res.stdout) : null;
   const err = counting ? splitAeDebug(res.stderr) : null;
+  // The element-realization lines are stripped ALWAYS, armed or not: the scripts
+  // log them unconditionally (so the count survives deputy routing), and a
+  // refusal a caller reads must never carry the machinery.
+  const elems = parseElemLog(err === null ? res.stderr : err.text);
   return {
     ok: res.exitCode === 0 && res.timedOut !== true,
     stdout: out === null ? res.stdout : out.text,
-    stderr: err === null ? res.stderr : err.text,
+    stderr: elems.stderr,
     ...(res.timedOut === true && { timedOut: true }),
     ...(out !== null && err !== null && { axOps: out.axOps + err.axOps }),
+    ...(elems.axElems !== null && { axElems: elems.axElems }),
   };
 }
 
@@ -2874,6 +2967,9 @@ function tracingRun(inner: UiRunner): UiRunner {
       // (RDLAT2): `durationMs` says what this host paid, `axOps` says what any
       // host would pay, and only the second one transfers between machines.
       ...(res.axOps !== undefined && { axOps: res.axOps }),
+      // The elements whose content this hop realized — the term the field pays
+      // ~115 ms each for, and the one a plural read hides from an event count.
+      ...(res.axElems !== undefined && { axElems: res.axElems }),
       ok: res.ok,
       timedOut: res.timedOut === true,
     }));

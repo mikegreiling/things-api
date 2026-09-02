@@ -11,6 +11,8 @@ import {
   axAuditDialogScript,
   axDialogOpenScript,
   splitAeDebug,
+  parseElemLog,
+  AX_ELEMS_LOG_PREFIX,
   COMMIT_FAILED_TAG,
   axConvergeWeekdaysScript,
   axEnsureCheckboxScript,
@@ -1004,7 +1006,16 @@ describe("axAuditDialogScript — the folded commit (RDLAT2)", () => {
     });
     expect(advised).toContain('my cgSettle(g, 2, {"Every", "Ends:"}, {})');
     const unadvised = axAuditDialogScript({ shell: "sh", group: "g", controls });
-    expect(unadvised).toContain("my cgSettle(g, -1, {}, {})");
+    expect(unadvised).toContain("my cgSettle(g, -2, {}, {})");
+    // -1 is the LABELS-ONLY sentinel: assert the anchor labels, leave the field
+    // count alone (a pre-populated dialog may already show the ends field).
+    const labelsOnly = axAuditDialogScript({
+      shell: "sh",
+      group: "g",
+      controls,
+      expectation: { fields: null, requiredLabels: ["Every", "Ends:"], forbiddenLabels: [] },
+    });
+    expect(labelsOnly).toContain('my cgSettle(g, -1, {"Every", "Ends:"}, {})');
   });
 });
 
@@ -1089,5 +1100,58 @@ describe("splitAeDebug — the AX round-trip counter (RDLAT2)", () => {
     const msg = 'execution error: refused to type "3": the field did not take keyboard focus';
     expect(splitAeDebug(msg)).toEqual({ axOps: 0, text: msg });
     expect(splitAeDebug("")).toEqual({ axOps: 0, text: "" });
+  });
+});
+
+describe("parseElemLog — the element-realization counter (RDLAT2 §E)", () => {
+  it("SUMS every line and removes them all", () => {
+    // A hop reports once per container it read, so a guard-folded keystroke hop
+    // logs the shell, the group, and each snapshot the settle took.
+    const raw = `${AX_ELEMS_LOG_PREFIX}8\n${AX_ELEMS_LOG_PREFIX}3\n${AX_ELEMS_LOG_PREFIX}2`;
+    expect(parseElemLog(raw)).toEqual({ axElems: 13, stderr: "" });
+  });
+
+  it("leaves a refusal sentence intact, and reports null when nothing was logged", () => {
+    const msg = 'execution error: refused to type "3": the field did not take keyboard focus';
+    expect(parseElemLog(msg)).toEqual({ axElems: null, stderr: msg });
+    expect(parseElemLog("")).toEqual({ axElems: null, stderr: "" });
+  });
+
+  it("keeps the surrounding stderr when a count rides alongside it", () => {
+    const { axElems, stderr } = parseElemLog(`${AX_ELEMS_LOG_PREFIX}4\nexecution error: boom`);
+    expect(axElems).toBe(4);
+    expect(stderr).toBe("execution error: boom");
+  });
+
+  it("ignores a line whose count is not a number rather than counting it as zero", () => {
+    expect(parseElemLog(`${AX_ELEMS_LOG_PREFIX}oops`).axElems).toBeNull();
+  });
+});
+
+describe("the scripts report what they realized (RDLAT2 §E)", () => {
+  it("the group inventory reports its statics and fields — never its positions", () => {
+    const s = axSetGroupNumberScript("group 1 of sheet 1", "interval", "3");
+    // Values realize; positions are answered out of the layout the app already
+    // holds, so the reported count is the two VALUE reads and neither position
+    // read — even though the snapshot takes all four.
+    expect(s).toContain(`log "${AX_ELEMS_LOG_PREFIX}" & ((count of sv) + (count of fv))`);
+    expect(s).not.toContain(`${AX_ELEMS_LOG_PREFIX}" & ((count of sv) + (count of sp))`);
+  });
+
+  it("the pre-commit audit reports one realization per control it re-reads", () => {
+    const s = axAuditDialogScript({
+      shell: "sh",
+      group: "g",
+      controls: [
+        { label: "frequency", kind: "popup", path: "pop up button 1", expected: ["weekly"] },
+        { label: "interval", kind: "group-number", numberTarget: "interval", expected: ["3"] },
+      ],
+    });
+    expect(s).toContain(`log "${AX_ELEMS_LOG_PREFIX}2"`);
+  });
+
+  it("a pop-up reports the menu items its title search realizes", () => {
+    const s = axSelectPopupCandidatesScript("pop up button 1", ["month", "months"]);
+    expect(s).toContain(`log "${AX_ELEMS_LOG_PREFIX}" & (count of menu items of menu 1 of pu)`);
   });
 });

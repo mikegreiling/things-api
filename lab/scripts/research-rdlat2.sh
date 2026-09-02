@@ -392,6 +392,94 @@ if [ "$CMD" = "states" ]; then
   exit 0
 fi
 
+# ==================================================================== elemcheck
+# Attribution check for the element counter: with a dialog open in a KNOWN state,
+# run the shipped guard prelude and the shipped group snapshot and print what each
+# one reports, so a per-hop total in the profile can be explained line by line
+# rather than assumed.
+if [ "$CMD" = "elemcheck" ]; then
+  load_session
+  SHEET='sheet 1 of (first window whose subrole is "AXStandardWindow")'
+  note "=============================================================="
+  note "ELEMCHECK start $(date +%H:%M:%S)"
+  node -e "
+import('$STAGE/dist-new/write/vectors/ui-state.js').then((m) => {
+  process.stdout.write(m.axFocusGuardPrelude('repeat') + '\nreturn \"PRELUDE-OK\"\n');
+});" > "$OUT/elemcheck-prelude.applescript"
+  lab_scp "$OUT/elemcheck-prelude.applescript" "admin@$IP:/Users/admin/labh/elemcheck-prelude.applescript" >/dev/null
+  warm; front Things3
+  add "RDLAT2%20ec%20seed"
+  U=$(gq "SELECT uuid FROM TMTask WHERE title='RDLAT2 ec seed' AND type=0 AND trashed=0 ORDER BY rowid DESC LIMIT 1")
+  lab_ssh "$IP" "open -g 'things:///show?id=$U'; sleep 3" </dev/null
+  front Things3
+  axq 'tell application "System Events" to tell process "Things3" to click menu item "Repeat…" of menu "Items" of menu bar 1' >/dev/null
+  sleep 2
+  for FREQ in "after completion" monthly; do
+    axq "tell application \"System Events\" to tell process \"Things3\"
+  set pu to (pop up button 1 of ($SHEET))
+  repeat 20 times
+    if (exists menu 1 of pu) then exit repeat
+    click pu
+    delay 0.05
+  end repeat
+  click menu item \"$FREQ\" of menu 1 of pu
+  delay 1.5
+  return (value of pu) as text
+end tell" >/dev/null
+    note "  --- $FREQ ---"
+    note "    direct children of shell = $(axq "tell application \"System Events\" to tell process \"Things3\" to return (count of UI elements of ($SHEET))" | tail -1)"
+    note "    direct children of group = $(axq "tell application \"System Events\" to tell process \"Things3\" to return (count of UI elements of (group 1 of ($SHEET)))" | tail -1)"
+    note "    prelude reports: $(lab_ssh "$IP" 'osascript ~/labh/elemcheck-prelude.applescript 2>&1 | grep AXELEMS | tr "\n" " "' </dev/null)"
+  done
+  dismiss
+  note "ELEMCHECK done $(date +%H:%M:%S)"
+  exit 0
+fi
+
+# ======================================================================== elem
+# §E — DOES THE REPEAT SHEET REALIZE PER ELEMENT, the way the sidebar does?
+#
+# The field finding (M1, 2026-09-02) is that an AX sweep's cost is the app
+# realizing each custom row's content — ~115ms/row on a Retina display,
+# independent of depth and call count, and paid again on a repeat sweep. The
+# Repeat dialog is ordinary AppKit controls in a sheet, not custom cell views, so
+# whether it behaves the same way is an open question. A clone cannot answer it
+# for the FIELD (the whole point is that realization is cheap in a VM), but it
+# can measure the geometry-vs-content ratio and whether a repeat sweep re-pays.
+if [ "$CMD" = "elem" ]; then
+  load_session
+  note "=============================================================="
+  note "ELEM start $(date +%H:%M:%S)"
+  lab_scp lab/scripts/rdlat2-elem.jxa.js "admin@$IP:/Users/admin/labh/rdlat2-elem.jxa.js" >/dev/null
+  SHEET='sheet 1 of (first window whose subrole is "AXStandardWindow")'
+  warm; front Things3
+  add "RDLAT2%20elem%20seed"
+  U=$(gq "SELECT uuid FROM TMTask WHERE title='RDLAT2 elem seed' AND type=0 AND trashed=0 ORDER BY rowid DESC LIMIT 1")
+  lab_ssh "$IP" "open -g 'things:///show?id=$U'; sleep 3" </dev/null
+  front Things3
+  axq 'tell application "System Events" to tell process "Things3" to click menu item "Repeat…" of menu "Items" of menu bar 1' >/dev/null
+  sleep 2
+
+  for FREQ in "after completion" monthly; do
+    axq "tell application \"System Events\" to tell process \"Things3\"
+  set pu to (pop up button 1 of ($SHEET))
+  repeat 20 times
+    if (exists menu 1 of pu) then exit repeat
+    click pu
+    delay 0.05
+  end repeat
+  click menu item \"$FREQ\" of menu 1 of pu
+  delay 1
+  return (value of pu) as text
+end tell" >/dev/null
+    note "  --- frequency = $FREQ ---"
+    lab_ssh "$IP" 'osascript -l JavaScript ~/labh/rdlat2-elem.jxa.js' </dev/null 2>&1 | sed 's/^/[rdlat2]   /' | tee -a "$REPORT"
+  done
+  dismiss
+  note "ELEM done $(date +%H:%M:%S)"
+  exit 0
+fi
+
 # ====================================================================== census
 # THE CENSUS 2x2 (FGRD1 U1..U4), on its own fixtures so it can be re-run.
 # This is the cell the RDLAT2 census change has to answer for: the control
