@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Improved — making a to-do repeat no longer waits on a clock. It waits for Things to say it is ready.** Every step of the Repeat dialog used to guess: click a pop-up and re-ask "is your menu open yet?" every fiftieth of a second; ask a field for keyboard focus and then sleep a fixed 0.15 s in the hope it took; change the frequency and then re-read the whole section until two readings agreed. Things has been announcing all of it the whole time — macOS has an accessibility notification for "this menu opened", "this field took focus", "this control now holds the value you set" — and the app is completely silent when nothing is happening, so every announcement belongs to the thing the command just did. The command now listens, and each step ends the moment the app says it is done rather than when a timer runs out.
+
+  The practical difference on a Mac: entering an interval took 1.21 s and now takes 0.56 s, and no step's timing depends any more on how fast the rest of the command happens to be — which is the failure this fixes at the root. A wait sized by "however long two readings take" breaks the moment the readings get faster, and that had already happened once.
+
+  This needs the Command Line Tools, which most Macs with developer tools installed already have. Without them — or with `THINGS_API_AX_OBSERVER=0` set — every command runs exactly the code that shipped before, unchanged, so nothing is lost by not having them.
+
+- **Fixed — three seconds of pure waiting removed from making a to-do repeat, reported from the field.** Watching the command run on an M1 showed two pauses that were doing nothing useful, and both are gone.
+
+  The first was a ~1.5 s stall before the dialog's "Next:" field was touched. The command was waiting for Things to recompute which dates the rule produces — a real thing to wait for — but it started waiting *after* the recompute had already finished, so it spent its whole budget re-reading a control thirteen times to discover nothing had changed. It now knows immediately, because it was already listening; and when the step before it changed nothing at all, it does not wait at all.
+
+  The second was the command opening the "Next:" menu, walking its list of dates, and clicking the one the field was *already showing*. Since making an item repeat starts the series on the item's own scheduled date, that is the normal case rather than a corner. It now reads the field once and skips the whole thing when it already says the right date — including when the field reads "Today". Nothing about the checking changes: the dialog is still audited control by control before anything is committed, and the resulting series is still verified against the database afterwards.
+
+  Working out which version of the Repeat dialog is open got cheaper too — the same question, asked in three questions instead of fifteen.
+
+- **Added — `THINGS_API_TRACE=1` now records what each step of a GUI command WAITED for.** Beside how long a step took and how many controls it read, a step's trace record now names the notification it waited for and how long the app took to send it. That is the part of the time a command cannot make smaller, so a slow run can now be read as "the app took this long" or "we asked too many questions", rather than leaving both possible.
+
 ## 0.20.6 — 2026-09-02
 
 - **Fixed — setting a repeat frequency and its interval no longer races the dialog's own rebuild.** Changing the frequency makes Things rebuild that section of the Repeat dialog. The command went looking for the interval field before the rebuild had happened, found the *previous* layout, and picked its target out of that. It worked — the value it typed survived the rebuild, and the check before committing read the correct number back out — but the field was chosen from a stale picture of the dialog, which is precisely the class of mistake that once wrote an interval into the wrong box. It now waits for the rebuilt section to actually appear before deciding which field to type into.
