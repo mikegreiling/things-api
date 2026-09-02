@@ -425,6 +425,38 @@ That is the difference between a decoration and a control. A screen-reader user 
 
 It mattered here more than usual. The driver had been scrolling the sidebar with synthesized wheel events, which macOS delivers to whatever the pointer happens to be over; with the cursor anywhere else, six clicks moved the sidebar zero pixels, silently. The app had a better mechanism exposed the entire time. Evidence: [lab/sbscr1-sidebar-scroll.md](lab/sbscr1-sidebar-scroll.md) §2, §4. Things 3.23.
 
+## 10. The accessibility notifications are complete, prompt, and quiet
+
+Everything above is about what Things will *tell you if you ask*. This is about what it tells you **without being asked**, which turns out to be nearly everything, and it is the rarer courtesy.
+
+Register an `AXObserver` on the app, the sidebar table, its scroll area, the Repeat sheet and the sheet's cadence group, for fifteen notification classes. All twenty-three registrations are accepted (`AXError 0`) — no silent `kAXErrorNotificationUnsupported`, which is the usual outcome on an app that draws its own views. Then act, and time what arrives:
+
+| what you do | what the app says, unprompted | how long it takes |
+|---|---|---:|
+| write the scroll bar's `AXValue` | `AXValueChanged` on the `AXScrollBar` | **6.5 ms** |
+| click a disclosure chevron | `AXRowCountChanged` on the table, **one per row folded** (65 of them) | ~62 ms after the gesture |
+| open the Repeat dialog | `AXCreated` **and** `AXSheetCreated` on the `AXSheet` | 438 ms (the app's own presentation) |
+| press a pop-up button | `AXMenuOpened` on the `AXMenu` | **5.1 ms** |
+| set `AXFocused` on a text field | `AXFocusedUIElementChanged` on that field | **27.6 ms** |
+| type a digit into it | `AXValueChanged` on the field | **79 ms** |
+| type a digit with focus elsewhere | *nothing* | — |
+
+And, armed for three seconds with nothing happening: **zero events**. Not one stray `AXValueChanged` from an animation, a timer, or a background refresh.
+
+Three things are being done well here at once, and each is a decision someone had to make.
+
+**The silence is as engineered as the noise.** An app that posts a notification on every internal tick is technically compliant and practically useless — a screen reader has to filter it, and an automation client cannot tell a state change from a heartbeat. Things says nothing until something a user would notice has happened. That is what makes the 6.5 ms and the 5.1 ms usable numbers rather than lucky ones.
+
+**The fold announces itself per row rather than in aggregate**, which reads at first like chattiness and is not: `AXRowCountChanged` is defined per change, and a client that wants the aggregate gets it by debouncing, while a client that wants to follow the animation can. The information is not thrown away in the name of tidiness.
+
+**The last line of that table is the subtle one.** A keystroke that lands in the focused field is announced; a keystroke that lands nowhere is not. An automation client can therefore learn that its input went astray **without reading anything to find out** — the absence is the signal. Very few apps are careful enough about *when* to post `AXValueChanged` for that inference to be safe.
+
+The practical consequence for us is a whole class of code we did not need to write. Our drivers settle by re-reading a surface until two reads agree, and on the maintainer's Mac each of those reads of the sidebar costs about 115 ms per row realized. The app has been offering to just tell us, in single-digit milliseconds, the entire time — including for the one case our own settle got wrong (a rebuilt field that reports a stable shape before it will take focus: `AXFocusedUIElementChanged` answers exactly that question). Evidence: [lab/vopat1-screen-reader-pattern.md](lab/vopat1-screen-reader-pattern.md) §4. Things 3.23.
+
+The one gap, recorded for completeness rather than as a complaint: **`AXLayoutChanged` never fires**, including when the Repeat dialog's cadence group tears down three controls and builds nine in their place. A client wanting to know that a container finished rebuilding has to assemble it from `AXValueChanged` on the control it set plus the `AXUIElementDestroyed` burst — both of which do arrive, together, at the right instant.
+
+---
+
 ---
 
 ## Edge cases this project routed through

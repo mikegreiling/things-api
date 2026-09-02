@@ -17,10 +17,14 @@
 //
 //      Optional arguments (any order):
 //        <number>        latency-loop iteration count for cell 5 (default 200)
-//        --allow-click   ALSO run cell 7, the only cell that touches the UI
+//        --areas <n>     how many areas your sidebar has, so cell 10's sparse
+//                        strategy and cell 8's model are priced at your own
+//                        shape (default 14)
+//        --allow-click   ALSO run cell 7, the only cell that clicks anything
 //
 //      Examples:
 //        osascript -l JavaScript field-probe-sidebar.jxa.js 400
+//        osascript -l JavaScript field-probe-sidebar.jxa.js --areas 12
 //        osascript -l JavaScript field-probe-sidebar.jxa.js --allow-click
 //
 //   4. Paste the whole JSON output into the GitHub issue.
@@ -30,12 +34,21 @@
 //   Cell 0 fails fast with that instruction if it does not.
 //
 // READ-ONLY / SAFETY
-//   Every cell except cell 7 is a pure read: no clicks, no drags, no keystrokes,
-//   no scrolling, no AX writes, no menu actuation, and no database access of any
-//   kind. Cell 7 is OPT-IN (default OFF, requires --allow-click); it performs
-//   exactly two option-clicks on one disclosure chevron, where the second click
-//   undoes the first, and reports a row-count restore proof so you can confirm
-//   the sidebar came back to its original shape.
+//   Every cell except 7 and 11 is a pure read: no clicks, no drags, no
+//   keystrokes, no AX writes, no menu actuation, and no database access of any
+//   kind.
+//
+//   Cell 7 is OPT-IN (default OFF, requires --allow-click); it performs exactly
+//   two option-clicks on one disclosure chevron, where the second click undoes
+//   the first, and reports a row-count restore proof so you can confirm the
+//   sidebar came back to its original shape.
+//
+//   Cell 11 makes ONE AX write and always undoes it: it sets the sidebar scroll
+//   bar's AXValue by 0.15 to give its observer something to hear, then writes
+//   the original value straight back and reports `restored` so you can check.
+//   It clicks nothing, types nothing, and changes no data -- the sidebar
+//   scrolls and scrolls back, which is the smallest observable actuation the
+//   app offers.
 //
 // PRIVACY -- THE OUTPUT IS SAFE TO PASTE IN PUBLIC
 //   The JSON contains ONLY counts, durations in milliseconds, geometry numbers
@@ -71,9 +84,25 @@
 //                      instead of 174 -- the single biggest available lever.
 //   7 OPT-IN CLICK     Option-click collapse-all, then option-click again to
 //                      restore. Three row counts and a restore proof.
-//   8 COST MODEL       Predicted wall time for a "collapse-all, drag, restore"
-//                      move using THIS host's measured numbers, with every model
-//                      input printed so the arithmetic is auditable.
+//   9 HIT-TEST         Can one row be found WITHOUT sweeping? Geometry for every
+//                      row (free), then AXUIElementCopyElementAtPosition at a
+//                      predicted row centre, walked up to its AXRow, and ONE
+//                      content read to confirm. The screen-reader route.
+//  10 SPARSE READS     Three read strategies priced on this host: the full
+//                      sweep, the AXVisibleRows-bounded sweep, and the SPARSE
+//                      read (geometry for every row + content for only a handful
+//                      of predicted rows). Reports ms PER ROW REALIZED, which is
+//                      the number that transfers between machines.
+//  11 NOTIFICATIONS    An AXObserver instead of a poll. Registers for the
+//                      notification classes a settle would want, nudges the
+//                      scroll bar and puts it straight back, and reports which
+//                      notifications fired and how fast. A class that does NOT
+//                      fire for an actuation is a law worth knowing.
+//   8 COST MODEL       Predicted wall time for a sidebar move using THIS host's
+//                      measured numbers. Runs LAST because it consumes cells
+//                      9-11. Prices CONTENT reads per ROW REALIZED and geometry
+//                      reads per call -- never one latency for all calls, which
+//                      is the error that produced the earlier "REACHABLE 3.5 s".
 
 ObjC.import("AppKit");
 ObjC.import("ApplicationServices");
@@ -524,6 +553,267 @@ function runNativeLatency(pid, indexPath, n) {
   return res;
 }
 
+// ------------------------------------------------- cell 11 observer source
+// A stdlib-only Python 3 ctypes program that registers an AXObserver, runs a
+// CFRunLoop, optionally nudges ONE attribute, and reports what arrived.
+//
+// WHY PYTHON AND NOT JXA: AXObserverCreate takes a C FUNCTION POINTER
+// (AXObserverCallback). JXA's ObjC bridge marshals blocks but not raw function
+// pointers, so an observer cannot be built from JXA at all. ctypes' CFUNCTYPE
+// produces a real one, and /usr/bin/python3 is already this probe's path-B
+// transport, so nothing extra has to be installed to run it.
+//
+// READ-ONLY-ISH: the only actuation it can perform is setting AXValue on ONE
+// element (cell 11 uses the scroll bar, and puts the original value straight
+// back). It clicks nothing, types nothing, and touches no database.
+var PY_OBS_SRC = [
+  "import ctypes, json, sys, time",
+  "from ctypes import CFUNCTYPE, POINTER, byref, c_char_p, c_double, c_int, c_int32",
+  "from ctypes import c_long, c_uint32, c_void_p",
+  "",
+  "UTF8 = 0x08000100  # kCFStringEncodingUTF8",
+  "",
+  "",
+  "def main():",
+  "    pid = int(sys.argv[1])",
+  "    targets = json.loads(sys.argv[2])",
+  "    timeout_ms = int(sys.argv[3])",
+  "    act = sys.argv[4] if len(sys.argv) > 4 else 'none'",
+  "    AS = ctypes.CDLL(",
+  "        '/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')",
+  "    CF = ctypes.CDLL(",
+  "        '/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')",
+  "    # Every restype/argtype is declared: a missing restype on a 64-bit pointer",
+  "    # return silently truncates to 32 bits, which would make this program",
+  "    # report a plausible-looking nothing.",
+  "    AS.AXUIElementCreateApplication.restype = c_void_p",
+  "    AS.AXUIElementCreateApplication.argtypes = [c_int]",
+  "    AS.AXUIElementCopyAttributeValue.restype = c_int",
+  "    AS.AXUIElementCopyAttributeValue.argtypes = [c_void_p, c_void_p, POINTER(c_void_p)]",
+  "    AS.AXUIElementSetAttributeValue.restype = c_int",
+  "    AS.AXUIElementSetAttributeValue.argtypes = [c_void_p, c_void_p, c_void_p]",
+  "    AS.AXIsProcessTrusted.restype = ctypes.c_bool",
+  "    AS.AXObserverCreate.restype = c_int",
+  "    AS.AXObserverAddNotification.restype = c_int",
+  "    AS.AXObserverAddNotification.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p]",
+  "    AS.AXObserverGetRunLoopSource.restype = c_void_p",
+  "    AS.AXObserverGetRunLoopSource.argtypes = [c_void_p]",
+  "    CF.CFStringCreateWithCString.restype = c_void_p",
+  "    CF.CFStringCreateWithCString.argtypes = [c_void_p, c_char_p, c_uint32]",
+  "    CF.CFStringGetCString.restype = c_int",
+  "    CF.CFStringGetCString.argtypes = [c_void_p, c_char_p, c_long, c_uint32]",
+  "    CF.CFArrayGetCount.restype = c_long",
+  "    CF.CFArrayGetCount.argtypes = [c_void_p]",
+  "    CF.CFArrayGetValueAtIndex.restype = c_void_p",
+  "    CF.CFArrayGetValueAtIndex.argtypes = [c_void_p, c_long]",
+  "    CF.CFRelease.restype = None",
+  "    CF.CFRelease.argtypes = [c_void_p]",
+  "    CF.CFRunLoopGetCurrent.restype = c_void_p",
+  "    CF.CFRunLoopAddSource.restype = None",
+  "    CF.CFRunLoopAddSource.argtypes = [c_void_p, c_void_p, c_void_p]",
+  "    CF.CFRunLoopRunInMode.restype = c_int32",
+  "    CF.CFRunLoopRunInMode.argtypes = [c_void_p, c_double, ctypes.c_bool]",
+  "    CF.CFNumberCreate.restype = c_void_p",
+  "    CF.CFNumberCreate.argtypes = [c_void_p, c_int, c_void_p]",
+  "    mode = c_void_p.in_dll(CF, 'kCFRunLoopDefaultMode')",
+  "",
+  "    keys = {}",
+  "",
+  "    def k(name):",
+  "        if name not in keys:",
+  "            keys[name] = c_void_p(",
+  "                CF.CFStringCreateWithCString(None, name.encode('utf-8'), UTF8))",
+  "        return keys[name]",
+  "",
+  "    def pystr(ref):",
+  "        if not ref:",
+  "            return ''",
+  "        buf = ctypes.create_string_buffer(512)",
+  "        if CF.CFStringGetCString(ref, buf, 512, UTF8):",
+  "            return buf.value.decode('utf-8', 'replace')",
+  "        return ''",
+  "",
+  "    def role_of(el):",
+  "        out = c_void_p()",
+  "        if AS.AXUIElementCopyAttributeValue(el, k('AXRole'), byref(out)) != 0:",
+  "            return ''",
+  "        if not out.value:",
+  "            return ''",
+  "        s = pystr(out)",
+  "        CF.CFRelease(out)",
+  "        return s",
+  "",
+  "    if not AS.AXIsProcessTrusted():",
+  "        return {'ok': False,",
+  "                'why': 'the calling process is not trusted for the Accessibility API'}",
+  "    app = c_void_p(AS.AXUIElementCreateApplication(pid))",
+  "    if not app.value:",
+  "        return {'ok': False, 'why': 'AXUIElementCreateApplication returned NULL'}",
+  "",
+  "    # Child arrays are kept alive for the whole run: elements pulled out with",
+  "    # CFArrayGetValueAtIndex are BORROWED, so releasing the array could free an",
+  "    # element the observer is still registered on.",
+  "    keep = []",
+  "",
+  "    def walk(path):",
+  "        el = app",
+  "        for step, idx in enumerate(path):",
+  "            arr = c_void_p()",
+  "            err = AS.AXUIElementCopyAttributeValue(el, k('AXChildren'), byref(arr))",
+  "            if err != 0 or not arr.value:",
+  "                return None, 'AXChildren failed at step %d (AXError %d)' % (step, err)",
+  "            keep.append(arr)",
+  "            cnt = CF.CFArrayGetCount(arr)",
+  "            if idx < 0 or idx >= cnt:",
+  "                return None, 'child index %d out of range %d' % (idx, cnt)",
+  "            el = c_void_p(CF.CFArrayGetValueAtIndex(arr, idx))",
+  "            if not el.value:",
+  "                return None, 'NULL child at step %d' % step",
+  "        return el, None",
+  "",
+  "    events = []",
+  "    t0 = [None]",
+  "",
+  "    def on_note(observer, element, notification, refcon):",
+  "        now = time.perf_counter()",
+  "        events.append({'notification': pystr(notification),",
+  "                       'role': role_of(element),",
+  "                       'msFromActuation': None if t0[0] is None",
+  "                       else round((now - t0[0]) * 1000, 1)})",
+  "",
+  "    cb = CFUNCTYPE(None, c_void_p, c_void_p, c_void_p, c_void_p)(on_note)",
+  "    AS.AXObserverCreate.argtypes = [c_int, type(cb), POINTER(c_void_p)]",
+  "    obs = c_void_p()",
+  "    err = AS.AXObserverCreate(pid, cb, byref(obs))",
+  "    if err != 0 or not obs.value:",
+  "        return {'ok': False, 'why': 'AXObserverCreate failed (AXError %d)' % err}",
+  "",
+  "    registered = []",
+  "    for t in targets:",
+  "        el, why = walk(t.get('path', []))",
+  "        if el is None:",
+  "            registered.append({'label': t.get('label'), 'ok': False, 'why': why})",
+  "            continue",
+  "        r = role_of(el)",
+  "        for name in t.get('notifications', []):",
+  "            e = AS.AXObserverAddNotification(obs, el, k(name), None)",
+  "            registered.append({'label': t.get('label'), 'role': r,",
+  "                               'notification': name, 'axError': e, 'ok': e == 0})",
+  "",
+  "    src = AS.AXObserverGetRunLoopSource(obs)",
+  "    if not src:",
+  "        return {'ok': False, 'why': 'AXObserverGetRunLoopSource returned NULL'}",
+  "    CF.CFRunLoopAddSource(CF.CFRunLoopGetCurrent(), src, mode)",
+  "    # Drain whatever the registration itself queued, so what is counted below",
+  "    # belongs to the actuation and to nothing else.",
+  "    CF.CFRunLoopRunInMode(mode, 0.3, False)",
+  "    del events[:]",
+  "",
+  "    t0[0] = time.perf_counter()",
+  "    actuation = {'kind': act.split(':')[0]}",
+  "    if act.startswith('ax-setnum:'):",
+  "        addr, _, val = act[len('ax-setnum:'):].partition('=')",
+  "        el, why = walk([int(x) for x in addr.split(',') if x != ''])",
+  "        if el is None:",
+  "            actuation = {'kind': 'ax-setnum', 'ok': False, 'why': why}",
+  "        else:",
+  "            d = c_double(float(val))",
+  "            num = c_void_p(CF.CFNumberCreate(None, 13, byref(d)))",
+  "            e = AS.AXUIElementSetAttributeValue(el, k('AXValue'), num)",
+  "            CF.CFRelease(num)",
+  "            actuation = {'kind': 'ax-setnum', 'ok': e == 0, 'axError': e,",
+  "                         'value': float(val)}",
+  "    actuation_ms = round((time.perf_counter() - t0[0]) * 1000, 1)",
+  "",
+  "    deadline = t0[0] + timeout_ms / 1000.0",
+  "    while time.perf_counter() < deadline:",
+  "        CF.CFRunLoopRunInMode(mode, 0.02, False)",
+  "",
+  "    by = {}",
+  "    for ev in events:",
+  "        n = ev['notification']",
+  "        if n not in by:",
+  "            by[n] = {'count': 0, 'firstMs': ev['msFromActuation'], 'roles': []}",
+  "        by[n]['count'] += 1",
+  "        if ev['role'] and ev['role'] not in by[n]['roles']:",
+  "            by[n]['roles'].append(ev['role'])",
+  "    asked = sorted({r['notification'] for r in registered if r.get('ok')})",
+  "    return {'ok': True, 'actuation': actuation, 'actuationMs': actuation_ms,",
+  "            'registered': registered, 'eventCount': len(events),",
+  "            'firstEventMs': events[0]['msFromActuation'] if events else None,",
+  "            'byNotification': by,",
+  "            'silent': [n for n in asked if n not in by],",
+  "            'events': events[:40]}",
+  "",
+  "",
+  "try:",
+  "    print(json.dumps(main()))",
+  "except Exception as exc:",
+  "    print(json.dumps({'ok': False, 'why': '%s: %s' % (type(exc).__name__, exc)}))",
+  "",
+].join("\n");
+
+// Run the observer once. `targets` is [{label, path, notifications}], `path`
+// being a child-index path from the application element -- the same address the
+// native latency cell uses.
+function runObserver(pid, targets, timeoutMs, actuation) {
+  // /usr/bin/python3 is a shim: on a Mac WITHOUT Command Line Tools it raises
+  // the developer-tools installer dialog. This probe must never raise a dialog.
+  var haveCLT = shell("/usr/bin/xcode-select -p >/dev/null 2>&1 && echo yes || echo no");
+  if (haveCLT !== "yes") {
+    return {
+      available: false,
+      why:
+        "Command Line Tools are not installed; invoking /usr/bin/python3 would raise an " +
+        "installer dialog, so the observer cell was skipped deliberately.",
+    };
+  }
+  var dir = String($.NSTemporaryDirectory().js || "/tmp").replace(/\/$/, "");
+  var file = dir + "/things-field-observer-" + Math.floor(now()) + ".py";
+  try {
+    var errRef = Ref();
+    var wrote = $(PY_OBS_SRC).writeToFileAtomicallyEncodingError(
+      file,
+      true,
+      $.NSUTF8StringEncoding,
+      errRef,
+    );
+    if (!wrote) return { available: false, why: "could not write temp python file at " + file };
+  } catch (e) {
+    return { available: false, why: "could not write temp python file: " + e };
+  }
+  var res;
+  try {
+    var cmd =
+      "/usr/bin/python3 " +
+      q(file) +
+      " " +
+      pid +
+      " " +
+      q(JSON.stringify(targets)) +
+      " " +
+      timeoutMs +
+      " " +
+      q(actuation) +
+      " 2>&1";
+    var raw = String(stdApp.doShellScript(cmd));
+    try {
+      res = JSON.parse(raw);
+    } catch (e2) {
+      res = {
+        available: false,
+        why: "the observer emitted non-JSON output (" + raw.length + " chars)",
+      };
+    }
+  } catch (e3) {
+    res = { available: false, why: "python3 failed to run the observer: " + e3 };
+  }
+  shell("/bin/rm -f " + q(file));
+  if (res && res.available === undefined) res.available = res.ok === true;
+  res.tempFileDeleted = true;
+  return res;
+}
+
 // ------------------------------------------------------ mouse (cell 7 ONLY)
 var MOVED = 5,
   DOWN = 1,
@@ -554,10 +844,22 @@ function run(argv) {
   argv = argv || [];
   var allowClick = false;
   var iterations = 200;
+  // How many rows a SPARSE read would have to realize -- one per area, which the
+  // driver knows from the database and this probe deliberately does not read.
+  // 14 is the shape #676 reported; pass --areas N to price your own.
+  var areaHint = 14;
   for (var ai = 0; ai < argv.length; ai++) {
     var a = String(argv[ai]);
     if (a === "--allow-click") {
       allowClick = true;
+      continue;
+    }
+    if (a === "--areas") {
+      var an = Number(argv[ai + 1]);
+      if (isFinite(an) && an > 0) {
+        areaHint = Math.floor(an);
+        ai++;
+      }
       continue;
     }
     var num = Number(a);
@@ -568,7 +870,11 @@ function run(argv) {
     probe: "field-probe-sidebar",
     issue: 676,
     readOnly: !allowClick,
-    args: { latencyIterations: iterations, clickCellEnabled: allowClick },
+    args: {
+      latencyIterations: iterations,
+      clickCellEnabled: allowClick,
+      sparseAreaCount: areaHint,
+    },
   };
 
   // ------------------------------------------------------------------ CELL 0
@@ -719,6 +1025,13 @@ function run(argv) {
       rowsVisited: rows,
       nodesVisited: tally.nodes,
       msPerAxCall: round2(ms / Math.max(1, CALLS)),
+      // THE NUMBER THAT TRANSFERS BETWEEN HOSTS. msPerAxCall divides the sweep
+      // by its call count, which READS like a per-call latency and is not one:
+      // the same wall time is spent at depth 2 and at depth 6 for four times the
+      // nodes, so the cost is paid per ROW REALIZED on its first content-bearing
+      // touch, not per call. Cell 5 measures the real per-call latency, and it
+      // is two orders of magnitude smaller than this.
+      msPerRowRealized: round2(ms / Math.max(1, rows)),
       harvestedChars: tally.chars,
     };
   }
@@ -1023,114 +1336,523 @@ function run(argv) {
     }
   }
 
+  // ------------------------------------------------------------------ CELL 9
+  // HIT-TEST. A screen reader does not enumerate a list to find a row; it asks
+  // what is under a point. Geometry is free on this host (cell 6 / cell 10), so
+  // a row's centre can be computed without realizing anything, and the row
+  // itself reached with ONE hit-test plus ONE content read.
+  //
+  // Measured against cell 2's full sweep, which realizes every row to find one.
+  var hit = { ran: false };
+  (function () {
+    resetCalls();
+    var tGeom = now();
+    var rowsAttr = attr(table, "AXRows");
+    var geom = [];
+    if (rowsAttr !== null) {
+      var rc = -1;
+      try {
+        rc = Number(rowsAttr.count);
+      } catch (e) {
+        rc = -1;
+      }
+      for (var i = 0; i < rc; i++) {
+        var el = rowsAttr.objectAtIndex(i);
+        geom.push({ el: el, f: frame(el) });
+      }
+    }
+    var geomMs = now() - tGeom;
+    var geomCalls = CALLS;
+
+    // Pick a row whose centre sits inside the visible band -- a hit-test outside
+    // the band would be asking about a pixel the user cannot see, and the answer
+    // would be whatever is drawn there instead.
+    var target = null;
+    for (var k = 0; k < geom.length; k++) {
+      var f = geom[k].f;
+      if (!f || !viewport) continue;
+      var cy0 = f.y + f.h / 2;
+      if (cy0 > viewport.y + 8 && cy0 < viewport.y + viewport.h - 8) {
+        target = { i: k, f: f };
+        if (k > 3) break; // a few rows down, past any header chrome
+      }
+    }
+    hit.rowsSeenGeometrically = geom.length;
+    hit.geometryMs = round2(geomMs);
+    hit.geometryAxCalls = geomCalls;
+    hit.msPerGeometryCall = round2(geomMs / Math.max(1, geomCalls));
+    if (target === null) {
+      hit.why = "no row centre fell inside the scroll area's visible band";
+      return;
+    }
+
+    var cx = target.f.x + Math.min(120, target.f.w / 2);
+    var cy = target.f.y + target.f.h / 2;
+    resetCalls();
+    var tHit = now();
+    var elRef = Ref();
+    CALLS++;
+    var errHit = $.AXUIElementCopyElementAtPosition(appEl, cx, cy, elRef);
+    var hitMs = now() - tHit;
+    hit.ran = true;
+    hit.pointTestedInBand = true;
+    hit.targetRowIndex = target.i;
+    hit.hitTestMs = round2(hitMs);
+    hit.hitTestAxError = errHit;
+    if (errHit !== 0) {
+      hit.why = "AXUIElementCopyElementAtPosition returned AXError " + errHit;
+      return;
+    }
+    var landed = ObjC.castRefToObject(elRef[0]);
+    hit.landedRole = sv(landed, "AXRole");
+
+    // Walk UP to the row: one AXParent + one AXRole per hop.
+    var tWalk = now();
+    var hops = 0;
+    var cur = landed;
+    var rowEl = null;
+    while (cur && hops < 8) {
+      if (isRowRole(sv(cur, "AXRole"))) {
+        rowEl = cur;
+        break;
+      }
+      cur = attr(cur, "AXParent");
+      hops++;
+    }
+    hit.parentHopsToRow = hops;
+    hit.reachedARow = rowEl !== null;
+    hit.walkUpMs = round2(now() - tWalk);
+    if (rowEl === null) {
+      hit.why = "the hit-tested element had no AXRow ancestor within 8 hops";
+      hit.totalAxCalls = CALLS;
+      return;
+    }
+
+    // THE ONE CONTENT READ -- the only element realized by this route. Its text
+    // is counted and discarded, exactly as cell 2's is.
+    var tRead = now();
+    var n = node(rowEl);
+    var readMs = now() - tRead;
+    var tally = { nodes: 0, chars: 0 };
+    if (n !== null) harvestText(n, tally, 2);
+    hit.contentReadMs = round2(readMs);
+    hit.confirmDepth2Ms = round2(now() - tRead);
+    hit.rowsRealized = 1;
+    hit.confirmCharsRead = tally.chars;
+    hit.rowFrameMatchesGeometry =
+      n !== null && n.frame !== null && Math.abs(n.frame.y - target.f.y) < 0.5;
+    hit.totalAxCalls = CALLS;
+    hit.totalMs = round2(geomMs + hitMs + (now() - tWalk));
+  })();
+  hit.note =
+    "geometryMs covers AXRows plus a frame per row and realizes nothing; the hit-test, " +
+    "the walk up and ONE content read are the whole cost of finding a named row. " +
+    "Compare against cell 2's full sweep, which realizes every row.";
+  out.cell9_hitTest = hit;
+
+  // ----------------------------------------------------------------- CELL 10
+  // SPARSE READS. Three strategies for the same snapshot, priced on this host:
+  //   A  full sweep          content on every row               (what ships)
+  //   B  AXVisibleRows       content on the visible rows only
+  //   C  sparse              geometry on every row (free) + content on only the
+  //                          rows the database predicts carry an area
+  // Reported in ROWS REALIZED, which is what the field pays for, and in ms.
+  var sparseAreas = areaHint;
+  var read = {};
+  (function () {
+    // A -- reuse cell 2's measured sweep rather than paying for it twice.
+    var full = sweeps.depth2.run2;
+    read.a_fullSweep = {
+      rowsRealized: full.rowsVisited,
+      ms: full.ms,
+      axCalls: full.axCalls,
+      msPerRowRealized: full.msPerRowRealized,
+    };
+
+    // B -- AXVisibleRows, harvested at the same depth the driver uses.
+    resetCalls();
+    var tB = now();
+    var vr = attr(table, "AXVisibleRows");
+    var vrows = 0;
+    var tallyB = { nodes: 0, chars: 0 };
+    if (vr !== null) {
+      var vc = -1;
+      try {
+        vc = Number(vr.count);
+      } catch (e) {
+        vc = -1;
+      }
+      for (var i = 0; i < vc; i++) {
+        var nb = node(vr.objectAtIndex(i));
+        if (nb === null) continue;
+        vrows++;
+        harvestText(nb, tallyB, 2);
+      }
+    }
+    var msB = now() - tB;
+    read.b_visibleRows = {
+      present: vr !== null,
+      rowsRealized: vrows,
+      ms: Math.round(msB),
+      axCalls: CALLS,
+      msPerRowRealized: round2(msB / Math.max(1, vrows)),
+    };
+
+    // C -- geometry for every row, content for a spread of `sparseAreas` rows.
+    // Spread evenly rather than clustered, so no read benefits from a row its
+    // neighbour just realized.
+    resetCalls();
+    var tC = now();
+    var rowsAttrC = attr(table, "AXRows");
+    var all = [];
+    if (rowsAttrC !== null) {
+      var cc = -1;
+      try {
+        cc = Number(rowsAttrC.count);
+      } catch (e) {
+        cc = -1;
+      }
+      for (var j = 0; j < cc; j++) {
+        var e2 = rowsAttrC.objectAtIndex(j);
+        all.push({ el: e2, f: frame(e2) });
+      }
+    }
+    var geomCallsC = CALLS;
+    var geomMsC = now() - tC;
+    var touched = 0;
+    var tallyC = { nodes: 0, chars: 0 };
+    var want = Math.min(sparseAreas, all.length);
+    for (var q = 0; q < want; q++) {
+      var idx = Math.floor((q * all.length) / Math.max(1, want));
+      var nc = node(all[idx].el);
+      if (nc === null) continue;
+      touched++;
+      harvestText(nc, tallyC, 2);
+    }
+    var msC = now() - tC;
+    read.c_sparse = {
+      rowsSeenGeometrically: all.length,
+      geometryMs: round2(geomMsC),
+      geometryAxCalls: geomCallsC,
+      rowsRealized: touched,
+      ms: Math.round(msC),
+      axCalls: CALLS,
+      msPerRowRealized: round2((msC - geomMsC) / Math.max(1, touched)),
+    };
+
+    // Does the geometry-only row list agree with the swept one? The sparse
+    // strategy addresses rows by ORDINAL, so it is only safe if AXRows and the
+    // table's AXChildren enumerate the same rows in the same order.
+    read.d_orderAgreement = {
+      axRowsCount: all.length,
+      axChildrenRowCount: sidebarRows.length,
+      sameCount: all.length === sidebarRows.length,
+      note:
+        "A sparse read addresses a row by its ordinal, so AXRows and AXChildren " +
+        "must enumerate the same rows in the same order. A mismatch here would " +
+        "make the sparse strategy unsafe on this host.",
+    };
+  })();
+  read.sparseRowsAssumed = sparseAreas;
+  read.note =
+    "rowsRealized is the count of rows whose CONTENT was touched -- the quantity the " +
+    "~115 ms/row cost is charged per. Pass --areas N to price the sparse strategy at " +
+    "your own area count (default " +
+    areaHint +
+    ").";
+  out.cell10_readStrategies = read;
+
+  // ----------------------------------------------------------------- CELL 11
+  // NOTIFICATIONS INSTEAD OF POLLING. Every settle in the driver re-reads a
+  // surface until two reads agree, and each of those reads pays the per-row
+  // cost above. If an AXObserver notification fires for the changes the driver
+  // makes, a settle can wait on the notification and read NOTHING while waiting.
+  //
+  // The only actuation is a scroll-bar AXValue write, which is put straight
+  // back. Nothing is clicked, typed, or dragged.
+  var obsCell = { ran: false };
+  (function () {
+    var bar2 = scrollBarOf(scrollArea);
+    var barIdx = -1;
+    if (scrollArea !== null) {
+      var sk = kids(scrollArea);
+      for (var b = 0; b < sk.length; b++) {
+        if (sv(sk[b], "AXRole") === "AXScrollBar") {
+          barIdx = b;
+          break;
+        }
+      }
+    }
+    var scrollPath = chosen._pane.scrollPath;
+    var tableNotes = [
+      "AXRowCountChanged",
+      "AXValueChanged",
+      "AXLayoutChanged",
+      "AXSelectedRowsChanged",
+      "AXResized",
+      "AXMoved",
+      "AXCreated",
+      "AXUIElementDestroyed",
+    ];
+    var appNotes = [
+      "AXFocusedUIElementChanged",
+      "AXWindowCreated",
+      "AXSheetCreated",
+      "AXMainWindowChanged",
+      "AXLayoutChanged",
+      "AXValueChanged",
+      "AXCreated",
+      "AXUIElementDestroyed",
+    ];
+    var targets = [
+      { label: "app", path: [], notifications: appNotes },
+      { label: "table", path: tablePath, notifications: tableNotes },
+    ];
+    if (scrollPath !== null) {
+      targets.push({
+        label: "scrollArea",
+        path: scrollPath,
+        notifications: ["AXValueChanged", "AXLayoutChanged", "AXResized", "AXMoved"],
+      });
+    }
+
+    // (a) the control: armed, nothing actuated. Anything that arrives here is
+    //     the app's own background chatter and must be discounted from (b).
+    obsCell.a_idle = runObserver(pid, targets, 2500, "none");
+
+    // (b) one scroll-bar write, then the original value put back.
+    var before = barValue(bar2);
+    if (barIdx < 0 || scrollPath === null || before === null) {
+      obsCell.b_scrollBarWrite = {
+        ran: false,
+        why: "no addressable AXScrollBar under the sidebar's scroll area",
+      };
+    } else {
+      var target2 = before > 0.5 ? Math.max(0, before - 0.15) : Math.min(1, before + 0.15);
+      var barPath = scrollPath.concat([barIdx]).join(",");
+      obsCell.b_scrollBarWrite = runObserver(
+        pid,
+        targets,
+        3000,
+        "ax-setnum:" + barPath + "=" + target2,
+      );
+      obsCell.b_scrollBarWrite.scrollBefore = before;
+      obsCell.b_scrollBarWrite.scrollDuring = target2;
+      // Put it back, and prove it went back.
+      if (bar2 !== null) {
+        $.AXUIElementSetAttributeValue(bar2, $("AXValue"), $.NSNumber.numberWithDouble(before));
+        sleep(350);
+      }
+      obsCell.b_scrollBarWrite.scrollAfterRestore = barValue(bar2);
+      obsCell.b_scrollBarWrite.restored = Math.abs((barValue(bar2) || 0) - before) < 0.01;
+    }
+    obsCell.ran = true;
+  })();
+  obsCell.note =
+    "`silent` lists the notification classes that were registered successfully and never " +
+    "fired -- for a settle, that is the useful half of the answer. `firstEventMs` is " +
+    "measured from just before the actuation, so it includes the actuation itself.";
+  out.cell11_notifications = obsCell;
+
   // ------------------------------------------------------------------ CELL 8
-  // The five-second verdict: this host's measured numbers run through the cost
-  // model of a real "collapse-all, drag, restore" move. Every input is printed
-  // so the arithmetic can be checked by hand.
+  // THE FIVE-SECOND VERDICT, priced correctly.
+  //
+  // The first version of this cell multiplied the sweep's CALL COUNT by the
+  // per-call latency from cell 5 and reported "REACHABLE: 3,510 ms". That was
+  // wrong, and cells 2 and 6 are what convict it: the same wall time is spent
+  // sweeping at depth 2 (507 nodes) and at depth 6 (2,079 nodes), while AXRows
+  // plus a frame for all 174 rows costs about 2 ms. The cost is therefore NOT
+  // per call. It is paid once per ROW REALIZED, on that row's first
+  // content-bearing touch, and paid again on the next sweep because nothing
+  // caches it -- while geometry is very nearly free.
+  //
+  // So this model has TWO rates, both measured on this host:
+  //   perRowRealizedMs  cell 2 depth-2 run 2, ms / rows       (the expensive one)
+  //   perAxCallMs       cell 5 path A median                  (geometry, cheap)
+  // and every strategy is described by how many rows it REALIZES, not by how
+  // many calls it makes.
+  var perRowRealizedMs = sweeps.depth2.run2.msPerRowRealized;
   var perCallMs = pathA.medianMs === null ? 0 : pathA.medianMs;
-  var sweepCalls = sweeps.depth2.run2.axCalls;
+  var totalRows = sidebarRows.length;
+  var visibleRows = usable === null ? totalRows : usable;
   var areas = chevronRows;
   var CONST_CALLS = 200; // window/pane resolution, drag geometry, verification
-  var SETTLE_MS_PER_CLICK = 950; // 300 pointer settle + 90 press + 250 release + 600 re-census
+  // 300 ms pointer settle + 90 ms press + 250 ms release + 600 ms post-click
+  // re-census settle. This constant used to read 950, which is not the sum of
+  // its own comment; the parts are counted in docs/lab/sbchv1-chevron-budget.md
+  // section 5 and total 1,240 ms per chevron actuation.
+  var SETTLE_MS_PER_CLICK = 1240;
+  // The same actuation once a NOTIFICATION ends it instead of a fixed wait: the
+  // 640 ms of certified gesture timers (REPX1's 300 ms MOVED settle is a rig law
+  // and stays) plus the ~62 ms measured from the gesture completing to the first
+  // AXRowCountChanged (VOPAT1 section 4.1).
+  var SETTLE_MS_PER_CLICK_OBSERVED = 705;
   var DRAG_SETTLE_MS = 1205; // one sidebar drag's own fixed timers
+  var GEOM_CALLS_PER_ROW = 2; // AXPosition + AXSize
+  // The last model's inputs, named so the arithmetic stays auditable.
+  var LOCATOR_ROWS = Math.min(10, sparseAreas); // rows read to identify the sidebar pane
+  var ACTED_ROWS = 3; // source row, anchor row, post-drag confirmation
+  var GEOMETRY_PASSES = 8; // scroll iterations, fold confirmations, drop planning
 
-  // Two STRATEGIES, because the lab measured that they differ by more than the
-  // read cost does (docs/lab/sbchv1-chevron-budget.md section 6):
-  //   collapse-walls  what ships today: fold only the sections that block the
-  //                   path. Two chevron actuations for the reported shape.
-  //   collapse-all    fold every area, drag in the short list, restore all.
-  //                   Fewer rows per read, but 2 actuations PER AREA -- and the
-  //                   fixed settles per actuation are what the bar dies on.
-  function model(strategy, clicks, sweepsCount, callsPerSweep, basis) {
-    var axCalls = sweepsCount * callsPerSweep + CONST_CALLS;
-    var axMs = axCalls * perCallMs;
-    var settleMs = clicks * SETTLE_MS_PER_CLICK + DRAG_SETTLE_MS;
-    var totalMs = axMs + settleMs;
+  // A "read" is one snapshot of the sidebar. The ladder takes about six of them
+  // for a collapse-the-walls move (locate, pre-flight, scroll loop, fold
+  // confirm, drag plan, restore confirm) and two per area for collapse-all.
+  function model(strategy, basis, clicks, reads, rowsRealizedPerRead, geomCallsPerRead, perClick) {
+    var settlePerClick = perClick === undefined ? SETTLE_MS_PER_CLICK : perClick;
+    var contentMs = reads * rowsRealizedPerRead * perRowRealizedMs;
+    var geomMs = (reads * geomCallsPerRead + CONST_CALLS) * perCallMs;
+    var settleMs = clicks * settlePerClick + DRAG_SETTLE_MS;
+    var totalMs = contentMs + geomMs + settleMs;
     return {
       strategy: strategy,
       readBasis: basis,
       inputs: {
+        perRowRealizedMs: perRowRealizedMs,
         perAxCallMs: perCallMs,
-        axCallsPerSweep: callsPerSweep,
-        sweeps: sweepsCount,
-        areasWithChevrons: areas,
+        reads: reads,
+        rowsRealizedPerRead: rowsRealizedPerRead,
+        geometryCallsPerRead: geomCallsPerRead,
         chevronClicks: clicks,
         constantAxCalls: CONST_CALLS,
-        settleMsPerClick: SETTLE_MS_PER_CLICK,
+        settleMsPerClick: settlePerClick,
         dragSettleMs: DRAG_SETTLE_MS,
       },
       arithmetic:
-        sweepsCount +
-        " sweeps x " +
-        callsPerSweep +
-        " calls + " +
-        CONST_CALLS +
-        " const = " +
-        axCalls +
-        " AX calls; " +
-        axCalls +
+        reads +
+        " reads x " +
+        rowsRealizedPerRead +
+        " rows realized x " +
+        perRowRealizedMs +
+        " ms = " +
+        Math.round(contentMs) +
+        " ms content; (" +
+        reads +
         " x " +
+        geomCallsPerRead +
+        " + " +
+        CONST_CALLS +
+        ") calls x " +
         perCallMs +
         " ms = " +
-        Math.round(axMs) +
-        " ms AX; plus " +
+        Math.round(geomMs) +
+        " ms geometry; plus " +
         clicks +
         " clicks x " +
-        SETTLE_MS_PER_CLICK +
+        settlePerClick +
         " ms + " +
         DRAG_SETTLE_MS +
         " ms drag = " +
         settleMs +
-        " ms fixed timers",
-      estimatedAxCalls: axCalls,
-      axMs: Math.round(axMs),
+        " ms settles",
+      rowsRealizedTotal: reads * rowsRealizedPerRead,
+      contentMs: Math.round(contentMs),
+      geometryMs: Math.round(geomMs),
       fixedTimerMs: settleMs,
       predictedMoveMs: Math.round(totalMs),
       meetsFiveSecondBar: totalMs <= 5000,
     };
   }
 
-  // Sweep counts: collapse-walls does ~6 reads (locate, pre-flight, scroll loop,
-  // fold confirm, drag plan, restore confirm); collapse-all does 2 per area.
-  function bothStrategies(callsPerSweep, basis) {
-    return [
-      model("collapse-walls (what ships today)", 2, 6, callsPerSweep, basis),
-      model(
-        "collapse-all (every area folded and restored)",
-        areas * 2,
-        areas * 2,
-        callsPerSweep,
-        basis,
-      ),
-    ];
-  }
+  var models = [
+    model(
+      "collapse-walls, full sweep (what ships today)",
+      "cell 2 depth-2 run 2: content on all " + totalRows + " rows, every read",
+      2,
+      6,
+      totalRows,
+      0,
+    ),
+    model(
+      "collapse-walls, AXVisibleRows-bounded reads",
+      "cell 6/10: content on the " + visibleRows + " visible rows only",
+      2,
+      6,
+      visibleRows,
+      1 + GEOM_CALLS_PER_ROW * visibleRows,
+    ),
+    model(
+      "collapse-walls, SPARSE reads (geometry + predicted rows)",
+      "cell 10c: geometry for all " +
+        totalRows +
+        " rows (cheap) + content on " +
+        sparseAreas +
+        " predicted area rows",
+      2,
+      6,
+      sparseAreas,
+      1 + GEOM_CALLS_PER_ROW * totalRows,
+    ),
+    model(
+      "collapse-ALL (" + areas * 2 + " actuations), SPARSE reads",
+      "cell 10c, but two actuations per area with a chevron",
+      areas * 2,
+      areas * 2,
+      sparseAreas,
+      1 + GEOM_CALLS_PER_ROW * totalRows,
+    ),
+    // The strategy the campaign actually proposes, and the reason the four rows
+    // above are all pessimistic: they assume every one of the six reads has to
+    // identify every area. It does not. Only three moments in a move need any
+    // content at all -- the source row and the anchor row before the drag, and
+    // the moved row after it -- because a fold is confirmed by a ROW COUNT and a
+    // drop boundary is computed from FRAMES, both of which are geometry. The
+    // locator is the one remaining bulk read: content on the first rows of each
+    // candidate pane until the built-in `Source Inbox`..`Source Trash` image
+    // descriptions identify the sidebar, once per drive, then cached as a child
+    // index path. Modelled as ONE read of (locator + 3) rows plus the geometry
+    // of eight passes. See docs/lab/vopat1-screen-reader-pattern.md section 8.
+    model(
+      "collapse-walls, content ONLY on the rows acted upon (VOPAT1 §8)",
+      "locator (" +
+        LOCATOR_ROWS +
+        " rows, once) + source + anchor + post-drag confirm; every fold, scroll " +
+        "and boundary computed from geometry",
+      2,
+      1,
+      LOCATOR_ROWS + ACTED_ROWS,
+      GEOMETRY_PASSES * (1 + GEOM_CALLS_PER_ROW * totalRows),
+    ),
+  ];
 
-  var models = bothStrategies(sweepCalls, "cell 2 depth-2 run 2 (full sweep)");
-  if (usable !== null && sidebarRows.length > 0) {
-    // Same per-row cost, fewer rows: scale the measured sweep by the fraction of
-    // rows a bounded read would actually touch.
-    var scaled = Math.max(1, Math.round((sweepCalls * usable) / sidebarRows.length));
-    var bounded = bothStrategies(
-      scaled,
-      "cell 2 depth-2 run 2 scaled by " +
-        usable +
-        "/" +
-        sidebarRows.length +
-        " rows (AXVisibleRows)",
-    );
-    for (var bi = 0; bi < bounded.length; bi++) {
-      bounded[bi].boundedRowCount = usable;
-      bounded[bi].totalRowCount = sidebarRows.length;
-      models.push(bounded[bi]);
-    }
-  }
+  // The settle programme on top of the cheapest read strategy: the same move
+  // with each chevron's post-click re-census settle replaced by the notification
+  // cell 11 measures. Printed last because, once the reads are sparse, the
+  // SETTLES are the dominant term -- the opposite of where this started.
+  models.push(
+    model(
+      "collapse-walls, rows-acted-upon reads, observer-driven settles",
+      "the row above, with each fold ended by its AXRowCountChanged instead of a fixed wait",
+      2,
+      1,
+      LOCATOR_ROWS + ACTED_ROWS,
+      GEOMETRY_PASSES * (1 + GEOM_CALLS_PER_ROW * totalRows),
+      SETTLE_MS_PER_CLICK_OBSERVED,
+    ),
+  );
+  models[models.length - 1].note =
+    "Only reachable if cell 11 shows a notification actually firing for the fold. Check " +
+    "cell11_notifications before believing this row.";
+
   var best = models[0];
   for (var mi = 1; mi < models.length; mi++) {
     if (models[mi].predictedMoveMs < best.predictedMoveMs) best = models[mi];
   }
   out.cell8_costModel = {
-    note: "A prediction from THIS host's measured latency, not a measurement of the move itself.",
+    note:
+      "A prediction from THIS host's measured rates, not a measurement of the move itself. " +
+      "Content is priced PER ROW REALIZED and geometry PER CALL -- the two differ by " +
+      "roughly three orders of magnitude on a real display, which is why a single " +
+      "per-call latency cannot model a sidebar read.",
     fiveSecondBarMs: 5000,
+    rates: {
+      perRowRealizedMs: perRowRealizedMs,
+      perAxCallMs: perCallMs,
+      ratio: perCallMs > 0 ? Math.round(perRowRealizedMs / perCallMs) : null,
+      totalRows: totalRows,
+      visibleRows: visibleRows,
+      sparseRowsAssumed: sparseAreas,
+      rowsWithChevron: areas,
+    },
     bestCase: {
       strategy: best.strategy,
       readBasis: best.readBasis,
@@ -1138,20 +1860,18 @@ function run(argv) {
       meetsFiveSecondBar: best.meetsFiveSecondBar,
     },
     verdict: best.meetsFiveSecondBar
-      ? "REACHABLE on this host: " +
-        best.strategy +
-        " with " +
-        best.readBasis +
-        " predicts " +
-        best.predictedMoveMs +
-        " ms."
+      ? "REACHABLE on this host: " + best.strategy + " predicts " + best.predictedMoveMs + " ms."
       : "NOT REACHABLE on this host with any modelled strategy: the cheapest is " +
         best.strategy +
         " at " +
         best.predictedMoveMs +
-        " ms (" +
-        best.fixedTimerMs +
-        " ms of that is fixed timers that no read optimisation touches).",
+        " ms" +
+        (best.fixedTimerMs === undefined
+          ? ""
+          : " (" +
+            best.fixedTimerMs +
+            " ms of that is fixed timers that no read optimisation touches)") +
+        ".",
     models: models,
   };
 
