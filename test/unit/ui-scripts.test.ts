@@ -9,6 +9,9 @@ import {
   axAssertEligibleScript,
   axAuditDateAreasScript,
   axAuditDialogScript,
+  axDialogOpenScript,
+  splitAeDebug,
+  COMMIT_FAILED_TAG,
   axConvergeWeekdaysScript,
   axEnsureCheckboxScript,
   axKeyScript,
@@ -444,8 +447,8 @@ describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT field
     // shared `text field 1 of group 1` spelling wrote the requested interval into
     // the count on any PRE-POPULATED (reschedule) dialog.
     for (const s of [interval, endsCount]) {
-      expect(s).toContain('my cgLabelY(g, "Ends:")');
-      expect(s).toContain("set outY to item 2 of labelPos");
+      expect(s).toContain('my cgLabelY(snap, "Ends:")');
+      expect(s).toContain("set outY to (item i of ys)");
     }
   });
 
@@ -454,7 +457,7 @@ describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT field
     // interval at y=283. Preferring that positive match means a group whose shape
     // we do not recognize refuses rather than falling back on "the other field".
     for (const s of [interval, endsCount]) {
-      expect(s).toContain('my cgLabelY(g, "Every")');
+      expect(s).toContain('my cgLabelY(snap, "Every")');
       expect(s).toContain('on the \\"Every\\" row');
     }
     // The after-completion group carries NEITHER label (its only static text is
@@ -466,8 +469,8 @@ describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT field
 
   it("the ends-count REQUIRES the `Ends:` label — it is never inferred", () => {
     expect(endsCount).toContain('carries no \\"Ends:\\" label');
-    expect(endsCount).toContain("my cgOnRow(g, endsY, tol, true)");
-    expect(endsCount).toContain('my cgField(g, "ends-count", 8)');
+    expect(endsCount).toContain("my cgOnRow(snap, endsY, tol, true)");
+    expect(endsCount).toContain('my cgField(g, cgSnapshot, "ends-count", 8)');
   });
 
   it("fails closed unless EXACTLY one field matches, reporting the field inventory", () => {
@@ -504,10 +507,11 @@ describe("axSetGroupNumberScript — interval and ends-count are DIFFERENT field
     for (const s of [interval, endsCount]) {
       // the signature is the labels plus the field y-positions, read twice
       expect(s).toContain("set prevSig to sig");
-      expect(s).toContain("if sig is prevSig then return true");
+      expect(s).toContain("if (sig is prevSig) and (my cgValid(snap)) then");
       expect(s).toContain("still re-laying out");
-      // the settle precedes the row discrimination it protects
-      expect(s.indexOf("my cgSettle(g)")).toBeLessThan(s.indexOf("my cgField(g,"));
+      // the settle precedes the row discrimination it protects — and HANDS it the
+      // inventory it just proved stable, rather than leaving it to read again.
+      expect(s.indexOf("my cgSettle(g,")).toBeLessThan(s.indexOf("my cgField(g, cgSnapshot,"));
     }
   });
 });
@@ -520,8 +524,8 @@ describe("axSetRowFieldScript — the start-offset field is label-anchored (CGRD
     // luck (0 direct text fields with deadlines off, exactly 1 with them on) but
     // never provably so. Now the anchor is the `days earlier` static text at y=413
     // against the field's y=409.
-    expect(script).toContain('my rfField(c, "days earlier", 8)');
-    expect(script).toContain("my cgLabelY(c, rowLabel)");
+    expect(script).toContain('my rfField(c, rfSnapshot, "days earlier", 8)');
+    expect(script).toContain("my cgLabelY(snap, rowLabel)");
   });
 
   it("fails closed on a missing label or a non-unique row, naming the inventory", () => {
@@ -598,23 +602,23 @@ describe("axAuditDialogScript — the pre-commit full-dialog audit (CGRD1 guard 
     // wrote — the numbers go back through the label-row handlers, so a wrong
     // ADDRESS (the #589 shape) is visible here in a way a per-step read-back
     // structurally cannot be.
-    expect(script).toContain('my cgField(g, "interval", 8)');
-    expect(script).toContain('my cgField(g, "ends-count", 8)');
-    expect(script).toContain('my rfField(sh, "days earlier", 8)');
+    expect(script).toContain('my cgField(g, cgSnapshot, "interval", 8)');
+    expect(script).toContain('my cgField(g, cgSnapshot, "ends-count", 8)');
+    expect(script).toContain('my rfField(sh, rfSnapshot, "days earlier", 8)');
     expect(script).toContain(`pop up button 1 of ${SHELL}`);
     expect(script).toContain(`checkbox "Add deadlines" of ${SHELL}`);
     expect(script).toContain("repeat with k from 3 to (count of pop up buttons of g)");
   });
 
   it("settles the cadence group before reading anything (no sleeps)", () => {
-    expect(script).toContain("my cgSettle(g)");
-    expect(script.indexOf("my cgSettle(g)")).toBeLessThan(
-      script.indexOf('my cgField(g, "interval"'),
+    expect(script).toContain("my cgSettle(g,");
+    expect(script.indexOf("my cgSettle(g,")).toBeLessThan(
+      script.indexOf('my cgField(g, cgSnapshot, "interval"'),
     );
   });
 
   it("returns OK only when nothing differs, and otherwise names every mismatch", () => {
-    expect(script).toContain('if (count of bad) is 0 then return "OK"');
+    expect(script).toContain("if (count of bad) is not 0 then error");
     expect(script).toContain("does not hold what this drive entered");
     expect(script).toContain("control(s) differ");
     // Both values ride the message, so the operator can see what the app did.
@@ -901,5 +905,189 @@ describe("parseGuardLog — recovering the folded census (DRVLAT1)", () => {
 
   it("reports no state at all when nothing was logged (fail-closed for the caller)", () => {
     expect(parseGuardLog("execution error: boom (-1728)").state).toBeNull();
+  });
+});
+
+describe("axDialogOpenScript — the dialog wait and its census, in one hop (RDLAT2)", () => {
+  const script = axDialogOpenScript(
+    ['sheet 1 of (first window whose subrole is "AXStandardWindow")', "window 9"],
+    5000,
+  );
+
+  it("polls the shells in priority order and reports WHICH one answered", () => {
+    // The attached sheet is probed before the detached editor, and the index it
+    // returns is what every later step addresses — so no hop after this one has
+    // to ask about the shell that is demonstrably not there.
+    expect(script.indexOf("AXStandardWindow")).toBeLessThan(script.indexOf("window 9"));
+    expect(script).toContain("set dlgIdx to 1");
+    expect(script).toContain("set dlgIdx to 2");
+    expect(script).toContain('set out to "idx=" & dlgIdx & " roles="');
+  });
+
+  it("reads the shell's roles as ONE list, not a count per control class", () => {
+    expect(script).toContain("set dlgRoles to (role of UI elements of dlgShell)");
+    expect(script).not.toContain("count of checkboxes");
+  });
+
+  it("answers 'none' when the window elapses, leaving the abort path unchanged", () => {
+    expect(script).toContain('return "none"');
+  });
+});
+
+describe("axAuditDialogScript — the folded commit (RDLAT2)", () => {
+  const controls = [
+    {
+      label: "frequency = weekly",
+      kind: "popup" as const,
+      path: "pop up button 1",
+      expected: ["weekly"],
+    },
+  ];
+
+  it("presses OK inside its own script, and only PAST the mismatch check", () => {
+    // The audit and the press used to be two hops with a driver round trip in
+    // between — a window in which the thing just audited can change. Folded,
+    // what is committed is the state the audit read.
+    const s = axAuditDialogScript({
+      shell: "sheet 1",
+      group: "group 1",
+      controls,
+      commit: 'button "OK" of sheet 1',
+    });
+    expect(s.indexOf("does not hold what this drive entered")).toBeLessThan(
+      s.indexOf('click (button "OK" of sheet 1)'),
+    );
+    expect(s).toContain("if (count of bad) is not 0 then error");
+  });
+
+  it("tags a commit failure so it is never reported as an audit failure", () => {
+    const s = axAuditDialogScript({
+      shell: "sheet 1",
+      group: "group 1",
+      controls,
+      commit: 'button "OK" of sheet 1',
+    });
+    expect(s).toContain(COMMIT_FAILED_TAG);
+  });
+
+  it("omits the press entirely when the recipe supplied no commit", () => {
+    const s = axAuditDialogScript({ shell: "sheet 1", group: "group 1", controls });
+    expect(s).not.toContain("click (");
+    expect(s).toContain('return "OK"');
+  });
+
+  it("reads the SHELL's own field inventory only when a control needs it", () => {
+    const withoutRowField = axAuditDialogScript({ shell: "sh", group: "g", controls });
+    expect(withoutRowField).not.toContain("set rfSnapshot to");
+    const withRowField = axAuditDialogScript({
+      shell: "sh",
+      group: "g",
+      controls: [
+        ...controls,
+        {
+          label: "start 2 days earlier",
+          kind: "row-field" as const,
+          rowLabel: "days earlier",
+          expected: ["2"],
+        },
+      ],
+    });
+    expect(withRowField).toContain("set rfSnapshot to my cgSnap(sh)");
+  });
+
+  it("carries the manifest's expectation into the settle, or the -1 sentinel", () => {
+    const advised = axAuditDialogScript({
+      shell: "sh",
+      group: "g",
+      controls,
+      expectation: { fields: 2, requiredLabels: ["Every", "Ends:"], forbiddenLabels: [] },
+    });
+    expect(advised).toContain('my cgSettle(g, 2, {"Every", "Ends:"}, {})');
+    const unadvised = axAuditDialogScript({ shell: "sh", group: "g", controls });
+    expect(unadvised).toContain("my cgSettle(g, -1, {}, {})");
+  });
+});
+
+describe("the cadence group is read as ONE inventory (RDLAT2)", () => {
+  it("asks for each property in the PLURAL — four events, whatever the control count", () => {
+    const s = axSetGroupNumberScript("group 1 of sheet 1", "interval", "3");
+    expect(s).toContain("set sv to (value of static texts of c)");
+    expect(s).toContain("set sp to (position of static texts of c)");
+    expect(s).toContain("set fv to (value of text fields of c)");
+    expect(s).toContain("set fp to (position of text fields of c)");
+    // …and never one control at a time, which is what made a scan cost a
+    // round-trip per label.
+    expect(s).not.toContain("value of static text i of");
+    expect(s).not.toContain("position of text field i of");
+  });
+
+  it("treats a mismatched pair of plural reads as NOT-YET-SETTLED, never as a shape", () => {
+    // The two reads of a class are two events, so a tree that changes between
+    // them can answer different lengths. That is a snapshot to discard, not a
+    // picture to reason from.
+    const s = axSetGroupNumberScript("group 1 of sheet 1", "interval", "3");
+    expect(s).toContain(
+      "set ok to ((count of sv) is (count of sp)) and ((count of fv) is (count of fp))",
+    );
+    expect(s).toContain('if not (my cgValid(snap)) then return ""');
+  });
+
+  it("WAITS for the expected shape when the manifest supplied one, and refuses if it never comes", () => {
+    const s = axSetGroupNumberScript(
+      "group 1 of sheet 1",
+      "ends-count",
+      "4",
+      undefined,
+      undefined,
+      {
+        fields: 2,
+        requiredLabels: ["Every", "Ends:"],
+        forbiddenLabels: [],
+      },
+    );
+    expect(s).toContain('my cgSettle(g, 2, {"Every", "Ends:"}, {})');
+    expect(s).toContain("never took the shape this step expects");
+  });
+});
+
+describe("the typing loop waits for focus rather than refusing on the first miss (RDLAT2)", () => {
+  for (const [name, script] of [
+    ["set-value", axSetValueScript("text field 1", "3")],
+    ["set-group-number", axSetGroupNumberScript("group 1", "interval", "3")],
+    ["set-row-field", axSetRowFieldScript("sheet 1", "days earlier", "3")],
+  ] as const) {
+    it(`${name}: types only with proven focus, and refuses once the attempts are spent`, () => {
+      // The property that matters is unchanged — nothing is typed unless the
+      // field is observed focused. What changed is that a field which is not
+      // ready YET gets another attempt instead of an immediate refusal, so the
+      // guard stops depending on how long the driver's own reads happen to take.
+      expect(script).toContain("if gotFocus then");
+      expect(script.indexOf("if gotFocus then")).toBeLessThan(script.indexOf('keystroke "3"'));
+      expect(script).toContain(
+        'if not gotFocus then error "refused to type \\"3\\": the field did not take keyboard focus',
+      );
+      expect(script.indexOf('keystroke "3"')).toBeLessThan(script.indexOf("if not gotFocus then"));
+    });
+  }
+});
+
+describe("splitAeDebug — the AX round-trip counter (RDLAT2)", () => {
+  it("counts one per logged Apple event and REMOVES every diagnostic line", () => {
+    // The diagnostic writes to stdout, interleaved ahead of the script's own
+    // result — which is the stream every step's verdict is parsed from. An armed
+    // count must not change a single verdict.
+    const raw =
+      "{core,cnte target='psn '[System Events] {kocl=cwin} returnID=-1}\n" +
+      "{core,getd target='psn '[System Events] {} returnID=-2}\n" +
+      "true";
+    const { axOps, text } = splitAeDebug(raw);
+    expect(axOps).toBe(2);
+    expect(text.trim()).toBe("true");
+  });
+
+  it("leaves ordinary output and refusal text untouched", () => {
+    const msg = 'execution error: refused to type "3": the field did not take keyboard focus';
+    expect(splitAeDebug(msg)).toEqual({ axOps: 0, text: msg });
+    expect(splitAeDebug("")).toEqual({ axOps: 0, text: "" });
   });
 });

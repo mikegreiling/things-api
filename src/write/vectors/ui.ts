@@ -43,6 +43,14 @@ import { certificationOf } from "./ui-certification.ts";
 import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import {
+  type CadenceExpectation,
+  cadenceExpectationFor,
+  installedThingsVersion,
+  matchRepeatShell,
+  parseDialogOpenSnapshot,
+  shapeManifestCoversVersion,
+} from "./ui-shape.ts";
+import {
   AX_DIALOG_SHELL_SNIPPET,
   axFocusGuardPrelude,
   CENSUS_TIMEOUT_MS,
@@ -181,6 +189,86 @@ export interface UiRunResult {
   stdout: string;
   stderr: string;
   timedOut?: boolean;
+  /**
+   * ACCESSIBILITY ROUND-TRIPS this hop made — the Apple events its osascript
+   * sent to System Events (RDLAT2). Present only while round-trip counting is
+   * armed (see {@link axRoundTripCountingArmed}); absent otherwise, and absent
+   * for the `reveal` primitive, which sends no Apple event at all.
+   *
+   * This is the unit the FIELD pays in. A hop's wall time on a clone is mostly
+   * its process spawn; on the maintainer's Mac the same hop is dominated by how
+   * many questions it asks the tree, because each one costs an order of
+   * magnitude more there (~20 ms against ~1.7 ms, measured 2026-09-02). Counting
+   * them is therefore the only per-hop number that transfers between hosts.
+   */
+  axOps?: number;
+}
+
+/**
+ * The environment switch that arms AX ROUND-TRIP COUNTING (RDLAT2).
+ *
+ * When it is set, every osascript this vector spawns runs with Apple's
+ * `AEDebugSends` diagnostic enabled: the interpreter logs one line per Apple
+ * event it SENDS, which is exactly one line per Accessibility round-trip. The
+ * dispatch seam counts those lines into {@link UiRunResult.axOps} and REMOVES
+ * them from the hop's stderr, so every refusal a caller reads is unchanged.
+ *
+ * Off by default and never armed implicitly: a diagnostic that rewrites stderr
+ * has no business running in an ordinary drive.
+ *
+ * ONE LIMITATION, stated plainly: the counting rides the environment of the
+ * process that spawns osascript. On a host where the deputy carries automation,
+ * that process is the deputy — not the CLI — so the variable has to be in ITS
+ * environment for the count to appear. Where it is not, `axOps` is simply
+ * absent and the trace still carries every hop's `durationMs`. On a machine with
+ * the helpers switched off (`things config set helpers-enabled false`) the CLI
+ * spawns osascript itself and the counts appear.
+ */
+export const AX_COUNT_ENV = "THINGS_API_AX_COUNT";
+
+/** One `AEDebugSends` line: `{core,cnte target='psn '[System Events] {…}`. */
+const AE_SEND_LINE = /^\{\S+\s+target=/;
+
+let axCountArmed: boolean | null = null;
+
+/**
+ * Is round-trip counting armed? Resolved once per process, and ARMING IT SETS
+ * `AEDebugSends` in this process's environment — which is what every osascript
+ * child then inherits. Exported for the unit matrix.
+ */
+export function axRoundTripCountingArmed(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (axCountArmed === null) {
+    const raw = (env[AX_COUNT_ENV] ?? "").trim().toLowerCase();
+    axCountArmed = raw !== "" && raw !== "0" && raw !== "false" && raw !== "no";
+    if (axCountArmed) env.AEDebugSends = "1";
+  }
+  return axCountArmed;
+}
+
+/** Test seam: forget the memoized arming decision. */
+export function resetAxRoundTripCounting(): void {
+  axCountArmed = null;
+}
+
+/**
+ * Split an `AEDebugSends` stream into the round-trip COUNT and the text a caller
+ * should see.
+ *
+ * MEASURED (RDLAT2, guest probe `aeprobe`): the diagnostic writes its lines to
+ * **stdout**, interleaved ahead of the script's own result — which is exactly
+ * the stream every step's verdict is parsed from (`"true"`, `"OK"`, a frame).
+ * So the split runs over BOTH streams and removes every diagnostic line: an
+ * armed count must not change a single verdict or a single refusal sentence.
+ */
+export function splitAeDebug(text: string): { axOps: number; text: string } {
+  if (text === "") return { axOps: 0, text };
+  const kept: string[] = [];
+  let axOps = 0;
+  for (const line of text.split("\n")) {
+    if (AE_SEND_LINE.test(line)) axOps += 1;
+    else kept.push(line);
+  }
+  return { axOps, text: kept.join("\n") };
 }
 
 /**
@@ -260,132 +348,236 @@ const OCCURRENCE_POLL_MS = 100;
  *    undocumented private surface: an unrecognized shape is a refusal, never a
  *    best guess.
  */
-const AX_CADENCE_HANDLERS = `on cgLabelY(g, want)
+const AX_CADENCE_HANDLERS = `on cgSnap(c)
+  -- ONE INVENTORY, FOUR APPLE EVENTS (RDLAT2).
+  --
+  -- Every discrimination below — which row a label sits on, which field shares
+  -- it, whether the group has stopped re-laying out — is a question about the
+  -- SAME instant. These handlers used to ask the tree one control at a time
+  -- ("count of static texts", then "value of static text 1", then "value of
+  -- static text 2", …), which costs an Accessibility round-trip PER CONTROL and
+  -- per repetition: a monthly cadence group answered eight events for a single
+  -- scan, and cgField ran three such scans. AppleScript will answer a PLURAL
+  -- property in one event, so the whole inventory is four — values and positions
+  -- of the static texts, values and positions of the text fields — no matter how
+  -- many controls there are. That is the same measurement, taken closer together,
+  -- for a fraction of the round-trips (MEASURED: 72 ms → 23 ms per scan on the
+  -- clone; the field pays each round-trip an order of magnitude more).
+  --
+  -- The two reads of a class are still two events, so a tree that changes between
+  -- them can return mismatched lengths. That is reported as an INVALID snapshot
+  -- (an empty signature), which the settle below treats as "not settled yet"
+  -- rather than reasoning from half a picture.
+  set sv to {}
+  set sp to {}
+  set fv to {}
+  set fp to {}
   tell application "System Events"
-    set outY to missing value
-    repeat with i from 1 to (count of static texts of g)
-      set sv to ""
-      try
-        set sv to (value of static text i of g) as text
-      end try
-      if sv is want then
-        -- bind the position, THEN index it: System Events refuses indexing a
-        -- position read inline from a specifier (-1700).
-        set labelPos to position of static text i of g
-        set outY to item 2 of labelPos
-      end if
-    end repeat
-    return outY
+    try
+      set sv to (value of static texts of c)
+      set sp to (position of static texts of c)
+    end try
+    try
+      set fv to (value of text fields of c)
+      set fp to (position of text fields of c)
+    end try
   end tell
+  set ok to ((count of sv) is (count of sp)) and ((count of fv) is (count of fp))
+  return {my cgTexts(sv), my cgYs(sp), my cgTexts(fv), my cgYs(fp), ok}
+end cgSnap
+
+on cgTexts(lst)
+  -- A control with no value reads as \`missing value\`; the per-control loop this
+  -- replaces caught that with a \`try\` and defaulted to "", so this does too.
+  set out to {}
+  repeat with v in lst
+    set c to contents of v
+    if c is missing value then
+      set end of out to ""
+    else
+      try
+        set end of out to (c as text)
+      on error
+        set end of out to ""
+      end try
+    end if
+  end repeat
+  return out
+end cgTexts
+
+on cgYs(lst)
+  -- A position is {x, y}; every row rule here is about the y.
+  set out to {}
+  repeat with p in lst
+    set c to contents of p
+    try
+      set end of out to (item 2 of c)
+    on error
+      set end of out to -1000000
+    end try
+  end repeat
+  return out
+end cgYs
+
+on cgValid(snap)
+  return (item 5 of snap)
+end cgValid
+
+on cgSig(snap)
+  -- The SHAPE SIGNATURE the settle compares: the static texts' values and the
+  -- numeric fields' row positions — byte-for-byte the signature the per-control
+  -- loop built, so the settle's behavior is unchanged. An invalid snapshot has no
+  -- signature, so it can never compare equal to anything (including itself).
+  if not (my cgValid(snap)) then return ""
+  set s to ""
+  repeat with v in (item 1 of snap)
+    set s to s & "|s:" & (contents of v)
+  end repeat
+  repeat with y in (item 4 of snap)
+    set s to s & "|f:" & (contents of y)
+  end repeat
+  return s
+end cgSig
+
+on cgLabelY(snap, want)
+  -- The y of the LAST static text whose value is exactly \`want\` — the same rule
+  -- (and the same last-wins behavior) as the loop it replaces, computed from the
+  -- snapshot instead of re-asking the tree.
+  set outY to missing value
+  set vals to item 1 of snap
+  set ys to item 2 of snap
+  repeat with i from 1 to (count of vals)
+    if (contents of (item i of vals)) is want then set outY to (item i of ys)
+  end repeat
+  return outY
 end cgLabelY
 
-on cgInventory(g)
-  tell application "System Events"
-    set inv to ""
-    repeat with i from 1 to (count of text fields of g)
-      set fp to position of text field i of g
-      set inv to inv & " #" & i & "(y=" & (item 2 of fp) & ",shows=" & ((value of text field i of g) as text) & ")"
-    end repeat
-    if inv is "" then set inv to " (none)"
-    return inv
-  end tell
-end cgInventory
-
-on cgOnRow(g, y, tol, want)
-  tell application "System Events"
-    set hits to {}
-    repeat with i from 1 to (count of text fields of g)
-      set fp to position of text field i of g
-      set dy to (item 2 of fp) - y
-      if dy < 0 then set dy to -dy
-      set onRow to (dy <= tol)
-      if onRow is want then set end of hits to text field i of g
-    end repeat
-    return hits
-  end tell
+on cgOnRow(snap, y, tol, want)
+  -- The INDEXES of the numeric fields that do (or do not) share row \`y\`.
+  set hits to {}
+  set ys to item 4 of snap
+  repeat with i from 1 to (count of ys)
+    set dy to (item i of ys) - y
+    if dy < 0 then set dy to -dy
+    set onRow to (dy <= tol)
+    if onRow is want then set end of hits to i
+  end repeat
+  return hits
 end cgOnRow
 
-on cgSettle(g)
+on cgInventory(snap)
+  set inv to ""
+  set vals to item 3 of snap
+  set ys to item 4 of snap
+  repeat with i from 1 to (count of ys)
+    set inv to inv & " #" & i & "(y=" & (item i of ys) & ",shows=" & (contents of (item i of vals)) & ")"
+  end repeat
+  if inv is "" then set inv to " (none)"
+  return inv
+end cgInventory
+
+on cgMatches(snap, wantFields, need, forbid)
+  -- THE SHAPE MANIFEST'S CHECK (RDLAT2, src/write/vectors/ui-shape.ts): does this
+  -- inventory look like the state the drive has just produced? \`wantFields\` < 0
+  -- means the caller has no expectation for this state, so nothing is asserted.
+  if wantFields < 0 then return false
+  if not (my cgValid(snap)) then return false
+  if (count of (item 3 of snap)) is not wantFields then return false
+  repeat with w in need
+    if (my cgLabelY(snap, contents of w)) is missing value then return false
+  end repeat
+  repeat with w in forbid
+    if (my cgLabelY(snap, contents of w)) is not missing value then return false
+  end repeat
+  return true
+end cgMatches
+
+on cgSettle(c, wantFields, need, forbid)
   -- SETTLE ON THE GROUP'S OWN SHAPE, never on a clock (determinism doctrine).
   -- A frequency switch REBUILDS the cadence group. Two things go wrong when a
   -- read starts too early: the row discrimination reads positions from controls
   -- that are still moving, and keystrokes land on a field being torn down —
   -- unhandled, so macOS beeps (BEEP1). Poll until two consecutive reads of the
   -- group's label + field-position signature agree, then proceed.
-  tell application "System Events"
-    set sig to ""
-    set prevSig to "<none>"
-    repeat ${SETTLE_READS} times
-      set prevSig to sig
-      set sig to ""
-      repeat with i from 1 to (count of static texts of g)
-        set sv to ""
-        try
-          set sv to (value of static text i of g) as text
-        end try
-        set sig to sig & "|s:" & sv
-      end repeat
-      repeat with i from 1 to (count of text fields of g)
-        set fp to position of text field i of g
-        set sig to sig & "|f:" & (item 2 of fp)
-      end repeat
-      if sig is prevSig then return true
-      delay ${SETTLE_POLL_S}
-    end repeat
-    error "the Repeat dialog's cadence group is still re-laying out — its shape changed on every read; last seen" & sig
-  end tell
+  --
+  -- RETURNS THE SETTLED SNAPSHOT (RDLAT2). It used to return \`true\` and leave
+  -- every caller to go and read the group again; handing back the inventory that
+  -- was just PROVEN stable removes those reads and — more to the point — makes
+  -- the addressing decision on the very instant the settle vouched for, instead
+  -- of on a later one nobody checked.
+  -- WITH AN EXPECTATION, THE SETTLE WAITS FOR IT (RDLAT2). Agreement alone is
+  -- only the absence of movement, and the absence of movement is also what the
+  -- group looks like BEFORE the step's own input has taken effect — which is how
+  -- the ends-count step read a one-field group, stable and stale, and refused
+  -- ("0 field(s) on the Ends: row") the moment the reads got cheap enough to land
+  -- inside that window. Where the manifest can say what the finished state looks
+  -- like, the settle waits for THAT and for it to hold still, so what it returns
+  -- is a group that has demonstrably finished the transition rather than one that
+  -- has not started it. Where it cannot (a fixed frequency switching to another
+  -- fixed frequency looks identical either side), the agreement rule stands
+  -- alone, exactly as before.
+  set sig to ""
+  set prevSig to "<none>"
+  set snap to missing value
+  set matched to false
+  repeat ${SETTLE_READS} times
+    set prevSig to sig
+    set snap to my cgSnap(c)
+    set sig to my cgSig(snap)
+    set matched to my cgMatches(snap, wantFields, need, forbid)
+    if (sig is prevSig) and (my cgValid(snap)) then
+      if (wantFields < 0) or matched then return snap
+    end if
+    delay ${SETTLE_POLL_S}
+  end repeat
+  if wantFields > -1 then error "the Repeat dialog's cadence group never took the shape this step expects (" & wantFields & " numeric field(s)) — the control the step was about to drive is not the one the dialog is showing; numeric fields:" & my cgInventory(snap)
+  error "the Repeat dialog's cadence group is still re-laying out — its shape changed on every read; last seen" & sig
 end cgSettle
 
-on cgField(g, target, tol)
-  tell application "System Events"
-    set endsY to my cgLabelY(g, "Ends:")
-    set everyY to my cgLabelY(g, "Every")
-    set nf to (count of text fields of g)
-    if target is "ends-count" then
-      if endsY is missing value then error "the Repeat dialog's cadence group carries no \\"Ends:\\" label, so the ends-after count field cannot be identified — numeric fields:" & my cgInventory(g)
-      set hits to my cgOnRow(g, endsY, tol, true)
-      if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"Ends:\\" row, expected exactly 1 — numeric fields:" & my cgInventory(g)
-      return item 1 of hits
-    end if
-    if everyY is not missing value then
-      set hits to my cgOnRow(g, everyY, tol, true)
-      if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"Every\\" row, expected exactly 1 — numeric fields:" & my cgInventory(g)
-      return item 1 of hits
-    end if
-    if endsY is not missing value then
-      set hits to my cgOnRow(g, endsY, tol, false)
-      if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) off the \\"Ends:\\" row, expected exactly 1 — numeric fields:" & my cgInventory(g)
-      return item 1 of hits
-    end if
-    if nf is not 1 then error "the Repeat dialog's cadence group carries neither an \\"Every\\" nor an \\"Ends:\\" label and offers " & nf & " numeric field(s), so the interval cannot be identified — numeric fields:" & my cgInventory(g)
-    -- positional-ok: reached ONLY after the line above proved the group holds
-    -- exactly one text field, so this is a uniqueness statement, not an index.
-    -- The after-completion cadence group is that shape (MEASURED, CGRD1 §A: its
-    -- only static text is "after previous item is checked off.", one field).
-    return text field 1 of g
-  end tell
+on cgField(g, snap, target, tol)
+  set endsY to my cgLabelY(snap, "Ends:")
+  set everyY to my cgLabelY(snap, "Every")
+  set nf to (count of (item 3 of snap))
+  if target is "ends-count" then
+    if endsY is missing value then error "the Repeat dialog's cadence group carries no \\"Ends:\\" label, so the ends-after count field cannot be identified — numeric fields:" & my cgInventory(snap)
+    set hits to my cgOnRow(snap, endsY, tol, true)
+    if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"Ends:\\" row, expected exactly 1 — numeric fields:" & my cgInventory(snap)
+    return my cgAt(g, item 1 of hits)
+  end if
+  if everyY is not missing value then
+    set hits to my cgOnRow(snap, everyY, tol, true)
+    if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"Every\\" row, expected exactly 1 — numeric fields:" & my cgInventory(snap)
+    return my cgAt(g, item 1 of hits)
+  end if
+  if endsY is not missing value then
+    set hits to my cgOnRow(snap, endsY, tol, false)
+    if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) off the \\"Ends:\\" row, expected exactly 1 — numeric fields:" & my cgInventory(snap)
+    return my cgAt(g, item 1 of hits)
+  end if
+  if nf is not 1 then error "the Repeat dialog's cadence group carries neither an \\"Every\\" nor an \\"Ends:\\" label and offers " & nf & " numeric field(s), so the interval cannot be identified — numeric fields:" & my cgInventory(snap)
+  -- Reached ONLY after the line above proved the group holds exactly one text
+  -- field, so this is a uniqueness statement, not an index. The after-completion
+  -- cadence group is that shape (MEASURED, CGRD1 §A: its only static text is
+  -- "after previous item is checked off.", one field).
+  return my cgAt(g, 1)
 end cgField
 
-on rfInventory(c)
-  tell application "System Events"
-    set inv to ""
-    repeat with i from 1 to (count of text fields of c)
-      set fp to position of text field i of c
-      set inv to inv & " #" & i & "(y=" & (item 2 of fp) & ",shows=" & ((value of text field i of c) as text) & ")"
-    end repeat
-    if inv is "" then set inv to " (none)"
-    return inv
-  end tell
+on cgAt(c, i)
+  -- The element at an index the RULES above resolved. Never a bare index: every
+  -- caller reaches here only through a label-row match or a proven uniqueness.
+  tell application "System Events" to return text field i of c
+end cgAt
+
+on rfInventory(snap)
+  return my cgInventory(snap)
 end rfInventory
 
-on rfField(c, rowLabel, tol)
-  tell application "System Events"
-    set labelY to my cgLabelY(c, rowLabel)
-    if labelY is missing value then error "the Repeat dialog shows no \\"" & rowLabel & "\\" label, so the field beside it cannot be identified — text fields:" & my rfInventory(c)
-    set hits to my cgOnRow(c, labelY, tol, true)
-    if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"" & rowLabel & "\\" row, expected exactly 1 — text fields:" & my rfInventory(c)
-    return item 1 of hits
-  end tell
+on rfField(c, snap, rowLabel, tol)
+  set labelY to my cgLabelY(snap, rowLabel)
+  if labelY is missing value then error "the Repeat dialog shows no \\"" & rowLabel & "\\" label, so the field beside it cannot be identified — text fields:" & my rfInventory(snap)
+  set hits to my cgOnRow(snap, labelY, tol, true)
+  if (count of hits) is not 1 then error "the Repeat dialog offers " & (count of hits) & " field(s) on the \\"" & rowLabel & "\\" row, expected exactly 1 — text fields:" & my rfInventory(snap)
+  return my cgAt(c, item 1 of hits)
 end rfField`;
 
 /**
@@ -499,6 +691,66 @@ ${probes}
 end tell`;
 }
 /**
+ * dialog-open: WAIT for the Repeat dialog and CENSUS it in the same hop (RDLAT2).
+ *
+ * This replaces the bare wait that used to stand here. The wait proved that one
+ * control resolved and said nothing else; the drive then re-discovered which of
+ * the two shells was live on every subsequent step, and the pre-commit audit
+ * spent a whole osascript hop asking the same question again.
+ *
+ * The snapshot answers both questions once, for one extra Apple event:
+ *
+ *   - WHICH SHELL. It returns the 1-based index of the candidate that answered,
+ *     so every later step addresses the shell that actually opened instead of
+ *     probing both, and the audit needs no resolution hop at all.
+ *   - WHAT SHAPE. It returns the shell's direct-child AX roles, which the driver
+ *     matches against the manifest (`ui-shape.ts`). The dialog's control census
+ *     is the one thing about it that does NOT depend on the rule state, so it is
+ *     assertable exactly here — and a shell whose census has moved is a
+ *     redesigned dialog, which fails closed rather than being pressed into.
+ *
+ * Returns `idx=<n> roles=<AXRole>,<AXRole>,…`, or `"none"` when the window
+ * elapses with neither shell present (the driver's abort path is unchanged).
+ */
+export function axDialogOpenScript(shellPaths: string[], timeoutMs: number): string {
+  const probes = shellPaths
+    .map(
+      (p, i) => `    try
+      if (exists (${p})) then
+        set dlgIdx to ${i + 1}
+        set dlgShell to (${p})
+        exit repeat
+      end if
+    end try`,
+    )
+    .join("\n");
+  return `set dlgIdx to 0
+set dlgShell to missing value
+set fgT0 to (current date)
+${SE}
+  repeat
+${probes}
+    if ((current date) - fgT0) is greater than or equal to ${pollSeconds(timeoutMs)} then return "none"
+    delay ${IN_SCRIPT_POLL_S}
+  end repeat
+  set dlgRoles to {}
+  try
+    set dlgRoles to (role of UI elements of dlgShell)
+  end try
+  set out to "idx=" & dlgIdx & " roles="
+  set first_ to true
+  repeat with r in dlgRoles
+    if first_ then
+      set first_ to false
+    else
+      set out to out & ","
+    end if
+    set out to out & (contents of r)
+  end repeat
+  return out
+end tell`;
+}
+/**
  * A poll window in whole seconds, as the in-script `current date` deadline reads
  * it (AppleScript dates carry second granularity). Never below 1: a sub-second
  * window would make a loop that checks its deadline after the FIRST probe into a
@@ -566,20 +818,23 @@ export function axSetValueScript(path: string, value: string, attempts = 3): str
 ${SE}
   set tf to (${path})
 ${alreadyHoldsBlock("tf", v)}
+  set gotFocus to false
   repeat ${n} times
     my fgAssertFront("type \\"${v}\\" into the field")
     set focused of tf to true
     delay 0.15
-${focusedAssertBlock("tf", v)}
-    keystroke "${v}"
-    delay 0.1
-    key code 48
-    delay 0.2
-    try
-      if ((value of tf) as text) is "${v}" then return "OK"
-    end try
+${focusedAssertBlock("tf")}
+      keystroke "${v}"
+      delay 0.1
+      key code 48
+      delay 0.2
+      try
+        if ((value of tf) as text) is "${v}" then return "OK"
+      end try
+    end if
     delay 0.3
   end repeat
+${focusRefusalTail(v)}
   error "field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
 }
@@ -616,13 +871,38 @@ function alreadyHoldsBlock(ref: string, escapedValue: string): string {
  * took it before typing. A field that will not accept focus (the dialog is
  * rebuilding, another sheet stole it) would otherwise receive the keystrokes
  * somewhere else entirely.
+ *
+ * IT IS A CLOSED LOOP, NOT A SINGLE SHOT (RDLAT2). The assertion used to raise on
+ * the FIRST miss, and got away with it only because the shape settle above it was
+ * slow: the settle re-read the cadence group one control at a time, so on a group
+ * with several labels it spent ~240 ms deciding the shape had stopped moving, and
+ * by then the rebuilt field would accept focus. Reading the same group in four
+ * plural events cut that to ~150 ms, and the fixed-frequency interval step
+ * started refusing EVERY time — the guard was measuring the driver's own read
+ * cost, which is exactly the timing dependence the determinism doctrine forbids.
+ *
+ * So the readiness is now waited for POSITIVELY, on the observable itself: ask
+ * for focus, look, and if the field has not taken it, ask again on the next
+ * attempt of the loop this block sits in. Nothing is typed without proven focus —
+ * that property is unchanged and is what makes the retry safe — and a field that
+ * never accepts focus still refuses, in the same words, once the attempts are
+ * spent. See {@link focusRefusalTail}.
  */
-function focusedAssertBlock(ref: string, escapedValue: string): string {
+function focusedAssertBlock(ref: string): string {
   return `    set gotFocus to false
     try
       set gotFocus to (focused of ${ref}) as boolean
     end try
-    if not gotFocus then error "refused to type \\"${escapedValue}\\": the field did not take keyboard focus, so the keystrokes would have gone somewhere else"`;
+    if gotFocus then`;
+}
+
+/**
+ * The refusal a spent typing loop raises when the field never took focus — the
+ * FGRD wording, unchanged, now reached after the attempts rather than on the
+ * first miss (see {@link focusedAssertBlock}).
+ */
+function focusRefusalTail(escapedValue: string): string {
+  return `  if not gotFocus then error "refused to type \\"${escapedValue}\\": the field did not take keyboard focus, so the keystrokes would have gone somewhere else"`;
 }
 /**
  * set-group-number: drive ONE of the Repeat dialog's two numeric fields —
@@ -665,6 +945,7 @@ export function axSetGroupNumberScript(
   value: string,
   attempts = 3,
   rowTolerance = ROW_TOLERANCE,
+  expectation: CadenceExpectation | null = null,
 ): string {
   const v = escapeAppleScript(value);
   const n = Math.max(1, Math.trunc(attempts));
@@ -675,23 +956,26 @@ ${AX_FOCUS_GUARD_HANDLERS}
 
 ${SE}
   set g to (${groupPath})
-  my cgSettle(g)
-  set tf to my cgField(g, "${target}", ${tol})
+  set cgSnapshot to my cgSettle(g, ${settleArgs(expectation)})
+  set tf to my cgField(g, cgSnapshot, "${target}", ${tol})
 ${alreadyHoldsBlock("tf", v)}
+  set gotFocus to false
   repeat ${n} times
     my fgAssertFront("type \\"${v}\\" into the ${target} field")
     set focused of tf to true
     delay 0.15
-${focusedAssertBlock("tf", v)}
-    keystroke "${v}"
-    delay 0.1
-    key code 48
-    delay 0.2
-    try
-      if ((value of tf) as text) is "${v}" then return "OK"
-    end try
+${focusedAssertBlock("tf")}
+      keystroke "${v}"
+      delay 0.1
+      key code 48
+      delay 0.2
+      try
+        if ((value of tf) as text) is "${v}" then return "OK"
+      end try
+    end if
     delay 0.3
   end repeat
+${focusRefusalTail(v)}
   error "the ${target} field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
 }
@@ -733,22 +1017,26 @@ ${AX_FOCUS_GUARD_HANDLERS}
 
 ${SE}
   set c to (${containerPath})
-  set tf to my rfField(c, "${label}", ${tol})
+  set rfSnapshot to my cgSnap(c)
+  set tf to my rfField(c, rfSnapshot, "${label}", ${tol})
 ${alreadyHoldsBlock("tf", v)}
+  set gotFocus to false
   repeat ${n} times
     my fgAssertFront("type \\"${v}\\" into the \\"${label}\\" field")
     set focused of tf to true
     delay 0.15
-${focusedAssertBlock("tf", v)}
-    keystroke "${v}"
-    delay 0.1
-    key code 48
-    delay 0.2
-    try
-      if ((value of tf) as text) is "${v}" then return "OK"
-    end try
+${focusedAssertBlock("tf")}
+      keystroke "${v}"
+      delay 0.1
+      key code 48
+      delay 0.2
+      try
+        if ((value of tf) as text) is "${v}" then return "OK"
+      end try
+    end if
     delay 0.3
   end repeat
+${focusRefusalTail(v)}
   error "the \\"${label}\\" field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
 }
@@ -784,11 +1072,47 @@ export interface AuditScriptSpec {
   /** The resolved cadence group inside that shell. */
   group: string;
   controls: AuditScriptControl[];
+  /**
+   * The cadence group's expected shape for the rule state this drive built — the
+   * shape manifest's advisory check, which lets the settle stop on the first read
+   * that already shows the finished state (RDLAT2). Null asserts nothing.
+   */
+  expectation?: CadenceExpectation | null;
+  /**
+   * The COMMIT the audit presses when — and only when — every control agreed:
+   * the resolved path of the dialog's OK button (RDLAT2).
+   *
+   * The audit and the press used to be two osascript hops with a driver round
+   * trip between them, which is a window in which the thing just audited can
+   * change. Pressing inside the same script closes it: what is committed is the
+   * dialog state the audit read, with nothing dispatched in between. It also
+   * removes a process spawn and the separate shell resolution that preceded it
+   * (the open item DRVLAT1 §8 left).
+   *
+   * Absent for a caller that wants the audit alone (the date-area leg runs
+   * first, and a recipe that drove no control has no audit to fold a press into).
+   */
+  commit?: string;
 }
 
+/** The marker a folded commit's own failure raises, so the driver can tell the two apart. */
+export const COMMIT_FAILED_TAG = "#COMMITFAIL";
+
 /** AppleScript list literal of quoted strings. */
-function asList(values: string[]): string {
+function asList(values: readonly string[]): string {
   return `{${values.map((v) => `"${escapeAppleScript(v)}"`).join(", ")}}`;
+}
+
+/**
+ * The shape manifest's expectation as `cgSettle`'s three arguments. A null
+ * expectation compiles to `-1` — the sentinel that asserts nothing and leaves
+ * the BEEP1 two-agreeing-reads rule deciding alone (RDLAT2).
+ */
+function settleArgs(expectation: CadenceExpectation | null): string {
+  if (expectation === null) return "-1, {}, {}";
+  return `${expectation.fields}, ${asList(expectation.requiredLabels)}, ${asList(
+    expectation.forbiddenLabels,
+  )}`;
 }
 
 /** The intended value(s) as the mismatch report should read them. */
@@ -831,6 +1155,22 @@ function intendedText(control: AuditScriptControl): string {
  */
 export function axAuditDialogScript(spec: AuditScriptSpec, rowTolerance = ROW_TOLERANCE): string {
   const tol = Math.max(1, Math.trunc(rowTolerance));
+  // The shell's own text-field inventory is read only when a control needs it
+  // (the "and start N days earlier" offset is the sole one), so the ordinary
+  // audit costs four Apple events for the cadence group and none for the shell.
+  const needsShellSnapshot = spec.controls.some((c) => c.kind === "row-field");
+  // The commit, pressed only past the mismatch check above it. Its own failure
+  // carries a distinct tag: "the audit refused" and "the OK button would not
+  // press" are different outcomes and must not be reported as each other.
+  const commitTail =
+    spec.commit === undefined
+      ? ""
+      : `  try
+    click (${spec.commit})
+  on error errMsg
+    error "${COMMIT_FAILED_TAG} " & errMsg
+  end try
+`;
   const body = spec.controls
     .map((c, i) => {
       const name = escapeAppleScript(c.label);
@@ -864,13 +1204,13 @@ export function axAuditDialogScript(spec: AuditScriptSpec, rowTolerance = ROW_TO
         case "group-number":
           return `  set v${i} to "(unreadable)"
   try
-    set v${i} to ((value of (my cgField(g, "${c.numberTarget ?? "interval"}", ${tol}))) as text)
+    set v${i} to ((value of (my cgField(g, cgSnapshot, "${c.numberTarget ?? "interval"}", ${tol}))) as text)
   end try
   if not (my aqAny(v${i}, ${want})) then ${miss}`;
         case "row-field":
           return `  set v${i} to "(unreadable)"
   try
-    set v${i} to ((value of (my rfField(sh, "${escapeAppleScript(c.rowLabel ?? "")}", ${tol}))) as text)
+    set v${i} to ((value of (my rfField(sh, rfSnapshot, "${escapeAppleScript(c.rowLabel ?? "")}", ${tol}))) as text)
   end try
   if not (my aqAny(v${i}, ${want})) then ${miss}`;
         case "weekdays":
@@ -976,11 +1316,13 @@ end aqYMD
 ${SE}
   set sh to (${spec.shell})
   set g to (${spec.group})
-  my cgSettle(g)
+  set cgSnapshot to my cgSettle(g, ${settleArgs(spec.expectation ?? null)})${
+    needsShellSnapshot ? "\n  set rfSnapshot to my cgSnap(sh)" : ""
+  }
   set bad to {}
 ${body}
-  if (count of bad) is 0 then return "OK"
-  error "the Repeat dialog does not hold what this drive entered — " & (count of bad) & " control(s) differ: " & my aqJoin(bad, "; ")
+  if (count of bad) is not 0 then error "the Repeat dialog does not hold what this drive entered — " & (count of bad) & " control(s) differ: " & my aqJoin(bad, "; ")
+${commitTail}  return "OK"
 end tell`;
 }
 
@@ -2462,12 +2804,16 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
   }
   // JXA (ObjC bridge) for the mouse-synthesis primitive; one stable shape.
   const lang = command.lang === "javascript" ? ("javascript" as const) : ("applescript" as const);
+  const counting = axRoundTripCountingArmed();
   const res = await osaExec(command.script ?? "", { lang, timeoutMs });
+  const out = counting ? splitAeDebug(res.stdout) : null;
+  const err = counting ? splitAeDebug(res.stderr) : null;
   return {
     ok: res.exitCode === 0 && res.timedOut !== true,
-    stdout: res.stdout,
-    stderr: res.stderr,
+    stdout: out === null ? res.stdout : out.text,
+    stderr: err === null ? res.stderr : err.text,
     ...(res.timedOut === true && { timedOut: true }),
+    ...(out !== null && err !== null && { axOps: out.axOps + err.axOps }),
   };
 }
 
@@ -2524,6 +2870,10 @@ function tracingRun(inner: UiRunner): UiRunner {
       primitive: command.primitive,
       label: command.label,
       durationMs: Date.now() - started,
+      // The round-trip count rides EVERY traced hop when counting is armed
+      // (RDLAT2): `durationMs` says what this host paid, `axOps` says what any
+      // host would pay, and only the second one transfers between machines.
+      ...(res.axOps !== undefined && { axOps: res.axOps }),
       ok: res.ok,
       timedOut: res.timedOut === true,
     }));
@@ -2839,6 +3189,15 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
       script: axWaitAnyScript(paths, step.timeoutMs ?? STEP_TIMEOUT_MS),
     };
   }
+  if (step.primitive === "dialog-open") {
+    // The wait and the shell census, in one hop (RDLAT2).
+    const paths = step.pathCandidates ?? [step.path ?? ""];
+    return {
+      primitive: "dialog-open",
+      label: step.label,
+      script: axDialogOpenScript(paths, step.timeoutMs ?? STEP_TIMEOUT_MS),
+    };
+  }
   if (step.pathCandidates !== undefined && step.path === undefined) {
     const candidates = step.pathCandidates;
     const inner = commandForStep({ ...step, path: STEP_ELEMENT_REF }, targetUuid);
@@ -2875,6 +3234,11 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
           step.path ?? "",
           step.numberTarget ?? "interval",
           step.value ?? "",
+          undefined,
+          undefined,
+          step.cadence === undefined
+            ? null
+            : cadenceExpectationFor(step.cadence, installedThingsVersion()),
         ),
       };
     case "set-row-field":
@@ -3115,13 +3479,20 @@ async function driveDialogAudit(
   step: UiStep,
   run: UiRunner,
   dialogShape: RepeatDialogShape | null,
-): Promise<{ ok: boolean; why?: string }> {
+  knownShellIndex: number | null,
+): Promise<{ ok: boolean; why?: string; committed?: boolean }> {
   const plan = step.audit;
   if (plan === undefined) return { ok: false, why: "no audit plan compiled (recipe bug)" };
-  // Which of the two dialog shells is live, in the SAME priority order the drive's
-  // own candidate resolution used — so the audit reads the dialog the drive wrote.
-  let shellIndex = -1;
-  for (let i = 0; i < plan.shells.length; i += 1) {
+  // Which of the two dialog shells is live. The dialog-open snapshot already
+  // answered this when the drive opened the dialog, and the answer cannot have
+  // changed underneath (a shell does not become the other kind), so the audit
+  // reads it rather than spending a hop re-resolving (RDLAT2 — the open item
+  // DRVLAT1 §8 left). Without a snapshot — an unrecognized app build — it falls
+  // back to probing, in the SAME priority order the drive's own candidate
+  // resolution used, so the audit still reads the dialog the drive wrote.
+  let shellIndex =
+    knownShellIndex !== null && knownShellIndex < plan.shells.length ? knownShellIndex : -1;
+  for (let i = 0; shellIndex < 0 && i < plan.shells.length; i += 1) {
     const res = await run(
       {
         primitive: "resolve",
@@ -3184,19 +3555,10 @@ async function driveDialogAudit(
     });
   }
 
-  if (scriptControls.length > 0) {
-    const res = await run(
-      {
-        primitive: "audit-dialog",
-        label: step.label,
-        script: axAuditDialogScript({ shell, group, controls: scriptControls }),
-      },
-      STEP_TIMEOUT_MS,
-    );
-    if (!res.ok || res.stdout.trim() !== "OK") {
-      return { ok: false, why: auditFailureText(res) };
-    }
-  }
+  // The DATE-AREA leg runs FIRST now (RDLAT2). It is a JXA hop and cannot carry
+  // the commit, so it has to finish before the AppleScript leg — which does — or
+  // the drive would commit with one control still unaudited. Both legs are
+  // read-only, so the order between them is free to choose.
   if (dateAreas.length > 0) {
     const res = await run(
       {
@@ -3211,12 +3573,48 @@ async function driveDialogAudit(
       return { ok: false, why: auditFailureText(res) };
     }
   }
+  if (scriptControls.length > 0) {
+    // The COMMIT rides this hop when the recipe supplied one: every control is
+    // re-read, and the OK press happens in the same script the moment they all
+    // agree. Nothing is dispatched between the audit and the commit, so what
+    // lands is what was audited.
+    const commit = plan.commits?.[shellIndex] ?? plan.commits?.[0];
+    const res = await run(
+      {
+        primitive: "audit-dialog",
+        label: step.label,
+        script: axAuditDialogScript({
+          shell,
+          group,
+          controls: scriptControls,
+          ...(plan.cadence !== undefined && {
+            expectation: cadenceExpectationFor(plan.cadence, installedThingsVersion()),
+          }),
+          ...(commit !== undefined && { commit }),
+        }),
+      },
+      STEP_TIMEOUT_MS,
+    );
+    if (!res.ok || res.stdout.trim() !== "OK") {
+      return { ok: false, why: auditFailureText(res) };
+    }
+    if (commit !== undefined) return { ok: true, committed: true };
+  }
   return { ok: true };
 }
 
-/** The audit's own refusal text, preferred over the driver's generic guess. */
+/**
+ * The audit's own refusal text, preferred over the driver's generic guess.
+ *
+ * A folded commit's failure is NOT an audit failure and must not read as one:
+ * the audit passed, every control held what the drive entered, and the OK button
+ * would not press. Its message is tagged in-script so the two stay distinct.
+ */
 function auditFailureText(res: UiRunResult): string {
   const named = scriptErrorText(res.stderr);
+  if (named !== null && named.startsWith(COMMIT_FAILED_TAG)) {
+    return `the Repeat dialog held exactly what this drive entered, but its OK button would not ${""}press (${named.slice(COMMIT_FAILED_TAG.length).trim()}) — nothing was committed`;
+  }
   if (named !== null) return `${named} — nothing was committed`;
   if (res.timedOut === true) return "the pre-commit dialog audit timed out; nothing was committed";
   return "the Repeat dialog could not be re-read before committing; nothing was committed";
@@ -3405,7 +3803,7 @@ async function drive(
   //      directly, for every recipe, before anything is pressed — and a dialog
   //      standing here also means the app is ignoring scripted changes app-wide
   //      and holding Things Cloud sync, which is the operator's real problem.
-  const startState = await readUiState(rawRun, CENSUS_TIMEOUT_MS);
+  const startState = await readUiState(rawRun, CENSUS_TIMEOUT_MS, "when-not-ours");
   // An inspection that stalls at the very first hop is remembered, so a later
   // failure's cleanup does not go asking it again (issue #629). The preflight
   // itself stays permissive — only a POSITIVE sighting refuses (MODALX1 §7).
@@ -3468,6 +3866,12 @@ async function drive(
   // that never probes (no shape-dependent step), and any step that needs it while
   // it is null fails closed rather than guessing an index.
   let dialogShape: RepeatDialogShape | null = null;
+  // THE SHAPE MANIFEST'S GATE (RDLAT2). Set by the `dialog-open` step from the
+  // shell that actually opened: the 0-based index into every step's candidate
+  // list. While it is null every dialog-addressed step probes both shells and the
+  // pre-commit audit spends a hop resolving one — the behavior that shipped
+  // before this campaign, and the behavior an unrecognized app build keeps.
+  let shellIndex: number | null = null;
   for (let i = idx; i < recipe.steps.length; i += 1) {
     let step = recipe.steps[i] as UiStep;
     // Shape-gated step: the recipe emits BOTH the legacy and the 3.23 drive for a
@@ -3497,6 +3901,17 @@ async function drive(
       }
       step = { ...step, ...override };
     }
+    // NARROW to the shell that actually opened (RDLAT2). Applied AFTER the shape
+    // merge, so a shape-selected path is narrowed too. Every candidate list in a
+    // dialog recipe is `dualForm(inner)` — the same control inside each shell, in
+    // one fixed order — so index `shellIndex` names THIS drive's dialog. Nothing
+    // is skipped by narrowing: the step still proves its element exists (the
+    // candidate prelude polls it), it just stops asking about the shell that is
+    // demonstrably not there.
+    if (shellIndex !== null && step.pathCandidates !== undefined) {
+      const resolved = step.pathCandidates[shellIndex];
+      if (resolved !== undefined) step = { ...step, pathCandidates: [resolved] };
+    }
     // Overall-drive watchdog: if the budget is spent, stop at THIS step boundary
     // (the per-step execFile timeouts keep the boundary close), clear any open
     // dialog, and return the honest uncertain-outcome timeout (TRACE1 #487).
@@ -3513,6 +3928,56 @@ async function drive(
         const clear = await clearNow();
         return partial(step.label, "the expected element never appeared within the timeout", clear);
       }
+      done.push(step.label);
+      continue;
+    }
+    if (step.primitive === "dialog-open") {
+      // WAIT + CENSUS in one hop (RDLAT2). Three outcomes, in fail-closed order:
+      // the dialog never appeared (the old wait's failure, word for word); it
+      // appeared but its control census is not the Repeat dialog's (a REFUSAL —
+      // an app update has redesigned it, and structural indices must not be
+      // pressed into an unknown tree); or it matched, and the rest of the drive
+      // addresses the shell that opened instead of re-discovering it.
+      const res = await run(commandForStep(step, recipe.targetUuid), STEP_TIMEOUT_MS);
+      const snapshot = res.ok ? parseDialogOpenSnapshot(res.stdout) : null;
+      if (snapshot === null) {
+        const clear = await clearNow();
+        return partial(step.label, "the expected element never appeared within the timeout", clear);
+      }
+      const version = installedThingsVersion();
+      const covered = shapeManifestCoversVersion(version);
+      const verdict = matchRepeatShell(snapshot.roles);
+      trace(() => ({
+        phase: "dialog-shape",
+        label: step.label,
+        shell: snapshot.index,
+        roles: snapshot.roles,
+        appVersion: version,
+        manifestCovers: covered,
+        match: verdict.ok,
+        ...(verdict.ok ? {} : { mismatch: verdict.why }),
+      }));
+      if (!verdict.ok) {
+        if (covered) {
+          // The manifest says what this build's Repeat dialog looks like and this
+          // is not it. Fail closed, naming what was seen — the CGRD1 posture:
+          // better to refuse on an anodyne change than to mutate a field nobody
+          // asked about.
+          const clear = await clearNow();
+          return partial(
+            step.label,
+            `the dialog that opened is not the Repeat dialog this version drives — it shows ` +
+              `${verdict.why}. A Things update has changed it; nothing was entered into the rule`,
+            clear,
+          );
+        }
+        // An app generation the manifest was never measured against gets no
+        // assertion and no fast path — it runs the full per-step discrimination,
+        // exactly as it did before the manifest existed.
+        done.push(step.label);
+        continue;
+      }
+      if (covered) shellIndex = snapshot.index - 1;
       done.push(step.label);
       continue;
     }
@@ -3656,12 +4121,23 @@ async function drive(
       // read-back before this point is self-referential — it re-reads the element it
       // addressed — so a wrong ADDRESS is invisible until here. A mismatch clears
       // the dialog through the standard clean-abort path, so nothing is committed.
-      const outcome = await driveDialogAudit(step, run, dialogShape);
+      const outcome = await driveDialogAudit(step, run, dialogShape, shellIndex);
       if (!outcome.ok) {
         const clear = await clearNow();
         return partial(step.label, outcome.why ?? "the pre-commit dialog audit failed", clear);
       }
       done.push(step.label);
+      // The audit COMMITTED in its own script (RDLAT2). The recipe's commit step
+      // is still a step of the drive and still appears in the trail — it just did
+      // not need a process of its own, and nothing was dispatched between the
+      // read and the press.
+      if (outcome.committed === true) {
+        const commitStep = recipe.steps[i + 1];
+        if (commitStep !== undefined && commitStep.primitive === "press") {
+          done.push(commitStep.label);
+          i += 1;
+        }
+      }
       continue;
     }
     if (step.primitive === "click-element" || step.primitive === "click-picker-row") {
@@ -3796,7 +4272,7 @@ export function createUiVector(
     // composite's FIRST leg mints a row through the URL scheme, which sails
     // straight past an open dialog — and every AppleScript leg after it then
     // fails, leaving a copy behind. The orchestrator asks this BEFORE it seeds.
-    probeUiState: () => readUiState(tracedRun, CENSUS_TIMEOUT_MS),
+    probeUiState: () => readUiState(tracedRun, CENSUS_TIMEOUT_MS, "when-not-ours"),
     // Pre-seed gate seam for the promote orchestrators (SESSGATE, #480): probe the
     // live session BEFORE they seed a row, so a locked/full-screen session refuses
     // with zero mutation. Present regardless of `enabled` (the orchestrator has

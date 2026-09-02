@@ -16,7 +16,12 @@ import { createUiVector, type UiCommand, type UiRunResult } from "../../src/writ
 import type { CompiledInvocation, UiRecipe } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
-import { healthyScreen, screenAnswer, type FakeScreen } from "../fixtures/ui-state.ts";
+import {
+  healthyScreen,
+  REPEAT_DIALOG_OPEN_STDOUT,
+  screenAnswer,
+  type FakeScreen,
+} from "../fixtures/ui-state.ts";
 
 let fixture: FixtureDb;
 beforeEach(() => {
@@ -144,6 +149,7 @@ describe("ui driver — select-heading-row (HEADCERT1)", () => {
       if (c.primitive === "resolve") return ok("true"); // canary + candidate probes
       if (c.primitive === "select-heading-row") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       return ok();
     });
     const res = await createUiVector(config(), run).execute(invocation(recipe()));

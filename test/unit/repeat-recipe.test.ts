@@ -72,10 +72,13 @@ describe("repeat dialog recipe — dual-form addressing", () => {
     }
   });
 
-  it("base rule drives exactly wait -> frequency -> interval -> OK", () => {
+  it("base rule drives exactly dialog-open -> frequency -> interval -> OK", () => {
     const steps = dialogSteps({});
+    // The opening step WAITS for the dialog and CENSUSES it in the same hop
+    // (RDLAT2): it reports which shell opened and that shell's control roles, so
+    // a redesigned dialog is refused before any control is pressed.
     expect(steps.map((s) => s.primitive)).toEqual([
-      "wait",
+      "dialog-open",
       "select-popup",
       "set-group-number",
       "press",

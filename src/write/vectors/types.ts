@@ -126,6 +126,19 @@ export type UiPrimitive =
   | "audit-dialog"
   | "select-popup"
   | "wait"
+  /**
+   * WAIT for the Repeat dialog and CENSUS it in the same hop (RDLAT2). It reports
+   * which of the two shells opened — the attached sheet or the detached editor —
+   * and the shell's direct-child AX roles, which the driver matches against the
+   * shape manifest (`src/write/vectors/ui-shape.ts`).
+   *
+   * Two things follow from that one answer. A shell whose control census has
+   * moved is a REDESIGNED dialog, and the drive refuses instead of pressing
+   * structural indices into it. And a shell that matches is a shell the rest of
+   * the drive can ADDRESS directly, so no later step re-discovers which of the
+   * two is live and the pre-commit audit needs no resolution hop at all.
+   */
+  | "dialog-open"
   | "key"
   /**
    * Type literal text into whatever control currently holds focus (HXPC1). Used
@@ -362,6 +375,15 @@ export interface UiStep {
    */
   numberTarget?: "interval" | "ends-count";
   /**
+   * set-group-number only: the rule state the cadence group is expected to be in
+   * when this step runs, so the shape manifest can say what the group should look
+   * like (`src/write/vectors/ui-shape.ts`). A group that already SHOWS that state
+   * has finished re-laying out, so the settle can stop on its first read instead
+   * of waiting for two agreeing ones. Advisory: an expectation that does not
+   * match simply leaves the BEEP1 agreement rule deciding, as it always did.
+   */
+  cadence?: { afterCompletion: boolean; endsAfter: boolean };
+  /**
    * set-row-field only: the pinned English static text whose ROW the target field
    * shares (`days earlier` for the start-offset field). Locale fail-closed, like
    * every other title-pinned selector here.
@@ -496,6 +518,20 @@ export interface DialogAuditPlan {
   /** The cadence group inside each shell (same order as {@link shells}). */
   groups: string[];
   controls: DialogAuditControl[];
+  /**
+   * The OK button, per shell (same order as {@link shells}). Present when the
+   * audit should COMMIT in its own script the moment every control agrees, which
+   * is how the recipe emits it: the audit and the press used to be two hops with
+   * a driver round trip between them, and what is committed must be the state the
+   * audit read, with nothing dispatched in between (RDLAT2).
+   */
+  commits?: string[];
+  /**
+   * The cadence group's expected shape for the FINAL rule state, from the shape
+   * manifest — advisory, letting the settle stop on the first read that already
+   * shows it (RDLAT2, `src/write/vectors/ui-shape.ts`).
+   */
+  cadence?: { afterCompletion: boolean; endsAfter: boolean };
 }
 
 /**

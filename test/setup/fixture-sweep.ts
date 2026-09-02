@@ -13,8 +13,20 @@
  */
 import { afterAll } from "vitest";
 
+import { setInstalledThingsVersion } from "../../src/write/vectors/ui-shape.ts";
 import { sweepFixtureDbs } from "../fixtures/build-db.ts";
 import { sweepTempDirs } from "../fixtures/temp-dir.ts";
+
+/**
+ * PIN the app version the Repeat dialog's shape manifest keys on (RDLAT2).
+ *
+ * Without this the module would shell out to `defaults read` and report whatever
+ * the machine running the suite has installed — so the manifest's fast path
+ * would be armed on the maintainer's Mac and disarmed on a CI runner with no
+ * Things, and every cell that asserts either behavior would be a coin flip.
+ * Cells that exercise the unrecognized-build path pin their own version.
+ */
+setInstalledThingsVersion("3.23");
 
 afterAll(() => {
   sweepFixtureDbs();
