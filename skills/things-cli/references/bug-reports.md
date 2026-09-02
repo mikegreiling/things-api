@@ -43,6 +43,10 @@ Reproduce the shape instead:
 
 The tracker is the public GitHub repository **github.com/mikegreiling/things-api**. It has a bug-report form and a feature-request form; blank issues are open too, which is what makes non-interactive filing possible.
 
+Before opening anything, look at what is already on it. `gh issue list --state open` when the `gh` CLI is available (add `--search "<command>"` to narrow it), the repository's issues page otherwise. If an open issue already describes the SAME command failing with the same symptom, add a **comment** carrying your run's data — the versions, the complete output, the trace excerpt, and whatever was different about your attempt — rather than filing a second issue. A second run on one issue is usually worth more than two issues holding one run each: it is often what separates a defect that reproduces from one that looked like a fluke.
+
+A genuinely distinct failure still earns its own issue. The same feature is not the same defect — if a different step gives way, a different command, or a different underlying operation, file it separately and mention the neighboring issue by number. When you cannot tell which it is, comment on the open issue and say you are unsure whether it is the same defect; splitting one issue in two is easier than noticing that two were always one.
+
 When the `gh` CLI is available and authenticated:
 
 ```
