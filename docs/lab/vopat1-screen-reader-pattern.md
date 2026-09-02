@@ -182,7 +182,9 @@ With the shape manifest supplying the path, what does a step actually have to re
 
 Shell roles, in tree order: `AXCheckBox, AXCheckBox, AXGroup, AXStaticText, AXPopUpButton, AXButton, AXButton, AXImage` — the census `src/write/vectors/ui-shape.ts` asserts, re-proven live.
 
-For scale: the shipped `make-repeating --frequency monthly --interval 1 --after-completion` costs **13 osascript hops / 88 System Events round-trips** (RDLAT2 §5). The same information, read as raw `AXUIElement` calls against a manifest, is **9 + 4 + a handful** — and the two things that dominate those 88 round-trips (the menu-open poll and the cadence settle's repeated scans) become **zero reads**, because §4 shows both have notifications.
+For scale: the shipped `make-repeating --frequency monthly --interval 1 --after-completion` costs **13 osascript hops / 88 System Events round-trips**, and — measured independently while this campaign was running — **34 elements touched** ([RDLAT2 §E.3](rdlat2-repeat-dialog-latency.md), which added an `axElems` counter for exactly this quantity; 57 for the wider `--frequency monthly --interval 3` shape). The same information, read as raw `AXUIElement` calls against a manifest, is **9 + 4 + a handful** — and the two things that dominate those 88 round-trips (the menu-open poll and the cadence settle's repeated scans) become **zero reads**, because §4 shows both have notifications.
+
+Those two campaigns arrived at the same conclusion from opposite ends and should be read together: RDLAT2 §E counted what the shipped drive touches, this campaign counted what the drive would have to touch. They agree that the number is small, and §7 says why that is a property of the sheet rather than of either measurement.
 
 ---
 
@@ -231,6 +233,8 @@ SBCHV1/#676 measured the sidebar at **~115 ms per row realized**. RDLAT2 fitted 
 
 **Stated as a prediction, not a measurement:** the field multiplier for sheet-control content reads should be near the per-call floor (~0.1 ms), not near 115 ms. This campaign cannot prove that. The field probe's cell 10 measures `msPerRowRealized` on the maintainer's machine for the sidebar; an equivalent sheet cell is left for the build campaign, because it would have to open a dialog on his real database.
 
+**Independently confirmed from the other side.** [RDLAT2 §E.2](rdlat2-repeat-dialog-latency.md), landed while this campaign was in the VM, swept the open sheet element by element and found content costing **what geometry costs** (ratio 0.96–1.04) and a repeat sweep costing what the first did (0.96–0.92) — **no realize-and-discard signature at all**, which is §6's role-uniformity finding arrived at by a different route. It also supplies the bound this campaign should be read against: **the Repeat dialog is 12 elements wide, 22 at its widest**, so even under the most pessimistic possible reading — every element realized at the sidebar's 115 ms on every touch — realizing the whole dialog once is **1.4–2.5 s**. The element term on this surface is bounded by the dialog's size, and the bound is small. Whatever the multiplier turns out to be, the sheet cannot be realization-bound the way a 174-row list is.
+
 ---
 
 ## §8 — Recommendation: the read layer, redesigned
@@ -260,6 +264,8 @@ An AX notification **is** a closed-loop observable under the determinism doctrin
 Two riders, both from §4:
 - **`AXLayoutChanged` is not available** (VOPAT1-12). No settle may be written against it.
 - **A notification says WHEN, not WHAT.** The pre-commit audit (CGRD1) still reads every control it set. That is 4 calls on this dialog, and it is not negotiable.
+
+**The convergence worth noticing.** [RDLAT2 §E.4](rdlat2-repeat-dialog-latency.md) found, by counting elements, that the interval step had been discriminating its target field against a cadence group that **had not rebuilt yet** — the #589 error class surviving only because the value happened to be right — and fixed it by giving the settle a label expectation to wait for. That is the correct fix available without an observer, and it is a shape assertion: it waits for `Every` and `Ends:` to *appear*. §4(g) offers the observer's version of the same gate, and it is strictly more direct, because it does not have to know what the finished state looks like: wait for `AXValueChanged` on **the pop-up this step just set**, which arrives at the same instant as the `AXUIElementDestroyed` burst that tears the old controls down (both at ~535 ms). *The control I set now reports the value I set, and the children it had are gone* is true of every transition, including the fixed→fixed one the manifest is explicitly not allowed to guess about.
 
 ### R3. Do not use `AXVisibleRows` for the snapshot, and do not use the hit-test at all
 
@@ -303,7 +309,7 @@ Read the two bottom rows together, because they are the campaign's conclusion in
 
 The 1.79 s is entirely the app, and every term of it was measured this campaign: sheet presentation 438 ms, two pop-up opens 5–16 ms, two group rebuilds 535 ms each, focus 28 ms, type-and-confirm 79 ms, commit ~150 ms (the one estimate). **The drive becomes app-bound**, which is the correct place for it to end up.
 
-Caveat, per §7: this assumes sheet controls do not pay a realization cost in the field. If they do, add fifteen controls' worth.
+Caveat, per §7: this assumes sheet controls do not pay a realization cost in the field. If they do, RDLAT2 §E.2's bound applies — the whole dialog is 12–22 elements, so the worst case adds **1.4–2.5 s**, taking this to ≈3.6–4.7 s rather than ≈2.2 s. Even the pessimistic reading beats today's ≈7.6 s floor, which is why this recommendation does not wait on that measurement.
 
 ### The safety story, under the AX-scrutiny doctrine
 
