@@ -52,7 +52,9 @@ export const UI_CERTIFICATION_PROFILE =
   "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + UIC7b + HEADCERT1 + HEADXPROJ + DISS1 in-VM (Things 3.22.11) + " +
   "UIC8 promote-via-clone compounds in-VM (golden-v2 / Things 3.22.12) + RDLG2 recipe re-point + " +
   "HXPC1 heading-ellipsis/Move-picker paths in-VM (golden-v4 / Things 3.23) + " +
-  "CHORDMH1 heading-order arrow chords in-VM (golden-v4 / Things 3.23) — on-device pending";
+  "CHORDMH1 heading-order arrow chords in-VM (golden-v4 / Things 3.23) + " +
+  "RDLAT2 round-trip recut + shape manifest, re-certified across the dialog state matrix " +
+  "(fixed / after-completion / deadlines / ends-count / paused) in-VM (golden-v4 / Things 3.23) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": {

@@ -649,6 +649,7 @@ function setGroupNumber(
   label: string,
   numberTarget: "interval" | "ends-count",
   value: string,
+  cadence?: { afterCompletion: boolean; endsAfter: boolean },
 ): UiStep {
   return {
     primitive: "set-group-number",
@@ -656,6 +657,7 @@ function setGroupNumber(
     pathCandidates: DIALOG_GROUP,
     numberTarget,
     value,
+    ...(cadence !== undefined && { cadence }),
     dynamic: true,
     addressing: "title",
   };
@@ -747,11 +749,17 @@ function ORDINAL_TITLE_ANY(day: number): string {
  * field appends its own control steps before OK.
  */
 function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
+  // WAIT FOR THE DIALOG AND CENSUS IT IN THE SAME HOP (RDLAT2). The step used to
+  // wait on one control resolving; it now reports WHICH shell opened (so no later
+  // step re-discovers that, and the pre-commit audit needs no resolution hop) and
+  // the shell's control census, which the shape manifest checks before anything is
+  // pressed. It is addressed at the SHELLS rather than at a control inside one —
+  // the census is a property of the shell.
   const steps: UiStep[] = [
     {
-      primitive: "wait",
+      primitive: "dialog-open",
       label: "the Repeat dialog",
-      pathCandidates: DIALOG_FREQUENCY,
+      pathCandidates: DIALOG_SHELLS,
       dynamic: true,
       timeoutMs: 5000,
       addressing: "title",
@@ -773,7 +781,16 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(selectPopup(`frequency = ${rule.frequency}`, DIALOG_FREQUENCY, rule.frequency));
   }
 
-  steps.push(setGroupNumber(`interval = ${rule.interval}`, "interval", String(rule.interval)));
+  // The interval runs BEFORE any ends bound is selected, so the cadence group is
+  // expected to hold exactly one numeric field here — and the frequency step just
+  // above has rebuilt it, which is precisely the transition the manifest lets the
+  // settle wait for positively (RDLAT2).
+  steps.push(
+    setGroupNumber(`interval = ${rule.interval}`, "interval", String(rule.interval), {
+      afterCompletion: rule.afterCompletion === true,
+      endsAfter: false,
+    }),
+  );
 
   // MEASURE the dialog before touching any control the 3.23 redesign moved
   // (RDLG2). Emitted only when such a control is actually addressed, so the
@@ -905,8 +922,14 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   const endsOnDate = rule.ends !== undefined && rule.ends.kind === "on-date" ? rule.ends : null;
   if (rule.ends !== undefined && rule.ends.kind === "after") {
     steps.push(selectPopup("ends = after", DIALOG_ENDS, "after"));
+    // The `after` bound INSERTS the count ahead of the interval (HXPC1/#589), so
+    // the group is expected to hold TWO numeric fields from here on — the exact
+    // transition whose completion the settle can now wait for positively.
     steps.push(
-      setGroupNumber(`ends after = ${rule.ends.count}`, "ends-count", String(rule.ends.count)),
+      setGroupNumber(`ends after = ${rule.ends.count}`, "ends-count", String(rule.ends.count), {
+        afterCompletion: false,
+        endsAfter: true,
+      }),
     );
   } else if (endsOnDate !== null) {
     steps.push(selectPopup("ends = on date", DIALOG_ENDS, "on date"));
@@ -952,7 +975,15 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`, "reminder"));
   }
 
-  const audit = dialogAuditStep(steps);
+  // The pre-commit audit COMMITS for itself when there is one (RDLAT2): the OK
+  // press is still a step of the recipe — it is named in the trail and it is what
+  // the driver reports — but it runs inside the audit's own script, so nothing can
+  // change between the last read and the press. A recipe that drove no control has
+  // no audit, and its press stays a hop of its own.
+  const audit = dialogAuditStep(steps, {
+    afterCompletion: rule.afterCompletion === true,
+    endsAfter: rule.ends !== undefined && rule.ends.kind === "after",
+  });
   if (audit !== null) steps.push(audit);
   steps.push(pressControl('press "OK"', DIALOG_OK));
   return steps;
@@ -998,7 +1029,10 @@ function shapedPaths(
   };
 }
 
-function dialogAuditStep(steps: UiStep[]): UiStep | null {
+function dialogAuditStep(
+  steps: UiStep[],
+  cadence?: { afterCompletion: boolean; endsAfter: boolean },
+): UiStep | null {
   const controls: DialogAuditControl[] = [];
   for (const step of steps) {
     const base = {
@@ -1100,7 +1134,13 @@ function dialogAuditStep(steps: UiStep[]): UiStep | null {
   return {
     primitive: "audit-dialog",
     label: "audit the Repeat dialog against the requested rule (before committing)",
-    audit: { shells: DIALOG_SHELLS, groups: DIALOG_GROUP, controls },
+    audit: {
+      shells: DIALOG_SHELLS,
+      groups: DIALOG_GROUP,
+      controls,
+      commits: DIALOG_OK,
+      ...(cadence !== undefined && { cadence }),
+    },
     dynamic: true,
     addressing: "title",
   };

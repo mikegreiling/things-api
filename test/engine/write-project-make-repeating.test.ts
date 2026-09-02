@@ -33,7 +33,12 @@ import type {
 } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject } from "../fixtures/seed.ts";
-import { healthyScreen, screenAnswer, type FakeScreen } from "../fixtures/ui-state.ts";
+import {
+  healthyScreen,
+  REPEAT_DIALOG_OPEN_STDOUT,
+  screenAnswer,
+  type FakeScreen,
+} from "../fixtures/ui-state.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -286,6 +291,7 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
       if (c.primitive === "resolve") return ok("true"); // canary + candidate probes
       if (c.primitive === "select-row") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
@@ -319,26 +325,33 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     );
   });
 
-  it("carries BOTH dialog forms in the dispatched script, attached sheet first", async () => {
-    // The attached-sheet / detached-window disjunction (UIC4-a) is settled INSIDE
-    // the acting hop since DRVLAT1 (issue #633): the script polls the shapes in
-    // priority order, binds the first that exists, and acts on THAT reference —
-    // so a backgrounded run (detached form) and a foregrounded one dispatch the
-    // same script, and the element cannot change between resolving and acting.
+  it("probes BOTH dialog forms at the open, then addresses the one that opened", async () => {
+    // The attached-sheet / detached-window disjunction (UIC4-a) is settled ONCE,
+    // at the dialog-open hop (RDLAT2): it polls the shapes in priority order and
+    // reports which answered. Every later step then addresses THAT shell instead
+    // of re-asking about both, and each still binds its own element through the
+    // candidate prelude — so the element cannot change between resolving and
+    // acting, and a backgrounded run drives the detached form the same way.
     const { run, commands } = mockRunner((c) => {
       if (c.primitive === "resolve" || c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "select-row") return ok("OK");
       if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
     const res = await createUiVector(config(), run).execute(invocation(recipe()));
     expect(res.exitCode).toBe(0);
+    const open = commands.find((c) => c.primitive === "dialog-open");
+    const openScript = open?.script ?? "";
+    expect(openScript).toContain("AXStandardWindow");
+    expect(openScript).toContain("AXUnknown");
+    // Priority order: the attached sheet is probed before the detached window.
+    expect(openScript.indexOf("AXStandardWindow")).toBeLessThan(openScript.indexOf("AXUnknown"));
+    // The snapshot said "candidate 1", so the acting hop addresses the sheet only.
     const popup = commands.find((c) => c.primitive === "select-popup");
     const script = popup?.script ?? "";
     expect(script).toContain("AXStandardWindow");
-    expect(script).toContain("AXUnknown");
-    // Priority order: the attached sheet is probed before the detached window.
-    expect(script.indexOf("AXStandardWindow")).toBeLessThan(script.indexOf("AXUnknown"));
+    expect(script).not.toContain("AXUnknown");
     // …and the action addresses what the prelude bound, never a hard-coded shell.
     expect(script).toContain(`set pu to (${STEP_ELEMENT_REF})`);
   });

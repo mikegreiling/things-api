@@ -160,6 +160,21 @@ export function isSheetOpenProbe(c: UiCommand): boolean {
 }
 
 /**
+ * What the `dialog-open` hop reports for a healthy ATTACHED Repeat sheet
+ * (RDLAT2) — candidate 1, and the shell's direct-child AX roles exactly as
+ * measured on Things 3.23 (build 32300036): two checkboxes, the cadence group,
+ * a static text, the frequency pop-up, OK and Cancel, and the dialog's image.
+ */
+export const REPEAT_DIALOG_OPEN_STDOUT =
+  "idx=1 roles=AXCheckBox,AXCheckBox,AXGroup,AXStaticText,AXPopUpButton,AXButton,AXButton,AXImage";
+
+/** The same, for the DETACHED editor window (candidate 2, same census — DRVLAT1 §5). */
+export const REPEAT_DIALOG_OPEN_DETACHED_STDOUT = REPEAT_DIALOG_OPEN_STDOUT.replace(
+  "idx=1",
+  "idx=2",
+);
+
+/**
  * Answer the commands that READ or CHANGE the screen, and nothing else:
  * returns null for every command the test's own `answer` should handle.
  *

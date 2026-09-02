@@ -312,9 +312,23 @@ export const THINGS_PROCESS = "Things3";
  * could not be proven is NAMED (`stalled=` / `failed=`) instead of silently
  * reading as a clean "nothing is open".
  */
-export function axUiStateScript(): string {
+/**
+ * How much DECORATION the census gathers (RDLAT2).
+ *
+ *   - `"always"` — every probe, including the focused element's role even when
+ *     Things owns the screen. The DIAGNOSTIC posture: `things ui-state`, `things
+ *     doctor --ui-state`, `things rescue` and the cleanup ladder's disclosure all
+ *     print that role, so they ask for it unconditionally.
+ *   - `"when-not-ours"` — the focus probe runs only when Things is NOT frontmost.
+ *     The OPERATIONAL posture: nothing a drive decides or says uses the role while
+ *     the screen is ours, and the probe is the most expensive read in the census
+ *     (~3.5x an addressed one, FGRD2 §2) paid once per keystroke-class hop.
+ */
+export type CensusDecoration = "always" | "when-not-ours";
+
+export function axUiStateScript(decorate: CensusDecoration = "always"): string {
   return `${UI_STATE_MARKER}
-${CENSUS_BODY}
+${CENSUS_BODY(decorate)}
 
 return ${censusRecord("linefeed")}`;
 }
@@ -327,7 +341,7 @@ return ${censusRecord("linefeed")}`;
  * Nothing about the probes, their budgets or their order differs between the two
  * uses: it is one body, compiled into two scripts.
  */
-const CENSUS_BODY = `set frontName to ""
+const CENSUS_BODY = (decorate: CensusDecoration): string => `set frontName to ""
 set frontIsThings to false
 set focusRole to ""
 set focusSub to ""
@@ -386,20 +400,35 @@ ${AX_DIALOG_SHELL_SNIPPET}
 					set nBt to -1
 					set nGp to -1
 					set nTf to -1
+					-- ONE ROLE LIST, NOT FIVE COUNTS (RDLAT2). "count of checkboxes
+					-- of X" and friends are five separate Accessibility round-trips
+					-- answering five halves of one question; "role of UI elements"
+					-- answers all of it in one, and System Events derives each of
+					-- those classes from exactly this AXRole, so the counts are the
+					-- same numbers by construction (verified live across every
+					-- dialog state, docs/lab/rdlat2-repeat-dialog-latency.md §3).
+					-- MEASURED on the clone: 43.5 ms → 6.5 ms per census.
 					try
-						set nCb to (count of checkboxes of shellRef)
-					end try
-					try
-						set nPu to (count of pop up buttons of shellRef)
-					end try
-					try
-						set nBt to (count of buttons of shellRef)
-					end try
-					try
-						set nGp to (count of groups of shellRef)
-					end try
-					try
-						set nTf to (count of text fields of shellRef)
+						set rls to (role of UI elements of shellRef)
+						set nCb to 0
+						set nPu to 0
+						set nBt to 0
+						set nGp to 0
+						set nTf to 0
+						repeat with rlRef in rls
+							set rlv to (contents of rlRef) as text
+							if rlv is "AXCheckBox" then
+								set nCb to nCb + 1
+							else if rlv is "AXPopUpButton" then
+								set nPu to nPu + 1
+							else if rlv is "AXButton" then
+								set nBt to nBt + 1
+							else if rlv is "AXGroup" then
+								set nGp to nGp + 1
+							else if rlv is "AXTextField" then
+								set nTf to nTf + 1
+							end if
+						end repeat
 					end try
 					set census to "cb:" & nCb & " pu:" & nPu & " bt:" & nBt & " gp:" & nGp & " tf:" & nTf
 					set winId to ""
@@ -412,7 +441,18 @@ ${AX_DIALOG_SHELL_SNIPPET}
 						set groupOk to false
 						try
 							set g to group 1 of shellRef
-							if ((count of text fields of g) + (count of pop up buttons of g)) > 0 then set groupOk to true
+							-- Same economy, same question: does the cadence group hold
+							-- any of the controls a Repeat dialog's group must have?
+							-- The list is BOUND before it is walked: iterating an
+							-- anonymous expression here read as an unrecognized dialog
+							-- on every open (measured, RDLAT2 §5 — the drives still
+							-- ran, and the MODALX1 preflight and the cleanup ladder
+							-- silently stopped knowing which dialog was theirs).
+							set grs to (role of UI elements of g)
+							repeat with rlRef in grs
+								set rlv to (contents of rlRef) as text
+								if rlv is "AXTextField" or rlv is "AXPopUpButton" then set groupOk to true
+							end repeat
 						end try
 						if groupOk then set sheetKind to "repeat"
 					end if
@@ -455,7 +495,16 @@ end if
 -- the process that owns the screen rather than resolved system-wide, run last,
 -- and skipped outright once the budget is spent. An ERROR here (as opposed to a
 -- timeout) is the secure-system-modal signature: macOS exposes no tree for one.
-if not halted then
+--
+-- WHEN THE SCREEN IS OURS, THIS PROBE IS SKIPPED (RDLAT2, the
+-- "when-not-ours" decoration). It is not a saving at the expense of a check:
+-- with frontIsThings true, the focused element's role appears in NO sentence any
+-- consumer produces — the guard only renders it while refusing, and it refuses
+-- on frontIsThings being false. The secure-modal signal is not lost either: a
+-- macOS consent dialog owns the screen, so frontIsThings is false whenever one
+-- is up and the probe runs exactly as before. Skipped, not stalled: the record
+-- must not report a probe as unproven when nothing needed it.
+if (not halted) and (${decorate === "when-not-ours" ? "not frontIsThings" : "true"}) then
 	if ((current date) - t0) > ${CENSUS_BUDGET_S} then
 		set stalled to stalled & "focus "
 	else
@@ -541,7 +590,7 @@ export function axFocusGuardPrelude(expectedSheet: UiSheetKind | null): string {
       ? ""
       : `\n  if sheetKind is not "${expectedSheet}" then set fgBad to true`;
   return `${UI_STATE_MARKER}
-${CENSUS_BODY}
+${CENSUS_BODY("when-not-ours")}
 
 log "${GUARD_LOG_PREFIX}" & ${censusRecord(`"${GUARD_LOG_SEP}"`)}
 set fgBad to false
@@ -634,9 +683,10 @@ export function parseUiState(stdout: string): UiState | null {
 export async function readUiState(
   run: (command: UiCommand, timeoutMs: number) => Promise<UiRunResult>,
   timeoutMs: number = CENSUS_TIMEOUT_MS,
+  decorate: CensusDecoration = "always",
 ): Promise<UiState | null> {
   const res = await run(
-    { primitive: "resolve", label: UI_STATE_LABEL, script: axUiStateScript() },
+    { primitive: "resolve", label: UI_STATE_LABEL, script: axUiStateScript(decorate) },
     timeoutMs,
   );
   if (!res.ok) return null;

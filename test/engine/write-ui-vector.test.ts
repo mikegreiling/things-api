@@ -41,9 +41,12 @@ import { seedTodo } from "../fixtures/seed.ts";
 import {
   healthyScreen,
   isSheetOpenProbe,
+  REPEAT_DIALOG_OPEN_DETACHED_STDOUT,
+  REPEAT_DIALOG_OPEN_STDOUT,
   screenAnswer,
   type FakeScreen,
 } from "../fixtures/ui-state.ts";
+import { setInstalledThingsVersion } from "../../src/write/vectors/ui-shape.ts";
 import { GUARD_REFUSED_TAG, UI_STATE_MARKER } from "../../src/write/vectors/ui-state.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
@@ -188,6 +191,7 @@ describe("ui driver — fail-closed", () => {
       if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
       if (c.primitive === "resolve") return ok("true"); // canary passes
       if (c.primitive === "wait") return ok("false"); // dialog never appears
+      if (c.primitive === "dialog-open") return ok("none");
       return ok();
     });
     const vector = createUiVector(config(true), run);
@@ -233,6 +237,7 @@ describe("ui driver — fail-closed", () => {
           return ok("true");
         if (c.primitive === "resolve") return ok("true");
         if (c.primitive === "wait") return ok("false");
+        if (c.primitive === "dialog-open") return ok("none");
         return ok();
       },
       healthyScreen({ dismissable: false }),
@@ -986,6 +991,7 @@ function answerHappy(c: UiCommand): UiRunResult {
   if (c.primitive === "resolve") return ok("true");
   if (c.primitive === "resolve-frame") return ok("100 200 40 20");
   if (c.primitive === "wait") return ok("true");
+  if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
   return ok();
 }
 
@@ -1047,6 +1053,7 @@ describe("ui driver — mouse-hybrid click-element (NATIVE1 primitive)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "resolve-frame") return ok("100 200 40 20");
       if (c.primitive === "wait") return ok("false"); // assertion never satisfied
+      if (c.primitive === "dialog-open") return ok("none");
       return ok();
     });
     const vector = createUiVector(config(true), run);
@@ -1111,6 +1118,7 @@ describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
@@ -1129,6 +1137,7 @@ describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
@@ -1160,6 +1169,7 @@ describe("ui driver — the Move… picker commit is addressed, never a blind Re
       if (isReach(c)) return ok("1 1 1");
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "resolve-frame") return ok("400 150 230 18");
       return ok();
     });
@@ -1185,6 +1195,7 @@ describe("ui driver — the Move… picker commit is addressed, never a blind Re
       if (isReach(c)) return ok("1 1 1");
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "resolve-frame") {
         // The two popover targets resolve; the picker row refuses.
         const isPickerRow = c.script?.includes("MovePopUpDialog-") === true;
@@ -1244,6 +1255,7 @@ describe("ui driver — session-reachability gate (SESSGATE #480)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "audit-dialog") return ok("OK"); // CGRD1 pre-commit audit
       return ok();
     });
@@ -1323,6 +1335,7 @@ describe("ui driver — session-reachability gate (SESSGATE #480)", () => {
         }
         if (c.primitive === "resolve") return ok("true");
         if (c.primitive === "wait") return ok("false"); // the dialog never appears (window went AX-blind)
+        if (c.primitive === "dialog-open") return ok("none");
         return ok();
       },
       // An AX-blind session exposes nothing to walk, so the census cannot see
@@ -1354,6 +1367,7 @@ describe("ui driver — the measured Repeat-dialog shape fork (RDLG2)", () => {
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "probe-dialog-shape") return ok(shape);
       return ok("OK");
     });
@@ -1426,6 +1440,7 @@ describe("ui driver — the measured Repeat-dialog shape fork (RDLG2)", () => {
       if (c.primitive === "resolve")
         return ok(c.script?.includes('"Edit Rule…"') === true ? "false" : "true");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       return ok("OK");
     });
     const res = await createUiVector(config(true), run).execute(
@@ -1730,6 +1745,7 @@ describe("ui driver — typing is skipped when the field already holds the value
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "assert-eligible") return ok("OK");
       if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "probe-dialog-shape") return ok("next-popup");
       // The interval field already holds the requested value, so the script
       // returns without typing.
@@ -1772,6 +1788,7 @@ describe("ui driver — the audited cleanup ladder (#620)", () => {
     if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
     if (c.primitive === "resolve") return ok("true");
     if (c.primitive === "wait") return ok("false");
+    if (c.primitive === "dialog-open") return ok("none");
     return ok();
   };
 
@@ -1891,5 +1908,118 @@ describe("pre-commit audit — relative date renderings (#625)", () => {
     // The relative resolver runs FIRST, then the existing date parses.
     expect(s.indexOf("aqRelative")).toBeLessThan(s.indexOf("set d to date s"));
     expect(s).toContain("return missing value");
+  });
+});
+
+const manifestRecipe = (): UiRecipe => makeRepeatingRecipe("TODO-1", "weekly", 2);
+
+// RDLAT2: THE SHAPE MANIFEST'S GATE. The drive now WAITS FOR THE DIALOG AND
+// CENSUSES IT in one hop. Three things follow, and each is a cell here: a shell
+// whose control census has moved is REFUSED before anything is pressed; a shell
+// that matches is ADDRESSED directly by every later step (and by the pre-commit
+// audit, which no longer spends a hop resolving it); and an app generation the
+// manifest was never measured against gets neither — it runs the full per-step
+// discrimination exactly as it did before the manifest existed.
+describe("ui driver — the Repeat dialog's shape manifest (RDLAT2)", () => {
+  /** Answer every probe happily; `snapshot` is what the dialog-open hop reports. */
+  function openRunner(snapshot: string) {
+    return mockRunner((c) => {
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(snapshot);
+      if (c.primitive === "audit-dialog") return ok("OK");
+      return ok("OK");
+    });
+  }
+  const recipe = manifestRecipe;
+
+  afterEach(() => {
+    setInstalledThingsVersion("3.23");
+  });
+
+  it("a dialog whose control census has MOVED refuses, with nothing pressed", async () => {
+    // The lab cannot stage this — it would take a redesigned Things — so the
+    // fail-closed direction is proven here. A census that is not the Repeat
+    // dialog's is an app update, and pressing structural indices into an unknown
+    // tree is exactly how a GUI driver writes the wrong rule (CGRD1 posture).
+    const { run, commands } = openRunner("idx=1 roles=AXCheckBox,AXGroup,AXButton,AXTextField");
+    const res = await createUiVector(config(true), run).execute(invocation(recipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("not the Repeat dialog this version drives");
+    expect(res.stderr).toContain("1 checkboxes (expected 2)");
+    expect(res.stderr).toContain("nothing was entered into the rule");
+    expect(commands.some((c) => c.primitive === "select-popup")).toBe(false);
+    expect(commands.some((c) => c.primitive === "set-group-number")).toBe(false);
+  });
+
+  it("a matching shell is ADDRESSED by every later step, and the audit resolves no shell", async () => {
+    const { run, commands } = openRunner(REPEAT_DIALOG_OPEN_STDOUT);
+    const res = await createUiVector(config(true), run).execute(invocation(recipe()));
+    expect(res.exitCode).toBe(0);
+    // Candidate 1 is the attached sheet: later steps carry that address alone.
+    const popup = commands.find((c) => c.primitive === "select-popup");
+    expect(popup?.script).toContain("AXStandardWindow");
+    expect(popup?.script).not.toContain("AXUnknown");
+    // …and the audit's separate shell-resolution hop is gone (DRVLAT1 §8's open
+    // item): the only `resolve` hops left are the census, the reachability probe
+    // and the canary, none of them labelled for the audit.
+    const auditResolves = commands.filter(
+      (c) => c.primitive === "resolve" && c.label.includes("audit the Repeat dialog"),
+    );
+    expect(auditResolves).toEqual([]);
+  });
+
+  it("the DETACHED shell is addressed when that is the one that opened", async () => {
+    const { run, commands } = openRunner(REPEAT_DIALOG_OPEN_DETACHED_STDOUT);
+    const res = await createUiVector(config(true), run).execute(invocation(recipe()));
+    expect(res.exitCode).toBe(0);
+    const popup = commands.find((c) => c.primitive === "select-popup");
+    expect(popup?.script).toContain("AXUnknown");
+    expect(popup?.script).not.toContain("AXStandardWindow");
+  });
+
+  it("the OK press rides the audit's own script — one hop, nothing dispatched between", async () => {
+    const { run, commands } = openRunner(REPEAT_DIALOG_OPEN_STDOUT);
+    const res = await createUiVector(config(true), run).execute(invocation(recipe()));
+    expect(res.exitCode).toBe(0);
+    // No press hop for OK…
+    expect(commands.filter((c) => c.primitive === "press" && c.script?.includes('"OK"'))).toEqual(
+      [],
+    );
+    // …the audit hop carries it…
+    const audit = commands.find((c) => c.primitive === "audit-dialog");
+    expect(audit?.script).toContain('click (button "OK"');
+    // …and the step is still named in the trail, because it still happened.
+    expect(res.steps).toContain('press "OK"');
+  });
+
+  it("an UNRECOGNIZED app build asserts nothing and takes no fast path", async () => {
+    setInstalledThingsVersion("3.24");
+    // The same moved census that refuses above is merely unremarkable here: the
+    // manifest has nothing to say about a generation nobody has sat the lab with,
+    // so the drive runs the full per-step discrimination it always did.
+    const { run, commands } = openRunner("idx=1 roles=AXCheckBox,AXGroup,AXButton,AXTextField");
+    const res = await createUiVector(config(true), run).execute(invocation(recipe()));
+    expect(res.exitCode).toBe(0);
+    const popup = commands.find((c) => c.primitive === "select-popup");
+    expect(popup?.script).toContain("AXStandardWindow");
+    expect(popup?.script).toContain("AXUnknown");
+    // …and the audit goes back to resolving the shell for itself.
+    expect(
+      commands.some(
+        (c) => c.primitive === "resolve" && c.label.includes("audit the Repeat dialog"),
+      ),
+    ).toBe(true);
+  });
+
+  it("a dialog that never appears fails exactly as the old wait did", async () => {
+    const { run, commands } = openRunner("none");
+    const res = await createUiVector(config(true), run).execute(invocation(recipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("the expected element never appeared within the timeout");
+    expect(commands.some((c) => c.primitive === "select-popup")).toBe(false);
   });
 });
