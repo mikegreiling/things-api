@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { RepeatRule } from "../../src/model/recurrence.ts";
 import type {
   AddRepeatingRuleFields,
+  RepeatFrequency,
   RepeatRuleParams,
   TodoAddRepeatingParams,
 } from "../../src/write/operations.ts";
@@ -454,5 +455,67 @@ describe("splitAddRepeatingRule — the exhaustive rule/add split (#491 doctrine
     } as TodoAddRepeatingParams);
     expect(ruleHalf).toEqual({ frequency: "daily", interval: 1 });
     expect(add).toEqual({ title: "seed" });
+  });
+});
+
+/**
+ * THE AFTER-COMPLETION OFFSET CAP (DEFAULTS2 §clamp) — measured on Things 3.23
+ * build 32300036 across 3 seed offsets x 8 unit/interval pairs.
+ *
+ * The dialog will not hold an offset of P days or more for a series that repeats
+ * every P days: the start would fall on or before the PREVIOUS occurrence's due
+ * date. It applies the cap SILENTLY — a typed 30 became 6 under `every 1 week`
+ * and 0 under `every 3 days`, with no refusal, and the landed rule carried the
+ * replacement (oddities §32) — so the request is refused before dispatch instead.
+ * A FIXED cadence has no cap at all: 30- and 45-day offsets landed verbatim.
+ */
+describe("assertRepeatRule — the after-completion offset cap (DEFAULTS2)", () => {
+  const base = { afterCompletion: true, deadline: true } as const;
+  const cap = (frequency: RepeatFrequency, interval: number, startDaysEarlier: number) => () =>
+    assertRepeatRule({ ...base, frequency, interval, startDaysEarlier });
+
+  it("accepts every offset strictly inside the period", () => {
+    // 1 day -> 0 · 3 days -> 2 · 1 week -> 6 · 2 weeks -> 13 · 1 month -> 29 ·
+    // 1 year -> 364, exactly as the dialog pre-fills them.
+    expect(cap("daily", 1, 0)).not.toThrow();
+    expect(cap("daily", 3, 2)).not.toThrow();
+    expect(cap("weekly", 1, 6)).not.toThrow();
+    expect(cap("weekly", 2, 13)).not.toThrow();
+    expect(cap("monthly", 1, 29)).not.toThrow();
+    expect(cap("yearly", 1, 364)).not.toThrow();
+  });
+
+  it("refuses an offset AT the period, naming the cap", () => {
+    expect(cap("weekly", 1, 7)).toThrow(/caps the offset at 6/);
+    expect(cap("daily", 1, 1)).toThrow(/caps the offset at 0/);
+    expect(cap("daily", 3, 3)).toThrow(/caps the offset at 2/);
+    expect(cap("monthly", 1, 30)).toThrow(/caps the offset at 29/);
+  });
+
+  it("refuses an offset above it, and says what would go wrong", () => {
+    expect(cap("weekly", 1, 30)).toThrow(
+      /the start would fall on or before the previous occurrence's due date/,
+    );
+    expect(cap("weekly", 1, 30)).toThrow(/drop --after-completion/);
+  });
+
+  it("does not cap a FIXED cadence at all", () => {
+    for (const f of ["daily", "weekly", "monthly", "yearly"] as RepeatFrequency[]) {
+      expect(() =>
+        assertRepeatRule({
+          frequency: f,
+          interval: 1,
+          deadline: true,
+          startDaysEarlier: 45,
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it("scales with the interval, because the cap is the PERIOD", () => {
+    expect(cap("weekly", 1, 7)).toThrow();
+    expect(cap("weekly", 2, 7)).not.toThrow();
+    expect(cap("daily", 10, 9)).not.toThrow();
+    expect(cap("daily", 10, 10)).toThrow(/caps the offset at 9/);
   });
 });

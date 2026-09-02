@@ -84,6 +84,7 @@ import {
   resumeRepeatRecipe,
   type RepeatRuleExtras,
 } from "./vectors/ui-recipes.ts";
+import type { SeedRowFacts } from "./vectors/ui-prefill.ts";
 import type { SidebarPlacement } from "./vectors/ui-drag.ts";
 import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
 import { buildRepeatingFingerprint, type DeltaSpec, type FieldAssertion } from "./verify/delta.ts";
@@ -2050,10 +2051,44 @@ export { assertRepeatRule };
  * + `--when 2026-08-06` → "a first occurrence on 2026-08-20 would not hold",
  * measured in-lab). The orchestrators now pass `--when` through unshifted.
  */
-function makeRuleExtras(params: RepeatRuleParams): RepeatRuleExtras {
+function makeRuleExtras(params: RepeatRuleParams, pre?: PreState): RepeatRuleExtras {
   const base = ruleExtras(params);
   const drive = deadlineDriveNext(params);
-  return drive !== undefined ? { ...base, next: drive } : base;
+  const withNext = drive !== undefined ? { ...base, next: drive } : base;
+  const seed = seedRowFactsOf(pre);
+  return seed !== null ? { ...withNext, seed } : withNext;
+}
+
+/**
+ * THE SEED THE DIALOG WILL SEED ITSELF FROM (DEFAULTS2), read off the pre-state.
+ *
+ * `make-repeating` is only ever reached with the row it is about to promote — the
+ * disposable CLONE on the make path, the freshly created seed on the add path
+ * (promote-clone.ts) — so `pre.target` IS the row the Repeat dialog opens over,
+ * and the pre-read every command already performs is the authority on what it
+ * holds. Nothing is threaded down from the orchestrator and nothing is assumed
+ * about what the URL scheme did with a requested date: a `when` the app clamped
+ * (DEFAULTS1 §3.1) is described here as the row actually reads.
+ *
+ * `derived.reminder` rather than the presentation-live `reminder`: the dialog
+ * pre-ticks "Add reminders" from the row's stored `reminderTime` byte whether or
+ * not the reader would call that reminder live, and the substrate is that byte.
+ *
+ * Returns null for a target that did not resolve, which tags nothing and drives
+ * everything.
+ */
+function seedRowFactsOf(pre: PreState | undefined): SeedRowFacts | null {
+  const target = pre?.target;
+  if (pre === undefined || target === null || target === undefined) return null;
+  // A heading has no dates at all and can never be a promote target; it is in
+  // AnyTask, so it is excluded here rather than assumed away.
+  if (target.type === "heading") return null;
+  return {
+    scheduled: target.startDate,
+    today: pre.todayIso,
+    deadline: target.deadline,
+    reminder: target.derived.reminder ?? null,
+  };
 }
 
 /**
@@ -2160,10 +2195,13 @@ function rescheduleVectors(params: RescheduleRepeatParams): VectorId[] {
 const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
   op: "todo.make-repeating",
   hazards: UI_HAZARDS,
-  preRead(db, params) {
+  preRead(db, params, now, zone) {
     assertRepeatRule(params);
     const pre = emptyPreState();
-    pre.target = loadTarget(db, params.uuid);
+    // The seed row + the response clock's today are what the Repeat dialog's own
+    // pre-fill is derived from (DEFAULTS2), so the compile reads them from here.
+    pre.todayIso = localToday(now, zone);
+    pre.target = loadTarget(db, params.uuid, now, zone);
     pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "to-do");
     return pre;
   },
@@ -2199,10 +2237,15 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
       assert: [{ field: "repeating.isTemplate", equals: true }],
     };
   },
-  compile(params, vector) {
+  compile(params, vector, pre) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
     return uiDrive(
-      makeRepeatingRecipe(params.uuid, params.frequency, params.interval, makeRuleExtras(params)),
+      makeRepeatingRecipe(
+        params.uuid,
+        params.frequency,
+        params.interval,
+        makeRuleExtras(params, pre),
+      ),
     );
   },
 };
@@ -2534,10 +2577,12 @@ const projectResumeRepeat: CommandSpec<"project.resume-repeat"> = {
 const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
   op: "project.make-repeating",
   hazards: ["H-UNKNOWN-DESTINATION", "H-PROJECT-REPEAT", "H-UI-DRIVE"],
-  preRead(db, params) {
+  preRead(db, params, now, zone) {
     assertRepeatRule(params);
     const pre = emptyPreState();
-    pre.target = loadTarget(db, params.uuid);
+    // As for the to-do verb: the seed row the sheet pre-fills from (DEFAULTS2).
+    pre.todayIso = localToday(now, zone);
+    pre.target = loadTarget(db, params.uuid, now, zone);
     pre.projectRepeat = classifyProjectRepeat(db, pre.target);
     pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "project");
     if (pre.target !== null) pre.repeatSubtreeUuids = projectSubtreeUuids(db, pre.target.uuid);
@@ -2589,7 +2634,7 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
         tax.title,
         params.frequency,
         params.interval,
-        makeRuleExtras(params),
+        makeRuleExtras(params, pre),
       ),
     );
   },

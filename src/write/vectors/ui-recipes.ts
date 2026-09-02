@@ -43,6 +43,8 @@ import type {
 import type { HeadingChordSpec } from "./ui-chord.ts";
 import type { SidebarPlacement } from "./ui-drag.ts";
 import type { SettleSpec } from "./ui-observer.ts";
+import { type PrefillKey, provenPrefills, type SeedRowFacts } from "./ui-prefill.ts";
+import { installedThingsVersion } from "./ui-shape.ts";
 import type { DialogAuditControl, UiRecipe, UiStep } from "./types.ts";
 
 /**
@@ -70,6 +72,24 @@ export interface RepeatDialogRule {
    * to accept the app default. Not applicable to after-completion (no calendar).
    */
   next?: string;
+  /**
+   * THE SEED ROW THE DIALOG WILL SEED ITSELF FROM (DEFAULTS2) — its scheduled
+   * date, deadline and reminder as READ from the database, plus the response
+   * clock's today.
+   *
+   * Present only where the CLI MINTED the row it is about to promote —
+   * `make-repeating` (the disposable clone) and `add-repeating` (the fresh seed).
+   * Given it, the recipe computes which of the dialog's controls will already
+   * hold the requested value ({@link provenPrefills}), verifies each of those by
+   * READING it, and skips only the actuations the read confirmed.
+   *
+   * DELIBERATELY ABSENT ON RESCHEDULE. That dialog opens PRE-POPULATED from the
+   * EXISTING rule rather than on the after-completion default, so none of the
+   * defaults law applies to it (DEFAULTS1 §9.5) — its interval is the rule's own
+   * interval, not `1`, and its anchor is the rule's own anchor. Omit the field and
+   * every setter runs, which is exactly what shipped before this existed.
+   */
+  seed?: SeedRowFacts;
 }
 
 const ITEMS_MENU = `menu "Items" of menu bar 1`;
@@ -779,23 +799,42 @@ function setDateTime(label: string, spec: string, target: "next" | "ends" | "rem
   };
 }
 
+/**
+ * TAG A SETTER WITH THE PRE-FILL IT MAY BE ABLE TO SKIP (DEFAULTS2).
+ *
+ * `key` is `undefined` for everything the seed does not PROVE, and an untagged
+ * step always runs — so the arithmetic's job is only ever to nominate a control
+ * for verification, never to authorize a skip. The skip is the `verify-prefill`
+ * hop's answer, taken by reading the control itself.
+ */
+function tagPrefill(step: UiStep, key: PrefillKey | undefined): UiStep {
+  return key === undefined ? step : { ...step, unlessPrefilled: key };
+}
+
 /** Steps that drive the day anchor of a monthly rule into the mode + ordinal pop-ups. */
 function monthlyAnchorSteps(
   anchor: MonthlyAnchor,
   mode: NonNullable<UiStep["shaped"]>,
   ordinal: NonNullable<UiStep["shaped"]>,
+  keys?: { mode: PrefillKey | undefined; ordinal: PrefillKey | undefined },
 ): UiStep[] {
   if ("day" in anchor) {
     // mode = "day"; ordinal names the day-of-month (or "last").
     return [
-      selectPopupShaped("monthly mode = day", mode, "day"),
-      selectPopupShaped(
-        `monthly day = ${anchor.day}`,
-        ordinal,
-        anchor.day === "last" ? "last" : ORDINAL_TITLE_ANY(anchor.day),
+      tagPrefill(selectPopupShaped("monthly mode = day", mode, "day"), keys?.mode),
+      tagPrefill(
+        selectPopupShaped(
+          `monthly day = ${anchor.day}`,
+          ordinal,
+          anchor.day === "last" ? "last" : ORDINAL_TITLE_ANY(anchor.day),
+        ),
+        keys?.ordinal,
       ),
     ];
   }
+  // The ordinal-weekday form is NEVER pre-filled (DEFAULTS1-2, measured against
+  // seeds chosen to falsify it: a seed ON the first Monday pre-fills `3rd`), so
+  // this branch is never nominated and both pop-ups always run.
   return [
     selectPopupShaped(`monthly weekday = ${anchor.weekday}`, mode, WEEKDAY_TITLE[anchor.weekday]),
     selectPopupShaped(`monthly ordinal = ${anchor.ordinal}`, ordinal, ordinalTitle(anchor.ordinal)),
@@ -842,37 +881,43 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     },
   ];
 
+  // THE DEFAULTS LAW, AS ARITHMETIC (DEFAULTS2, the build DEFAULTS1 probed).
+  //
+  // The dialog seeds its whole cadence row from ONE date on the row it opened
+  // over, and on a promote WE MINTED THAT ROW — so `provenPrefills` can say, from
+  // the seed as read out of the database, exactly which of the controls below will
+  // already hold the requested value. Each such control's setter is TAGGED here
+  // and the `verify-prefill` hop spliced in below READS it; only a read that
+  // confirms the value skips the actuation, and a miss falls back to the certified
+  // setter for that control alone. An empty set (no seed — every reschedule — or an
+  // app build the shape manifest was never sat with) tags nothing, and the recipe
+  // is then the one that shipped before this existed.
+  const proven =
+    rule.seed === undefined
+      ? new Set<PrefillKey>()
+      : provenPrefills(rule, rule.seed, installedThingsVersion());
+  const pf = (key: PrefillKey): PrefillKey | undefined => (proven.has(key) ? key : undefined);
+
   if (rule.afterCompletion === true) {
     // "after completion" is the first frequency-pop-up option; picking it reveals
     // a secondary unit pop-up ("after completion, every N <unit>").
     steps.push(selectPopup("frequency = after completion", DIALOG_FREQUENCY, "after completion"));
-    steps.push(
-      selectPopupAny(
-        `after-completion unit = ${rule.frequency}`,
-        DIALOG_AC_UNIT,
-        FREQ_TO_AC_UNIT[rule.frequency],
-      ),
-    );
   } else {
     steps.push(selectPopup(`frequency = ${rule.frequency}`, DIALOG_FREQUENCY, rule.frequency));
   }
-
-  // The interval runs BEFORE any ends bound is selected, so the cadence group is
-  // expected to hold exactly one numeric field here — and the frequency step just
-  // above has rebuilt it, which is precisely the transition the manifest lets the
-  // settle wait for positively (RDLAT2).
-  steps.push(
-    setGroupNumber(`interval = ${rule.interval}`, "interval", String(rule.interval), {
-      afterCompletion: rule.afterCompletion === true,
-      endsAfter: false,
-    }),
-  );
 
   // MEASURE the dialog before touching any control the 3.23 redesign moved
   // (RDLG2). Emitted only when such a control is actually addressed, so the
   // certified two-control path (frequency + interval + OK) costs no extra hop —
   // and so an after-completion rule, whose cadence group has neither an Ends nor
   // a Next label to measure, never runs a probe that could only say "unknown".
+  //
+  // IT NOW RUNS BEFORE THE INTERVAL rather than after it (DEFAULTS2). Two reasons,
+  // and neither is a preference: the verify-by-read hop needs the measured shape
+  // to address the shaped pop-ups, and it must read BEFORE any setter runs — so
+  // both have to precede the interval. The probe is read-only and its own success
+  // is the group-rebuild gate the interval step's settle wanted anyway (RDLAT2
+  // §E.4), so nothing that step depended on has moved.
   const needsShape =
     rule.afterCompletion !== true &&
     ((rule.weekdays !== undefined && rule.weekdays.length > 0) ||
@@ -889,6 +934,49 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
       addressing: "title",
     });
   }
+  // Where the verify-by-read hop belongs: after the frequency selection has
+  // rebuilt the cadence group and the shape has been measured, and before the
+  // first setter. It is spliced in at the end, once the tagged steps are known.
+  const verifyAt = steps.length;
+
+  if (rule.afterCompletion === true) {
+    steps.push(
+      tagPrefill(
+        selectPopupAny(
+          `after-completion unit = ${rule.frequency}`,
+          DIALOG_AC_UNIT,
+          FREQ_TO_AC_UNIT[rule.frequency],
+        ),
+        // The opening default is `after completion, every 1 week` — not `day` —
+        // on every one of the 14 seed states, deadlined or not (DEFAULTS1 §2). So
+        // weekly is the one after-completion shape whose unit needs no actuation;
+        // the other three still need one.
+        pf("ac-unit"),
+      ),
+    );
+  }
+
+  // The interval runs BEFORE any ends bound is selected, so the cadence group is
+  // expected to hold exactly one numeric field here — and the frequency step just
+  // above has rebuilt it, which is precisely the transition the manifest lets the
+  // settle wait for positively (RDLAT2).
+  //
+  // AND AT INTERVAL 1 IT NOW DISAPPEARS (DEFAULTS2). This was the most expensive
+  // hop in the whole drive — 39 round-trips, 33 elements, ~1.03 s — and it TYPED
+  // NOTHING: the field already held `1`, so the read-back-first skip fired every
+  // time. It existed to confirm a default the dialog was never going to get wrong,
+  // and the interval field is `1` in every cell of the 70-cell matrix, under every
+  // frequency, after-completion included (DEFAULTS1 §8). The verify hop confirms
+  // it in one plural read shared with every other pre-filled control.
+  steps.push(
+    tagPrefill(
+      setGroupNumber(`interval = ${rule.interval}`, "interval", String(rule.interval), {
+        afterCompletion: rule.afterCompletion === true,
+        endsAfter: false,
+      }),
+      rule.interval === 1 ? pf("interval") : undefined,
+    ),
+  );
 
   if (rule.weekdays !== undefined && rule.weekdays.length > 0) {
     // ONE closed-loop converge (RRD1 fix) rather than "set row 1, then press +
@@ -897,34 +985,56 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     // reads the live rows, grows to the target count, assigns every row from the
     // target set (cycling), and reads them all back. See ui.ts
     // axConvergeWeekdaysScript for the loop and its evidence.
+    //
+    // The pre-fill can only ever satisfy a SINGLE-weekday set on the anchor's own
+    // weekday (a weekday set is always exactly one row, DEFAULTS1 §8), so a
+    // multi-weekday request always converges.
     const titles = rule.weekdays.map((day) => WEEKDAY_TITLE[day]).join(",");
-    steps.push({
-      primitive: "converge-weekdays",
-      label: `weekdays = ${rule.weekdays.join(", ")}`,
-      pathCandidates: DIALOG_GROUP,
-      shaped: {
-        "next-popup": { value: `${WEEKDAY_BASE["next-popup"]}|${titles}` },
-        legacy: { value: `${WEEKDAY_BASE.legacy}|${titles}` },
-      },
-      dynamic: true,
-      addressing: "title",
-    });
+    steps.push(
+      tagPrefill(
+        {
+          primitive: "converge-weekdays",
+          label: `weekdays = ${rule.weekdays.join(", ")}`,
+          pathCandidates: DIALOG_GROUP,
+          shaped: {
+            "next-popup": { value: `${WEEKDAY_BASE["next-popup"]}|${titles}` },
+            legacy: { value: `${WEEKDAY_BASE.legacy}|${titles}` },
+          },
+          dynamic: true,
+          addressing: "title",
+        },
+        pf("weekdays"),
+      ),
+    );
   }
 
   if (rule.monthly !== undefined) {
-    steps.push(...monthlyAnchorSteps(rule.monthly, DIALOG_MONTH_MODE, DIALOG_MONTH_ORDINAL));
+    steps.push(
+      ...monthlyAnchorSteps(rule.monthly, DIALOG_MONTH_MODE, DIALOG_MONTH_ORDINAL, {
+        mode: pf("monthly-mode"),
+        ordinal: pf("monthly-ordinal"),
+      }),
+    );
   }
 
   if (rule.yearly !== undefined) {
     const y: YearlyAnchor = rule.yearly;
     steps.push(
-      selectPopupShaped(
-        `yearly month = ${y.month}`,
-        DIALOG_YEAR_MONTH,
-        MONTH_TITLE[y.month - 1] ?? "",
+      tagPrefill(
+        selectPopupShaped(
+          `yearly month = ${y.month}`,
+          DIALOG_YEAR_MONTH,
+          MONTH_TITLE[y.month - 1] ?? "",
+        ),
+        pf("yearly-month"),
       ),
     );
-    steps.push(...monthlyAnchorSteps(y, DIALOG_YEAR_MODE, DIALOG_YEAR_ORDINAL));
+    steps.push(
+      ...monthlyAnchorSteps(y, DIALOG_YEAR_MODE, DIALOG_YEAR_ORDINAL, {
+        mode: pf("yearly-mode"),
+        ordinal: pf("yearly-ordinal"),
+      }),
+    );
   }
 
   // LET THE `Next:` POP-UP ABSORB THE RULE (NEXTPOP1) before any further input.
@@ -942,6 +1052,15 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   // with no menu to recompute — and never for after-completion, which has no
   // first-occurrence control at all. It is a WAIT, not a setter, so it
   // contributes no control to the pre-commit audit.
+  //
+  // WHAT IT WAITS FOR HAS NOT CHANGED; WHEN IT IS NEEDED HAS (DEFAULTS2). The
+  // recompute it absorbs is provoked by an anchor SETTER, so the driver skips it
+  // when no setter has dispatched since the shape was measured — a rule whose
+  // whole anchor was pre-filled changed nothing for the pop-up to absorb. That is
+  // a POSITIVE condition on the dependency, not a shortened clock (VOPAT2-7): the
+  // step is emitted exactly as before and the driver's own dispatch counter, not
+  // this recipe's arithmetic, decides. It is also the polling path's twin of the
+  // observer's `seen === 0` skip, so both settle shapes agree.
   if (needsShape && rule.afterCompletion !== true) {
     steps.push({
       primitive: "settle-occurrences",
@@ -968,6 +1087,15 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   // bare `startDaysEarlier > 0` implies deadline:true; an UNSPECIFIED deadline emits
   // NO step, PRESERVING the pre-populated checkbox state (a reschedule that does not
   // address the deadline leaves it exactly as it was).
+  //
+  // NEITHER IS PRE-FILLED ON THE SHIPPED SEED SHAPING (DEFAULTS2). A deadline on
+  // the SEED would tick the box and fill the offset for free (DEFAULTS1 §4), but a
+  // to-do seed carrying a deadline is SRCFATE-preserved as a materialized instance
+  // that double-books the template cursor (DBLSPAWN1 cell C) — so the seed stays
+  // deadline-free and these two keep their actuations. What the seed shaping DOES
+  // buy for a deadlined rule is the anchor: it is scheduled on the DUE date, so
+  // `Next:` and the calendar anchor come up right. DEFAULTS1 §9.3 option A is a
+  // gated follow-up, not a shipped path.
   const deadlineTarget: boolean | undefined =
     rule.deadline !== undefined
       ? rule.deadline
@@ -975,15 +1103,23 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
         ? true
         : undefined;
   if (deadlineTarget !== undefined) {
-    steps.push(ensureCheckbox("Add deadlines", DIALOG_ADD_DEADLINES, deadlineTarget));
+    steps.push(
+      tagPrefill(
+        ensureCheckbox("Add deadlines", DIALOG_ADD_DEADLINES, deadlineTarget),
+        pf("add-deadlines"),
+      ),
+    );
     // startDaysEarlier is requested-fields-only too: drive the offset field only
     // when it was given (>0), else leave it at its pre-populated value.
     if (deadlineTarget && (rule.startDaysEarlier ?? 0) > 0) {
       steps.push(
-        setRowField(
-          `start ${rule.startDaysEarlier} days earlier`,
-          DIALOG_START_EARLIER_LABEL,
-          String(rule.startDaysEarlier),
+        tagPrefill(
+          setRowField(
+            `start ${rule.startDaysEarlier} days earlier`,
+            DIALOG_START_EARLIER_LABEL,
+            String(rule.startDaysEarlier),
+          ),
+          pf("start-earlier"),
         ),
       );
     }
@@ -995,6 +1131,9 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   // target. Driving Next while it is the SOLE date area and THEN adding the ends
   // area collapses the whole series to the ends date (ANCH2 RC4); selecting the
   // ends bound first — the proven-clean order (cell d) — keeps them distinct.
+  //
+  // NOTHING HERE IS EVER PRE-FILLED: `Ends:` is `never` in every cell of the
+  // matrix, and no property of a to-do row expresses a series bound (DEFAULTS1 §8).
   const endsOnDate = rule.ends !== undefined && rule.ends.kind === "on-date" ? rule.ends : null;
   if (rule.ends !== undefined && rule.ends.kind === "after") {
     steps.push(selectPopup("ends = after", DIALOG_ENDS, "after"));
@@ -1019,20 +1158,33 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   //     off-rule first occurrence is UNREACHABLE and the step fails closed with
   //     the reason (the app removed the affordance; we do not fake it by picking
   //     a neighbouring date).
+  //
+  // The 3.23 drive is the one the pre-fill can satisfy — and it is the COMMON
+  // case, because `make-repeating` derives its first occurrence from the item's
+  // own scheduled date, which is exactly the date the dialog anchors on. VOPAT2
+  // already stopped it opening the menu to pick the value the control showed
+  // (893 → 79 ms); with the pre-fill verified it costs no hop at all. The legacy
+  // date-area drive carries no tag: the defaults law was measured on 3.23 and the
+  // version gate hands a ≤3.22 build no reliance at all.
   if (rule.next !== undefined && rule.afterCompletion !== true) {
     steps.push({
       ...setDateTime(`Next (first occurrence) = ${rule.next}`, `date:${rule.next}`, "next"),
       onlyShape: "legacy",
     });
-    steps.push({
-      primitive: "select-next-occurrence",
-      label: `Next (first occurrence) = ${rule.next}`,
-      pathCandidates: DIALOG_NEXT_POPUP,
-      value: rule.next,
-      onlyShape: "next-popup",
-      dynamic: true,
-      addressing: "title",
-    });
+    steps.push(
+      tagPrefill(
+        {
+          primitive: "select-next-occurrence",
+          label: `Next (first occurrence) = ${rule.next}`,
+          pathCandidates: DIALOG_NEXT_POPUP,
+          value: rule.next,
+          onlyShape: "next-popup",
+          dynamic: true,
+          addressing: "title",
+        },
+        pf("next"),
+      ),
+    );
   }
 
   if (endsOnDate !== null) {
@@ -1046,9 +1198,24 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   // whatever the creation order. Requested-fields-only (#492): an unspecified
   // reminder emits NO step, PRESERVING the pre-populated checkbox + time. (The rule
   // vocabulary carries no "reminder off", so the only requested target is checked.)
+  //
+  // BOTH STEPS ARE PRE-FILLABLE (DEFAULTS1-3). A reminder lives in the row's own
+  // `reminderTime` column rather than in the recurrence blob, and a promote carries
+  // it onto the template untouched — so a seed minted `when=<date>@<HH:MM>` comes
+  // up with the box ticked and the time already on the control. The time is still
+  // VERIFIED, through the ObjC date-area read (DEFAULTS1 §5 read it as empty
+  // through System Events, which is that transport's limitation, not the
+  // control's — §13's "needs a working spelling" is the audit's own leg).
   if (rule.reminder !== undefined) {
-    steps.push(ensureCheckbox("Add reminders", DIALOG_ADD_REMINDERS, true));
-    steps.push(setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`, "reminder"));
+    steps.push(
+      tagPrefill(ensureCheckbox("Add reminders", DIALOG_ADD_REMINDERS, true), pf("add-reminders")),
+    );
+    steps.push(
+      tagPrefill(
+        setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`, "reminder"),
+        pf("reminder-time"),
+      ),
+    );
   }
 
   // The pre-commit audit COMMITS for itself when there is one (RDLAT2): the OK
@@ -1056,13 +1223,74 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
   // the driver reports — but it runs inside the audit's own script, so nothing can
   // change between the last read and the press. A recipe that drove no control has
   // no audit, and its press stays a hop of its own.
+  //
+  // IT IS BUILT FROM EVERY SETTER, TAGGED OR NOT (DEFAULTS2). A step whose
+  // actuation the verify hop skips is still in this list, so it still contributes
+  // its control here: the audit reads exactly the same set of controls it always
+  // did, and a pre-filled value is checked at the same cost as a driven one. That
+  // is the whole reason the skip is a per-step tag rather than an omission at
+  // compile time — an unaudited commit is not an option.
   const audit = dialogAuditStep(steps, {
     afterCompletion: rule.afterCompletion === true,
     endsAfter: rule.ends !== undefined && rule.ends.kind === "after",
   });
   if (audit !== null) steps.push(audit);
   steps.push(pressControl('press "OK"', DIALOG_OK));
+
+  const verify = verifyPrefillStep(steps, {
+    afterCompletion: rule.afterCompletion === true,
+    endsAfter: false,
+    ...(needsShape && { onlyShape: "next-popup" as const }),
+  });
+  if (verify !== null) steps.splice(verifyAt, 0, verify);
   return steps;
+}
+
+/**
+ * Build the VERIFY-BY-READ step from the drive's OWN tagged steps (DEFAULTS2) —
+ * the mirror image of {@link dialogAuditStep}, and derived the same way for the
+ * same reason.
+ *
+ * Every control it reads comes from a setter the recipe emitted, through that
+ * setter's own candidate paths / shape overrides / row anchors — so the read, the
+ * write it may replace, and the pre-commit audit that follows all address the
+ * identical control. A pre-fill key can therefore never be confirmed by looking
+ * at the wrong thing, which is the #589 error class arriving at a third door.
+ *
+ * It carries NO commit and no `Ends:` state: it is a read-only hop taken before
+ * any setter has run, so the cadence expectation it hands `cgSettle` is the state
+ * the frequency selection just produced (that assertion is advisory — a group
+ * that already shows the state has demonstrably finished re-laying out, which is
+ * exactly the existence gate DEFAULTS1-4 says the pre-fill needs).
+ *
+ * Returns null when the seed proves nothing — no tagged step, no hop.
+ */
+function verifyPrefillStep(
+  steps: UiStep[],
+  state: { afterCompletion: boolean; endsAfter: boolean; onlyShape?: "next-popup" },
+): UiStep | null {
+  const controls: DialogAuditControl[] = [];
+  for (const step of steps) {
+    const key = step.unlessPrefilled;
+    if (key === undefined) continue;
+    const control = auditControlFor(step);
+    if (control === null) continue;
+    controls.push({ ...control, prefillKey: key });
+  }
+  if (controls.length === 0) return null;
+  return {
+    primitive: "verify-prefill",
+    label: "read the Repeat dialog's pre-filled controls (nothing driven yet)",
+    audit: {
+      shells: DIALOG_SHELLS,
+      groups: DIALOG_GROUP,
+      controls,
+      cadence: { afterCompletion: state.afterCompletion, endsAfter: state.endsAfter },
+    },
+    ...(state.onlyShape !== undefined && { onlyShape: state.onlyShape }),
+    dynamic: true,
+    addressing: "title",
+  };
 }
 
 /**
@@ -1111,100 +1339,8 @@ function dialogAuditStep(
 ): UiStep | null {
   const controls: DialogAuditControl[] = [];
   for (const step of steps) {
-    const base = {
-      label: step.label,
-      ...(step.onlyShape !== undefined && { onlyShape: step.onlyShape }),
-    };
-    switch (step.primitive) {
-      case "select-popup": {
-        const shaped = shapedPaths(step);
-        controls.push({
-          ...base,
-          kind: "popup",
-          ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
-          ...(shaped !== undefined && { shaped }),
-          // valueCandidates carries the singular/plural pair the app pluralizes by
-          // interval; ANY of them satisfies, exactly as the drive accepted any.
-          expected: step.valueCandidates ?? [step.value ?? ""],
-        });
-        break;
-      }
-      case "set-group-number":
-        controls.push({
-          ...base,
-          kind: "group-number",
-          numberTarget: step.numberTarget ?? "interval",
-          expected: [step.value ?? ""],
-        });
-        break;
-      case "set-row-field":
-        controls.push({
-          ...base,
-          kind: "row-field",
-          rowLabel: step.rowLabel ?? "",
-          expected: [step.value ?? ""],
-        });
-        break;
-      case "ensure-checkbox":
-        controls.push({
-          ...base,
-          kind: "checkbox",
-          ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
-          expected: [step.checkboxTarget === true ? "1" : "0"],
-          expectedLabel: step.checkboxTarget === true ? "checked" : "unchecked",
-        });
-        break;
-      case "converge-weekdays": {
-        // The weekday step encodes "<base>|<Weekday>,<Weekday>…" per dialog shape
-        // (the base is the group pop-up index of the first weekday row, which the
-        // +1 fork moves). The audit reads every row pop-up from that base and
-        // compares as a SET: the converge law assigns EVERY row from the target set
-        // cycling, so a surplus row duplicates a target weekday rather than keeping
-        // a stale one, and set equality is the exact property to check.
-        const nextValue = step.shaped?.["next-popup"]?.value;
-        const legacyValue = step.shaped?.legacy?.value;
-        const encoded = nextValue ?? legacyValue;
-        if (encoded === undefined) break;
-        const titles = encoded
-          .slice(encoded.indexOf("|") + 1)
-          .split(",")
-          .filter((t) => t !== "");
-        if (titles.length === 0) break;
-        controls.push({
-          ...base,
-          kind: "weekdays",
-          expected: titles,
-          expectedLabel: titles.join(" + "),
-          shaped: {
-            ...(nextValue !== undefined && {
-              "next-popup": { weekdayBase: weekdayBaseOfEncoded(nextValue) },
-            }),
-            ...(legacyValue !== undefined && {
-              legacy: { weekdayBase: weekdayBaseOfEncoded(legacyValue) },
-            }),
-          },
-        });
-        break;
-      }
-      case "select-next-occurrence":
-        controls.push({
-          ...base,
-          kind: "occurrence-popup",
-          ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
-          expected: [step.value ?? ""],
-        });
-        break;
-      case "set-datetime":
-        controls.push({
-          ...base,
-          kind: "date-area",
-          dtTarget: step.dtTarget ?? "next",
-          dtSpec: step.value ?? "",
-        });
-        break;
-      default:
-        break;
-    }
+    const control = auditControlFor(step);
+    if (control !== null) controls.push(control);
   }
   if (controls.length === 0) return null;
   return {
@@ -1220,6 +1356,105 @@ function dialogAuditStep(
     dynamic: true,
     addressing: "title",
   };
+}
+
+/**
+ * ONE step's contribution to a control-reading plan, or null for a step that sets
+ * nothing (a wait, the menu press, the shape probe, the verify hop, the OK press).
+ *
+ * Shared by the pre-commit audit and the verify-by-read hop, which is what keeps
+ * the two honest about each other: a control read before the drive and the same
+ * control re-read before the commit are derived from the SAME setter, so they
+ * cannot disagree about its address, its accepted values, or how a mismatch reads.
+ */
+function auditControlFor(step: UiStep): DialogAuditControl | null {
+  const base = {
+    label: step.label,
+    ...(step.onlyShape !== undefined && { onlyShape: step.onlyShape }),
+  };
+  switch (step.primitive) {
+    case "select-popup": {
+      const shaped = shapedPaths(step);
+      return {
+        ...base,
+        kind: "popup",
+        ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
+        ...(shaped !== undefined && { shaped }),
+        // valueCandidates carries the singular/plural pair the app pluralizes by
+        // interval; ANY of them satisfies, exactly as the drive accepted any.
+        expected: step.valueCandidates ?? [step.value ?? ""],
+      };
+    }
+    case "set-group-number":
+      return {
+        ...base,
+        kind: "group-number",
+        numberTarget: step.numberTarget ?? "interval",
+        expected: [step.value ?? ""],
+      };
+    case "set-row-field":
+      return {
+        ...base,
+        kind: "row-field",
+        rowLabel: step.rowLabel ?? "",
+        expected: [step.value ?? ""],
+      };
+    case "ensure-checkbox":
+      return {
+        ...base,
+        kind: "checkbox",
+        ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
+        expected: [step.checkboxTarget === true ? "1" : "0"],
+        expectedLabel: step.checkboxTarget === true ? "checked" : "unchecked",
+      };
+    case "converge-weekdays": {
+      // The weekday step encodes "<base>|<Weekday>,<Weekday>…" per dialog shape
+      // (the base is the group pop-up index of the first weekday row, which the
+      // +1 fork moves). The check reads every row pop-up from that base and
+      // compares as a SET: the converge law assigns EVERY row from the target set
+      // cycling, so a surplus row duplicates a target weekday rather than keeping
+      // a stale one, and set equality is the exact property to check.
+      const nextValue = step.shaped?.["next-popup"]?.value;
+      const legacyValue = step.shaped?.legacy?.value;
+      const encoded = nextValue ?? legacyValue;
+      if (encoded === undefined) return null;
+      const titles = encoded
+        .slice(encoded.indexOf("|") + 1)
+        .split(",")
+        .filter((t) => t !== "");
+      if (titles.length === 0) return null;
+      return {
+        ...base,
+        kind: "weekdays",
+        expected: titles,
+        expectedLabel: titles.join(" + "),
+        shaped: {
+          ...(nextValue !== undefined && {
+            "next-popup": { weekdayBase: weekdayBaseOfEncoded(nextValue) },
+          }),
+          ...(legacyValue !== undefined && {
+            legacy: { weekdayBase: weekdayBaseOfEncoded(legacyValue) },
+          }),
+        },
+      };
+    }
+    case "select-next-occurrence":
+      return {
+        ...base,
+        kind: "occurrence-popup",
+        ...(step.pathCandidates !== undefined && { pathCandidates: step.pathCandidates }),
+        expected: [step.value ?? ""],
+      };
+    case "set-datetime":
+      return {
+        ...base,
+        kind: "date-area",
+        dtTarget: step.dtTarget ?? "next",
+        dtSpec: step.value ?? "",
+      };
+    default:
+      return null;
+  }
 }
 
 /** The optional extended-vocabulary fields a recipe threads into the dialog. */

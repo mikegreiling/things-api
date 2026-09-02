@@ -1455,6 +1455,161 @@ describe("ui driver — the measured Repeat-dialog shape fork (RDLG2)", () => {
 });
 
 // ===========================================================================
+// VERIFY-BY-READ (DEFAULTS2). The Repeat dialog seeds its whole cadence row from
+// the row it opened over, and on a promote we minted that row — so a setter whose
+// value the dialog already holds is an actuation that becomes a read. What a unit
+// test can prove is the DISPATCH LEDGER: which hops went, which did not, and what
+// happened when the read disagreed. The live proof is the DEFAULTS2 lab matrix,
+// which lands byte-identical rule blobs against `THINGS_API_PREFILL=0`.
+// ===========================================================================
+/**
+ * A drive whose seed PROVES the whole cadence: a Thursday-scheduled seed with a
+ * 09:30 reminder, asked for `weekly thursday, interval 1, first occurrence
+ * 2026-07-09, reminder 09:30` — every control the recipe would drive.
+ */
+const seeded = (): UiRecipe =>
+  makeRepeatingRecipe("TODO-1", "weekly", 1, {
+    weekdays: ["thursday"],
+    next: "2026-07-09",
+    reminder: "09:30",
+    seed: {
+      scheduled: "2026-07-09",
+      today: "2026-07-05",
+      deadline: null,
+      reminder: "09:30",
+    },
+  });
+
+describe("ui driver — the verify-by-read pre-fill skip (DEFAULTS2)", () => {
+  /** `report` is what the System Events verify leg answers; the JXA leg always agrees. */
+  function prefillRunner(report: string, dateAreas = "reminder-time|ok") {
+    return mockRunner((c) => {
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
+      if (c.primitive === "probe-dialog-shape") return ok("next-popup");
+      if (c.primitive === "verify-prefill") return ok(c.lang === "javascript" ? dateAreas : report);
+      return ok("OK");
+    });
+  }
+
+  const ALL_OK = "interval|ok~weekdays|ok~next|ok~add-reminders|ok";
+
+  it("drives NOTHING the dialog already holds, and still commits", async () => {
+    const { run, commands } = prefillRunner(ALL_OK);
+    const res = await createUiVector(config(true), run).execute(invocation(seeded()));
+    expect(res.exitCode).toBe(0);
+    // The interval hop — 39 round-trips and 33 elements to confirm a `1` the
+    // dialog was never going to get wrong — is gone.
+    expect(commands.some((c) => c.primitive === "set-group-number")).toBe(false);
+    expect(commands.some((c) => c.primitive === "converge-weekdays")).toBe(false);
+    expect(commands.some((c) => c.primitive === "select-next-occurrence")).toBe(false);
+    expect(commands.some((c) => c.primitive === "ensure-checkbox")).toBe(false);
+    expect(commands.some((c) => c.primitive === "set-datetime")).toBe(false);
+    // The pre-commit audit still ran, and it is what pressed OK.
+    expect(commands.some((c) => c.primitive === "audit-dialog")).toBe(true);
+    // The frequency selection is the one actuation that must always happen.
+    expect(commands.some((c) => c.primitive === "select-popup")).toBe(true);
+  });
+
+  it("names every skipped control in the completed-steps trail", async () => {
+    const { run } = prefillRunner(ALL_OK);
+    const res = await createUiVector(config(true), run).execute(invocation(seeded()));
+    expect(res.stdout).toContain("(pre-filled)");
+    expect(res.stdout).toContain("interval");
+  });
+
+  it("falls back to the certified setter for the ONE control that disagreed", async () => {
+    // The mismatch-fallback law: a read that does not confirm is not a refusal
+    // and not a guess — it is the setter running exactly as it did before.
+    const { run, commands } = prefillRunner(
+      "interval|ok~weekdays|miss|Sunday~next|ok~add-reminders|ok",
+    );
+    const res = await createUiVector(config(true), run).execute(invocation(seeded()));
+    expect(res.exitCode).toBe(0);
+    expect(commands.some((c) => c.primitive === "converge-weekdays")).toBe(true);
+    // …and only that one.
+    expect(commands.some((c) => c.primitive === "set-group-number")).toBe(false);
+    expect(commands.some((c) => c.primitive === "select-next-occurrence")).toBe(false);
+  });
+
+  it("drives EVERYTHING when the verify hop itself fails", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
+      if (c.primitive === "probe-dialog-shape") return ok("next-popup");
+      // A hop that cannot run confirms nothing. It must never skip an actuation.
+      if (c.primitive === "verify-prefill")
+        return { ok: false, exitCode: 1, stdout: "", stderr: "boom" };
+      return ok("OK");
+    });
+    const res = await createUiVector(config(true), run).execute(invocation(seeded()));
+    expect(res.exitCode).toBe(0);
+    expect(commands.some((c) => c.primitive === "set-group-number")).toBe(true);
+    expect(commands.some((c) => c.primitive === "converge-weekdays")).toBe(true);
+    expect(commands.some((c) => c.primitive === "select-next-occurrence")).toBe(true);
+    expect(commands.some((c) => c.primitive === "ensure-checkbox")).toBe(true);
+  });
+
+  it("skips the occurrence settle only when no setter drove — never on a timer", async () => {
+    // Nothing driven: there is no recompute to absorb, so the wait is not needed.
+    const { run: runA, commands: none } = prefillRunner(ALL_OK);
+    await createUiVector(config(true), runA).execute(invocation(seeded()));
+    expect(none.some((c) => c.primitive === "settle-occurrences")).toBe(false);
+    // A setter DID drive: the wait stays, because the anchor moved.
+    const { run: runB, commands: some } = prefillRunner(
+      "interval|ok~weekdays|miss|Sunday~next|ok~add-reminders|ok",
+    );
+    await createUiVector(config(true), runB).execute(invocation(seeded()));
+    expect(some.some((c) => c.primitive === "settle-occurrences")).toBe(true);
+    // Two full drives in one cell; the default 5 s budget is a flake here, not a
+    // signal (the same rider the script-syntax suite carries).
+  }, 30_000);
+
+  it("reads through the same addresses the audit re-reads (one derivation, two hops)", async () => {
+    const { run, commands } = prefillRunner(ALL_OK);
+    await createUiVector(config(true), run).execute(invocation(seeded()));
+    const verify = commands.find(
+      (c) => c.primitive === "verify-prefill" && c.lang !== "javascript",
+    );
+    // The audit runs on two legs; the addresses live on the System Events one.
+    const audit = commands.find((c) => c.primitive === "audit-dialog" && c.lang !== "javascript");
+    // The 3.23 first-occurrence pop-up, at its shape-measured group index, and
+    // the weekday rows from their shape-measured base — identical in both.
+    for (const fragment of ["pop up button 2 of group 1", "repeat with k from 3"]) {
+      expect(verify?.script).toContain(fragment);
+      expect(audit?.script).toContain(fragment);
+    }
+  });
+
+  it("emits no verify hop at all with the reliance switched off", async () => {
+    const prior = process.env["THINGS_API_PREFILL"];
+    process.env["THINGS_API_PREFILL"] = "0";
+    try {
+      const { run, commands } = prefillRunner(ALL_OK);
+      const res = await createUiVector(config(true), run).execute(invocation(seeded()));
+      expect(res.exitCode).toBe(0);
+      expect(commands.some((c) => c.primitive === "verify-prefill")).toBe(false);
+      // …and the full recipe drives, exactly as it did before DEFAULTS2.
+      expect(commands.some((c) => c.primitive === "set-group-number")).toBe(true);
+      expect(commands.some((c) => c.primitive === "converge-weekdays")).toBe(true);
+      expect(commands.some((c) => c.primitive === "select-next-occurrence")).toBe(true);
+      expect(commands.some((c) => c.primitive === "settle-occurrences")).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env["THINGS_API_PREFILL"];
+      else process.env["THINGS_API_PREFILL"] = prior;
+    }
+  });
+});
+
+// ===========================================================================
 // The PER-STEP FOCUS GUARD (issue #620). A synthetic keystroke goes to whatever
 // application owns the screen, and a synthesized click lands on whatever is in
 // front — so before every one of those hops the driver reads the screen, and

@@ -103,11 +103,11 @@ export function deriveWeeklyWeekdays(
 }
 
 /** The 1-based day-of-month of an ISO date. */
-function dayOfMonthIso(iso: IsoDate): number {
+export function dayOfMonthIso(iso: IsoDate): number {
   return Number(iso.split("-")[2]);
 }
 /** The 1-based month of an ISO date. */
-function monthOfIso(iso: IsoDate): number {
+export function monthOfIso(iso: IsoDate): number {
   return Number(iso.split("-")[1]);
 }
 
