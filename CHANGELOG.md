@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.6 — 2026-09-02
+
 - **Fixed — setting a repeat frequency and its interval no longer races the dialog's own rebuild.** Changing the frequency makes Things rebuild that section of the Repeat dialog. The command went looking for the interval field before the rebuild had happened, found the *previous* layout, and picked its target out of that. It worked — the value it typed survived the rebuild, and the check before committing read the correct number back out — but the field was chosen from a stale picture of the dialog, which is precisely the class of mistake that once wrote an interval into the wrong box. It now waits for the rebuilt section to actually appear before deciding which field to type into.
 
   Found by counting, not by a failure: a new per-step count of how many controls each step reads came back at 17 where the dialog's own structure demanded about 39, and the missing ones were the controls the rebuild had not created yet.

@@ -1,6 +1,6 @@
 {
   "name": "things-api",
-  "version": "0.20.5",
+  "version": "0.20.6",
   "description": "Typed TypeScript library + CLI for Things 3 (Cultured Code) — verified writes, audit trail, schema-drift detection",
   "homepage": "https://github.com/mikegreiling/things-api#readme",
   "bugs": {
