@@ -6,6 +6,26 @@
 
 - **Changed — a PR that addresses a tracked issue now references it as `Refs #N`, never `Fixes #N`.** The repo conventions in `AGENTS.md` spell out the issue lifecycle: `Fixes`/`Closes`/`Resolves` auto-close an issue the moment the PR merges, and a merge is not confirmation that the defect is gone. A field-reported bug is closed only once the reporter's own re-run on the machine that hit it says the fix resolves it, because lab certification cannot reproduce real-hardware conditions.
 
+- **Changed — `things area reorder` is now off by default, and says why.** Reordering sidebar areas is the one thing this tool does by driving the Things window through the accessibility API: it synthesises a drag, and between gestures it has to read the sidebar back to see where everything ended up. On a large sidebar that read has been measured at 16–18 seconds *per read* on an M1 MacBook Pro — the same read takes under a second on a test machine — and a single move needs several of them. A command that can take minutes, and can leave an area collapsed if it stops part-way, is not a command to hand someone without warning.
+
+  So it is behind an opt-in now: `things config set experimental-area-reorder true`. Without it, `things area reorder`, `things reorder` on areas, and the MCP `reorder` tool's areas branch all refuse and explain what the command drives, what it has measured, and what it can leave behind. Nothing else changed about how it works when you do turn it on. The bar it has to clear to come back on by default is finishing a move in about five seconds on real hardware.
+
+  Refs #676.
+
+- **Fixed — the step that collapses a blocking area no longer gives up after 30 seconds and calls it "the disclosure arrow did not respond".** Every other sidebar step already got a time allowance that grows with the size of your sidebar; this one was still on the flat 30-second allowance that a big sidebar had already outgrown, so on a large sidebar it was stopped mid-work and the message described a Things problem that was not happening. The allowance now scales like the others, the message now distinguishes *stopped after N seconds* from *would not run* from *the arrow refused the click*, and every sidebar-touching step derives its allowance from one place, so a future step cannot quietly be left out.
+
+  The step also got much faster. Finding the right row used to walk six levels of the accessibility tree for all 174 rows with three separate reads per node — 8,185 round-trips into Things, 3.9 seconds on a test machine and, at the speeds measured on an M1, well over two minutes. It now uses the same batched two-level read the sidebar snapshot uses, which finds exactly the same rows: 506 round-trips, 0.5 seconds.
+
+  Refs #676.
+
+- **Added — the collapse step reports what it did, step by step, when tracing is on.** `THINGS_API_TRACE=1` now records the row scroll, the row census, the click, the settle and the confirming re-census as separate timed records, and the click record carries the script's own internal split (locating the sidebar, harvesting the rows, finding the arrow, dispatching the click). A step that hangs and a step that is merely slow no longer look the same in a trace.
+
+  Refs #676.
+
+- **Added — `lab/scripts/field-probe-sidebar.jxa.js`, a standalone read-only measurement script.** One file, no install, no checkout: `osascript -l JavaScript field-probe-sidebar.jxa.js` prints how long a full sidebar sweep takes on *your* Mac, what one accessibility call costs there, whether the sidebar supports reading only the visible rows, and a predicted time for a whole reorder. Its output is counts, durations and geometry only — no task, project or area names — so it is safe to paste into a bug report.
+
+  Refs #676.
+
 ## 0.20.3 — 2026-09-01
 
 - **Fixed — `things area reorder` no longer depends on where you left the mouse pointer, and can read a big sidebar without giving up.** Two separate problems in the same command, both of which made it fail on a large sidebar and neither of which said what was really wrong.
