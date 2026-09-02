@@ -324,7 +324,33 @@ export type UiPrimitive =
    * Replaces the blind first-row-then-"+" drive, which left a pre-populated
    * dialog's stale weekdays in the committed rule.
    */
-  | "converge-weekdays";
+  | "converge-weekdays"
+  /**
+   * VERIFY-BY-READ, before a single setter runs: read every control the Repeat
+   * dialog is EXPECTED to have pre-filled from the seed row and report, per
+   * control, whether it holds what the requested rule asks for (DEFAULTS2 — the
+   * build docs/lab/defaults1-repeat-dialog-defaults.md is the probe for).
+   *
+   * The dialog seeds its whole cadence row from ONE date on the row, and our own
+   * CLI mints that row — so before the drive starts it can compute exactly what
+   * the pre-fill will hold (`src/write/vectors/ui-prefill.ts`). A control whose
+   * pre-fill is already correct is an actuation that becomes a READ: this step
+   * takes the read, and every setter it confirms is skipped.
+   *
+   * IT IS A REPORT, NOT A REFUSAL. A control that disagrees — or that will not
+   * read at all — is simply NOT confirmed, and its setter runs exactly as it did
+   * before, with its own closed loop and its own read-back (fail-safe, never
+   * assume). Nothing about the drive's verification posture changes: the
+   * pre-commit audit (CGRD1) still re-reads EVERY control of the requested rule,
+   * pre-filled or driven, and still refuses the commit fail-closed on a mismatch.
+   *
+   * Safe to read the moment the cadence group exists: the rebuild is ATOMIC with
+   * respect to the pre-fill (DEFAULTS1-4 — across 4 frequencies x 30 samples at
+   * 100 ms, plus an 8-point timeline on all 70 matrix cells, a control was either
+   * absent or already final; no intermediate value was ever observed). The step
+   * runs after `probe-dialog-shape`, whose success IS that existence gate.
+   */
+  | "verify-prefill";
 
 export interface UiStep {
   primitive: UiPrimitive;
@@ -489,6 +515,25 @@ export interface UiStep {
    * polling one.
    */
   settle?: import("./ui-observer.ts").SettleSpec;
+  /**
+   * SKIP THIS SETTER WHEN THE DIALOG ALREADY HOLDS ITS VALUE (DEFAULTS2) — the
+   * pre-fillable control this step drives, named by `PrefillKey`
+   * (`src/write/vectors/ui-prefill.ts`).
+   *
+   * The recipe emits the step exactly as it always did and tags it with the key;
+   * the driver skips the dispatch only when the `verify-prefill` hop CONFIRMED
+   * that key by reading the control. So the skip is never a guess and never an
+   * arithmetic claim standing alone — a key the read did not confirm (a value
+   * that disagreed, a control that would not read, an app build the manifest was
+   * never sat with, a `verify-prefill` step that never ran) leaves the setter to
+   * run, which is the behavior that shipped before this field existed.
+   *
+   * The step STAYS IN THE STEP LIST either way, so it still contributes its
+   * control to the pre-commit audit — a skipped actuation is never an unaudited
+   * one. That is the whole reason this is a per-step tag rather than an omission
+   * at compile time.
+   */
+  unlessPrefilled?: import("./ui-prefill.ts").PrefillKey;
 }
 
 /**
@@ -527,6 +572,14 @@ export interface DialogAuditControl {
   onlyShape?: RepeatDialogShape;
   /** Per-shape overrides, merged once the dialog shape is measured. */
   shaped?: Partial<Record<RepeatDialogShape, { pathCandidates?: string[]; weekdayBase?: number }>>;
+  /**
+   * `verify-prefill` only: the pre-fillable control this check answers for
+   * (DEFAULTS2). Present on every control of a verify-prefill plan and on none
+   * of a pre-commit audit's — the audit reports which controls DIFFER and
+   * refuses, while the verify hop reports which KEYS matched so their setters
+   * can be skipped.
+   */
+  prefillKey?: import("./ui-prefill.ts").PrefillKey;
 }
 
 /** The pre-commit audit an `audit-dialog` step carries. */

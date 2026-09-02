@@ -178,6 +178,29 @@ export function splitAddRepeatingRule<T extends AddRepeatingRuleFields>(
  * not apply to the chosen frequency (or contradicts another field). Throws a
  * RangeError with a behavioral message on any violation.
  */
+/**
+ * An AFTER-COMPLETION series' period in DAYS, or null when the rule is not
+ * after-completion (a fixed cadence has no such cap — DEFAULTS2 §clamp measured a
+ * 45-day offset landing verbatim under weekly, monthly and yearly).
+ *
+ * The unit conversion is the app's own, read off the clamp it applies: a month is
+ * 30 days and a year is 365 (`every 1 month` caps at 29, `every 1 year` at 364).
+ * They are calendar-naive numbers, and deliberately so — this is a reproduction
+ * of the app's arithmetic, not an improvement on it.
+ */
+function afterCompletionPeriodDays(
+  params: Pick<RepeatRuleParams, "afterCompletion" | "frequency" | "interval">,
+): number | null {
+  if (params.afterCompletion !== true) return null;
+  const perUnit: Record<RepeatRuleParams["frequency"], number> = {
+    daily: 1,
+    weekly: 7,
+    monthly: 30,
+    yearly: 365,
+  };
+  return params.interval * perUnit[params.frequency];
+}
+
 export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
   if (!FREQUENCIES.includes(params.frequency)) {
     throw new RangeError(
@@ -282,6 +305,34 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
     if (params.startDaysEarlier > 0 && params.deadline === false) {
       throw new RangeError(
         "startDaysEarlier requires a deadline (it counts days before the deadline)",
+      );
+    }
+    // AN AFTER-COMPLETION OFFSET IS BOUNDED BY THE PERIOD (DEFAULTS2 §clamp,
+    // MEASURED on Things 3.23 build 32300036). The dialog will not hold an offset
+    // of P days or more for a series that repeats every P days: the start would
+    // fall on or before the PREVIOUS occurrence's due date, and the app clamps the
+    // field to P − 1. Measured across 3 seed offsets x 8 unit/interval pairs —
+    // 1 day -> 0, 3 days -> 2, 10 days -> 9, 1 week -> 6, 2 weeks -> 13,
+    // 1 month -> 29, 2 months -> 59, 1 year -> 364 — with a month taken as 30 days
+    // and a year as 365.
+    //
+    // IT IS REFUSED HERE RATHER THAN DRIVEN, because the app's clamp is SILENT: a
+    // typed value above it is replaced with no refusal and no visible sign (30
+    // became 6 under `every 1 week`, and 0 under `every 3 days`), and the landed
+    // rule carries the replacement (oddities §32). The drive would in fact catch
+    // it — the pre-commit audit re-reads the field before the OK press, and the
+    // post-drive oracle asserts the landed `startOffsetDays` against the requested
+    // one — but both of those fail a drive that had no chance of succeeding. The
+    // over-caution fail direction says refuse the request, and name the law.
+    const period = afterCompletionPeriodDays(params);
+    if (period !== null && params.startDaysEarlier >= period) {
+      throw new RangeError(
+        `an after-completion series repeating every ${period} day` +
+          `${period === 1 ? "" : "s"} cannot start ${params.startDaysEarlier} days before its ` +
+          `deadline — the start would fall on or before the previous occurrence's due date, and ` +
+          `Things caps the offset at ${period - 1}. Use --start-days-earlier ` +
+          `${period - 1} or less, lengthen the interval, or drop --after-completion for a fixed ` +
+          "schedule (which has no such cap).",
       );
     }
   }

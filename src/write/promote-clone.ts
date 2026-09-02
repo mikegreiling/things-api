@@ -25,7 +25,14 @@
 import type { AuditRecord } from "../audit/schema.ts";
 import { undoToken } from "../audit/schema.ts";
 import { uiAllowed, uiCapability as uiCapabilityDefault } from "../capability.ts";
-import { addDaysIso, decodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
+import {
+  addDaysIso,
+  decodePackedDate,
+  decodeReminderTime,
+  localToday,
+  type IsoDate,
+  type ReminderTime,
+} from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
 import { byUuid } from "../read/detail.ts";
@@ -64,6 +71,7 @@ import {
   type PreModDates,
   type RepeatingDiscovery,
 } from "./verify/delta.ts";
+import { seedScheduleFor } from "./vectors/ui-prefill.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
 
 type PromoteOp =
@@ -397,6 +405,71 @@ async function trashDisposableCopy(
  * mutation fails: while a dialog is open, Things ignores scripted changes
  * app-wide AND stops sending anything to Things Cloud.
  */
+/**
+ * SEED SHAPING (DEFAULTS2, DEFAULTS1 §9.3 option B) — the date our own seed row
+ * must be scheduled on for the Repeat dialog to pre-fill the requested cadence.
+ *
+ * The dialog derives its entire cadence row from `max(the row's scheduled date,
+ * today)`, and we mint the row. For an UNDEADLINED rule the requested first
+ * occurrence already is that date, so nothing needs shaping. For a DEADLINED rule
+ * the dialog anchors on the DUE date (DEFAULTS1 §4, and the geometry the shipped
+ * recipe has always driven by hand — YANCH1 #493 / NEXTPOP1: `of=` holds the due
+ * date and `next`/`icStart` the requested start, because the app back-shifts each
+ * occurrence's start by N), so the seed is scheduled on the due date and STAYS
+ * DEADLINE-FREE.
+ *
+ * Deadline-free is not an oversight, it is the invariant: a to-do seed carrying a
+ * deadline is SRCFATE-preserved as a materialized instance that double-books the
+ * template cursor (DBLSPAWN1 cell C), which is why `mapDeadlineOntoRule` lifts the
+ * deadline onto the rule in the first place. Option B takes 44–47 % of the
+ * predicted field wall while arming no preserve trigger at all; option A (the
+ * deadline ON the seed, which would pre-fill the checkbox and the offset too, for
+ * 62 %) needs the DBLSPAWN1 matrix re-run through the CLI before it can be
+ * adopted, and is recorded as a gated follow-up rather than built.
+ *
+ * AFTER-COMPLETION IS EXCLUDED, and not as a precaution. That state carries NO
+ * first-occurrence control and no calendar anchor at all — nothing about the
+ * seed's DATE reaches an after-completion rule (DEFAULTS1 §2/§8; only its deadline
+ * offset and its reminder do) — so shaping the schedule would buy exactly nothing
+ * while moving the date the app materializes the first occurrence from. A shaping
+ * with no benefit and a real effect is not a trade.
+ *
+ * TWO HAZARDS, BOTH NAMED. The seed row is briefly scheduled on the due date
+ * rather than the start — invisible unless the promote fails, and the failure path
+ * auto-trashes the seed (add) or rolls the compound back (make). And a date the
+ * URL scheme would CLAMP is refused here rather than claimed: a past `when`
+ * silently becomes today (DEFAULTS1 §3.1), so `seedScheduleFor` returns null for
+ * one and the drive keeps its actuations.
+ */
+function seedShapeDate(
+  startIso: unknown,
+  startDaysEarlier: number,
+  afterCompletion: boolean,
+  now: Date,
+  zone: string | undefined,
+): IsoDate | null {
+  if (afterCompletion || startDaysEarlier <= 0) return null;
+  return seedScheduleFor(startIso, startDaysEarlier, localToday(now, zone));
+}
+
+/** The seed row's schedule + reminder as the shaping leg needs them (raw bytes). */
+function seedScheduleRow(
+  db: WriteDeps["db"],
+  uuid: string,
+): { startDate: IsoDate | null; evening: boolean; reminder: ReminderTime | null } | null {
+  const row = db
+    .prepare(
+      "SELECT startDate AS sd, startBucket AS sb, reminderTime AS rt FROM TMTask WHERE uuid = ?",
+    )
+    .get(uuid) as { sd: number | null; sb: number | null; rt: number | null } | undefined;
+  if (row === undefined) return null;
+  return {
+    startDate: decodePackedDate(row.sd),
+    evening: row.sb === 1,
+    reminder: decodeReminderTime(row.rt),
+  };
+}
+
 const DISMISS_FIRST =
   ". If a dialog is still open in Things, dismiss it first (click Cancel, or press Escape with " +
   "Things in front): while one is open the app ignores changes like this and stops sending " +
@@ -1065,6 +1138,53 @@ async function makeRepeatingViaClone(
       ? createDbReader(deps.db, now, deps.zone).modDateOf(srcUuid)
       : null;
 
+    // 1b. SHAPE THE SEED'S SCHEDULE (DEFAULTS2). The clone carries the SOURCE's
+    // own scheduled date, which is the date the dialog will pre-fill from — so
+    // when the rule asks the dialog to anchor somewhere else (an explicit
+    // `--when`, or a deadlined rule whose anchor is the DUE date) the clone is
+    // rescheduled onto that date FIRST, and the whole cadence row then comes up
+    // pre-filled instead of being typed. One url-scheme leg on our own disposable
+    // copy, against the three or four dialog hops it removes.
+    //
+    // Three conditions, and each one is a refusal to guess:
+    //   - the date must be CONCRETE and not already the clone's (nothing to do);
+    //   - it must not be in the past — the URL scheme clamps such a `when` to
+    //     today (DEFAULTS1 §3.1) and the anchor would silently become today;
+    //   - the clone must not be EVENING-scheduled (`startBucket = 1`), because a
+    //     `when=` leg would clear that byte and this leg exists to make the drive
+    //     cheaper, never to change what the row means.
+    // A skipped shaping is not a failure: the dialog then pre-fills from the
+    // clone's own date, the verify-by-read hop finds the mismatch, and every
+    // anchor actuation runs exactly as it did before this leg existed. The same is
+    // true of a FAILED shaping, which is why it is not fatal.
+    // After-completion is excluded for the reason seedShapeDate names: that
+    // dialog state has no first-occurrence control and no calendar anchor, so the
+    // seed's date reaches its rule not at all.
+    if (isIsoDate(driveIso) && effParams.afterCompletion !== true) {
+      const seedRow = seedScheduleRow(deps.db, cloneUuid);
+      if (
+        seedRow !== null &&
+        !seedRow.evening &&
+        seedRow.startDate !== driveIso &&
+        daysBetweenIso(localToday(now, deps.zone), driveIso) >= 0
+      ) {
+        await runMutation(
+          deps,
+          kind === "project" ? "project.update" : "todo.update",
+          {
+            uuid: cloneUuid,
+            when: driveIso,
+            // Re-supplied WITH the date, the way the clone leg's own reminder
+            // follow-up does it: a bare `when=` leg drops the row's reminder, and
+            // the reminder is exactly one of the things the dialog then carries
+            // onto the template for free (DEFAULTS1-3).
+            ...(seedRow.reminder !== null && { reminder: seedRow.reminder }),
+          } as never,
+          legOptions(options, txnId, "url-scheme"),
+        );
+      }
+    }
+
     // 2. Trash the original BEFORE promoting — the clone already holds X's content,
     // and a live same-titled X would make the promote's project row-selection
     // ambiguous (H-PROJECT-REPEAT). X survives in the Trash (the recoverable half).
@@ -1264,6 +1384,23 @@ async function addRepeatingViaCreate(
   // shift — the one place that does (NEXTPOP1; see promoteViaCloneAndMakeRepeating).
   const nextIso = whenIso ?? undefined;
   const expectedStartIso = nextIso;
+  // SEED SHAPING (DEFAULTS2 / DEFAULTS1 §9.3 option B): the SEED is scheduled on
+  // the date the dialog must anchor on — the due date for a deadlined rule — while
+  // every arithmetic above and below stays on the requested START. That separation
+  // is the whole correctness of this: `driveIso`, `nextIso` and `expectedStartIso`
+  // are all derived from `whenIso` BEFORE this line, so shaping the seed cannot
+  // shift the anchor twice, cannot move the cursor the post-drive check verifies,
+  // and cannot change what the caller asked for. An undeadlined rule's seed is
+  // ALREADY on the requested first occurrence, so it is left exactly as it is.
+  const seedWhen = seedShapeDate(
+    addParams["when"],
+    deadlineShift,
+    rule.afterCompletion === true,
+    deps.now?.() ?? new Date(),
+    deps.zone,
+  );
+  const seedParams: Record<string, unknown> =
+    seedWhen !== null ? { ...addParams, when: seedWhen } : addParams;
   const effRule: AddRepeatingRuleFields &
     Partial<Pick<RepeatRuleParams, "deadline" | "startDaysEarlier">> = {
     ...rule,
@@ -1361,7 +1498,7 @@ async function addRepeatingViaCreate(
     const add = await runMutation(
       deps,
       addOp,
-      addParams as never,
+      seedParams as never,
       legOptions(options, txnId, "url-scheme"),
     );
     if (add.kind !== "ok" || add.uuid === null) {

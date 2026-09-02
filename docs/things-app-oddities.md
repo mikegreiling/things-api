@@ -1472,6 +1472,35 @@ A second, quieter case in the same family: a row with a **deadline and no start 
 
 Evidence: [lab/defaults1-repeat-dialog-defaults.md](lab/defaults1-repeat-dialog-defaults.md) §4, §10.2, §10.3.
 
+## 32. Things 3.23: an after-completion series caps its deadline offset at one day short of its period — and enforces the cap by SILENTLY replacing whatever you typed (DEFAULTS2, 2026-09-02, golden-v4 / Things 3.23 build 32300036)
+
+The Repeat dialog's `and start N days earlier` field means something different under `after completion` than under a fixed cadence, and the dialog does not say so. Under a fixed cadence any offset is accepted: a to-do due 45 days after it starts commits `ts = -45` and the series works. Under `after completion, every N <unit>` the field is capped at **the period in days minus one** — because a start that far back would fall on or before the PREVIOUS occurrence's due date — and the cap is applied without a word.
+
+Read off the pre-fill, 6 seed offsets × 6 unit/interval pairs, every cell `min(the row's deadline − start, P − 1)`:
+
+| seed offset | `1 day` | `3 days` | `1 week` | `2 weeks` | `1 month` | `1 year` | any FIXED cadence |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 7 | 0 | 2 | **6** | 7 | 7 | 7 | 7 |
+| 30 | 0 | 2 | **6** | **13** | **29** | 30 | 30 |
+| 45 | 0 | 2 | **6** | **13** | **29** | 45 | 45 |
+
+(A month is 30 days and a year is 365 — `1 month` caps at 29, `1 year` at 364.)
+
+**The cap itself is defensible; the enforcement is not.** Type a value above it and the field simply shows a different number, with no refusal, no highlight and no explanation — and OK commits the substitute:
+
+```
+after completion, every 1 week   pre-filled 6   typed 30 → field shows 6   landed ts=-6
+after completion, every 3 days   pre-filled 2   typed 30 → field shows 0   landed ts=0
+```
+
+Two different substitutions for the same typed value, neither of them the value. A user who types 30 and presses OK gets a series whose occurrences are due 6 days (or 0 days) after they start, and nothing anywhere told them so.
+
+One more wrinkle for anyone reading the field programmatically: **the clamp is applied when the unit or interval CHANGES, not continuously.** Switch an after-completion rule to a fixed cadence and back and the field keeps the un-clamped value, so the number on screen in an after-completion state is not necessarily a number that state can hold.
+
+**Expected:** refuse the out-of-range value, or accept it and say what will happen. Silently replacing a number the user typed — in the one field whose entire job is to state that offset precisely — is the same failure mode as §31, with the same fix.
+
+Evidence: [lab/defaults2-minimal-recipe.md](lab/defaults2-minimal-recipe.md) §2.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

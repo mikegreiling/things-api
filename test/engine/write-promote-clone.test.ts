@@ -650,13 +650,20 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
   // (CNCAC1 §9.1). The two shapes below used to be, respectively, a hard refusal
   // and a silent mis-wire (the deadline stayed on the SEED, so one occurrence was
   // deadlined and the series was not).
+  // The offsets below are 5 rather than 7 for a MEASURED reason (DEFAULTS2
+  // §clamp): an after-completion series' offset is capped at (its period in days
+  // − 1), so `every 1 week` accepts at most 6 — and the app applies that cap
+  // SILENTLY, replacing a larger value with no refusal. An offset of 7 here was
+  // certifying a request the app could never have honored; it is now refused
+  // before dispatch, and the cells keep their subject (the mapping does not
+  // divert by rule kind) at an offset the dialog can actually hold.
   it("add-repeating: --start-days-earlier with --after-completion maps to the RULE (CNCAC2)", async () => {
     const res = await runAddRepeatingTodo(
       deps(vector),
       {
         title: "After-completion offset",
         when: "2026-07-15",
-        startDaysEarlier: 7,
+        startDaysEarlier: 5,
         afterCompletion: true,
         frequency: "weekly",
         interval: 1,
@@ -666,11 +673,11 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     expect(res.kind).toBe("ok");
     if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
     // The RULE owns the deadline on an after-completion series too: the template's
-    // 4001 sentinel plus ts = −7 (in-lab: `tp=1 … ts=-3` + `tmplDeadline=4001-01-01`).
+    // 4001 sentinel plus ts = −5 (in-lab: `tp=1 … ts=-3` + `tmplDeadline=4001-01-01`).
     expect(row(res.uuid)?.["deadline"]).not.toBeNull();
     const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
     expect(rule?.type).toBe("after-completion");
-    expect(rule?.startOffsetDays).toBe(-7);
+    expect(rule?.startOffsetDays).toBe(-5);
   });
 
   it("add-repeating: --deadline with --after-completion maps to the RULE, not the seed (CNCAC2)", async () => {
@@ -679,7 +686,7 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
       {
         title: "After-completion deadline",
         when: "2026-07-15",
-        deadline: "2026-07-22", // 7 days after the start
+        deadline: "2026-07-20", // 5 days after the start
         afterCompletion: true,
         frequency: "weekly",
         interval: 1,
@@ -691,12 +698,45 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     const rule = decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array);
     expect(rule?.type).toBe("after-completion");
     // Both spellings land the SAME rule — in-lab, byte-identical rule blobs.
-    expect(rule?.startOffsetDays).toBe(-7);
+    expect(rule?.startOffsetDays).toBe(-5);
     expect(row(res.uuid)?.["deadline"]).not.toBeNull();
     // The landed-rule echo states the deadline on an after-completion series.
     expect((res.notes ?? []).join(" ")).toMatch(
       /after each occurrence is completed, with a deadline/,
     );
+  });
+
+  // DEFAULTS2 §clamp: the cap itself, refused before anything is created.
+  it("add-repeating: an after-completion offset at or above the period REFUSES (DEFAULTS2)", async () => {
+    await expect(
+      runAddRepeatingTodo(
+        deps(vector),
+        {
+          title: "After-completion over the cap",
+          when: "2026-07-15",
+          startDaysEarlier: 7,
+          afterCompletion: true,
+          frequency: "weekly",
+          interval: 1,
+        },
+        GUI,
+      ),
+    ).rejects.toThrow(/caps the offset at 6/);
+    // …and a longer interval makes the same offset legal, because the cap is the
+    // PERIOD and not a constant.
+    const ok = await runAddRepeatingTodo(
+      deps(vector),
+      {
+        title: "After-completion inside a longer period",
+        when: "2026-07-15",
+        startDaysEarlier: 7,
+        afterCompletion: true,
+        frequency: "weekly",
+        interval: 2,
+      },
+      GUI,
+    );
+    expect(ok.kind).toBe("ok");
   });
 
   // The expectedDelta the promote leg verifies against — the SAME assertion set

@@ -142,6 +142,26 @@ const WAIT_ASSERT_TIMEOUT_MS = 5_000;
  * dependants). Refused, never guessed: the two shapes address DIFFERENT controls
  * at the same index.
  */
+/**
+ * The primitives that WRITE to the Repeat dialog (DEFAULTS2). Everything else a
+ * dialog recipe emits reads, waits, or presses OK.
+ *
+ * Its one use is the `settle-occurrences` dependency: that wait exists to let the
+ * `Next:` pop-up absorb a recompute an anchor change provoked, so it is needed
+ * exactly when one of these has dispatched since the dialog's shape was measured.
+ */
+const DIALOG_SETTER_PRIMITIVES: ReadonlySet<string> = new Set([
+  "select-popup",
+  "set-group-number",
+  "set-row-field",
+  "set-value",
+  "set-datetime",
+  "ensure-checkbox",
+  "converge-weekdays",
+  "select-next-occurrence",
+  "key",
+]);
+
 const SHAPE_UNPROBED =
   "the Repeat dialog's shape was never measured, so this control's address is unknown (recipe bug)";
 
@@ -1625,6 +1645,297 @@ function run(){
   return 'OK';
 }`;
 }
+/** ONE control the VERIFY-BY-READ hop reads, plus the pre-fill key it answers for. */
+export interface PrefillScriptControl extends AuditScriptControl {
+  /** The `PrefillKey` this control's verdict belongs to (ui-prefill.ts). */
+  prefillKey: string;
+}
+
+/** The resolved verify-by-read the {@link axVerifyPrefillScript} generator compiles. */
+export interface PrefillScriptSpec {
+  /** The resolved dialog shell (attached sheet or detached editor window). */
+  shell: string;
+  /** The resolved cadence group inside that shell. */
+  group: string;
+  controls: PrefillScriptControl[];
+  /**
+   * The cadence group's expected shape for the state the dialog is in RIGHT NOW —
+   * after the frequency selection and before any setter. It lets `cgSettle` stop
+   * on the first read that already shows the rebuilt group, which is exactly the
+   * existence gate the pre-fill needs (DEFAULTS1-4: a control is either absent or
+   * already final). Null asserts nothing and leaves the BEEP1 agreement rule
+   * deciding alone.
+   */
+  expectation?: CadenceExpectation | null;
+}
+
+/** The record separator of the verify hop's report (never present in a dialog value). */
+export const PREFILL_RECORD_SEP = "~";
+
+/**
+ * verify-prefill: READ every control the seed row is expected to have pre-filled
+ * and REPORT, per control, whether it holds what the requested rule asks for
+ * (DEFAULTS2 — the build docs/lab/defaults1-repeat-dialog-defaults.md probed).
+ *
+ * WHY A READ IS WORTH A HOP. The Repeat dialog derives its whole cadence row from
+ * ONE date on the row it opened over — `max(the row's scheduled date, today)` —
+ * and our own CLI mints that row (promote-via-clone / add-then-promote), so
+ * before the drive starts it can compute exactly what the pre-fill will hold. Every
+ * control whose pre-fill is already correct is an actuation that becomes a read,
+ * and on the maintainer's M1 an actuation costs about a second of settles and
+ * recompute waits while a read costs one plural Apple event. Measured through the
+ * shipped CLI, a fixed-frequency promote's setters are 147–202 round-trips of
+ * which 70–78 survive this transformation.
+ *
+ * WHY IT IS A REPORT RATHER THAN A REFUSAL — and this is the safety property.
+ * The arithmetic in ui-prefill.ts only NOMINATES a control; this script decides,
+ * by looking. A control that disagrees, or that will not read at all, comes back
+ * `miss` and its setter runs exactly as it did before — fail-safe, never assume.
+ * There is therefore no state of the world in which a wrong pre-fill becomes a
+ * wrong rule: either the read confirms the value the audit will later demand, or
+ * the certified setter writes it.
+ *
+ * It reads through THE SAME discriminated addresses as the setters it may skip and
+ * as the pre-commit audit that follows (both derive from the recipe's own step
+ * list), so the three can never disagree about which control is which — the #589
+ * error class, closed the same way it was closed for the audit.
+ *
+ * IT WRITES NOTHING AND PRESSES NOTHING. No commit rides it (unlike the audit,
+ * whose OK press is folded in): a hop that can only read cannot land a rule.
+ */
+export function axVerifyPrefillScript(
+  spec: PrefillScriptSpec,
+  rowTolerance = ROW_TOLERANCE,
+): string {
+  const tol = Math.max(1, Math.trunc(rowTolerance));
+  // The shell's text-field inventory is read only when a control needs it (the
+  // "and start N days earlier" offset is the sole one) — same economy as the audit.
+  const needsShellSnapshot = spec.controls.some((c) => c.kind === "row-field");
+  // How many CONTROLS this hop reads the content of, for the element counter
+  // (RDLAT2's cost law: elements and round-trips are separate terms). A weekday
+  // check reads every row pop-up from its base.
+  const contentReads = spec.controls.reduce(
+    (n, c) => n + (c.kind === "weekdays" ? Math.max(1, c.expected.length) : 1),
+    0,
+  );
+  const body = spec.controls
+    .map((c, i) => {
+      const key = escapeAppleScript(c.prefillKey);
+      const want = asList(c.expected);
+      const ok = `set end of out to "${key}|ok"`;
+      const miss = (expr: string) => `set end of out to "${key}|miss|" & ${expr}`;
+      const verdict = (read: string) => `  set v${i} to "(unreadable)"
+  try
+${read}
+  end try
+  if (my aqAny(v${i}, ${want})) then
+    ${ok}
+  else
+    ${miss(`v${i}`)}
+  end if`;
+      switch (c.kind) {
+        case "popup":
+          return verdict(`    set v${i} to (value of (${c.path ?? ""})) as text`);
+        case "checkbox":
+          return verdict(`    set v${i} to ((value of (${c.path ?? ""})) as integer) as text`);
+        case "group-number":
+          return verdict(
+            `    set v${i} to ((value of (my cgField(g, cgSnapshot, "${c.numberTarget ?? "interval"}", ${tol}))) as text)`,
+          );
+        case "row-field":
+          return verdict(
+            `    set v${i} to ((value of (my rfField(sh, rfSnapshot, "${escapeAppleScript(c.rowLabel ?? "")}", ${tol}))) as text)`,
+          );
+        case "occurrence-popup":
+          // The pop-up renders its value LOCALIZED ("Sun, Jul 12, 2026") and, for
+          // near dates, RELATIVELY ("Today"), so the comparison resolves the title
+          // to a calendar date and compares components — never a rebuilt display
+          // string (the #625 error class, and the same `aqYMD` the audit uses).
+          return `  set v${i} to "(unreadable)"
+  try
+    set v${i} to (value of (${c.path ?? ""})) as text
+  end try
+  set d${i} to my aqYMD(v${i})
+  if d${i} is missing value then
+    ${miss(`v${i}`)}
+  else if (my aqAny(d${i}, ${want})) then
+    ${ok}
+  else
+    ${miss(`v${i} & " = " & d${i}`)}
+  end if`;
+        case "weekdays":
+          // Set equality, exactly as the audit compares it: the pre-fill is always
+          // ONE row carrying the anchor's own weekday (DEFAULTS1 §8), so a target
+          // set of any other shape can never match and its converge runs.
+          return `  set got${i} to {}
+  try
+    repeat with k from ${Math.max(1, Math.trunc(c.weekdayBase ?? 2))} to (count of pop up buttons of g)
+      set end of got${i} to ((value of pop up button k of g) as text)
+    end repeat
+  end try
+  set off${i} to (count of got${i}) is 0
+  repeat with w in ${want}
+    if not (my aqAny(w as text, got${i})) then set off${i} to true
+  end repeat
+  repeat with w in got${i}
+    if not (my aqAny(w as text, ${want})) then set off${i} to true
+  end repeat
+  if off${i} then
+    ${miss(`my aqJoin(got${i}, ",")`)}
+  else
+    ${ok}
+  end if`;
+      }
+    })
+    .join("\n");
+  return `${AX_CADENCE_HANDLERS}
+
+on aqAny(v, lst)
+  repeat with c in lst
+    if (v as text) is (c as text) then return true
+  end repeat
+  return false
+end aqAny
+
+on aqJoin(lst, sep)
+  set out to ""
+  repeat with x in lst
+    if out is not "" then set out to out & sep
+    set out to out & (x as text)
+  end repeat
+  return out
+end aqJoin
+
+on aqPad2(n)
+  set s to (n as integer) as text
+  if (length of s) < 2 then set s to "0" & s
+  return s
+end aqPad2
+
+on aqStamp(d)
+  return ((year of d) as text) & "-" & my aqPad2((month of d) as integer) & "-" & my aqPad2(day of d)
+end aqStamp
+
+on aqRelative(s)
+  -- The first-occurrence pop-up renders NEAR dates RELATIVELY, and a relative
+  -- word can never be string-compared against an ISO date (#625). Resolve it
+  -- against the app's own clock, the same way the selector and the audit do.
+  set rightNow to current date
+  if s is "Today" then return my aqStamp(rightNow)
+  if s is "Tomorrow" then return my aqStamp(rightNow + 86400)
+  if s is "Yesterday" then return my aqStamp(rightNow - 86400)
+  set wdNames to {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+  repeat with i from 1 to 7
+    if s is (item i of wdNames) then
+      repeat with k from 1 to 7
+        set cand to rightNow + (k * 86400)
+        if ((weekday of cand) as text) is (item i of wdNames) then return my aqStamp(cand)
+      end repeat
+    end if
+  end repeat
+  return missing value
+end aqRelative
+
+on aqYMD(t)
+  set s to t as text
+  set rel to my aqRelative(s)
+  if rel is not missing value then return rel
+  try
+    set d to date s
+    return ((year of d) as text) & "-" & my aqPad2((month of d) as integer) & "-" & my aqPad2(day of d)
+  end try
+  try
+    set ofs to offset of ", " in s
+    if ofs > 0 then
+      set d to date (text (ofs + 2) thru -1 of s)
+      return ((year of d) as text) & "-" & my aqPad2((month of d) as integer) & "-" & my aqPad2(day of d)
+    end if
+  end try
+  return missing value
+end aqYMD
+
+${SE}
+  set sh to (${spec.shell})
+  set g to (${spec.group})
+  set cgSnapshot to my cgSettle(g, ${settleArgs(spec.expectation ?? null)})${
+    needsShellSnapshot ? "\n  set rfSnapshot to my cgSnap(sh)" : ""
+  }
+  set out to {}
+  log "${AX_ELEMS_LOG_PREFIX}${contentReads}"
+${body}
+  return my aqJoin(out, "${PREFILL_RECORD_SEP}")
+end tell`;
+}
+
+/**
+ * The verify-by-read hop's DATE-AREA leg — the reminder time, and nothing else on
+ * the shipped path.
+ *
+ * Its existence answers an open item DEFAULTS1 left. That campaign's census read
+ * the reminder area through System Events (`value of <element> as text`) and got
+ * an EMPTY string, so §5 could say only "pre-ticked, and the time rides the row"
+ * and §13 recorded "if a future recipe ever needs to VERIFY the time rather than
+ * trust the row, that read needs a working spelling". The spelling already ships:
+ * the control's value is an NSDate, unreachable from System Events but read
+ * directly by the ObjC bridge the pre-commit audit's own date-area leg uses. So
+ * the reminder's pre-fill is verified rather than trusted, like every other key.
+ *
+ * Report shape and posture are the System Events leg's: a control that is absent
+ * or holds a different time comes back `miss` and its setter runs. It never
+ * throws for a mismatch — only a hop that cannot run at all fails, and that too
+ * confirms nothing.
+ */
+export function axVerifyPrefillDateAreasScript(
+  areas: (AuditDateArea & { prefillKey: string })[],
+): string {
+  return `${AX_DATE_AREA_PRELUDE}
+function run(){
+  var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
+  if(!apps || apps.count===0) throw new Error('Things not running');
+  var app=$.AXUIElementCreateApplication(apps.objectAtIndex(0).processIdentifier);
+  var wanted=${JSON.stringify(areas)};
+  var cal=$.NSCalendar.currentCalendar;
+  var found=[]; try{ var shell=findShell(app); if(shell) collect(shell,'AXDateTimeArea',16,found); }catch(e){ found=[]; }
+  var out=[];
+  for(var i=0;i<wanted.length;i++){
+    var w=wanted[i];
+    var dt=pick(found,w.target);
+    if(!dt){ out.push(w.prefillKey+'|miss|(no '+w.target+' control among ['+inv(found)+'])'); continue; }
+    if(w.spec.indexOf('date:')===0){
+      var got=ymdStr(dt,cal), want=w.spec.slice(5);
+      out.push(got===want ? w.prefillKey+'|ok' : w.prefillKey+'|miss|'+(got||'(no value)'));
+    } else {
+      var gott=hmStr(dt,cal), pp=w.spec.slice(5).split(':'), wantt=(+pp[0])+':'+('0'+(+pp[1])).slice(-2);
+      out.push(gott===wantt ? w.prefillKey+'|ok' : w.prefillKey+'|miss|'+(gott||'(no value)'));
+    }
+  }
+  return out.join('${PREFILL_RECORD_SEP}');
+}`;
+}
+
+/**
+ * Parse a verify-by-read leg's report into the set of CONFIRMED pre-fill keys,
+ * plus the misses in the words the trace should carry.
+ *
+ * Unparseable output confirms nothing — which is the safe direction: every setter
+ * then runs, exactly as it did before this hop existed.
+ */
+export function parsePrefillReport(stdout: string): {
+  confirmed: string[];
+  missed: { key: string; observed: string }[];
+} {
+  const confirmed: string[] = [];
+  const missed: { key: string; observed: string }[] = [];
+  for (const record of stdout.trim().split(PREFILL_RECORD_SEP)) {
+    const parts = record.trim().split("|");
+    const key = (parts[0] ?? "").trim();
+    if (key === "") continue;
+    if (parts[1] === "ok") confirmed.push(key);
+    else missed.push({ key, observed: (parts[2] ?? "(unreadable)").trim() });
+  }
+  return { confirmed, missed };
+}
+
 /**
  * ensure-checkbox: converge a dialog checkbox to a target state through a
  * DETERMINISTIC CLOSED LOOP (RRD1, determinism doctrine) — never a blind toggle.
@@ -3703,6 +4014,16 @@ export function commandForStep(
         label: step.label,
         script: "",
       };
+    case "verify-prefill":
+      // Compiled by driveVerifyPrefill, for the audit's reason: the plan's controls
+      // are addressed through the live shell and the measured shape, neither of
+      // which the recipe knows. This shape exists only so the step compiles
+      // uniformly — nothing dispatches it.
+      return {
+        primitive: "verify-prefill",
+        label: step.label,
+        script: "",
+      };
     case "type-text":
       return {
         primitive: "type-text",
@@ -4051,6 +4372,125 @@ async function driveDialogAudit(
 }
 
 /**
+ * Execute the VERIFY-BY-READ step (DEFAULTS2): read every control the seed row is
+ * expected to have pre-filled and return the set of pre-fill keys the dialog
+ * CONFIRMED, so their setters can be skipped.
+ *
+ * It resolves the live shell and the measured shape exactly as the pre-commit
+ * audit does — and through the same plan shape, built from the same steps — so a
+ * key can only be confirmed by reading the control its setter would have written.
+ *
+ * EVERY FAILURE PATH CONFIRMS NOTHING, and that is the whole design. A shell that
+ * will not resolve, a shape never probed, a hop that times out, output that does
+ * not parse: all of them return an empty set, every setter runs, and the drive is
+ * the one that shipped before this hop existed. There is no path on which this
+ * function's failure can skip an actuation.
+ */
+async function driveVerifyPrefill(
+  step: UiStep,
+  run: UiRunner,
+  dialogShape: RepeatDialogShape | null,
+  knownShellIndex: number | null,
+): Promise<{ confirmed: Set<string>; missed: { key: string; observed: string }[]; why?: string }> {
+  const empty = { confirmed: new Set<string>(), missed: [] as { key: string; observed: string }[] };
+  const plan = step.audit;
+  if (plan === undefined) return { ...empty, why: "no verify plan compiled (recipe bug)" };
+  const shellIndex =
+    knownShellIndex !== null && knownShellIndex < plan.shells.length ? knownShellIndex : -1;
+  if (shellIndex < 0) {
+    // Deliberately NOT a probe ladder like the audit's. The audit MUST resolve a
+    // shell (an unaudited commit is not an option) and spends hops to do it; this
+    // hop is an optimization, so a drive that has not already banked the shell
+    // index — an app build the shape manifest does not cover — simply skips it.
+    return { ...empty, why: "no dialog-open snapshot to read the live shell from" };
+  }
+  const shell = plan.shells[shellIndex] as string;
+  const group = (plan.groups[shellIndex] ?? plan.groups[0]) as string;
+
+  const scriptControls: PrefillScriptControl[] = [];
+  const dateAreas: (AuditDateArea & { prefillKey: string })[] = [];
+  for (const raw of plan.controls) {
+    const key = raw.prefillKey;
+    if (key === undefined) continue;
+    if (raw.onlyShape !== undefined || raw.shaped !== undefined) {
+      if (dialogShape === null) return { ...empty, why: SHAPE_UNPROBED };
+      if (raw.onlyShape !== undefined && raw.onlyShape !== dialogShape) continue;
+    }
+    const override = raw.shaped === undefined ? undefined : raw.shaped[dialogShape ?? "next-popup"];
+    if (raw.shaped !== undefined && override === undefined) continue;
+    const control = { ...raw, ...override };
+    if (control.kind === "date-area") {
+      dateAreas.push({
+        label: control.label,
+        target: control.dtTarget ?? "next",
+        spec: control.dtSpec ?? "",
+        prefillKey: key,
+      });
+      continue;
+    }
+    const candidates = control.pathCandidates;
+    scriptControls.push({
+      label: control.label,
+      kind: control.kind,
+      ...(candidates !== undefined && {
+        path: (candidates[shellIndex] ?? candidates[0]) as string,
+      }),
+      ...(control.numberTarget !== undefined && { numberTarget: control.numberTarget }),
+      ...(control.rowLabel !== undefined && { rowLabel: control.rowLabel }),
+      ...(control.weekdayBase !== undefined && { weekdayBase: control.weekdayBase }),
+      expected: control.expected ?? [],
+      ...(control.expectedLabel !== undefined && { expectedLabel: control.expectedLabel }),
+      prefillKey: key,
+    });
+  }
+
+  const confirmed = new Set<string>();
+  const missed: { key: string; observed: string }[] = [];
+  if (scriptControls.length > 0) {
+    const res = await run(
+      {
+        primitive: "verify-prefill",
+        label: step.label,
+        script: axVerifyPrefillScript({
+          shell,
+          group,
+          controls: scriptControls,
+          ...(plan.cadence !== undefined && {
+            expectation: cadenceExpectationFor(plan.cadence, installedThingsVersion()),
+          }),
+        }),
+      },
+      STEP_TIMEOUT_MS,
+    );
+    if (!res.ok) return { ...empty, why: auditFailureText(res) };
+    const report = parsePrefillReport(res.stdout);
+    for (const key of report.confirmed) confirmed.add(key);
+    missed.push(...report.missed);
+  }
+  if (dateAreas.length > 0) {
+    const res = await run(
+      {
+        primitive: "verify-prefill",
+        label: step.label,
+        lang: "javascript",
+        script: axVerifyPrefillDateAreasScript(dateAreas),
+      },
+      STEP_TIMEOUT_MS,
+    );
+    if (res.ok) {
+      const report = parsePrefillReport(res.stdout);
+      for (const key of report.confirmed) confirmed.add(key);
+      missed.push(...report.missed);
+    } else {
+      // The date-area leg is its own hop, and its failure must not un-confirm what
+      // the System Events leg already read. Its keys simply stay unconfirmed.
+      for (const area of dateAreas) missed.push({ key: area.prefillKey, observed: "(unread)" });
+    }
+  }
+  return { confirmed, missed };
+}
+
+/**
  * The audit's own refusal text, preferred over the driver's generic guess.
  *
  * A folded commit's failure is NOT an audit failure and must not read as one:
@@ -4389,8 +4829,41 @@ async function driveSteps(
    */
   let markBeforeStep: number | null = null;
   let markBeforePrev: number | null = null;
+  /**
+   * The pre-fill keys the `verify-prefill` hop CONFIRMED by reading the dialog
+   * (DEFAULTS2). A setter tagged with a key in here is skipped; every other setter
+   * runs. It starts — and on any failure of that hop stays — empty, so a drive
+   * that never verified drives everything.
+   */
+  const prefilled = new Set<string>();
+  /**
+   * Has any SETTER dispatched since the dialog's shape was measured?
+   *
+   * This is what the `settle-occurrences` wait actually depends on. The wait exists
+   * to let the `Next:` pop-up absorb a recompute an anchor change provoked
+   * (NEXTPOP1), and a rule whose whole anchor was already pre-filled provoked none
+   * — so there is nothing to absorb and nothing to race. It is a POSITIVE
+   * condition on the dependency rather than a shorter clock (VOPAT2-7), and it is
+   * the polling path's twin of the observer's own `seen === 0` skip, which reaches
+   * the same conclusion from the app's silence.
+   */
+  let setterSinceShape = false;
   for (let i = idx; i < recipe.steps.length; i += 1) {
     let step = recipe.steps[i] as UiStep;
+    // ALREADY PRE-FILLED, AND READ BACK TO PROVE IT (DEFAULTS2). The step stays in
+    // the recipe — it still contributes its control to the pre-commit audit — but
+    // its actuation is unnecessary: the verify hop read this very control, through
+    // this very address, and found the value the drive was about to write.
+    if (step.unlessPrefilled !== undefined && prefilled.has(step.unlessPrefilled)) {
+      trace(() => ({
+        phase: "ui-prefill",
+        event: "skip",
+        label: step.label,
+        key: step.unlessPrefilled,
+      }));
+      done.push(`${step.label} (pre-filled)`);
+      continue;
+    }
     // Shape-gated step: the recipe emits BOTH the legacy and the 3.23 drive for a
     // control whose CLASS changed, and only the matching one runs.
     if (step.onlyShape !== undefined) {
@@ -4559,6 +5032,52 @@ async function driveSteps(
       markBeforePrev = markBeforeStep;
       markBeforeStep = await observerMark(observer.session);
     }
+    // A SETTER IS ABOUT TO DISPATCH (DEFAULTS2) — recorded so the
+    // `settle-occurrences` wait below can tell "the anchor moved" from "nothing
+    // moved". A step skipped as pre-filled never reaches here, which is precisely
+    // the case the wait has nothing to do in.
+    if (DIALOG_SETTER_PRIMITIVES.has(step.primitive)) setterSinceShape = true;
+    if (step.primitive === "settle-occurrences" && !setterSinceShape) {
+      // NOTHING WAS DRIVEN, SO THERE IS NO RECOMPUTE TO ABSORB (DEFAULTS2). Every
+      // anchor-bearing control came up pre-filled and verified, so the rule the
+      // `Next:` pop-up is describing is the rule that is about to be committed —
+      // and the shape probe that ran between the frequency selection and here
+      // already waited for the rebuilt cadence group to exist, which is the only
+      // thing the frequency change itself could still have owed (DEFAULTS1-4: a
+      // control is either absent or already final).
+      trace(() => ({
+        phase: "ui-settle",
+        what: SETTLE_OCCURRENCE_RECOMPUTE.what,
+        ok: true,
+        skipped: "nothing-driven",
+      }));
+      done.push(step.label);
+      continue;
+    }
+    if (step.primitive === "verify-prefill") {
+      // READ BEFORE WRITING (DEFAULTS2). One hop reads every control the seed row
+      // is expected to have pre-filled; the keys it confirms skip their setters,
+      // and everything else is driven exactly as before. It writes nothing and
+      // presses nothing, so its own failure can only cost round-trips.
+      const outcome = await driveVerifyPrefill(step, run, dialogShape, shellIndex);
+      for (const key of outcome.confirmed) prefilled.add(key);
+      trace(() => ({
+        phase: "ui-prefill",
+        event: "verify",
+        label: step.label,
+        confirmed: [...outcome.confirmed],
+        ...(outcome.missed.length > 0 && {
+          missed: outcome.missed.map((m) => `${m.key}=${m.observed}`),
+        }),
+        ...(outcome.why !== undefined && { why: outcome.why }),
+      }));
+      done.push(
+        outcome.confirmed.size > 0
+          ? `${step.label} (${[...outcome.confirmed].join(", ")})`
+          : `${step.label} (nothing pre-filled)`,
+      );
+      continue;
+    }
     if (step.primitive === "settle-occurrences" && observer.session !== null) {
       // The whole hop IS the wait, so with a sidecar live it dispatches NOTHING:
       // no osascript, no content read. See SETTLE_OCCURRENCE_RECOMPUTE.
@@ -4611,6 +5130,11 @@ async function driveSteps(
         );
       }
       dialogShape = verdict;
+      // The shape probe is the fence the `settle-occurrences` dependency is
+      // measured from: it runs after the frequency selection has rebuilt the
+      // cadence group and before the first setter, so "a setter has dispatched
+      // since here" is exactly "an anchor has moved since the group was built".
+      setterSinceShape = false;
       // THE VERDICT, IN THE TRACE (RDLAT2's census law: a change to what the
       // driver READS is certified by reading it back). VOPAT2 rewrote this probe
       // from 15 singular Apple events into three plural ones, so what it decides

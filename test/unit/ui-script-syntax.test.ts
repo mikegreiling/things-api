@@ -50,6 +50,8 @@ import {
   axCancelFrameScript,
   axSetValueScript,
   axTypeTextScript,
+  axVerifyPrefillDateAreasScript,
+  axVerifyPrefillScript,
   commandForStep,
 } from "../../src/write/vectors/ui.ts";
 import {
@@ -94,6 +96,20 @@ const FULL: RepeatRuleExtras = {
 function everyScript(): { label: string; script: string; lang: string }[] {
   const recipes = [
     makeRepeatingRecipe("T-1", "yearly", 2, FULL),
+    // THE SEEDED SHAPE (DEFAULTS2): the same vocabulary with a seed row whose
+    // dates PROVE the pre-fill, so the verify-by-read branch and the tagged
+    // setters are generated as well as the untagged ones.
+    makeRepeatingRecipe("T-1", "weekly", 1, {
+      weekdays: ["thursday"],
+      reminder: "09:30",
+      next: "2026-07-09",
+      seed: {
+        scheduled: "2026-07-09",
+        today: "2026-07-05",
+        deadline: null,
+        reminder: "09:30",
+      },
+    }),
     makeRepeatingRecipe("T-1", "monthly", 1, { monthly: { weekday: "monday", ordinal: 2 } }),
     makeRepeatingRecipe("T-1", "weekly", 1, { weekdays: ["sunday"], afterCompletion: false }),
     makeRepeatingRecipe("T-1", "daily", 1, { afterCompletion: true }),
@@ -196,10 +212,76 @@ function everyScript(): { label: string; script: string; lang: string }[] {
         ],
       }),
     },
+    // THE VERIFY-BY-READ LEGS (DEFAULTS2). Both are driver-compiled for the
+    // audit's reason — the plan's controls are addressed through the live shell
+    // and the measured shape — so neither reaches osascript via a recipe step,
+    // and both carry the relative-date resolver the #625 class needs.
+    {
+      label: "driver · verify-prefill (System Events leg)",
+      script: axVerifyPrefillScript({
+        shell: "sheet 1 of window 1",
+        group: "group 1 of sheet 1 of window 1",
+        controls: [
+          {
+            kind: "group-number",
+            label: "interval",
+            numberTarget: "interval",
+            expected: ["1"],
+            prefillKey: "interval",
+          },
+          {
+            kind: "popup",
+            label: "after-completion unit",
+            path: "pop up button 1 of group 1 of sheet 1 of window 1",
+            expected: ["week", "weeks"],
+            prefillKey: "ac-unit",
+          },
+          {
+            kind: "occurrence-popup",
+            label: "first occurrence",
+            path: "pop up button 2 of group 1 of sheet 1 of window 1",
+            expected: ["2026-08-20"],
+            prefillKey: "next",
+          },
+          {
+            kind: "checkbox",
+            label: "add reminders",
+            path: 'checkbox "Add reminders" of sheet 1 of window 1',
+            expected: ["1"],
+            prefillKey: "add-reminders",
+          },
+          {
+            kind: "weekdays",
+            label: "weekdays",
+            weekdayBase: 3,
+            expected: ["Monday"],
+            prefillKey: "weekdays",
+          },
+          {
+            kind: "row-field",
+            label: "start earlier",
+            rowLabel: "days earlier",
+            expected: ["14"],
+            prefillKey: "start-earlier",
+          },
+        ],
+      }),
+    },
   ]) {
     if (seen.has(extra.script)) continue;
     seen.add(extra.script);
     out.push({ ...extra, lang: "applescript" });
+  }
+  const jxa = {
+    label: "driver · verify-prefill (date-area leg)",
+    script: axVerifyPrefillDateAreasScript([
+      { label: "reminder", target: "reminder", spec: "time:09:30", prefillKey: "reminder-time" },
+    ]),
+    lang: "javascript",
+  };
+  if (!seen.has(jxa.script)) {
+    seen.add(jxa.script);
+    out.push(jxa);
   }
   return out;
 }
