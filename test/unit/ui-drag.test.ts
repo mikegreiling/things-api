@@ -28,6 +28,9 @@ import {
   sectionBlocks,
   slotPitch,
   snapshotTimeoutMs,
+  stepBudgetFor,
+  describeChevronStop,
+  jxaSidebarChevronClickScript,
   sourceGroupSpan,
   tallestSectionInSpan,
   usableDragSpan,
@@ -38,6 +41,7 @@ import {
   type ScrollIteration,
   type ScrollOutcome,
   type ScrollStop,
+  type ChevronStop,
   type SidebarSectionSpan,
 } from "../../src/write/vectors/ui-drag.ts";
 
@@ -1301,5 +1305,90 @@ describe("the sidebar read scales with the sidebar", () => {
     expect(snapshotTimeoutMs(10)).toBe(30_000); // never below the generic step
     expect(snapshotTimeoutMs(174)).toBe(69_600);
     expect(snapshotTimeoutMs(10_000)).toBe(90_000); // and never unbounded
+  });
+
+  it("scales EVERY sidebar-touching primitive's budget, not only the read (#676)", () => {
+    // The #676 field shape: the snapshot got 69600ms at 174 rows and finished;
+    // the chevron got a flat 30000ms, ran 30028ms, and was stopped.
+    expect(stepBudgetFor("sidebar-snapshot", 174)).toBe(69_600);
+    expect(stepBudgetFor("sidebar-scroll", 174)).toBe(69_600);
+    // The chevron script is a census PLUS a row harvest PLUS the click's settles.
+    expect(stepBudgetFor("sidebar-chevron", 174)).toBe(208_800);
+    expect(stepBudgetFor("sidebar-chevron", 174)).toBeGreaterThan(30_000);
+    // The held drag re-reads the sidebar once per tick, so it scales with ticks
+    // too — and with the absolute ceiling.
+    expect(stepBudgetFor("sidebar-held-drag", 174, { maxTicks: 90 })).toBe(240_000);
+    // Primitives whose cost does NOT depend on the sidebar keep the flat step.
+    expect(stepBudgetFor("sidebar-drag", 174)).toBe(30_000);
+    expect(stepBudgetFor("sidebar-visibility", 174)).toBe(30_000);
+    expect(stepBudgetFor("key", 174)).toBe(30_000);
+  });
+
+  it("the disclosure script reports its own stage split and a structured reason", () => {
+    // #676 asked to tell a HANG from mere SLOWNESS. Both need the script to say
+    // where it got and what each stage cost.
+    const script = jxaSidebarChevronClickScript("Hobbies", -1, ["Hobbies"]);
+    for (const stage of ["'sidebar'", "'rows'", "'chevron'", "'click'", "'clicked'"]) {
+      expect(script).toContain(`STAGE = ${stage}`);
+    }
+    for (const reason of [
+      "chevron-sidebar-unresolved",
+      "chevron-row-unresolved",
+      "chevron-unresolved",
+      "chevron-off-band",
+    ]) {
+      expect(script).toContain(reason);
+    }
+    expect(script).toContain("o.ms.total");
+  });
+
+  it("the disclosure script matches rows with the BATCHED harvest, not a depth-6 walk", () => {
+    // MEASURED (SBCHV1, 174-row sidebar): the hand-rolled depth-6 walk with three
+    // reads per node cost 8,185 AX round-trips / 3.9s; the batched depth-2
+    // harvest the snapshot already uses costs 506 / 0.5s for the SAME hits.
+    const script = jxaSidebarChevronClickScript("Hobbies", -1, ["Hobbies"]);
+    expect(script).toContain("textOf(nodes[j].n,[],depth)");
+    expect(script).not.toContain("function allText(");
+    // The deep walk survives as an ESCALATION, so the matcher can never see less.
+    expect(script).toContain("if (hits.length === 0 || (ord >= 0 && hits.length <= ord))");
+  });
+
+  it("every disclosure terminal reason is distinct — none collapses into another", () => {
+    const reasons: ChevronStop[] = [
+      "chevron-row-unscrollable",
+      "chevron-sidebar-unresolved",
+      "chevron-row-unresolved",
+      "chevron-unresolved",
+      "chevron-off-band",
+      "chevron-click-dispatch-failed",
+      "chevron-step-timeout",
+      "chevron-census-timeout",
+      "chevron-census-failed",
+      "collapse-not-confirmed",
+    ];
+    const lines = reasons.map((r) => describeChevronStop(r, []));
+    expect(new Set(lines).size).toBe(reasons.length);
+    for (const [i, reason] of reasons.entries()) {
+      expect(lines[i]).toBe(`chevron-stop=${reason}`);
+    }
+  });
+
+  it("the disclosure account carries each sub-step's own duration and the script's split", () => {
+    const line = describeChevronStop("chevron-step-timeout", [
+      { step: "scroll-into-view", durationMs: 1200, ok: true },
+      { step: "census-before", durationMs: 0, ok: true },
+      {
+        step: "click",
+        durationMs: 30_028,
+        ok: false,
+        scriptStage: "rows",
+        ms: { sidebar: 16_033, rows: 13_900, total: 29_933 },
+      },
+    ]);
+    expect(line).toContain("chevron-stop=chevron-step-timeout");
+    expect(line).toContain("click 30028ms FAILED");
+    expect(line).toContain('script reached "rows"');
+    expect(line).toContain("in-script sidebar=16033 rows=13900");
+    expect(line).not.toContain("total=");
   });
 });

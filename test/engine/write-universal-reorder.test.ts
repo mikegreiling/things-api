@@ -49,6 +49,7 @@ function config(): ThingsApiConfig {
     acceptedFingerprint: null,
     certifiedAppVersion: null,
     allowExperimental: true,
+    experimentalAreaReorder: true,
     bounceEnabled: true,
     bounceMaxItems: 30,
     autoLaunch: true,
@@ -203,6 +204,30 @@ describe("universal reorder — refusals", () => {
     const result = await runUniversalReorder(deps([vector]), { uuids: [a], in: "anytime" });
     expect(result.kind).toBe("move-refused");
     if (result.kind === "move-refused") expect(result.detail).toContain("`--in`");
+  });
+
+  it("refuses an area reorder unless the maturity opt-in is on (#676)", async () => {
+    // MAINTAINER RULING 2026-09-02: area.reorder is the package's only
+    // Accessibility-driven write, and one sidebar read has MEASURED 16-18s on
+    // the maintainer's M1. Until a move finishes inside ~5s there it is opt-in,
+    // and the refusal names the reason rather than the machine.
+    const a1 = seedArea(fixture.db, "A1", 0);
+    seedArea(fixture.db, "A2", 1);
+    const { vector, calls } = nativeVector();
+    const gated = deps([vector], { config: { ...config(), experimentalAreaReorder: false } });
+    const result = await runUniversalReorder(gated, {
+      uuids: [a1],
+      position: { at: "last" },
+    });
+    expect(result.kind).toBe("move-refused");
+    if (result.kind === "move-refused") {
+      expect(result.refusal).toBe("blocked");
+      expect(result.detail).toContain("Accessibility API");
+      expect(result.detail).toContain("16–18s");
+      expect(result.remediation).toContain("experimental-area-reorder");
+    }
+    // and nothing was driven
+    expect(calls).toHaveLength(0);
   });
 
   it("refuses an area reorder with no position", async () => {

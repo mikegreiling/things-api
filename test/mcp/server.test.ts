@@ -2436,7 +2436,19 @@ describe("things MCP server", () => {
       const target = seedArea(fixture.db, "Move Me", 0);
       seedArea(fixture.db, "Anchor", 1);
       await connect([fakeVector(null, { id: "ui", ops: ["area.reorder"] }).vector]);
-      // Without the drive ack the ui-vector leg blocks (H-UI-DRIVE, a pre-vector hazard).
+      // area.reorder's MATURITY gate answers first (#676, the five-second ruling):
+      // telling a caller to acknowledge a GUI drive for an operation that is off
+      // would be advice they cannot act on.
+      const gated = textOf(
+        await client.callTool({ name: "reorder", arguments: { refs: [target], end: true } }),
+      ) as { code: string; remediation?: string };
+      expect(gated.code).toBe("blocked");
+      expect(gated.remediation).toContain("experimental-area-reorder");
+
+      // Past the opt-in, the drive ack is still required (H-UI-DRIVE, a pre-vector hazard).
+      await close();
+      process.env["THINGS_API_EXPERIMENTAL_AREA_REORDER"] = "true";
+      await connect([fakeVector(null, { id: "ui", ops: ["area.reorder"] }).vector]);
       const blocked = await client.callTool({
         name: "reorder",
         arguments: { refs: [target], end: true },

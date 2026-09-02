@@ -166,8 +166,9 @@ describe("config get (all keys)", () => {
     expect(env["kind"]).toBe("config");
     const data = (env["data"] as { items: { key: string; source: string }[] }).items;
     expect(Array.isArray(data)).toBe(true);
-    expect(data).toHaveLength(16);
+    expect(data).toHaveLength(17);
     expect(data.map((e) => e.key)).toContain("helpers-enabled");
+    expect(data.map((e) => e.key)).toContain("experimental-area-reorder");
     expect(data.map((e) => e.key)).toContain("ui-enabled");
     expect(data.map((e) => e.key)).toContain("auto-launch");
     expect(data.map((e) => e.key)).toContain("ui-drive-budget-ms");

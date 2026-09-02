@@ -67,6 +67,17 @@ export interface ThingsApiConfig {
    */
   allowExperimental: boolean;
   /**
+   * Opt-in for `area.reorder` — the sidebar-area drag, the ONE operation with no
+   * transport but the Accessibility API (P6/O13). MAINTAINER RULING 2026-09-02:
+   * an AX-driven operation that cannot finish in ~5s on an M1 MacBook Pro is not
+   * worth advertising, and the field evidence (#676) puts a single 174-row
+   * sidebar read at 16–18s on that host. Until the operation MEASURES inside that
+   * bar on real hardware it is experimental: off unless this key says otherwise,
+   * refusing with the reason rather than driving a gesture nobody can rely on.
+   * Default false — the only config key in this file that gates one operation.
+   */
+  experimentalAreaReorder: boolean;
+  /**
    * Whether the `when=`-bounce reorder protocols may run (default true). When
    * false the move/reorder planner REFUSES every bounce-dependent placement
    * (within-heading order, area-someday order, area-less loose anytime, and the
@@ -221,6 +232,7 @@ interface ConfigFile {
   acceptedFingerprint?: string;
   certifiedAppVersion?: string;
   allowExperimental?: boolean;
+  experimentalAreaReorder?: boolean;
   bounceEnabled?: boolean;
   bounceMaxItems?: number;
   autoLaunch?: boolean;
@@ -268,6 +280,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
 
   const auditEnv = boolEnvOverride(env["THINGS_API_AUDIT"], "on", "off");
   const experimentalEnv = boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false");
+  const areaReorderEnv = boolEnvOverride(
+    env["THINGS_API_EXPERIMENTAL_AREA_REORDER"],
+    "true",
+    "false",
+  );
   const bounceEnabledEnv = boolEnvOverride(env["THINGS_API_BOUNCE_ENABLED"], "true", "false");
   const bounceMaxItemsEnv = positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]);
   const autoLaunchEnv = boolEnvOverride(env["THINGS_API_AUTO_LAUNCH"], "true", "false");
@@ -295,6 +312,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     acceptedFingerprint: file.acceptedFingerprint ?? null,
     certifiedAppVersion: file.certifiedAppVersion ?? null,
     allowExperimental: experimentalEnv ?? file.allowExperimental ?? true,
+    experimentalAreaReorder: areaReorderEnv ?? file.experimentalAreaReorder ?? false,
     bounceEnabled: bounceEnabledEnv ?? file.bounceEnabled ?? true,
     bounceMaxItems: bounceMaxItemsEnv ?? file.bounceMaxItems ?? 30,
     autoLaunch: autoLaunchEnv ?? file.autoLaunch ?? true,
@@ -425,6 +443,12 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       cfg.allowExperimental,
       file.allowExperimental !== undefined,
       boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false") !== undefined,
+    ),
+    view(
+      "experimental-area-reorder",
+      cfg.experimentalAreaReorder,
+      file.experimentalAreaReorder !== undefined,
+      boolEnvOverride(env["THINGS_API_EXPERIMENTAL_AREA_REORDER"], "true", "false") !== undefined,
     ),
     view(
       "bounce-enabled",

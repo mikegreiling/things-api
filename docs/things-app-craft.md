@@ -405,6 +405,16 @@ That asymmetry is not sloppiness on one side. A content list is unbounded — it
 
 The practical consequence for anything automating Things: **the cost of reading the sidebar is a function of the sidebar, not of what the user happens to have open.** We assumed the opposite and built a campaign cell to prove it — a 400-item project versus a small area view, with `AXEnhancedUserInterface` forced on and off — and the numbers came back flat, because the app had already handled it. Evidence: [lab/sbres1-sidebar-resolution.md](lab/sbres1-sidebar-resolution.md) §5. Things 3.23 / 3.23.1.
 
+## The sidebar exposes every row AND a bounded window onto them — you are not forced to choose
+
+The section above is only half the story, and the missing half is the generous one. Yes, the sidebar materializes all 174 of its accessibility rows including the off-screen ones, because navigation should be readable without scrolling through it. But the same `AXTable` also advertises **`AXVisibleRows`** — and it is honest: asked while 28 rows sit in a 613pt band, it returns **exactly those 28**, with correct frames, against `AXRows`' full 174.
+
+That is a real design decision rather than a freebie. `NSTableView` offers the attribute, but an app that draws its own rows has to keep it truthful as the list scrolls, and plenty do not — they return everything, or nothing, or a stale window. Things keeps both answers correct at once, which lets a client pick the one its job needs: a screen reader that wants the whole structure asks for `AXRows`, and a client that only cares what the user can see right now asks for `AXVisibleRows` and pays for a screenful.
+
+The difference is not small. Harvesting the full sweep at depth 2 costs **862 AX round-trips / 629ms** in a VM; harvesting `AXVisibleRows` the same way costs **78 / 44ms** — and, more importantly, it is O(viewport) instead of O(list), so it stays flat as the user's sidebar grows. On the field host behind #676, where one round-trip costs ~18.6ms against the lab's 0.73ms, that is the difference between a 16-second read and a 1.5-second one.
+
+The same census turned up a second courtesy. Sidebar row heights are **constant per kind** — 24pt for area, project and built-in list rows, 16pt for the spacer rows — with zero variance across 174 rows, including an area holding no projects and an area that is collapsed. And the built-in rows carry **locale-independent** `AXImage` descriptions: `Source Inbox`, `Source Today`, `Source Upcoming`, `Source Anytime`, `Source Someday`, `Source Logbook`, `Source Trash`. Between the two, a client can work out where every row *will* be, and tell the fixed rows from the user's own, without reading one word of localized text. Evidence: [lab/sbchv1-chevron-budget.md](lab/sbchv1-chevron-budget.md) §0, §3, §7. Things 3.23.
+
 ## 9. A scroll bar that is hidden from you but never from automation
 
 macOS has hidden scroll bars by default on trackpad Macs for over a decade. The overlay bar fades in when you scroll and disappears again, and a great many apps let their accessibility tree fade with it — the element is gone, or present with a value nothing will accept.

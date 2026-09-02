@@ -91,6 +91,7 @@ function config(): ThingsApiConfig {
     acceptedFingerprint: null,
     certifiedAppVersion: null,
     allowExperimental: false,
+    experimentalAreaReorder: true,
     bounceEnabled: true,
     bounceMaxItems: 30,
     autoLaunch: true,
