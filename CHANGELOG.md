@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.3 — 2026-09-01
+
 - **Fixed — `things area reorder` no longer depends on where you left the mouse pointer, and can read a big sidebar without giving up.** Two separate problems in the same command, both of which made it fail on a large sidebar and neither of which said what was really wrong.
 
   The command scrolls the sidebar to bring rows into view. It did that by sending scroll-wheel events — and macOS delivers those to whatever is under the pointer, so unless your cursor happened to be sitting over the sidebar, the sidebar did not move at all. No error, no warning: six wheel clicks moved it exactly zero pixels. It now scrolls by setting the sidebar's scroll position directly, which works no matter where the pointer is and gets there in one step instead of a dozen. The wheel is kept only for the case where a sidebar exposes no scroll position at all, and it moves the pointer first — because that is the only way it ever worked.
