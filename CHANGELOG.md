@@ -10,6 +10,15 @@
 
   If you are reporting that a repeat command is slow, a run with `THINGS_API_TRACE=1` now says both what your machine cost and what any machine would.
 
+- **Fixed — the sidebar probe's five-second estimate was wrong, and said "reachable" when it is not.** `lab/scripts/field-probe-sidebar.jxa.js` — the one-file instrument you can copy to any Mac and run against Things — ended with a predicted time for a sidebar reorder. It worked that prediction out by multiplying the number of questions a sidebar read asks by how long one question takes, and printed "REACHABLE: 3,510 ms". Its own measurements say otherwise: reading the sidebar shallowly and reading it deeply take the *same* twenty seconds for four times as many elements, while asking every row where it is takes about two milliseconds. The cost is not per question. It is paid once per row whose content is touched, and paid again the next time. The model now prices those two kinds of read separately — they differ by roughly a thousandfold on a real display — and reports the honest number. The full-sweep measurement also now reports milliseconds per row read, beside the per-question figure it always had, with a note saying which of the two means anything.
+
+- **Added — the field probe can now measure the three things a screen reader does differently.** Three new cells, and a `--areas <n>` option so the arithmetic is priced at your own sidebar rather than a stand-in.
+  - *Hit-test*: ask the accessibility API what is under a point instead of listing everything, then read one row to confirm it. Reports whether the point resolved to a row and what the whole route cost.
+  - *Read strategies*: the full sweep, the visible-rows-only sweep, and a sparse read (ask every row where it is — which is nearly free — and read the content of only a handful) side by side, in rows-touched and in milliseconds per row touched.
+  - *Notifications*: register for the accessibility notifications a waiting step would want, nudge the scroll bar, and report which ones actually arrived and how quickly. This cell makes one change and undoes it immediately — it moves the sidebar's scroll position and puts it straight back, reporting whether the original value was restored. Nothing else in the probe writes anything, and nothing anywhere in it reads your database.
+
+  The probe's own instructions and safety notes were updated to say all of that plainly, including that two cells now touch the app rather than one.
+
 ## 0.20.5 — 2026-09-02
 
 - **Improved — making a to-do repeat is faster, and the speed came from asking the dialog fewer questions.** Every command that drives Things' Repeat dialog — `make-repeating`, `add-repeating`, `reschedule-repeat`, and the project versions of each — now reads the dialog in a fraction of the round-trips it used to.
