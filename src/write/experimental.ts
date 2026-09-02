@@ -106,3 +106,50 @@ export function urlReanchorSupported(installedVersion: string | null): boolean {
   const cmp = compareAppVersions(installedVersion, URL_REANCHOR_FROM);
   return cmp !== null && cmp >= 0;
 }
+
+/**
+ * `area.reorder`'s opt-in gate — the MAINTAINER RULING of 2026-09-02.
+ *
+ * The sidebar-area order has exactly one transport: a synthesized drag through
+ * the Accessibility API (P6/O13). Every other write in this package rides a
+ * documented app surface; this one drives the window. #676 measured what that
+ * costs on real hardware — a single 174-row sidebar read took 16–18s on the
+ * maintainer's M1, against ~0.8s for the same shape in the lab — and one move
+ * needs several of them. The ruling that follows from it: an AX-driven
+ * operation that cannot finish in about five seconds on that machine is not
+ * worth advertising as a feature. Until it MEASURES inside that bar there, the
+ * operation is experimental — available to a caller who opts in, refused with
+ * the reason to everyone else.
+ *
+ * This is deliberately NOT the `allow-experimental` key: that one gates the
+ * app's private sdef reorder command, is documented as a private-vendor-surface
+ * switch rather than a maturity switch, and defaults ON — so it would gate
+ * nothing here. A one-operation key states one fact and defaults off.
+ */
+export const AREA_REORDER_CONFIG_KEY = "experimental-area-reorder";
+
+/** The ~5s wall-time bar `area.reorder` must MEASURE inside to be promoted. */
+export const AREA_REORDER_LATENCY_BAR_MS = 5_000;
+
+export interface ExperimentalOpBlock {
+  detail: string;
+  remediation: string;
+}
+
+/**
+ * The refusal for an un-opted-in `area.reorder`, or null when the caller has
+ * opted in. Behavior and side effects only, per docs/design/surface-copy.md.
+ */
+export function areaReorderBlock(experimentalAreaReorder: boolean): ExperimentalOpBlock | null {
+  if (experimentalAreaReorder) return null;
+  return {
+    detail:
+      "reordering sidebar areas drives the Things window through the Accessibility API — " +
+      "it synthesizes a drag, reads the sidebar between gestures, and can collapse and " +
+      "re-expand areas to clear a path. On a large sidebar those reads have measured " +
+      "16–18s each on an M1, so a single move can take minutes and can leave an area " +
+      "collapsed if it stops part-way. It is off until it completes inside five seconds " +
+      "on real hardware",
+    remediation: `run \`things config set ${AREA_REORDER_CONFIG_KEY} true\` to use it anyway, or drag the area in Things`,
+  };
+}

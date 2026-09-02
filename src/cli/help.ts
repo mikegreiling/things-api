@@ -393,7 +393,7 @@ which overrides the built-in default.
   maxDisruption       ceiling for how disruptive a change may be
   auto-launch         launch Things for a write when it is closed (default on; off refuses)
   ui-enabled          allow the GUI-driven operations
-  allow-experimental  use the app's private reorder command (default on; off-switch)
+  allow-experimental · experimental-area-reorder  private reorder cmd (on) · areas (OFF)
   bounce-enabled / bounce-max-items  when= bounce reorder: on by default, ≤30 items
   scope               limit this host to one area/project — jails EVERY command,
                       terminal included; per process prefer \`things mcp --scope\`

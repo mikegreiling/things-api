@@ -2633,7 +2633,10 @@ export function registerWriteCommands(program: Command): void {
           "Move an area to a new position in the area order (target by uuid or unique name). " +
             "Pass exactly one destination: --before/--after another area, or --first/--last. " +
             "This visibly drives the Things app (the window comes forward and the sidebar may " +
-            "scroll); the area's projects and to-dos are untouched.",
+            "scroll); the area's projects and to-dos are untouched. It reads the sidebar " +
+            "through the Accessibility API between gestures, which on a large sidebar has " +
+            "measured 16-18s per read, so it is off until `things config set " +
+            "experimental-area-reorder true`.",
         )
         .option("--before <area>", "place it immediately above this area (uuid or unique name)")
         .option("--after <area>", "place it immediately below this area (uuid or unique name)")
@@ -3097,7 +3100,9 @@ export function registerWriteCommands(program: Command): void {
               "re-ranking drives the local Things app (keyboard shortcuts on the heading row) " +
               "and covers the open headings only — a completed or canceled heading is not shown " +
               "in the project view, so it is skipped over and cannot be moved. AREAS: this drives the " +
-              "local Things app (sidebar drag). `things area reorder` and `things project " +
+              "local Things app (sidebar drag) and reads the sidebar between gestures, which on a " +
+              "large sidebar has measured 16-18s per read — it is off until `things config set " +
+              "experimental-area-reorder true`. `things area reorder` and `things project " +
               "move-heading` remain as kind-specific spellings.",
           )
           .option(
@@ -3206,9 +3211,9 @@ export function registerWriteCommands(program: Command): void {
     .command("set <key> <value>")
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
-        "accepted-fingerprint | certified-app-version | allow-experimental | bounce-enabled | " +
-        "bounce-max-items | auto-launch | helpers-enabled (auto | true | false) | ui-enabled | " +
-        "ui-drive-budget-ms | trace | scope",
+        "accepted-fingerprint | certified-app-version | allow-experimental | " +
+        "experimental-area-reorder | bounce-enabled | bounce-max-items | auto-launch | " +
+        "helpers-enabled (auto | true | false) | ui-enabled | ui-drive-budget-ms | trace | scope",
     )
     .action((key: string, value: string, opts: { dryRun?: boolean }) => {
       const map: Record<string, string> = {
@@ -3219,6 +3224,7 @@ export function registerWriteCommands(program: Command): void {
         "accepted-fingerprint": "acceptedFingerprint",
         "certified-app-version": "certifiedAppVersion",
         "allow-experimental": "allowExperimental",
+        "experimental-area-reorder": "experimentalAreaReorder",
         "bounce-enabled": "bounceEnabled",
         "bounce-max-items": "bounceMaxItems",
         "auto-launch": "autoLaunch",
@@ -3249,6 +3255,7 @@ export function registerWriteCommands(program: Command): void {
           ? Number(value)
           : target === "auditEnabled" ||
               target === "allowExperimental" ||
+              target === "experimentalAreaReorder" ||
               target === "bounceEnabled" ||
               target === "autoLaunch" ||
               target === "uiEnabled" ||

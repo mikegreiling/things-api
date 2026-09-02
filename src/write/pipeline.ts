@@ -47,6 +47,7 @@ import {
   type EnvironmentTracker,
 } from "./environment.ts";
 import {
+  areaReorderBlock,
   privateReorderIsNoOp,
   sdefDeclaresPrivateReorder,
   urlReanchorSupported,
@@ -389,7 +390,15 @@ export type MutationResult =
         | "clock"
         | "scope"
         | "reconcile"
-        | "in-flight";
+        | "in-flight"
+        /**
+         * The operation exists and the transport is available, but the operation
+         * itself has not met its maturity bar and is off unless the caller opts
+         * in (`area.reorder`, the 2026-09-02 five-second ruling — #676). Distinct
+         * from `environment`, which says the transport is missing: here nothing
+         * about the machine is wrong, the OPERATION is not ready.
+         */
+        | "capability";
       hazard?: HazardId;
       detail: string;
       remediation: string;
@@ -1096,6 +1105,27 @@ export async function runMutation<K extends OperationKind>(
           reason: "scope",
           detail: decision.detail,
           remediation: decision.remediation,
+        };
+      }
+    }
+
+    // 3a-bis. The one-operation maturity gate. `area.reorder` is the package's
+    // only Accessibility-driven write, and the 2026-09-02 ruling (#676) holds it
+    // to a five-second bar on the maintainer's own hardware before it may be
+    // advertised. Until it measures inside that bar it is opt-in, and the
+    // refusal names the reason rather than the machine. Placed with the scope
+    // gate — before the hazards — so an un-opted-in caller is answered by the
+    // maturity fact, not by the GUI-drive acknowledgement hazard.
+    if (op === "area.reorder") {
+      const gate = areaReorderBlock(deps.config.experimentalAreaReorder);
+      if (gate !== null) {
+        audit({ result: blockedCode({ reason: "capability" }) });
+        return {
+          kind: "blocked",
+          op,
+          reason: "capability",
+          detail: gate.detail,
+          remediation: gate.remediation,
         };
       }
     }

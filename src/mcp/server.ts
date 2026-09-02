@@ -3408,7 +3408,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "areas below. It covers the open headings only — a completed or canceled heading is not " +
         "shown in the project view, so it is stepped over and cannot be moved or used as an " +
         "anchor. AREAS: this drives the local Things app (sidebar drag) and " +
-        "must be turned on with `things config set ui-enabled true` plus dangerously_drive_gui; " +
+        "must be turned on with `things config set ui-enabled true` plus dangerously_drive_gui, " +
+        "and additionally with `things config set experimental-area-reorder true` — it reads the " +
+        "sidebar through the Accessibility API between gestures, which on a large sidebar has " +
+        "measured 16-18s per read, so a move can take minutes; " +
         "the areas' projects and to-dos are untouched. Ordering the Today, Inbox, or Someday " +
         "lists, or a project's to-dos, must first be enabled once via `things config set " +
         "allow-experimental true`.",
