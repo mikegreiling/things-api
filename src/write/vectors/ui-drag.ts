@@ -65,7 +65,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { trace } from "../../trace/tracer.ts";
 import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
-import type { UiCommand, UiRunner, UiRunResult } from "./ui.ts";
+import type { UiCommand, UiCommandPrimitive, UiRunner, UiRunResult } from "./ui.ts";
 
 // ------------------------------------------------------------------- types
 
@@ -609,6 +609,22 @@ JSON.stringify(result)
  * `ordinal` selects among same-titled rows in visual (y) order, the AXDRAG3
  * disambiguation the rest of the driver uses; -1 means "the only row with this
  * title", and an ambiguous match refuses.
+ *
+ * SELF-TIMED (#676). The field trace could say only that the whole primitive ran
+ * 30028ms and was stopped — never whether one sub-step hung or every sub-step
+ * merely crawled. So the script stamps a wall clock at each internal boundary
+ * (sidebar census, row harvest, chevron resolve, click) and reports the split
+ * plus the STAGE it reached on every exit, success or refusal. A `reason` rides
+ * beside the human sentence so the five distinct causes never wear one word.
+ *
+ * The row harvest uses the SAME batched, depth-guarded machinery the snapshot
+ * uses (`node()` + `textOf`), not a hand-rolled per-node `AXValue`/`AXDescription`/
+ * `AXTitle` walk to depth 6: the driver consumes a row's text only as an exact
+ * segment match against a known area title, and SBRES1 measured depth 2 to agree
+ * with depth 6 on exactly that for every row, at a fraction of the round-trips.
+ * The deep walk is kept as an ESCALATION for the case that made it necessary —
+ * a fast pass that finds too few rows to satisfy `ordinal` — so the matcher can
+ * never see LESS than it used to.
  */
 export function jxaSidebarChevronClickScript(
   title: string,
@@ -619,47 +635,70 @@ export function jxaSidebarChevronClickScript(
   const ord = Math.trunc(ordinal);
   return `${JXA_PRELUDE}
 var TITLES = ${JSON.stringify([...areaTitles])};
-function allText(el, acc, depth){ acc=acc||[]; depth=depth==null?6:depth; if(depth<0) return acc;
-  var v=sv(el,'AXValue'); if(v) acc.push(v); var d=sv(el,'AXDescription'); if(d) acc.push(d);
-  var t=sv(el,'AXTitle'); if(t) acc.push(t); var ch=kids(el); for(var i=0;i<ch.length;i++) allText(ch[i],acc,depth-1); return acc }
-function matches(el, title){ var segs=allText(el,[],6);
-  for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.') return true } return false }
+var T0 = Date.now(), MS = {}, STAGE = 'start';
+function mark(name, from){ MS[name] = Date.now() - from; return Date.now() }
+function out(o){ o.ms = MS; o.ms.total = Date.now() - T0; o.stage = STAGE; return JSON.stringify(o) }
 function chevronOf(el, depth){ if(depth<0) return null; var ch=kids(el);
   for(var i=0;i<ch.length;i++){
     if(sv(ch[i],'AXRole')==='AXImage' && sv(ch[i],'AXDescription').indexOf('Toggle')>=0) return ch[i];
     var r=chevronOf(ch[i], depth-1); if(r) return r }
   return null }
 var want=${want}, ord=${ord};
+STAGE = 'sidebar';
+var tm = Date.now();
 var sb = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST});
-if (sb.ok !== true) { JSON.stringify({clicked:false, why:'the sidebar did not resolve (' + sb.why + ')'}) } else {
+tm = mark('sidebar', tm);
+if (sb.ok !== true) { out({clicked:false, reason:'chevron-sidebar-unresolved', why:'the sidebar did not resolve (' + sb.why + ')'}) } else {
 var t = sb.table, vp = sb.viewport;
-if (vp === null) { JSON.stringify({clicked:false, why:'the sidebar viewport did not resolve'}) } else {
-var ch = kids(t), hits = [];
-for (var r=0;r<ch.length;r++){ var role=sv(ch[r],'AXRole');
-  if (role!=='AXRow' && role!=='AXTableRow') continue;
-  if (!matches(ch[r], want)) continue;
-  var rf = frame(ch[r]); if (rf) hits.push({el:ch[r], f:rf}) }
-hits.sort(function(p,q){ return p.f.y-q.f.y });
+if (vp === null) { out({clicked:false, reason:'chevron-sidebar-unresolved', why:'the sidebar viewport did not resolve'}) } else {
+STAGE = 'rows';
+/*
+ * ONE batched multi-attribute fetch per row (role + text + frame together),
+ * depth-guarded exactly as the snapshot harvest is. \`nodes\` is cached across
+ * the two depths so an escalation costs the deeper text walk only.
+ */
+var ch = kids(t), nodes = null;
+function harvest(depth){
+  if (nodes === null) { nodes = []; for (var i=0;i<ch.length;i++){ var n=node(ch[i]);
+    if (n===null) continue; if (n.role!=='AXRow'&&n.role!=='AXTableRow') continue; nodes.push({el:ch[i], n:n}) } }
+  var hits=[];
+  for (var j=0;j<nodes.length;j++){
+    if (!segMatch(textOf(nodes[j].n,[],depth).join('|'), want)) continue;
+    var f = nodes[j].n.frame; if (f) hits.push({el:nodes[j].el, f:f}) }
+  hits.sort(function(p,q){ return p.f.y-q.f.y }); return hits }
+var hits = harvest(${ROW_TEXT_DEPTH_FAST}), depthUsed = ${ROW_TEXT_DEPTH_FAST};
+// Escalate ONLY when the fast pass cannot answer the ordinal — never fewer
+// matches than the old depth-6 walk would have produced.
+if (hits.length === 0 || (ord >= 0 && hits.length <= ord)) {
+  var deep = harvest(${ROW_TEXT_DEPTH_FULL});
+  if (deep.length > hits.length) { hits = deep; depthUsed = ${ROW_TEXT_DEPTH_FULL} } }
+tm = mark('rows', tm);
+MS.rowsScanned = nodes === null ? 0 : nodes.length; MS.rowDepth = depthUsed;
 var pick = ord < 0 ? (hits.length === 1 ? hits[0] : null) : (hits[ord] || null);
 if (pick === null) {
-  JSON.stringify({clicked:false, why:'the area row did not resolve uniquely', rows:hits.length})
+  out({clicked:false, reason:'chevron-row-unresolved', why:'the area row did not resolve uniquely', rows:hits.length})
 } else {
+  STAGE = 'chevron';
   var img = chevronOf(pick.el, 5);
-  if (img === null) { JSON.stringify({clicked:false, why:'the row exposes no disclosure chevron'}) }
+  tm = mark('chevron', tm);
+  if (img === null) { out({clicked:false, reason:'chevron-unresolved', why:'the row exposes no disclosure chevron'}) }
   else {
     var cf = frame(img);
-    if (cf === null) { JSON.stringify({clicked:false, why:'the chevron exposed no frame'}) }
+    if (cf === null) { out({clicked:false, reason:'chevron-unresolved', why:'the chevron exposed no frame'}) }
     else {
       var cx = cf.x + cf.w/2, cy = cf.y + cf.h/2;
       if (cy < vp.y + 6 || cy > vp.y + vp.h - 6) {
-        JSON.stringify({clicked:false, why:'the chevron is outside the visible sidebar band', y:cy})
+        out({clicked:false, reason:'chevron-off-band', why:'the chevron is outside the visible sidebar band', y:cy})
       } else {
+        STAGE = 'click';
         // REPX1 §1.2 rig law: flags set EXPLICITLY on EVERY synthetic event
         // (zero included), and a MOVED settle before the press.
         var mv=mev(MOVED,cx,cy,0); $.CGEventSetFlags(mv,0); postHID(mv); sleep(300);
         var dn=mev(DOWN,cx,cy,1); $.CGEventSetFlags(dn,0); postHID(dn); sleep(90);
         var up=mev(UP,cx,cy,1); $.CGEventSetFlags(up,0); postHID(up); sleep(250);
-        JSON.stringify({clicked:true, x:cx, y:cy})
+        mark('click', tm);
+        STAGE = 'clicked';
+        out({clicked:true, x:cx, y:cy})
       }
     }
   }
@@ -1231,13 +1270,99 @@ const ASSERT_ATTEMPTS = 12;
 const ASSERT_DELAY_MS = 250;
 const STEP_TIMEOUT_MS = 30_000;
 /**
- * The sidebar read's budget scales with the sidebar (see `snapshotTimeoutMs`).
+ * Every sidebar-touching budget scales with the sidebar (see `sidebarStepBudget`).
  * MEASURED (SBSCR1, golden-v4): a 178-row sidebar reads in ~2.1s in a VM, so
  * 400ms/row is ~34x headroom for a busy Mac — and the ceiling still stops a
  * genuinely wedged read well inside the drive's own watchdog.
  */
 const SNAPSHOT_MS_PER_ROW = 400;
-const SNAPSHOT_TIMEOUT_CEILING_MS = 90_000;
+/** Ceiling on ONE census-equivalent's budget, however large the sidebar. */
+const SIDEBAR_CENSUS_CEILING_MS = 90_000;
+/** Absolute ceiling on any one sidebar step, however many censuses it holds. */
+const SIDEBAR_STEP_CEILING_MS = 240_000;
+
+/**
+ * CENSUS-EQUIVALENTS per primitive — the budget audit #676 asked for.
+ *
+ * A sidebar primitive's cost is dominated by the AX round-trips its script makes
+ * into Things' main thread, and every one of these scripts opens by running the
+ * SAME `resolveSidebar` census the snapshot runs. So the honest unit of budget is
+ * "how many sidebar censuses does this script contain", and the honest budget is
+ * that count times what one census costs on THIS host at THIS row count.
+ *
+ * #676 is what a missing entry here looks like in the field: `sidebar-snapshot`
+ * scaled (16–18s spent against a 69.6s budget, four times, all fine) and
+ * `sidebar-chevron` did not (30028ms against a flat 30s, `timedOut: true`) — on a
+ * host measured ~20x slower at the AX sweep than the lab. The chevron script is
+ * a census PLUS a per-row text harvest PLUS a chevron-subtree walk PLUS ~0.7s of
+ * click settles, so a budget equal to one census was never going to hold it.
+ *
+ * Primitives whose cost is INDEPENDENT of sidebar size are absent on purpose and
+ * keep the flat step timeout: `sidebar-drag` posts ~28 CGEvents and reads
+ * nothing; `sidebar-visibility` clicks one View-menu item; `key` posts one key.
+ */
+const CENSUS_EQUIVALENTS = {
+  /** One census; the harvest IS the product. */
+  "sidebar-snapshot": 1,
+  /** One census to locate the sidebar, then one AX write (or a wheel burst). */
+  "sidebar-scroll": 1,
+  /**
+   * Census + per-row title harvest + the picked row's chevron subtree + the
+   * click's own ~640ms of settles. Three is the measured-cost estimate with the
+   * headroom a 20x-slower host needs; SBCHV1 measures the real split.
+   */
+  "sidebar-chevron": 3,
+} as const;
+
+/** Census-equivalents the held-scroll drag spends OUTSIDE its per-tick loop. */
+const HELD_DRAG_FIXED_CENSUSES = 16;
+
+/**
+ * The budget for one sidebar step, scaled by the sidebar's MEASURED size.
+ *
+ * A flat 30s was the #672 field failure for the read and the #676 field failure
+ * for the chevron: a 174-row sidebar on real hardware blew through it and the
+ * drive died before a single gesture, with copy that blamed the machine. The
+ * cost is synchronous AX round-trips into Things' main thread, so it scales with
+ * row count — and a budget that does not scale with the same thing is a budget
+ * that fails on exactly the large sidebars this rung exists to serve.
+ *
+ * The first read has nothing measured yet and gets the ceiling; every later step
+ * is sized from what that read actually found. Raising a budget is the weaker
+ * half of the fix — the confined escalation and the `textOf` depth guard are what
+ * made the read fast — but a large sidebar on a busy Mac still deserves headroom
+ * rather than a refusal.
+ */
+export function sidebarStepBudget(rows: number | undefined, censuses = 1): number {
+  const perCensus =
+    rows === undefined
+      ? SIDEBAR_CENSUS_CEILING_MS
+      : Math.min(
+          SIDEBAR_CENSUS_CEILING_MS,
+          Math.max(STEP_TIMEOUT_MS, Math.round(rows * SNAPSHOT_MS_PER_ROW)),
+        );
+  return Math.min(SIDEBAR_STEP_CEILING_MS, perCensus * Math.max(1, Math.round(censuses)));
+}
+
+/**
+ * The budget one dispatched command gets, by primitive. ONE place, so a new
+ * sidebar primitive that forgets to scale is a visible omission rather than a
+ * field timeout nobody can attribute.
+ */
+export function stepBudgetFor(
+  primitive: UiCommandPrimitive,
+  rows: number | undefined,
+  meta?: Record<string, unknown>,
+): number {
+  if (primitive === "sidebar-held-drag") {
+    // Every tick re-reads the whole sidebar to re-derive the live drop boundary
+    // (AXDRAG2-a), so this one scales with the TICK BUDGET as well as the rows.
+    const ticks = typeof meta?.["maxTicks"] === "number" ? meta["maxTicks"] : 0;
+    return sidebarStepBudget(rows, HELD_DRAG_FIXED_CENSUSES + Math.max(0, ticks));
+  }
+  const weight = (CENSUS_EQUIVALENTS as Record<string, number | undefined>)[primitive];
+  return weight === undefined ? STEP_TIMEOUT_MS : sidebarStepBudget(rows, weight);
+}
 
 export interface DragDriveResult {
   ok: boolean;
@@ -1280,7 +1405,111 @@ interface CollapsedArea {
  */
 type ToggleOutcome =
   | { clicked: true; ok: true; rowsBefore: number; rowsAfter: number }
-  | { clicked: boolean; ok: false; why: string };
+  | { clicked: boolean; ok: false; why: string; reason: ChevronStop };
+
+/**
+ * Why the disclosure step stopped — the #676 half of the diagnostic ladder.
+ *
+ * The field report could not tell a HANG from mere SLOWNESS, because every
+ * outcome of the collapse step arrived as one sentence ("the disclosure arrow
+ * did not respond") whatever had actually happened — including a 30s dispatch
+ * timeout, which that sentence actively misdescribes. Each member below names
+ * exactly one cause, and each rides the failure payload beside the human copy.
+ */
+export type ChevronStop =
+  /** The row never reached the visible band (the scroll loop's own reasons apply). */
+  | "chevron-row-unscrollable"
+  /** The sidebar itself did not resolve inside the chevron script. */
+  | "chevron-sidebar-unresolved"
+  /** No uniquely-matching area row for the title/ordinal. */
+  | "chevron-row-unresolved"
+  /** The row resolved but exposes no disclosure image, or it has no frame. */
+  | "chevron-unresolved"
+  /** The chevron resolved OUTSIDE the visible band — refused rather than clicked. */
+  | "chevron-off-band"
+  /** The dispatch itself failed (osascript non-zero, unparsable verdict). */
+  | "chevron-click-dispatch-failed"
+  /** The dispatch ran past its scaled budget and was stopped (#676's field shape). */
+  | "chevron-step-timeout"
+  /** The click went out; the confirming re-census timed out. */
+  | "chevron-census-timeout"
+  /** The click went out; the confirming re-census failed some other way. */
+  | "chevron-census-failed"
+  /** The click went out and the section did not change size. */
+  | "collapse-not-confirmed";
+
+/**
+ * The in-script refusal vocabulary, mapped to the rung's own terminal reasons.
+ * The script names its own stop; an unrecognized one is never silently rewritten
+ * into a plausible neighbour — it falls to the dispatch-failure bucket.
+ */
+const CHEVRON_SCRIPT_REASONS: Readonly<Record<string, ChevronStop>> = {
+  "chevron-sidebar-unresolved": "chevron-sidebar-unresolved",
+  "chevron-row-unresolved": "chevron-row-unresolved",
+  "chevron-unresolved": "chevron-unresolved",
+  "chevron-off-band": "chevron-off-band",
+};
+
+/** One internal step of the disclosure rung, as the trace records it. */
+interface ChevronStepRecord {
+  step: "scroll-into-view" | "census-before" | "click" | "settle" | "census-after" | "confirm";
+  durationMs: number;
+  ok: boolean;
+  reason?: ChevronStop;
+  /** The click hop's in-script split (`sidebar` / `rows` / `chevron` / `click`). */
+  ms?: Record<string, number>;
+  /** How far the in-script sequence got before it returned. */
+  scriptStage?: string;
+}
+
+/** What the chevron script reported about its own run. */
+interface ChevronVerdict {
+  clicked: boolean;
+  why?: string;
+  reason?: string;
+  stage?: string;
+  ms?: Record<string, number>;
+}
+
+function parseChevronVerdict(stdout: string): ChevronVerdict | null {
+  try {
+    const p = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    return {
+      clicked: p["clicked"] === true,
+      ...(typeof p["why"] === "string" && { why: p["why"] }),
+      ...(typeof p["reason"] === "string" && { reason: p["reason"] }),
+      ...(typeof p["stage"] === "string" && { stage: p["stage"] }),
+      ...(typeof p["ms"] === "object" &&
+        p["ms"] !== null && { ms: p["ms"] as Record<string, number> }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The disclosure rung's own account, in one clause — the twin of
+ * `describeScrollStop`. It rides the failure payload unconditionally, so the
+ * next field trace says WHICH sub-step ran long rather than only that the step
+ * as a whole did.
+ */
+export function describeChevronStop(
+  reason: ChevronStop,
+  steps: readonly ChevronStepRecord[],
+): string {
+  const parts = [`chevron-stop=${reason}`];
+  for (const s of steps) parts.push(`${s.step} ${s.durationMs}ms${s.ok ? "" : " FAILED"}`);
+  const click = steps.find((s) => s.step === "click");
+  if (click?.scriptStage !== undefined) parts.push(`script reached "${click.scriptStage}"`);
+  if (click?.ms !== undefined) {
+    const split = Object.entries(click.ms)
+      .filter(([k]) => k !== "total")
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ");
+    if (split) parts.push(`in-script ${split}`);
+  }
+  return parts.join("; ");
+}
 
 interface DriveCtx {
   run: UiRunner;
@@ -1300,39 +1529,21 @@ interface DriveCtx {
   read: { depth?: number; rows?: number; scrollbar?: boolean };
 }
 
+/**
+ * EVERY dispatch in this driver goes through here, so every dispatch is budgeted
+ * by `stepBudgetFor` from the sidebar size the last read MEASURED (#676).
+ */
 async function runCmd(ctx: DriveCtx, cmd: UiCommand): Promise<UiRunResult> {
-  return ctx.run(cmd, STEP_TIMEOUT_MS);
+  return ctx.run(cmd, stepBudgetFor(cmd.primitive, ctx.read.rows, cmd.meta));
 }
 
-/**
- * The sidebar read's own budget, scaled by the sidebar's MEASURED size.
- *
- * A flat 30s was the #672 field failure: a 174-row sidebar on real hardware
- * blew through it and the drive died before a single gesture, with copy that
- * blamed the machine. The read's cost is dominated by synchronous AX
- * round-trips into Things' main thread, so it scales with row count — and a
- * budget that does not scale with the same thing is a budget that fails on
- * exactly the large sidebars this rung exists to serve.
- *
- * The first read has nothing measured yet and gets the ceiling; every later one
- * is sized from what the first actually found. Raising a budget is the weaker
- * half of the fix — the confined escalation and the `textOf` depth guard are
- * what made the read fast — but a large sidebar on a busy Mac still deserves
- * headroom rather than a refusal.
- */
+/** The sidebar read's own budget — one census-equivalent. */
 export function snapshotTimeoutMs(rows: number | undefined): number {
-  if (rows === undefined) return SNAPSHOT_TIMEOUT_CEILING_MS;
-  return Math.min(
-    SNAPSHOT_TIMEOUT_CEILING_MS,
-    Math.max(STEP_TIMEOUT_MS, Math.round(rows * SNAPSHOT_MS_PER_ROW)),
-  );
+  return sidebarStepBudget(rows, CENSUS_EQUIVALENTS["sidebar-snapshot"]);
 }
 
 async function takeSnapshot(ctx: DriveCtx): Promise<SnapshotOutcome> {
-  const res = await ctx.run(
-    snapshotCommand(ctx.areaTitles, ctx.read.depth),
-    snapshotTimeoutMs(ctx.read.rows),
-  );
+  const res = await runCmd(ctx, snapshotCommand(ctx.areaTitles, ctx.read.depth));
   if (res.timedOut === true) return { ok: false, why: "timeout" };
   if (!res.ok) {
     return { ok: false, why: "dispatch-failed", ...(res.stderr.trim() && { stderr: res.stderr }) };
@@ -1753,45 +1964,123 @@ async function toggleDisclosure(
   ordinal: number,
   want: "fewer" | "more",
 ): Promise<ToggleOutcome> {
+  // #676's request, in production form: every internal step of this rung is
+  // TIMED and recorded, so the next field trace distinguishes one sub-step that
+  // never returned (a hang) from five sub-steps that each returned slowly.
+  const steps: ChevronStepRecord[] = [];
+  const timed = async <T>(
+    step: ChevronStepRecord["step"],
+    run: () => Promise<T>,
+    judge: (value: T) => { ok: boolean; reason?: ChevronStop; extra?: Partial<ChevronStepRecord> },
+  ): Promise<T> => {
+    const started = Date.now();
+    const value = await run();
+    const verdict = judge(value);
+    steps.push({
+      step,
+      durationMs: Date.now() - started,
+      ok: verdict.ok,
+      ...(verdict.reason !== undefined && { reason: verdict.reason }),
+      ...verdict.extra,
+    });
+    return value;
+  };
+  const refuse = (reason: ChevronStop, clicked: boolean, sentence: string): ToggleOutcome => {
+    trace(() => ({
+      phase: "sidebar-chevron-steps",
+      want,
+      reason,
+      clicked,
+      budgetMs: stepBudgetFor("sidebar-chevron", ctx.read.rows),
+      rows: ctx.read.rows ?? null,
+      steps,
+    }));
+    // The human sentence stays; the STRUCTURED account rides beside it, because
+    // distinct causes wearing one sentence is what made #672/#676 unanswerable.
+    return {
+      clicked,
+      ok: false,
+      reason,
+      why: `${sentence} (${describeChevronStop(reason, steps)})`,
+    };
+  };
+
   // The row must be inside the band before the chevron can be clicked: an
   // off-viewport row still exposes a valid virtualized frame (AXDRAG1), so an
   // unscrolled click would land outside the sidebar entirely.
-  const scrolled = await scrollUntil(ctx, (s) => {
-    if (s.viewport === null) return null;
-    const row = resolveAreaRow(s.rows, title, ordinal);
-    if (row === null) return null;
-    const center = row.y + row.h / 2;
-    if (inBand(center, s.viewport)) return null;
-    return s.viewport.y + s.viewport.h / 2 - center;
-  });
+  const scrolled = await timed(
+    "scroll-into-view",
+    () =>
+      scrollUntil(ctx, (s) => {
+        if (s.viewport === null) return null;
+        const row = resolveAreaRow(s.rows, title, ordinal);
+        if (row === null) return null;
+        const center = row.y + row.h / 2;
+        if (inBand(center, s.viewport)) return null;
+        return s.viewport.y + s.viewport.h / 2 - center;
+      }),
+    (o) => ({
+      ok: o.snapshot !== null,
+      ...(o.snapshot === null && { reason: "chevron-row-unscrollable" as const }),
+    }),
+  );
   const ready = scrolled.snapshot;
   if (ready === null) {
-    // The human sentence stays; the STRUCTURED reason rides beside it, because
-    // five distinct causes wearing one sentence is what made #672 unanswerable.
-    return {
-      clicked: false,
-      ok: false,
-      why: `"${title}"'s row could not be scrolled into view (${describeScrollStop(scrolled)})`,
-    };
+    return refuse(
+      "chevron-row-unscrollable",
+      false,
+      `"${title}"'s row could not be scrolled into view (${describeScrollStop(scrolled)})`,
+    );
   }
-  const rowsBefore = sectionRowCount(ready, areaTitles, title, ordinal);
+  const rowsBefore = await timed(
+    "census-before",
+    () => Promise.resolve(sectionRowCount(ready, areaTitles, title, ordinal)),
+    (n) => ({ ok: n !== null, ...(n === null && { reason: "chevron-row-unresolved" as const }) }),
+  );
   if (rowsBefore === null) {
-    return { clicked: false, ok: false, why: `"${title}"'s row did not resolve` };
+    return refuse("chevron-row-unresolved", false, `"${title}"'s row did not resolve`);
   }
   // the gesture must land before the re-census that judges it
-  const res = await runCmd(ctx, chevronClickCommand(title, ordinal, ctx.areaTitles));
-  let clicked = false;
-  let why = "the disclosure arrow did not respond";
-  if (res.ok) {
-    try {
-      const parsed = JSON.parse(res.stdout.trim()) as { clicked?: boolean; why?: string };
-      clicked = parsed.clicked === true;
-      if (typeof parsed.why === "string") why = parsed.why;
-    } catch {
-      /* keep the default reason */
+  const res = await timed(
+    "click",
+    () => runCmd(ctx, chevronClickCommand(title, ordinal, ctx.areaTitles)),
+    (r) => {
+      const said = r.ok ? parseChevronVerdict(r.stdout) : null;
+      return {
+        ok: said?.clicked === true,
+        extra: {
+          ...(said?.stage !== undefined && { scriptStage: said.stage }),
+          ...(said?.ms !== undefined && { ms: said.ms }),
+        },
+      };
+    },
+  );
+  const verdict = res.ok ? parseChevronVerdict(res.stdout) : null;
+  if (verdict?.clicked !== true) {
+    // A 30s wall is not "the arrow did not respond" (#676): a step that was
+    // STOPPED, a step that would not RUN, and a chevron that REFUSED the click
+    // are three different facts and now read as three different sentences.
+    if (res.timedOut === true) {
+      const budget = Math.round(stepBudgetFor("sidebar-chevron", ctx.read.rows) / 1000);
+      return refuse(
+        "chevron-step-timeout",
+        false,
+        `the disclosure step for "${title}" was still running after ${budget}s and was stopped ` +
+          "— nothing was clicked. This is a very large sidebar, a busy Mac, or both",
+      );
     }
+    if (!res.ok || verdict === null) {
+      return refuse(
+        "chevron-click-dispatch-failed",
+        false,
+        `the disclosure step for "${title}" did not run${
+          res.stderr.trim() ? `: ${res.stderr.trim()}` : ""
+        }`,
+      );
+    }
+    const reason = CHEVRON_SCRIPT_REASONS[verdict.reason ?? ""] ?? "chevron-click-dispatch-failed";
+    return refuse(reason, false, verdict.why ?? "the disclosure arrow did not respond");
   }
-  if (!clicked) return { clicked: false, ok: false, why };
   // The click WENT OUT. Everything below reports `clicked: true` even when it
   // fails, because the app has already changed its state and a verification
   // that could not run is not evidence that nothing happened. SBCOL1 §6 found
@@ -1802,25 +2091,65 @@ async function toggleDisclosure(
   //
   // RE-CENSUS after the input step — a gesture whose effect we cannot see is
   // still never allowed to carry the ladder forward.
-  await ctx.sleep(600);
-  const after = await takeSnapshot(ctx);
+  await timed(
+    "settle",
+    () => ctx.sleep(600),
+    () => ({ ok: true }),
+  );
+  const after = await timed(
+    "census-after",
+    () => takeSnapshot(ctx),
+    (o) => ({
+      ok: o.ok,
+      ...(!o.ok && {
+        reason: (o.why === "timeout"
+          ? "chevron-census-timeout"
+          : "chevron-census-failed") as ChevronStop,
+      }),
+    }),
+  );
   if (!after.ok) {
-    return { clicked: true, ok: false, why: describeSnapshotFailure(after) };
+    return refuse(
+      after.why === "timeout" ? "chevron-census-timeout" : "chevron-census-failed",
+      true,
+      describeSnapshotFailure(after),
+    );
   }
-  const rowsAfter = sectionRowCount(after.snapshot, areaTitles, title, ordinal);
+  const rowsAfter = await timed(
+    "confirm",
+    () => Promise.resolve(sectionRowCount(after.snapshot, areaTitles, title, ordinal)),
+    (n) => ({
+      ok: n !== null && (want === "fewer" ? n < rowsBefore : n > rowsBefore),
+      reason:
+        n === null ? ("chevron-row-unresolved" as const) : ("collapse-not-confirmed" as const),
+    }),
+  );
   if (rowsAfter === null) {
-    return { clicked: true, ok: false, why: `"${title}"'s row did not resolve after the click` };
+    return refuse(
+      "chevron-row-unresolved",
+      true,
+      `"${title}"'s row did not resolve after the click`,
+    );
   }
   const moved = want === "fewer" ? rowsAfter < rowsBefore : rowsAfter > rowsBefore;
   if (!moved) {
-    return {
-      clicked: true,
-      ok: false,
-      why: `the click left "${title}" rendering ${rowsAfter} row(s) — the section did not ${
+    return refuse(
+      "collapse-not-confirmed",
+      true,
+      `the click left "${title}" rendering ${rowsAfter} row(s) — the section did not ${
         want === "fewer" ? "collapse" : "re-expand"
       }`,
-    };
+    );
   }
+  trace(() => ({
+    phase: "sidebar-chevron-steps",
+    want,
+    reason: "confirmed",
+    clicked: true,
+    budgetMs: stepBudgetFor("sidebar-chevron", ctx.read.rows),
+    rows: ctx.read.rows ?? null,
+    steps,
+  }));
   return { clicked: true, ok: true, rowsBefore, rowsAfter };
 }
 
