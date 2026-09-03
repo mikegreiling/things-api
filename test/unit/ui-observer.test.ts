@@ -23,7 +23,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   inertSettleInjector,
@@ -37,7 +37,10 @@ import {
   observerSpawnScript,
   parseReply,
   parseSettleLog,
-  type ObserverSession,
+  observerTransport,
+  observerTransportSync,
+  resetObserverAvailability,
+  type SidecarSession,
   type SettleSpec,
   settleInjectorFor,
   stopObserver,
@@ -54,11 +57,55 @@ import {
   OK_ALREADY,
 } from "../../src/write/vectors/ui.ts";
 import { makeRepeatingRecipe, rescheduleRepeatRecipe } from "../../src/write/vectors/ui-recipes.ts";
+import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
 
 const PYTHON = "/usr/bin/python3";
 const HAVE_PYTHON = existsSync(PYTHON);
 
-const SESSION: ObserverSession = {
+/**
+ * WHICH PROCESS WOULD HOLD THIS HOST'S LEDGER (DEPOBS1).
+ *
+ * The decision has two callers with different shapes — the drive awaits it, and
+ * `doctor` cannot — so the two forms must never be able to disagree. They share
+ * one memo and one config branch; these cells pin that.
+ */
+describe("the transport decision", () => {
+  beforeEach(() => {
+    resetObserverAvailability();
+    resetDeputyRoutingForTests();
+  });
+
+  it("the off switch beats every other consideration, in both forms", async () => {
+    const off = { THINGS_API_AX_OBSERVER: "0" } as NodeJS.ProcessEnv;
+    expect(observerTransportSync(off)).toEqual({
+      transport: "none",
+      why: `switched off by ${OBSERVER_ENV}`,
+    });
+    expect(await observerTransport(off)).toEqual(observerTransportSync(off));
+  });
+
+  it("sync and async agree on a direct-execution host", async () => {
+    const direct = { THINGS_API_HELPERS: "false" } as NodeJS.ProcessEnv;
+    // The verdict itself is the host's business (Linux CI has no python3); that
+    // the two forms return the SAME verdict is this project's business.
+    const fromAsync = await observerTransport(direct);
+    expect(observerTransportSync(direct)).toEqual(fromAsync);
+    expect(["sidecar", "none"]).toContain(fromAsync.transport);
+  });
+
+  it("a routed host with no helper installed gets no observer, and routing's reason", () => {
+    const routed = {
+      THINGS_API_HELPERS: "true",
+      THINGS_API_STATE_DIR: mkdtempSync(join(tmpdir(), "obs-transport-")),
+    } as NodeJS.ProcessEnv;
+    const choice = observerTransportSync(routed);
+    expect(choice.transport).toBe("none");
+    expect(choice.why).toContain("deputy-routed");
+  });
+});
+
+const SESSION: SidecarSession = {
+  transport: "sidecar",
   socketPath: "/tmp/things-api-observer/s-0123abcd.sock",
   token: "0123456789abcdef0123456789abcdef",
   logPath: "/tmp/things-api-observer/observer.log",
@@ -414,7 +461,7 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
 
   async function withSidecar(
     ttlMs: number,
-    body: (session: ObserverSession, inject: (spec: string) => void) => Promise<void>,
+    body: (session: SidecarSession, inject: (spec: string) => void) => Promise<void>,
   ): Promise<number | null> {
     const dir = mkdtempSync(join(tmpdir(), "obs-live-"));
     const file = join(dir, "ax-observer.py");
@@ -441,7 +488,8 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
       },
     );
     const exited = new Promise<number | null>((resolve) => child.on("exit", resolve));
-    const session: ObserverSession = {
+    const session: SidecarSession = {
+      transport: "sidecar",
       socketPath,
       token: TOKEN,
       logPath: join(dir, "log"),
@@ -540,7 +588,7 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
 
   it("refuses an unauthorized request", async () => {
     await withSidecar(20_000, async (session) => {
-      const wrong: ObserverSession = { ...session, token: "not-the-token" };
+      const wrong: SidecarSession = { ...session, token: "not-the-token" };
       expect(await observerMark(wrong)).toBeNull();
     });
   });
@@ -555,7 +603,8 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
       [file, "--socket", socketPath, "--token", TOKEN, "--self-test", "--ttl-ms", "20000"],
       { stdio: ["ignore", "ignore", "ignore"] },
     );
-    const session: ObserverSession = {
+    const session: SidecarSession = {
+      transport: "sidecar",
       socketPath,
       token: TOKEN,
       logPath: join(dir, "log"),

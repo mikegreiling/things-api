@@ -310,6 +310,8 @@ export type {
   ReaderHalfStatus,
 } from "./deputy/install.ts";
 export {
+  DEPUTY_CAPABILITY_OBSERVER,
+  deputyHostsObserver,
   deputyInstalledBinaryPath,
   EXPECTED_HELPERS_VERSION,
   helpersInstallDir,

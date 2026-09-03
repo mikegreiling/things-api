@@ -11,6 +11,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEPUTY_BANNED_SCRIPT_PHRASES,
+  DEPUTY_CAPABILITY_OBSERVER,
+  type DeputyHello,
+  deputyHostsObserver,
   deputySocketPath,
   deputyStateDir,
   deputyTokenPath,
@@ -45,6 +48,71 @@ describe("helpers version line", () => {
       "utf8",
     ).trim();
     expect(EXPECTED_HELPERS_VERSION).toBe(onDisk);
+  });
+});
+
+/**
+ * THE HELPER CAPABILITY, PINNED ACROSS THE SAME SEAM (DEPOBS1).
+ *
+ * `hello.capabilities` is what lets a new CLI meet an old helper and degrade to
+ * the polling settles instead of speaking verbs nobody implements — so the
+ * string the deputy advertises and the string the client looks for must be one
+ * string. Parsed out of the Swift rather than trusted, for the reason the ban
+ * list is: a mismatch here is silent until a field drive quietly loses its
+ * settles.
+ */
+/**
+ * The `AX…` names inside the array literal that follows `marker`, from its
+ * OPENING BRACKET to its close — the Swift declaration's own `[String]`
+ * annotation sits before it and would otherwise end the slice immediately.
+ */
+function notificationNames(source: string, marker: string): string[] {
+  const open = source.indexOf("[", source.indexOf(marker) + marker.length);
+  const end = source.indexOf("]", open);
+  return [...source.slice(open, end).matchAll(/"(AX[A-Za-z]+)"/g)].map((m) => m[1] as string);
+}
+
+describe("the observer capability name", () => {
+  it("matches deputy/src/main.swift", () => {
+    const swift = readFileSync(
+      fileURLToPath(new URL("../../deputy/src/main.swift", import.meta.url)),
+      "utf8",
+    );
+    const match = /let DEPUTY_CAPABILITY_OBSERVER = "([^"]+)"/.exec(swift);
+    expect(match?.[1]).toBe(DEPUTY_CAPABILITY_OBSERVER);
+  });
+
+  it("reads a handshake that advertises it, and one that cannot", () => {
+    const base: DeputyHello = {
+      protocol: 1,
+      deputyVersion: EXPECTED_HELPERS_VERSION,
+      pid: 42,
+      uptimeMs: 1,
+    };
+    expect(deputyHostsObserver({ ...base, capabilities: [DEPUTY_CAPABILITY_OBSERVER] })).toBe(true);
+    // A 1.3.0 helper carries no list at all — absent means "base verbs only",
+    // never "unknown", and never a guess in the observer's favor.
+    expect(deputyHostsObserver(base)).toBe(false);
+    expect(deputyHostsObserver({ ...base, capabilities: [] })).toBe(false);
+    expect(deputyHostsObserver(null)).toBe(false);
+  });
+
+  it("is registered on the Things application element in ONE list per language", () => {
+    // The notification classes the observer registers are the sidecar's, and
+    // the two are read by the same settle specs — a class present in one and
+    // absent from the other is a settle that fires on one host class only.
+    const swift = readFileSync(
+      fileURLToPath(new URL("../../deputy/src/observer.swift", import.meta.url)),
+      "utf8",
+    );
+    const python = readFileSync(
+      fileURLToPath(new URL("../../src/write/vectors/ui-observer.ts", import.meta.url)),
+      "utf8",
+    );
+    const fromSwift = notificationNames(swift, "let OBSERVER_NOTIFICATIONS: [String] =");
+    const fromSidecar = notificationNames(python, "CLASSES =");
+    expect(fromSwift.length).toBeGreaterThan(10);
+    expect(fromSwift).toEqual(fromSidecar);
   });
 });
 

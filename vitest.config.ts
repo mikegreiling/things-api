@@ -25,6 +25,17 @@ export default defineConfig({
       // mid-check twice, 2026-08-24). Suites that assert plist contents set
       // their own per-test dir on top of this shared throwaway.
       THINGS_API_LAUNCH_AGENTS_DIR: "/tmp/things-api-test-launch-agents",
+      // The same shield, one layer lower: the state dir is where the deputy's
+      // SOCKET and TOKEN live, so a suite that opts into routing
+      // (THINGS_API_HELPERS=true, which several must) otherwise handshakes the
+      // DEVELOPER MACHINE's live helper. That is not read-only — a version
+      // line the worktree has bumped ahead of the installed bundle makes
+      // `reconcileVersions` run `launchctl kickstart -k`, which BOUNCED the
+      // maintainer's running deputy twice during a unit run (2026-09-03,
+      // DEPOBS1: worktree expected 1.4.0, installed was 1.3.0). A throwaway
+      // state dir makes routing-opt-in suites resolve to "not installed"
+      // instead; the ones that want a deputy stand up their own.
+      THINGS_API_STATE_DIR: "/tmp/things-api-test-state",
     },
   },
 });

@@ -282,6 +282,18 @@ function helpersLines(helpers: DiagnoseReport["helpers"]): string[] {
 }
 
 /** The `── ui vector ──` section: config + app + Accessibility + certification. */
+/** `deputy — the helpers host the ledger` / `none — <reason>`. */
+function settleObserverLine(observer: DiagnoseReport["ui"]["settleObserver"]): string {
+  switch (observer.transport) {
+    case "deputy":
+      return "deputy — the helpers hold the ledger, so settles wait on the app's own notifications";
+    case "sidecar":
+      return "sidecar — a python3 observer runs for the length of each drive";
+    default:
+      return `none — every settle is a poll (${observer.why})`;
+  }
+}
+
 function uiVectorLines(ui: DiagnoseReport["ui"]): string[] {
   const total = ui.certification.length;
   const certified = ui.certification.filter((c) => c.status === "certified").length;
@@ -291,6 +303,11 @@ function uiVectorLines(ui: DiagnoseReport["ui"]): string[] {
     `enabled:       ${ui.enabled ? "yes" : "no"} — ${ui.reason}`,
     `app running:   ${ui.appRunning ? "yes" : "no"}`,
     `accessibility: ${ui.accessibility.status} — ${ui.accessibility.detail}`,
+    // WHERE A SETTLE WAITS. A drive either waits for the app's own
+    // Accessibility notification or runs a poll, and which one it gets is a
+    // property of the host, not of the command — so it belongs in the report
+    // someone reads when a drive is slower than they expected.
+    `settle observer: ${settleObserverLine(ui.settleObserver)}`,
     `certification: ${certified} on-device + ${lab} lab-verified of ${total} (${ui.certificationProfile}) — ` +
       "lab-verified recipes ran end-to-end in a disposable VM; on-device confirmation is the " +
       "final step (docs/lab/ui-certification-runbook.md)",

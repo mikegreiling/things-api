@@ -28,6 +28,20 @@ let PROTOCOL_VERSION = 1
 let MAX_REQUEST_BYTES = 8 * 1024 * 1024
 let MAX_FILE_READ_BYTES = 64 * 1024 * 1024
 
+/**
+ * The AX-settle-observer capability, named in `hello`'s `capabilities` list.
+ *
+ * An ADDED verb set does not move PROTOCOL_VERSION: an older client and this
+ * deputy still agree on every shape they both know, and bumping the number
+ * would deactivate routing outright on the very hosts the addition is for. What
+ * a client needs instead is to know whether the verbs are THERE — helpers 1.3.0
+ * has no observer, so the list is how a new CLI on an old helper falls back to
+ * the certified polling settles rather than speaking to nobody. Mirrored in TS
+ * as DEPUTY_CAPABILITY_OBSERVER (src/deputy/protocol.ts), pinned by a drift
+ * test.
+ */
+let DEPUTY_CAPABILITY_OBSERVER = "observer"
+
 struct DeputyPaths {
   let stateDir: String
   var socket: String { stateDir + "/deputy.sock" }

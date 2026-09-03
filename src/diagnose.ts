@@ -16,6 +16,10 @@ import { createDeputyDbFacade } from "./deputy/db-facade.ts";
 import { helpersStatus, type HelpersStatus } from "./deputy/install.ts";
 import { type DeputyHello, EXPECTED_HELPERS_VERSION } from "./deputy/protocol.ts";
 import {
+  type ObserverTransportChoice,
+  observerTransportSync,
+} from "./write/vectors/ui-observer.ts";
+import {
   deputyDbPath,
   deputyRoutesDb,
   helpersRouting,
@@ -301,6 +305,13 @@ export interface DiagnoseReport {
       status: AccessibilityProbeStatus | "not-probed";
       detail: string;
     };
+    /**
+     * WHICH PROCESS WOULD HOLD THIS HOST'S SETTLE LEDGER (DEPOBS1) — the
+     * `python3` sidecar on a direct-execution Mac, the deputy on a routed one
+     * with helpers 1.4.0, or nothing, in which case every settle is the
+     * certified poll. Resolved prompt-free, like every other row here.
+     */
+    settleObserver: ObserverTransportChoice;
     /** Manifest profile ("provisional" until a real-hardware sitting lands). */
     certificationProfile: string;
     /** Per-op certification: recipes ship uncertified until certified on hardware. */
@@ -598,6 +609,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
                   "opt-in: pass --probe-accessibility to test Accessibility consent + the recipe " +
                   "canary (may show a one-time macOS prompt; skipped when Things is not running)",
               },
+        settleObserver: observerTransportSync(),
         certificationProfile: UI_CERTIFICATION_PROFILE,
         certification: allCertifications().map(({ op, entry }) => ({
           op,

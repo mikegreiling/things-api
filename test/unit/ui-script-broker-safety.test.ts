@@ -28,13 +28,18 @@
  * the seam by a drift test (test/unit/deputy-protocol.test.ts): two lists that
  * can disagree are how this class shipped.
  */
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { DEPUTY_BANNED_SCRIPT_PHRASES } from "../../src/deputy/protocol.ts";
 import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
 import {
-  observerAvailable,
+  observerTransport,
   resetObserverAvailability,
+  settleInjectorFor,
   startObserver,
 } from "../../src/write/vectors/ui-observer.ts";
 import { everyUiScript, OBSERVED_SHAPE, POLLING_SHAPE } from "./helpers/ui-script-catalog.ts";
@@ -44,8 +49,16 @@ import { everyUiScript, OBSERVED_SHAPE, POLLING_SHAPE } from "./helpers/ui-scrip
  * is the strongest form of the configuration — an explicit instruction to route
  * — and needs no installed bundle to assert, so the decision is testable on any
  * host, CI runners included.
+ *
+ * The state dir is a fresh temp directory on purpose: the routed decision reads
+ * the deputy handshake (DEPOBS1 needs the capability list), and a suite must ask
+ * that question of an EMPTY machine rather than of whatever helper the developer
+ * running it happens to have installed.
  */
-const ROUTED_HOST = { THINGS_API_HELPERS: "true" } as NodeJS.ProcessEnv;
+const ROUTED_HOST = {
+  THINGS_API_HELPERS: "true",
+  THINGS_API_STATE_DIR: mkdtempSync(join(tmpdir(), "brokersafe-")),
+} as NodeJS.ProcessEnv;
 
 /** A host with the helpers switched off: the direct-execution majority. */
 const DIRECT_HOST = { THINGS_API_HELPERS: "false" } as NodeJS.ProcessEnv;
@@ -56,12 +69,16 @@ function bannedPhrasesIn(script: string): string[] {
 }
 
 describe("the sidecar stands down where the broker would refuse it", () => {
-  it("reports deputy routing as the reason, ahead of any tool probe", async () => {
+  it("answers a routed host from ROUTING, ahead of any tool probe", async () => {
     resetObserverAvailability();
     resetDeputyRoutingForTests();
-    const avail = await observerAvailable(ROUTED_HOST);
-    expect(avail.ok).toBe(false);
-    expect(avail.why).toBe("deputy-routed: brokered scripts cannot spawn the sidecar");
+    const choice = await observerTransport(ROUTED_HOST);
+    // Nothing is installed in a unit run, so the routed branch resolves to no
+    // observer — and says so in routing's words, never python's. The transport
+    // that a routed host CAN have (helpers 1.4.0 hosting the ledger, DEPOBS1)
+    // is certified against the real broker in test/deputy/broker-integration.
+    expect(choice.transport).toBe("none");
+    expect(choice.why).toContain("deputy-routed");
   });
 
   it("never generates the spawn hop there — the runner is not called at all", async () => {
@@ -79,19 +96,22 @@ describe("the sidecar stands down where the broker would refuse it", () => {
   it("leaves a direct-execution host to decide on its own tools", async () => {
     resetObserverAvailability();
     resetDeputyRoutingForTests();
-    // Not asserting ok/true: whether python3 and the Command Line Tools are
-    // present is the host's business (Linux CI has neither). What must be true
-    // is that routing is not the thing standing in the way.
-    const avail = await observerAvailable(DIRECT_HOST);
-    expect(avail.why).not.toContain("deputy-routed");
+    // Not asserting sidecar/true: whether python3 and the Command Line Tools
+    // are present is the host's business (Linux CI has neither). What must be
+    // true is that routing is not the thing standing in the way.
+    const choice = await observerTransport(DIRECT_HOST);
+    expect(choice.why).not.toContain("deputy-routed");
   });
 });
 
 describe("every acting script a routed host generates is brokerable", () => {
   it("renders the whole catalog clean of the deputy's banned phrases", () => {
-    // POLLING_SHAPE is what the stand-down above produces: a null session makes
-    // `settleInjectorFor` inert, and every script comes out byte-identical to
-    // the pre-VOPAT2 version (certified in ui-observer.test.ts).
+    // POLLING_SHAPE is what a routed host produces — with OR without an
+    // observer. A null session makes `settleInjectorFor` inert; so does a
+    // DEPUTY-hosted one (DEPOBS1), because the in-script client is the half
+    // that shells out and the routed transport deliberately does not carry it.
+    // Either way every script comes out byte-identical to the pre-VOPAT2
+    // version (certified in ui-observer.test.ts).
     const scripts = everyUiScript([POLLING_SHAPE]);
     expect(scripts.length).toBeGreaterThan(30);
     const offenders = scripts
@@ -99,6 +119,21 @@ describe("every acting script a routed host generates is brokerable", () => {
       .filter((r) => r.banned.length > 0)
       .map((r) => `${r.label} — contains ${r.banned.join(", ")}`);
     expect(offenders).toEqual([]);
+  });
+
+  it("a deputy-hosted session still generates the polling scripts", () => {
+    // The DEPOBS1 half-measure, asserted rather than assumed: node gets its
+    // settles over the deputy socket, and the SCRIPTS stay the brokerable ones.
+    const routed = settleInjectorFor({
+      transport: "deputy",
+      token: "0123456789abcdef0123456789abcdef",
+      registered: "16/16",
+      pid: 4242,
+    });
+    expect(routed.live).toBe(false);
+    const scripts = everyUiScript([{ tag: "deputy-hosted", obs: routed }]);
+    expect(scripts.length).toBeGreaterThan(30);
+    expect(scripts.filter((s) => bannedPhrasesIn(s.script).length > 0)).toEqual([]);
   });
 
   it("has teeth: the observed shape IS what the broker refuses", () => {
