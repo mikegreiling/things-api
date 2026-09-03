@@ -41,7 +41,20 @@ source lab/scripts/env.sh
 
 CMD="${1:-}"
 VM="${VM:-vopat2pr2-lab}"
-GOLDEN="${GOLDEN:-things-lab-golden-v4}"
+# ROUTED=1 certifies the FIELD-SHAPED path: a clone of the helpers-baked golden
+# (HELPGST1's `golden-v4h`) with the deputy carrying every script, which is how
+# every real Mac runs this drive and is the half of the release gate the lab
+# could not reach before. The read side is identical either way — the sparse
+# census makes no shell call — so what the routed arm measures is whether the
+# ordinal-addressed primitives survive the broker, and which settles a routed
+# host actually gets.
+ROUTED="${ROUTED:-0}"
+if [ "$ROUTED" = "1" ]; then
+  VM="${VM_ROUTED:-vopat2pr2-routed}"
+  GOLDEN="${GOLDEN:-things-lab-golden-v4h}"
+else
+  GOLDEN="${GOLDEN:-things-lab-golden-v4}"
+fi
 OUT="lab/artifacts/$VM"; mkdir -p "$OUT/ax"
 REPORT="$OUT/report.txt"
 SESSION="$OUT/session.env"
@@ -63,7 +76,11 @@ setwin() { lab_ssh "$IP" "/usr/bin/osascript -e 'tell application \"System Event
 activate() { lab_ssh "$IP" 'osascript -e '\''tell application "Things3" to activate'\''; sleep 2' </dev/null >/dev/null 2>&1; }
 
 CLI='~/things-lab/bin/node ~/things-lab/things-api/dist/cli/main.js'
-G() { lab_ssh "$IP" "$LAB_DIRECT $CLI $*; echo EXIT=\$?" </dev/null 2>&1; }
+# DIRECT on the ordinary arm; EMPTY on the routed one, so the deputy brokers
+# every script exactly as it does on the maintainer's Mac.
+RUNAS="$LAB_DIRECT"
+[ "$ROUTED" = "1" ] && RUNAS=""
+G() { lab_ssh "$IP" "$RUNAS $CLI $*; echo EXIT=\$?" </dev/null 2>&1; }
 
 area_order()    { gq 'SELECT COALESCE(group_concat(t," < "),"(none)") FROM (SELECT title AS t FROM TMArea ORDER BY "index", uuid)'; }
 areacount()     { gq 'SELECT COUNT(*) FROM TMArea'; }
@@ -195,6 +212,11 @@ if [ "$CMD" = "setup" ]; then
   lab_ssh "$IP" 'chmod +x ~/things-lab/bin/node' </dev/null
   lab_ssh "$IP" "$CLI config set ui-enabled true" </dev/null >/dev/null 2>&1
   lab_ssh "$IP" "$CLI config set experimental-area-reorder true" </dev/null >/dev/null 2>&1
+  if [ "$ROUTED" = "1" ]; then
+    lab_ssh "$IP" "$CLI config set helpers-enabled true" </dev/null >/dev/null 2>&1
+    note "ROUTED arm: helpers-enabled true"
+    note "  helpers: $(lab_ssh "$IP" "$CLI helpers status" </dev/null 2>&1 | tr '\n' ' ' | head -c 400)"
+  fi
   note "cli: $(lab_ssh "$IP" "$CLI --version" </dev/null 2>&1 | tail -1)"
 
   warm
@@ -441,7 +463,7 @@ if [ "$CMD" = "e2e" ]; then
     lab_ssh "$IP" 'rm -rf ~/.local/state/things-api/trace' </dev/null 2>/dev/null
     lab_ssh "$IP" '~/labh/beep-sentinel.sh reset; ~/labh/beep-sentinel.sh mark "'"$label"'"' </dev/null >/dev/null 2>&1
     T0=$(date +%s)
-    lab_ssh "$IP" "$LAB_DIRECT THINGS_API_TRACE=1 THINGS_API_SIDEBAR_SPARSE=${SPARSE:-1} $CLI $* --dangerously-drive-gui --verify-timeout 180000 --json; echo EXIT=\$?" </dev/null > "$OUT/e2e-$label.json" 2>&1
+    lab_ssh "$IP" "$RUNAS THINGS_API_TRACE=1 THINGS_API_SIDEBAR_SPARSE=${SPARSE:-1} $CLI $* --dangerously-drive-gui --verify-timeout 180000 --json; echo EXIT=\$?" </dev/null > "$OUT/e2e-$label.json" 2>&1
     T1=$(date +%s)
     note "    wall clock: $((T1-T0))s"
     head -c 2500 "$OUT/e2e-$label.json" | tee -a "$REPORT"; echo | tee -a "$REPORT"
@@ -478,7 +500,7 @@ if [ "$CMD" = "abort" ]; then
   collapsed_n() { lab_ssh "$IP" "plutil -extract collapsedAreaUUIDs raw -o - $PLIST 2>/dev/null | grep -c . || echo 0" </dev/null | tr -d ' \r\n'; }
   note "  collapsed before: $(collapsed_n)"
   note "  rows before: $(rows_now)"
-  lab_ssh "$IP" "$LAB_DIRECT THINGS_API_TRACE=1 $CLI reorder Alpha --end --dangerously-drive-gui --json >/tmp/abort.json 2>&1 & echo started" </dev/null
+  lab_ssh "$IP" "$RUNAS THINGS_API_TRACE=1 $CLI reorder Alpha --end --dangerously-drive-gui --json >/tmp/abort.json 2>&1 & echo started" </dev/null
   for i in $(seq 1 90); do
     C=$(collapsed_n)
     if [ "${C:-0}" != "0" ]; then note "  fold landed after ${i}s (collapsed=$C) — killing the drive"; break; fi
@@ -529,6 +551,9 @@ fi
 
 cat >&2 <<USAGE
 usage: TART_HOME=/Volumes/Workspace/tart bash lab/scripts/research-vopat2-pr2.sh <cmd>
+  ROUTED=1 runs every cell against a clone of the helpers-baked golden with the
+  deputy brokering each script — the field-shaped arm (see harness.md
+  §Routing-arm law). Everything below is the same in both arms.
   setup      clone golden-v4 + airgap + clock pin + rigs + sidecar + bundle
   seed       14 areas (incl. a duplicate-title pair), two walls, a scroll bar
   topup      more projects, toward the field's 174 rows
