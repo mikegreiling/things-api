@@ -33,6 +33,8 @@ import {
   jxaSidebarDragScript,
   jxaSidebarHeldScrollDragScript,
   jxaSidebarScrollScript,
+  jxaSidebarSparseChevronClickScript,
+  jxaSidebarSparseScrollScript,
   jxaSidebarScrollToScript,
   jxaSidebarSnapshotScript,
 } from "../../src/write/vectors/ui-drag.ts";
@@ -73,6 +75,12 @@ const GUARDED_SITES: Readonly<Record<string, string>> = {
   jxaSidebarChevronClickScript: "guards the arrow's point with an identity check",
   jxaSidebarScrollScript: "guards the sidebar centre the wheel events go to",
   jxaClickScript: "guards the resolved control point with an identity check",
+  // The ORDINAL-ADDRESSED twins (VOPAT2 PR 2). A cheaper way to FIND the sidebar
+  // is not a cheaper way to be sure of the pixel, so these carry the same guard
+  // as the census-addressed builders above — the chevron's identity leg with the
+  // row frame the census measured, the wheel's with the sidebar's own table.
+  jxaSidebarSparseChevronClickScript: "guards the arrow's point against the census's row frame",
+  jxaSidebarSparseScrollScript: "guards the sidebar centre the wheel events go to",
 };
 
 /** Strip comments so a JSDoc line naming `CGEventPost(kCGHIDEventTap)` is not a site. */
@@ -121,6 +129,7 @@ function mousePostSites(): { file: string; declaration: string; line: string }[]
 /** The pointer-gesture builders, rendered exactly as the driver dispatches them. */
 const SIDEBAR_TITLES = ["Errands", "Reading"] as const;
 const SIDEBAR_ROW = { x: 12, y: 208, w: 240, h: 24 };
+const SPARSE_ADDR = { paneIndex: 1, verifyOrdinal: 13, verifyTitle: "Errands" };
 const RENDERED: { label: string; script: string }[] = [
   { label: "sidebar-drag", script: jxaSidebarDragScript(180, 220, 180, 420, SIDEBAR_ROW) },
   {
@@ -132,6 +141,14 @@ const RENDERED: { label: string; script: string }[] = [
     script: jxaSidebarChevronClickScript("Errands", -1, SIDEBAR_TITLES),
   },
   { label: "sidebar-scroll (wheel)", script: jxaSidebarScrollScript(-3, SIDEBAR_TITLES) },
+  {
+    label: "sidebar-chevron (ordinal-addressed)",
+    script: jxaSidebarSparseChevronClickScript(SPARSE_ADDR, SIDEBAR_ROW),
+  },
+  {
+    label: "sidebar-scroll (wheel, ordinal-addressed)",
+    script: jxaSidebarSparseScrollScript(-3, SPARSE_ADDR),
+  },
   {
     label: "click-point",
     script: jxaClickScript(412, 388, "click the open dialog's Cancel button"),

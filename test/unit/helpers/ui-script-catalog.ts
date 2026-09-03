@@ -44,6 +44,11 @@ import {
   jxaSidebarScrollScript,
   jxaSidebarScrollToScript,
   jxaSidebarSnapshotScript,
+  jxaSidebarSparseChevronClickScript,
+  jxaSidebarSparseScrollScript,
+  jxaSidebarSparseScrollToScript,
+  jxaSidebarSparseSnapshotScript,
+  jxaSidebarVisibilityScript,
 } from "../../../src/write/vectors/ui-drag.ts";
 import {
   inertSettleInjector,
@@ -310,6 +315,53 @@ export function everyUiScript(
     if (seen.has(gesture.script)) continue;
     seen.add(gesture.script);
     out.push({ ...gesture, lang: "javascript" });
+  }
+  // ...AND THE SPARSE / ORDINAL-ADDRESSED FORMS the sidebar map enables (VOPAT2
+  // PR 2). The census-addressed scripts above are what a drive generates with no
+  // map — the first census, a prediction that did not confirm, or
+  // `THINGS_API_SIDEBAR_SPARSE=0`; these are what it generates with one. Both
+  // shapes are dispatched on every real move, so both must parse and both must
+  // clear the broker.
+  const SPARSE_ADDR = { paneIndex: 1, verifyOrdinal: 13, verifyTitle: "Errands" };
+  for (const sparse of [
+    {
+      label: "driver · sidebar-snapshot (sparse, section starts)",
+      script: jxaSidebarSparseSnapshotScript(SIDEBAR_TITLES, {
+        paneIndex: null,
+        ordinals: [],
+        maxCandidates: 28,
+      }),
+    },
+    {
+      label: "driver · sidebar-snapshot (sparse, carried ordinals)",
+      script: jxaSidebarSparseSnapshotScript(SIDEBAR_TITLES, {
+        paneIndex: 1,
+        ordinals: [13, 16],
+        maxCandidates: 28,
+      }),
+    },
+    {
+      label: "driver · sidebar-snapshot (full sweep, escalated depth)",
+      script: jxaSidebarSnapshotScript(SIDEBAR_TITLES, 6),
+    },
+    {
+      label: "driver · sidebar-scroll (scrollbar, ordinal-addressed)",
+      script: jxaSidebarSparseScrollToScript(0.5, SPARSE_ADDR),
+    },
+    {
+      label: "driver · sidebar-scroll (wheel, ordinal-addressed)",
+      script: jxaSidebarSparseScrollScript(-3, SPARSE_ADDR),
+    },
+    {
+      label: "driver · sidebar-chevron (ordinal-addressed)",
+      script: jxaSidebarSparseChevronClickScript(SPARSE_ADDR, SIDEBAR_ROW),
+    },
+    { label: "driver · sidebar-visibility (show)", script: jxaSidebarVisibilityScript("show") },
+    { label: "driver · sidebar-visibility (hide)", script: jxaSidebarVisibilityScript("hide") },
+  ]) {
+    if (seen.has(sparse.script)) continue;
+    seen.add(sparse.script);
+    out.push({ ...sparse, lang: "javascript" });
   }
   const jxa = {
     label: "driver · verify-prefill (date-area leg)",
