@@ -84,6 +84,8 @@ shasum -a 256 /tmp/rc/things-api-<version>.tgz
 
 The RC is built from the merge commit that will carry the tag, not from a feature branch and not from a dirty tree.
 
+**The RC tarball carries the PREVIOUS version string** — the bump is Stage 7, so `main` at Stage 5 is still `v<prev>` and `npm pack` writes `things-api-<prev>.tgz`. That is correct and stays that way (the RC must come from the merge commit, which cannot already hold the new number). Identify the RC by its **sha256** and a content fingerprint of the fix under test (e.g. `grep -c unsettled dist/write/vectors/ui.js`), never by its filename, and say so in the Stage 5(v) record; `things --version` inside the temp prefix will print `<prev>`, which is expected and not a failed install.
+
 **(ii) Install it into a temp prefix on a helpers-enabled host.**
 
 Today that host is the maintainer's Mac (a lab guest with the helpers installed is the automatable replacement, queued in [up-next.md](../up-next.md) as *"Helpers IN THE GUEST"*; the real-display half of the gate stays human regardless).
@@ -91,7 +93,7 @@ Today that host is the maintainer's Mac (a lab guest with the helpers installed 
 ```sh
 PFX=$(mktemp -d)
 npm install -g --prefix "$PFX" /tmp/rc/things-api-<version>.tgz
-"$PFX/bin/things" --version                     # must print the RC version
+"$PFX/bin/things" --version                     # prints the PREVIOUS version — see the note above; identify the RC by sha256 + fingerprint
 "$PFX/bin/things" helpers status                # must show the deputy answering + onboarded
 "$PFX/bin/things" doctor                        # routing line must say the helpers carry traffic
 ```
