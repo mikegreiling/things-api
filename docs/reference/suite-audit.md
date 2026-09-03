@@ -201,3 +201,17 @@ The pre-3.23 arm was wrong in the same change and in the opposite direction — 
 - **s-suite** (Shortcuts) is auto-runnable and part of `lab:regress` (2026-07-12): its output-class probes (S01–S03 + S-detail) run headless via the runner's `shortcut` DSL step on the golden's inherited Always-Allow; the delete-class probes (S04, S-delperm) are `group:interactive` and skipped by the runner (human sitting via `lab/scripts/l5-consent-absorb.sh`). Backs recurring live coverage of `project.add-heading` + `todo.clear-dated-reminder`.
 - **Probe-id vocabularies differ by layer**: suite JSON `operation` fields are probe-level primitives (`todo.create`, `order.today-partial`); the write API uses catalog kinds (`todo.add`, `reorder`). The [README](README.md) maps the families.
 - Read-side regression is carried by the unit corpus (fixture DBs; UI-oracle-derived expectations) — views have no VM suite, by design (SQLite reads don't drift with app behavior, only with schema, which the fingerprint gate owns).
+
+## Execution identity — a coverage dimension every arm had one value of (2026-09-03, #695)
+
+Every recurring check in this audit answers "does this op work" under **direct execution**: the lab's clones have no helpers installed, and the escapes that make a clone drivable at all (`THINGS_API_UI_DIRECT=1`, `THINGS_API_WRITE_DIRECT=1`) exist precisely to bypass the helper gates. So the routed host class — the deputy brokering every osascript, which is the maintainer's own machine — had **no arm anywhere in the matrix**, and 0.20.7 shipped a fully certified `todo add-repeating --dangerously-drive-gui` that failed in two seconds there.
+
+What now covers it:
+
+- `test/unit/ui-script-broker-safety.test.ts` — every acting script the ui vector can emit, rendered in the shape a routed host generates, checked against the deputy's banned-phrase list (with a negative control).
+- `test/unit/deputy-protocol.test.ts` — that list is one TS constant pinned to the Swift array by a drift test parsing `deputy/src/server.swift`.
+- `test/deputy/broker-integration.test.ts` — the **real Swift broker binary** accepts every one of those scripts (macOS CI `deputy-macos`; `THINGS_DEPUTY_LIVE=1` on a dev Mac).
+- `test/unit/helpers/ui-script-catalog.ts` — one shared catalog behind both the broker-safety and osacompile suites, so a script cannot be known to one guard and invisible to the other.
+
+**Still uncovered by any automated arm: a COMPLETE routed GUI drive** (the deputy's own identity clicking through the dialog). A guest helpers install would make it automatable and needs a Swift toolchain, a Developer ID signature and interactive TCC consent inside an airgapped clone — queued as its own campaign. Until it lands, the gap is closed by the release gate: a field-shaped end-to-end on a real routed host with a real display is **required before any tag** ([release-checklist.md](release-checklist.md), Stage 5).
+

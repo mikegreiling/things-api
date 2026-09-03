@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  DEPUTY_BANNED_SCRIPT_PHRASES,
   deputySocketPath,
   deputyStateDir,
   deputyTokenPath,
@@ -44,5 +45,37 @@ describe("helpers version line", () => {
       "utf8",
     ).trim();
     expect(EXPECTED_HELPERS_VERSION).toBe(onDisk);
+  });
+});
+
+/**
+ * THE BROKER'S LINT, PINNED ACROSS THE LANGUAGE SEAM (#695).
+ *
+ * `scriptGuard` in the deputy refuses any script containing one of these
+ * phrases, and the TS side must know the same list to keep its generators from
+ * emitting one — that is the whole guard behind
+ * test/unit/ui-script-broker-safety.test.ts. Two hand-maintained lists in two
+ * languages WILL drift, and the drift is silent until a field command fails, so
+ * the Swift array is parsed here rather than trusted.
+ */
+describe("the deputy's banned script phrases", () => {
+  it("match the Swift array in deputy/src/server.swift, in order", () => {
+    const swift = readFileSync(
+      fileURLToPath(new URL("../../deputy/src/server.swift", import.meta.url)),
+      "utf8",
+    );
+    const match = /for banned in \[([^\]]*)\]/.exec(swift);
+    expect(match, "scriptGuard's `for banned in [...]` loop was not found").not.toBeNull();
+    const fromSwift = [...(match?.[1] ?? "").matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+    expect(fromSwift.length).toBeGreaterThan(0);
+    expect([...DEPUTY_BANNED_SCRIPT_PHRASES]).toEqual(fromSwift);
+  });
+
+  it("are lower-cased, because the Swift guard lower-cases before comparing", () => {
+    // `scriptGuard` tests `script.lowercased().contains(banned)`, so an
+    // upper-case character in the list would make that phrase unmatchable.
+    for (const phrase of DEPUTY_BANNED_SCRIPT_PHRASES) {
+      expect(phrase).toBe(phrase.toLowerCase());
+    }
   });
 });

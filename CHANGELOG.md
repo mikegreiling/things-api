@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Fixed — making a to-do repeat works again on a Mac with the helpers installed.** On a machine set up with `things helpers setup`, `todo add-repeating --dangerously-drive-gui` had been failing after about two seconds, with nothing driven and a message about the helper refusing to run a shell command. The cause was the settle listener added in 0.20.7: it starts a small watcher process, and it asks the helper to start it — but the helper deliberately refuses to run anything that shells out, which is what keeps "drive the Things GUI" from becoming "run any command with the helper's permissions". That refusal is correct and stays.
+
+  So the listener now stands down wherever the helper carries the automation, and those Macs run exactly the code that shipped before 0.20.7 — the same commands, the same results, none of the speed-up the listener buys. Macs that drive Things directly keep it. `THINGS_API_TRACE=1` names which of the two ran, and why.
+
+  Every command that has ever been reported working on such a machine had been certified only on machines that drive Things directly, which is why this was invisible until the field found it. Two guards now close that: every command the GUI drive can send is checked against the helper's rules before release, and the real helper binary is asked to accept every one of them.
 - **Changed — a release is now certified the way it is actually used, not only the way it is probed.** Every version was already blocked on a fully green lab regression suite. That suite runs headless, and it runs each operation by executing its script directly — which is not how a real machine runs them: with the optional helpers installed, every operation is brokered by the helper process, on real hardware, with a real display. Two releases shipped green-in-lab and broken-in-field on that difference. So the gate is broadened: before a version is tagged, every operation whose driver changed in the batch is run end-to-end through the helpers using the ordinary command line, and anything that drives the app's own windows is run at least once on a real display. The drill is written down in `docs/reference/release-checklist.md`.
 
 ## 0.20.7 — 2026-09-02

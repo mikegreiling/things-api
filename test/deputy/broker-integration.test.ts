@@ -29,6 +29,7 @@ import { shortcutsListSync, shortcutsRunExec } from "../../src/deputy/shortcuts-
 import { DeputySyncBridge } from "../../src/deputy/bridge.ts";
 import { deputySocketPath, deputyTokenPath } from "../../src/deputy/protocol.ts";
 import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
+import { everyUiScript, POLLING_SHAPE } from "../unit/helpers/ui-script-catalog.ts";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -266,6 +267,41 @@ echo "$1:$2:$3:$4:$5:$6"
     expect(res["ok"]).toBe(false);
     expect((res["error"] as { code: string }).code).toBe("script-denied");
   });
+
+  /**
+   * THE ROUTED ARM (#695). The guard above proves the lint BITES; this proves it
+   * bites nothing the library actually sends.
+   *
+   * Every ui-vector certification the lab has ever run drove scripts DIRECT —
+   * goldens have no helpers installed — so "does the broker accept this script"
+   * was a dimension with no arm at all, and 0.20.7 shipped a settle sidecar whose
+   * `do shell script` hop made `todo add-repeating --dangerously-drive-gui` fail
+   * in two seconds on every helpers-routed Mac. The static guard
+   * (test/unit/ui-script-broker-safety.test.ts) checks the rendered scripts
+   * against a MIRROR of the Swift list; this checks them against the REAL binary,
+   * so the class cannot survive a mirror that has drifted either.
+   *
+   * The stub osascript never looks at the script, so nothing here is driven and
+   * no GUI is touched: what is certified is acceptance at the broker's door,
+   * which is exactly where the field failure happened.
+   */
+  it("osascript: the broker accepts every acting script the ui vector generates", () => {
+    const scripts = everyUiScript([POLLING_SHAPE]);
+    expect(scripts.length).toBeGreaterThan(30);
+    const refused = scripts
+      .map((s) => ({
+        label: s.label,
+        res: request({
+          verb: "osascript",
+          script: s.script,
+          lang: s.lang === "javascript" ? "javascript" : "applescript",
+          timeoutMs: 5000,
+        }),
+      }))
+      .filter((r) => r.res["ok"] !== true)
+      .map((r) => `${r.label} — ${JSON.stringify(r.res["error"])}`);
+    expect(refused).toEqual([]);
+  }, 120_000);
 
   it("shortcuts: run carries the fixed argv shape and list censuses (stub proves both)", async () => {
     const run = await shortcutsRunExec("things-proxy-alpha", "/tmp/in.json", "/tmp/out.json", 5000);
