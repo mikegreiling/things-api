@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Fixed — making a to-do repeat works again on a Mac without the developer tools, or with the helpers installed.** `todo add-repeating` / `make-repeating` / `reschedule-repeat --dangerously-drive-gui` had been failing after about nine seconds with nothing entered, reporting that the Repeat dialog "matched neither known shape — a Things update has redesigned it again". Things had not changed anything. The dialog rebuilds its middle section a fraction of a second after you pick a frequency, and the command was looking at it during the rebuild: for that moment the section really is empty, and the app answers the question as readily as it would have a moment later.
+
+  Why it only happened on some Macs: the listener added in 0.20.7 hears Things announce "that section is rebuilt", so wherever it runs, the command was already waiting for exactly the right thing. Wherever it does not run — a Mac without the Command Line Tools, or one where the helpers carry the automation — nothing was waiting at all, because the step that used to absorb the pause by accident had been made faster and then skipped entirely in 0.20.7. So the command now waits for the rebuilt section itself, by looking until it has settled, on every Mac that has nothing to listen with. Macs with the listener behave exactly as before.
+
+  And if the section genuinely never settles, the message now says that, instead of blaming an app update for it.
+
 - **Fixed — making a to-do repeat works again on a Mac with the helpers installed.** On a machine set up with `things helpers setup`, `todo add-repeating --dangerously-drive-gui` had been failing after about two seconds, with nothing driven and a message about the helper refusing to run a shell command. The cause was the settle listener added in 0.20.7: it starts a small watcher process, and it asks the helper to start it — but the helper deliberately refuses to run anything that shells out, which is what keeps "drive the Things GUI" from becoming "run any command with the helper's permissions". That refusal is correct and stays.
 
   So the listener now stands down wherever the helper carries the automation, and those Macs run exactly the code that shipped before 0.20.7 — the same commands, the same results, none of the speed-up the listener buys. Macs that drive Things directly keep it. `THINGS_API_TRACE=1` names which of the two ran, and why.
