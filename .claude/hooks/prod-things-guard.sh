@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
-# PreToolUse guard (Bash tool): no agent writes to, drives the GUI of, or sends
-# AppleEvents/keystrokes/pointer events to the maintainer's PRODUCTION Things on
-# this host — and no agent changes the installed helpers — without the
-# maintainer's explicit, time-boxed sanction (scripts/sanction-prod.sh, run by
-# him in his own terminal). Lab/VM commands pass. Reads pass. Over-blocking is
-# the correct fail direction: a refused command is reported, never worked around.
+# PreToolUse guard (Bash tool). Maintainer's law (2026-09-03): ALL AUTOMATED
+# TESTING RUNS IN A GUEST OS IN THE VM. Nothing non-read-only touches his
+# PRODUCTION Things unless he is LIVE-DEBUGGING with the agent in real time and
+# asked for it in that conversation. Automated regression tests, release smokes,
+# probes and measurements against production are NEVER run and NOT sanctionable.
+#
+# So this hook refuses, for every agent in the session: host-side `things` write
+# verbs, GUI drives, config/helpers changes, osascript at Things3 / System Events,
+# raw things:// opens, launchctl/pkill at the deputy, and the live deputy suite.
+# Tart/ssh lab commands pass. Reads pass.
+#
+# The ONLY release: the maintainer, in HIS OWN terminal, runs
+#     touch ~/.local/state/things-api/live-debugging
+# while he is live-debugging with the agent. It is honoured for 2 hours from its
+# mtime, and any agent command that names that file is refused, so an agent can
+# never create it. It is for live debugging ONLY — never for tests.
 #
 # Exit 2 + stderr = block (the reason is fed back to the agent). Exit 0 = allow.
 set -u
-SANCTION="${HOME}/.local/state/things-api/prod-sanction"
+LIVE="${HOME}/.local/state/things-api/live-debugging"
 
 cmd="$(python3 -c 'import json,sys
 try:
@@ -20,20 +30,19 @@ print(ti.get("command","") if isinstance(ti,dict) else "")' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
 deny() {
-  if [ -f "$SANCTION" ]; then
-    exp="$(awk 'NR==1{print $1}' "$SANCTION" 2>/dev/null || echo 0)"
-    now="$(date +%s)"
-    if [ "${exp:-0}" -gt "$now" ] 2>/dev/null; then
-      exit 0   # maintainer's sanction is live
+  if [ -f "$LIVE" ]; then
+    age=$(( $(date +%s) - $(stat -f %m "$LIVE" 2>/dev/null || echo 0) ))
+    if [ "$age" -ge 0 ] && [ "$age" -lt 7200 ]; then
+      exit 0   # the maintainer is live-debugging with the agent (marker < 2 h old)
     fi
   fi
-  printf 'BLOCKED by .claude/hooks/prod-things-guard.sh: %s\nThis command would touch the maintainer'"'"'s PRODUCTION Things (or the installed helpers) on this host. Agents may only READ production. Do not rephrase to get past this — stop, report the refused command, and let the maintainer run it himself or grant a time-boxed sanction with scripts/sanction-prod.sh in HIS terminal. Lab work belongs in a Tart clone.\n' "$1" >&2
+  printf 'BLOCKED by .claude/hooks/prod-things-guard.sh: %s\nThis command would touch the maintainer'"'"'s PRODUCTION Things (or the installed helpers) on this host. Agents only READ production. ALL automated testing runs in the Tart guest (with the helpers installed there). Do not rephrase to get past this — stop and report the refused command. The only release is the maintainer live-debugging with you in real time, in which case HE creates the live-debugging marker from his own terminal.\n' "$1" >&2
   exit 2
 }
 
-# 1. Self-sanction attempts.
+# 1. An agent may never create the live-debugging marker.
 case "$cmd" in
-  *sanction-prod*|*prod-sanction*) deny "attempt to create or edit the production sanction" ;;
+  *live-debugging*) deny "attempt to create or touch the live-debugging marker" ;;
 esac
 
 # 2. Lab/VM-targeted commands pass (the guest CLI is not production).
