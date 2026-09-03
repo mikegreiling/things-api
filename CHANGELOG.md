@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.8 — 2026-09-03
+
 - **Fixed — making a to-do repeat works again on a Mac without the developer tools, or with the helpers installed.** `todo add-repeating` / `make-repeating` / `reschedule-repeat --dangerously-drive-gui` had been failing after about nine seconds with nothing entered, reporting that the Repeat dialog "matched neither known shape — a Things update has redesigned it again". Things had not changed anything. The dialog rebuilds its middle section a fraction of a second after you pick a frequency, and the command was looking at it during the rebuild: for that moment the section really is empty, and the app answers the question as readily as it would have a moment later.
 
   Why it only happened on some Macs: the listener added in 0.20.7 hears Things announce "that section is rebuilt", so wherever it runs, the command was already waiting for exactly the right thing. Wherever it does not run — a Mac without the Command Line Tools, or one where the helpers carry the automation — nothing was waiting at all, because the step that used to absorb the pause by accident had been made faster and then skipped entirely in 0.20.7. So the command now waits for the rebuilt section itself, by looking until it has settled, on every Mac that has nothing to listen with. Macs with the listener behave exactly as before.
