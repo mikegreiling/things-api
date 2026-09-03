@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Changed — a release is now certified the way it is actually used, not only the way it is probed.** Every version was already blocked on a fully green lab regression suite. That suite runs headless, and it runs each operation by executing its script directly — which is not how a real machine runs them: with the optional helpers installed, every operation is brokered by the helper process, on real hardware, with a real display. Two releases shipped green-in-lab and broken-in-field on that difference. So the gate is broadened: before a version is tagged, every operation whose driver changed in the batch is run end-to-end through the helpers using the ordinary command line, and anything that drives the app's own windows is run at least once on a real display. The drill is written down in `docs/reference/release-checklist.md`.
+
 ## 0.20.7 — 2026-09-02
 
 - **Improved — making a to-do repeat now reads the Repeat dialog instead of retyping what it already says.** The dialog fills itself in from the to-do it was opened on: give it a to-do scheduled for a Thursday and ask for a weekly repeat, and it comes up already saying "every 1 week, on Thursday, next occurrence that Thursday". The command used to click every one of those controls anyway. It now checks them — one look at the dialog, comparing each control against what you asked for — and only touches the ones that disagree.
