@@ -18,6 +18,27 @@ import { stateDir } from "../paths.ts";
 export const DEPUTY_PROTOCOL_VERSION = 1;
 
 /**
+ * THE BROKER'S SCRIPT LINT, IN ONE PLACE (#695).
+ *
+ * The deputy refuses to broker any script containing one of these phrases —
+ * `scriptGuard` in deputy/src/server.swift, a defense-in-depth lint that keeps
+ * "drive the Things GUI" from turning into "run arbitrary shell". This array is
+ * the TS mirror of the Swift one, and a drift test parses the Swift source to
+ * pin the two together (test/unit/deputy-protocol.test.ts) — two lists that can
+ * disagree are how 0.20.7 shipped an acting script the broker refused.
+ *
+ * The rule the list enforces: EVERY generator that can emit an acting script
+ * must render output free of these phrases whenever the host expects the deputy
+ * to carry its automation. The AX settle sidecar (src/write/vectors/ui-observer.ts)
+ * spoke to its socket through `do shell script`, so `todo add-repeating
+ * --dangerously-drive-gui` failed on every helpers-routed Mac (#695); the
+ * observer now stands down on those hosts and
+ * test/unit/ui-script-broker-safety.test.ts renders the whole recipe catalog to
+ * keep the class from returning.
+ */
+export const DEPUTY_BANNED_SCRIPT_PHRASES = ["do shell script", "do script"] as const;
+
+/**
  * The helpers version this package expects — the helpers are versioned on
  * their OWN line (deputy/VERSION), decoupled from the package version, so a
  * package release whose helper sources are unchanged never nags for (or

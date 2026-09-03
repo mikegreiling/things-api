@@ -43,7 +43,7 @@ The brief's own instruction: decide the shape by measuring spawn cost against th
 
 **LAW (VOPAT2-1).** *A per-settle helper cannot pay for itself.* The waits it would replace are 4–80 ms (menu open, focus, keystroke); a process to observe them costs 19–30 ms to start before it does anything, and it would have to start BEFORE the actuation to see the notification at all. **One sidecar per drive** turns a settle into a socket round-trip — 0.10 ms from node, ~15 ms from inside a hop — against a one-time ~230 ms arm.
 
-**LAW (VOPAT2-2).** *A sidecar spawned from inside the hop inherits the hop's Accessibility identity.* `AXIsProcessTrusted()` returned true and 16 of 16 registrations succeeded, with no consent dialog and no new window, for a `python3` backgrounded by `do shell script` from the osascript the driver was already running. That is what lets this work under the deputy without a new deputy verb: Accessibility trust belongs to the RESPONSIBLE application and is assigned at spawn time (APDP1), so the sidecar is the deputy's descendant on a helper-routed Mac and the terminal's otherwise. Nothing new is granted anything.
+**LAW (VOPAT2-2).** *A sidecar spawned from inside the hop inherits the hop's Accessibility identity.* `AXIsProcessTrusted()` returned true and 16 of 16 registrations succeeded, with no consent dialog and no new window, for a `python3` backgrounded by `do shell script` from the osascript the driver was already running. Accessibility trust belongs to the RESPONSIBLE application and is assigned at spawn time (APDP1), so the sidecar is the terminal's descendant on a direct-execution host. Nothing new is granted anything. **The clause that once followed here — "and the deputy's descendant on a helper-routed Mac" — was an inference, not a measurement, and it was false: see §10.** The identity claim is sound; what it overlooked is that the deputy refuses to broker the script that does the spawning, so the descendant is never born.
 
 ---
 
@@ -263,7 +263,7 @@ The **census cell** is what certifies that the settle records riding stderr (`#A
 
 ### Not reachable in a clone
 
-- **The deputy path.** A clone has no helper bundle, so the sidecar's inheritance of the DEPUTY's identity is certified only by construction (it is `do shell script` from the routed osascript, and responsibility is spawn-assigned — APDP1) plus the same mechanism working under the lab's own sshd-descended identity. The maintainer's Mac is the first host to exercise it.
+- **The deputy path — and this prediction was WRONG. See §10.** A clone has no helper bundle, so the sidecar's inheritance of the DEPUTY's identity was certified only by construction (it is `do shell script` from the routed osascript, and responsibility is spawn-assigned — APDP1) plus the same mechanism working under the lab's own sshd-descended identity. The maintainer's Mac was the first host to exercise it, and it refused: the deputy never runs the script that would spawn the sidecar, because its broker lints `do shell script` out first.
 - **The field's per-round-trip rate.** §7 is arithmetic against RDLAT2's fitted ~47 ms, not a measurement.
 - **The scroll-bar notification** (§2) — it needs the 174-row fixture, which belongs to the sidebar campaign.
 
@@ -282,3 +282,42 @@ The **census cell** is what certifies that the settle records riding stderr (`#A
 **(c) A fixed fixture prefix made the oracle read the wrong row.** The `states` cell's `tmpl s1` resolved a PREVIOUS run's template (which S4 had already rescheduled), so the rule the report printed was not the rule the drive had just landed. The drives were fine; the ORACLE was wrong, which is the kind of thing that quietly certifies nothing. The prefix is now unique per run, as the `cells` cell's always was.
 
 **(d) Latency has to be measured from the MARK, not from the await.** The first traces reported **negative** settle latencies (−0.2 ms, −0.6 ms) for the typing loop, because the notification had already arrived by the time the script got round to asking — which is the design working, and a trace that says "−0.6 ms" telling the reader nothing about what the app took. The sidecar now remembers when each mark was taken and reports `lat` from there, with `wait` beside it for the time the request itself blocked.
+
+---
+
+## §10 — The host class this campaign never had an arm for (#695, 2026-09-03)
+
+**The field failure.** On the maintainer's M1 — v0.20.7, helpers installed and granted, Things 3.23.2 — `things todo add-repeating … --dangerously-drive-gui` failed in about two seconds, with nothing driven:
+
+```
+{"code":"unexpected","message":"script rejected: contains \"do shell script\" — the deputy only brokers GUI/AppleEvent scripts, never shell execution"}
+```
+
+**Why.** Both of the sidecar's hops shell out — the spawn hop (`tell current application to do shell script cmd`) and the per-settle client (`printf | nc -U`) — and the deputy's broker refuses any script containing `do shell script` or `do script` (`scriptGuard`, `deputy/src/server.swift`). That lint is not a bug to be worked around: a broker that will shell out stops being "drive the Things GUI" and becomes "run arbitrary shell under the helper's grants". So a host that routes its automation through the deputy cannot have this sidecar at all — not the spawn, not the client.
+
+**Why the campaign's own certification could not see it.** Every arm above ran in a clone, and a clone has no helpers, so every certified drive executed its scripts DIRECT. "Which identity executes this script" was a dimension with exactly one value in the whole matrix, and §8's own gap list names it while predicting — by construction, from a sound identity law — that the missing value would behave. It did not. The lab's escape hatches (`THINGS_API_UI_DIRECT=1`, `THINGS_API_WRITE_DIRECT=1`) exist precisely to bypass the helper gates in a clone, which makes the direct path the only path the lab can reach and the routed path the one the field discovers. This is now a standing law: harness.md §Routing-arm law.
+
+**The fix (v0.20.8).** Deputy routing is one more reason `observerAvailable()` says no — `why: "deputy-routed: brokered scripts cannot spawn the sidecar"`, traced like every other unavailability reason — so a routed host regenerates every script byte-identically to the polling version this campaign was measured against, which §8 already certifies as a fallback. The observer stays live on every direct-execution host, and nothing else in the drive changes. The gate asks whether the deputy is EXPECTED rather than merely active, because a machine that expects a deputy and has none gets a refusal from the osascript seam (#620) rather than a direct run — so there is no configuration in which an expected deputy still executes an acting script locally.
+
+**The arms that now cover the class.**
+
+| arm | what it certifies | where it runs |
+|-----|-------------------|---------------|
+| `test/unit/ui-script-broker-safety.test.ts` | the sidecar stands down on a routed host and names the reason; the whole script catalog renders free of the broker's banned phrases; a negative control proves the observed shape IS what the broker refuses | every `npm run check`, Linux included |
+| `test/unit/deputy-protocol.test.ts` (banned-phrase drift) | the TS mirror of the banned list equals the Swift array, parsed out of `deputy/src/server.swift` | every `npm run check` |
+| `test/deputy/broker-integration.test.ts` (the ROUTED arm) | the **real Swift broker binary** accepts every acting script the ui vector generates — acceptance at the broker's door, with a stub osascript behind it, so nothing is driven | macOS CI (`deputy-macos`), and any dev Mac with `THINGS_DEPUTY_LIVE=1`. **Ran green locally 2026-09-03**, 14/14 |
+
+The script catalog is now shared between the broker-safety suite and the osacompile suite (`test/unit/helpers/ui-script-catalog.ts`), so a script cannot be known to one guard and invisible to the other.
+
+**Still a gap: a real routed GUI drive.** Installing the helpers inside a clone is not feasible quickly — the bundle needs a Swift toolchain and a Developer ID signature to be trusted, and its Accessibility and Automation grants need interactive consent, inside an airgapped guest whose whole doctrine is that nothing raises a dialog. What is certified above is acceptance at the broker's door, which is where this failure actually happened; what remains uncertified in any automated arm is a *complete* routed drive (the deputy's identity actually clicking through the Repeat dialog). That half is answered by the release gate below, and a guest-hosted helpers install stays queued as its own campaign.
+
+**Release gate.** This campaign is half the evidence behind the gate canonized on 2026-09-03 (#629's headless-invisible census stall is the other half): `npm run lab:regress` green is necessary and not sufficient, and before any tag the candidate is run once on a real routed host — helpers installed and granted, a real display for GUI drives, the normal CLI syntax, against synthetic content. The drill is [reference/release-checklist.md](../reference/release-checklist.md).
+
+### Queued decision — where the observer should actually live (NOT built)
+
+The stand-down restores the essential op on routed hosts at the cost of the campaign's own speed-up there: a routed Mac runs the certified polling settles, so the ~0.65 s the interval step saved is not saved on the maintainer's own machine. The observer belongs in the trusted long-lived process, and there are two shapes. **Maintainer's call — neither is implemented.**
+
+1. **A deputy-hosted `AXObserver`.** The deputy already holds the Accessibility grant and is already long-lived, which is exactly what the sidecar was approximating with a per-drive `python3`. Native Swift means no `ctypes`, no embedded python source, no Command Line Tools dependency, and no socket of its own — the settle becomes a deputy verb. Costs: new verbs on the protocol (mark / await / count / stop), the observer's lifetime becomes the deputy's problem rather than a drive's `finally`, and the whole thing is a deputy version bump plus a helpers reinstall.
+2. **A deputy verb that spawns the sidecar.** Smaller: the deputy runs the `python3` itself, so the spawn happens under the helper's identity with nothing shelling out from a brokered script. But the per-settle client still shells out from inside the hop, so either the settles move to node-side round-trips (splitting hops that DRVLAT1 folded precisely to avoid a process spawn) or a second verb brokers the await. Also a version bump plus a reinstall.
+
+Both leave the direct-execution path exactly as it is. Until one lands, a routed host is a polling host, which is the shape every cell in §8 was measured under.
