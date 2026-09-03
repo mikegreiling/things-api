@@ -46,6 +46,15 @@ if printf '%s' "$cmd" | grep -Eq '(launchctl[[:space:]]+(kickstart|bootout|unloa
   deny "signalling or unloading the installed helper"
 fi
 
+# 2c. The live deputy test suite. A child deputy built from source carries the
+#     SAME signing identity as the installed helper, so TCC hands it the same
+#     Accessibility grant: a test that "just asks the deputy" can reach the real
+#     Things app (DEPOBS1, 2026-09-03 — an observer-start registered against the
+#     maintainer's running Things). Live-deputy runs are production interaction.
+if printf '%s' "$cmd" | grep -Eq 'THINGS_DEPUTY_LIVE'; then
+  deny "live deputy suite: a source-built child deputy inherits the installed helper's Accessibility grant"
+fi
+
 # 3. Raw URL-scheme opens against the production app.
 if printf '%s' "$cmd" | grep -Eq 'things://'; then
   deny "raw things:/// URL against production"
