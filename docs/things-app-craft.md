@@ -396,6 +396,16 @@ The payoff is that accepting the defaults is a *correct* action, not a lazy one:
 
 Under `after completion, every N <unit>`, the "start N days earlier" offset is capped at one day short of the period — a start any further back would fall on or before the previous occurrence's due date, and the series would be due for two occurrences at once. The app knows this and enforces it, scaling the cap with the interval rather than picking a constant (`1 week` → 6, `2 weeks` → 13, `1 month` → 29, `1 year` → 364). That is a real invariant about what a repeating series can mean, held in the one place a user could violate it by accident. The *enforcement* is the problem, not the rule — it substitutes silently, which is oddities §32 — but the constraint itself is the app thinking about its own model. Evidence: [lab/defaults2-minimal-recipe.md](lab/defaults2-minimal-recipe.md) §2. Things 3.23.
 
+### 6o. A schedule write that would change nothing changes nothing — and the reminder that cannot outlive its date goes with it
+
+Two halves of one `update?…&when=` write, decided independently and both decided right.
+
+A row that arrived in Today on its own — a scheduled arrival, a spawned repeat occurrence — sits at `start=2` with an arrived `startDate`, and Things counts it in the "You have N new to-dos" banner until a human acknowledges it ([banner1-research](lab/banner1-research.md) L1/L2). Send that row `when=today` and the app writes **nothing** to its schedule: `start`, `startDate`, `startBucket` and even `userModificationDate` come back byte-identical. The naive implementation would restate the bucket it is already in, materialize the row as a side effect, and silently retire the pip that told the user this thing showed up on its own — a write that "succeeded" by destroying the one bit of state the caller never asked about. Things declines instead, and the banner still says what arrived.
+
+The reminder, though, is not part of the bucket, and it does move: the same call clears `reminderTime` (R07), because a bare `when=` is the app's own reminder-clear spelling. And `when=anytime` — which really does change the bucket, ejecting the row from Today (`start 2→1`, `startDate := NULL`) — clears the reminder as it goes, because a time-of-day reminder on a row with no date is a notification that can never fire. Neither half is inferable from the other, and the app gets both.
+
+Evidence: [provrem1-provisional-reminder.md](lab/provrem1-provisional-reminder.md) X4 (a spawned after-completion occurrence: `reminderTime` and `umd` are the ONLY columns that move) and X6 (`when=anytime` on a row holding a live 12:00 reminder: reminder cleared, date dropped, `start` promoted). Things 3.23, golden-v4. Earlier halves: [sit3-arrival-evening-lists](lab/sit3-arrival-evening-lists.md) BANNERACK, [remrev-stale-reminder-reschedule](lab/remrev-stale-reminder-reschedule.md) RR-SF-TODAY.
+
 ## 7. Truncation that respects the reader, not the buffer
 
 Things caps a URL-scheme `notes` value at 10,000 characters and every title/name at 4,000 UTF-16 code units, and it enforces those caps by storing a prefix rather than refusing the write. The *silence* is a real hazard and is filed as such next door ([oddities §2j](things-app-oddities.md)) — but the CUT ITSELF is careful in a way most implementations are not, and the two facts are worth keeping apart.

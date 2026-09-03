@@ -557,6 +557,85 @@ describe("update --exception on a repeating to-do", () => {
     expect(result.kind).toBe("ok");
   });
 
+  // ---------------------------------------------------- #699: the wrong-target refusals
+  //
+  // PROVREM1 reproduced #699's first two commands byte-for-byte on golden-v4.
+  // Both refused, and neither refusal described the situation: the occurrence
+  // was told the series was "no longer" repeating (with "retry" as the remedy),
+  // and the template's own remediation pointed back at the occurrence command
+  // that had just refused. These cells lock the copy that closes that circle.
+
+  it("an OCCURRENCE uuid is told what it is, and where to write instead (#699)", async () => {
+    const { template, instance } = seedSeries({ withOpenInstance: true });
+    const cnc = cncVector(() => template);
+    const result = await runTemplateExceptionWrite(
+      deps([urlVector().vector, cnc.vector]),
+      instance as string,
+      { when: "anytime", reminder: null },
+      {},
+    );
+
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("IS one occurrence of a repeating series");
+      expect(result.detail).toContain(template); // the series is named
+      expect(result.detail).not.toContain("no longer");
+      // The way out is a command the caller can run, on the row they aimed at.
+      expect(result.remediation).toContain(instance as string);
+      expect(result.remediation).toContain("no --exception");
+    }
+    expect(cnc.state.calls, "nothing may be driven").toBe(0);
+  });
+
+  it("a to-do that does not repeat is not told it 'no longer' does (#699)", async () => {
+    const plain = seedTodo(fixture.db, { title: "Plain", start: "active" });
+    const cnc = cncVector(() => plain);
+    const result = await runTemplateExceptionWrite(
+      deps([urlVector().vector, cnc.vector]),
+      plain,
+      { when: "anytime" },
+      {},
+    );
+
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("does not repeat");
+      expect(result.detail).not.toContain("no longer");
+      expect(result.remediation).toContain(plain);
+    }
+    expect(cnc.state.calls).toBe(0);
+  });
+
+  it("a cursor-less series holding an OPEN occurrence names that occurrence (#699)", async () => {
+    // The #699 shape: an after-completion series whose current occurrence has
+    // spawned and is unfinished, so the cursor is NULL (CNCAC1 §7.1) and there
+    // is nothing to bring forward — but there IS a row the caller wants.
+    const { template, instance } = seedSeries({
+      ruleXml: AFTER_COMPLETION_XML,
+      cursor: null,
+      withOpenInstance: true,
+    });
+    const cnc = cncVector(() => template);
+    const result = await runTemplateExceptionWrite(
+      deps([urlVector().vector, cnc.vector]),
+      template,
+      { when: "anytime", reminder: null },
+      {},
+    );
+
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("2026-07-05"); // the occurrence's own date
+      expect(result.detail).toContain("counts from each completion");
+      expect(result.remediation).toContain(instance as string);
+      expect(result.remediation).toContain("no --exception");
+      // The circular remediation is gone: it no longer says only "work on one of
+      // its occurrences" without saying WHICH.
+      expect(result.remediation).not.toBe("work on one of its occurrences directly");
+    }
+    expect(cnc.state.calls).toBe(0);
+  });
+
   it("refuses a CURSOR-LESS series outright (CNC1 §5 / CNCAC1 §6 / oddities §18)", async () => {
     const { template } = seedSeries({ ruleXml: AFTER_COMPLETION_XML, cursor: null });
     const cnc = cncVector(() => template);

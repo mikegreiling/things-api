@@ -32,6 +32,7 @@ import {
   updateAssertions,
   updateRestoreParams,
   updateWireParams,
+  whenAssertions,
 } from "../../src/write/update-fields.ts";
 import { createDbReader, evaluateDelta, type DeltaSpec } from "../../src/write/verify/delta.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -246,6 +247,67 @@ describe("DISCRIMINATION: a single-field value change flips satisfaction", () =>
     } finally {
       db.close();
     }
+  });
+});
+
+describe("#699: a PROVISIONAL Today member satisfies the today asserts", () => {
+  // An autonomous Today entrant the app has not materialized: `start=2`
+  // (someday) with an arrived `startDate` (BANNER1 L1/L2 — a repeat-instance
+  // spawn, a scheduled arrival). A `when=today` write leaves those bytes exactly
+  // as it found them (PROVREM1 X4), so the asserts must hold on that row.
+  it("start=someday + an arrived startDate is satisfied, and so is an OVERDUE one", () => {
+    const db = buildFixtureDb();
+    try {
+      const today = seedTodo(db.db, { title: "Spawned", start: "someday", startDate: TODAY });
+      expect(satisfies(db, { when: "today" }, today)).toBe(true);
+      // The arrived-date law: a preserved historical date is still Today.
+      const overdue = seedTodo(db.db, { title: "Old", start: "someday", startDate: "2026-07-01" });
+      expect(satisfies(db, { when: "today" }, overdue)).toBe(true);
+      // With the reminder clear that #699 asked for, on the same row shape.
+      const cleared = seedTodo(db.db, { title: "Cleared", start: "someday", startDate: TODAY });
+      expect(satisfies(db, { when: "today", reminder: null }, cleared)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("DISCRIMINATION survives: a row that is not an arrived Today member fails", () => {
+    const db = buildFixtureDb();
+    try {
+      // Undated: Today membership would rest on a deadline, not the schedule.
+      const undated = seedTodo(db.db, { title: "Gone", start: "someday", startDate: null });
+      expect(satisfies(db, { when: "today" }, undated)).toBe(false);
+      // Inbox: not a Today member at all (today-placement.ts takes start 1|2).
+      const inbox = seedTodo(db.db, { title: "In", start: "inbox", startDate: TODAY });
+      expect(satisfies(db, { when: "today" }, inbox)).toBe(false);
+      // Future-dated: arrived-on-or-before rejects it.
+      const future = seedTodo(db.db, { title: "Later", start: "someday", startDate: "2026-08-01" });
+      expect(satisfies(db, { when: "today" }, future)).toBe(false);
+      // The evening sub-bucket is still refused by `when: today`.
+      const evening = seedTodo(db.db, {
+        title: "Eve",
+        start: "active",
+        startDate: TODAY,
+        evening: true,
+      });
+      expect(satisfies(db, { when: "today" }, evening)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("an ADD still demands the MATERIALIZED start (a user-placed entrant)", () => {
+    // BANNER1 L2(f): a fresh `add --when today` lands start=1 + startDate=today,
+    // so the mint path keeps its exact assertion — the relaxation is UPDATE-only.
+    expect(whenAssertions("today", TODAY)).toContainEqual({ field: "start", equals: "active" });
+    expect(whenAssertions("today", TODAY, { mode: "update" })).toContainEqual({
+      field: "start",
+      satisfies: { predicate: "one-of", values: ["active", "someday"] },
+    });
+    expect(whenAssertions("evening", TODAY, { mode: "update" })).toContainEqual({
+      field: "start",
+      satisfies: { predicate: "one-of", values: ["active", "someday"] },
+    });
   });
 });
 

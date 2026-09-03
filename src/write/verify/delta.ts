@@ -28,8 +28,21 @@ import { anchorRelation, assertSpawnExpectation, spawnRuleKind } from "../spawn-
  * `startDate == today` false-fails a write that succeeded. The predicate accepts
  * any preserved arrived date while still REJECTING an undated deadline-only pull
  * (null `startDate`). Equality stays the check for adds and explicit ISO dates.
+ *
+ * `one-of` holds iff the value equals one of `values` (same null/undefined
+ * tolerance as `equals`). It exists for the `start` byte of a `when:
+ * today|evening` UPDATE (#699): an ARRIVED row is a Today member at `start`
+ * active OR someday (`src/model/today-placement.ts` — arrivedness is judged on
+ * the date alone), the app leaves that byte exactly as it found it on such a
+ * write (PROVREM1 X4: the only columns a `when=today` moved on a provisional
+ * occurrence were `reminderTime` and `umd`), and it promotes someday→active
+ * only when a human acknowledges the Today banner (BANNER1 L4) — a GUI-only
+ * mutation that can land from another device mid-verify. Asserting `active`
+ * alone therefore false-failed a write that had done precisely what was asked.
  */
-export type FieldPredicate = { predicate: "arrived-on-or-before"; date: string };
+export type FieldPredicate =
+  | { predicate: "arrived-on-or-before"; date: string }
+  | { predicate: "one-of"; values: unknown[] };
 
 /**
  * Dotted path into a decoded entity (see getField for computed paths) checked
@@ -606,6 +619,10 @@ function predicateHolds(pred: FieldPredicate, actual: unknown): boolean {
       // ordering is chronological, so a lexicographic <= is a day compare; a
       // null/undefined (undated) value is not a string and correctly fails.
       return typeof actual === "string" && actual <= pred.date;
+    case "one-of":
+      // Membership, with `equals`'s own null/undefined tolerance so an absent
+      // marker and an explicit null keep reading the same.
+      return pred.values.some((v) => valuesEqual(actual, v));
   }
 }
 

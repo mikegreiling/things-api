@@ -379,21 +379,28 @@ const GUARDS: Record<HazardId, GuardFn> = {
     const when = params["when"];
     const isDate = typeof when === "string" && /^\d{4}-\d{2}-\d{2}$/.test(when);
     if (params["reminder"] === null) {
-      // The clear IS a bare when= write — but only today/evening honor it;
-      // dated reminders are STICKY (persist through same-date AND re-dated
-      // bare when=, R20/R21). No URL clear path exists for them.
-      if (when === "today" || when === "evening") return null;
+      // The clear IS a bare when= write — but not every `when` honors it.
+      // MEASURED to clear: today (R07), evening (SIT3 REMSTALE), and anytime
+      // (PROVREM1 X6, 2026-09-03 — `when=anytime` on a row holding a live 12:00
+      // reminder cleared `reminderTime` along with `start 2→1` and
+      // `startDate := NULL`; the branch had been ASSUMED by effectiveReminder
+      // and was never probed, and this guard was what kept it unreachable —
+      // #699's caller asked for exactly that call and was sent to a two-step
+      // that then verify-failed). Dated reminders are STICKY (persist through
+      // same-date AND re-dated bare when=, R20/R21) and `someday` is still
+      // unmeasured, so both stay refused.
+      if (when === "today" || when === "evening" || when === "anytime") return null;
       return {
         hazard: "H-REMINDER-SCOPE",
         detail: isDate
           ? "dated reminders cannot be cleared via the URL scheme — they persist through " +
             "bare when= re-schedules (R20/R21)"
-          : "clearing a reminder IS a bare when= write (R07) — when: today|evening must be " +
-            "re-stated in the same call",
+          : "clearing a reminder IS a bare when= write (R07) — when: today|evening|anytime must " +
+            "be re-stated in the same call",
         remediation: isDate
           ? "re-schedule with `--when today --clear-reminder` first (then re-date), or clear " +
             "it in the app"
-          : "pass when today|evening together with --clear-reminder",
+          : "pass when today|evening|anytime together with --clear-reminder",
       };
     }
     if (when === "today" || when === "evening" || isDate) return null;
