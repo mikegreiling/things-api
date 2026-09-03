@@ -506,7 +506,14 @@ describe("simulator write vector — covered operations", () => {
     expect(res.kind).toBe("ok");
     const r = row(uuid);
     expect(r["reminderTime"]).toBeNull();
-    expect(r["startDate"]).toBe(encodePackedDate(TODAY));
+    // The ARRIVED-DATE law: `when=today` aimed at a row that is already a flat
+    // arrived Today member leaves the schedule bytes exactly as it found them —
+    // only the reminder is cleared (R07). This assertion used to expect the byte
+    // rewritten to today, which is the state the simulator produced and NOT the
+    // one the app does: it is why `arrived-on-or-before` exists on the verify
+    // side, and PROVREM1 X4 re-measured the zero-write under Things 3.23 (#699).
+    expect(r["startDate"]).toBe(encodePackedDate("2026-07-01"));
+    expect(r["start"]).toBe(1);
   });
 
   it("todo.add into an area", async () => {

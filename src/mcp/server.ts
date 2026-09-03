@@ -1848,8 +1848,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "existing body, exclusive with notes), schedule (when), reminder/clear_reminder, and " +
         "deadline/clear_deadline; changing the schedule keeps an existing reminder unless a new " +
         "one is set, schedule and deadline changes are unavailable for repeating items, and " +
-        "clear_reminder needs the item scheduled for today or this evening (a reminder on a " +
-        "future date can only be changed, not cleared). created_at/completed_at rewrite the " +
+        "clear_reminder needs the same call to set when to today, this evening, or anytime (a " +
+        "reminder on a future date can only be changed, not cleared). created_at/completed_at rewrite the " +
         "resolution timestamps of an already-resolved item; created_at is status-safe, but " +
         "completed_at on an open item is refused — resolving it is set_status's boundary, not " +
         "update's. kind area: title and/or tags (the full " +

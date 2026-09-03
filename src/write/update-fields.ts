@@ -68,6 +68,47 @@ export function whenWithReminder(
 }
 
 /**
+ * The `start` byte a to-do placed in TODAY (or its evening sub-bucket) may hold.
+ *
+ * An ADD mints the row, and a user-placed Today entrant lands MATERIALIZED —
+ * `start=1` (active) with a concrete `startDate` (BANNER1 L2 classes (d)/(f)) —
+ * so equality is exact there and stays exact.
+ *
+ * An UPDATE can be aimed at a row that is ALREADY an arrived Today member, and
+ * such a row is a Today member at `start` active OR someday: arrivedness is
+ * judged on the date alone (`src/model/today-placement.ts`), which is why the
+ * app's own autonomous entrants — a scheduled arrival, a repeat-instance SPAWN —
+ * sit in Today at `start=2` until a human acknowledges the Today banner
+ * (BANNER1 L1/L2/L4). On those rows the app treats `when=today` as a schedule
+ * NO-OP: PROVREM1 X4 (2026-09-03, golden-v4 / Things 3.23) drove exactly #699's
+ * command at a spawned after-completion occurrence and the ONLY columns that
+ * moved were `reminderTime` (12:00 → NULL, R07) and `userModificationDate` —
+ * `start` stayed 2, `startDate` stayed the occurrence day. Asserting `active`
+ * alone reported `verify-failed:mismatch` for a write that had done precisely
+ * what was asked, and left the caller with a landed change and a failure code.
+ *
+ * So an UPDATE asserts MEMBERSHIP instead: `start` is one of the two states an
+ * arrived Today member can hold, alongside the `today` marker and the arrived
+ * `startDate` that this set already carries. Nothing is given up — the trio
+ * still fails a row that left Today, lost its date, or went to the Inbox — and
+ * the banner acknowledgement that promotes someday→active mid-verify (it can
+ * arrive from another device) stops being a false mismatch too.
+ *
+ * `evening` shares it, though the no-op is NOT what was measured there:
+ * PROVREM1 X7 drove `--when evening --clear-reminder` at the same provisional
+ * shape and the app APPLIED the write in full (`start 2→1`, `startBucket 0→1`).
+ * The relaxation is kept because the assertion set proves evening membership
+ * without the `start` byte (the `evening` marker plus today's `startDate`), and
+ * because the one corner nobody has driven — `when=evening` at a row ALREADY in
+ * the evening sub-bucket — is the shape that would short-circuit if any does.
+ */
+function startInToday(opts: { mode: "add" | "update" }): FieldAssertion {
+  return opts.mode === "add"
+    ? { field: "start", equals: "active" }
+    : { field: "start", satisfies: { predicate: "one-of", values: ["active", "someday"] } };
+}
+
+/**
  * The schedule assertions a `when` value implies. Shared with the ADD verbs
  * (mode "add"), which mint a fresh row rather than re-scheduling an existing one.
  */
@@ -111,7 +152,7 @@ export function whenAssertions(
       //    still rejected — the item's Today membership then rests only on a
       //    deadline, not on the requested schedule.
       return [
-        { field: "start", equals: "active" },
+        startInToday(opts),
         opts.mode === "update"
           ? { field: "startDate", satisfies: { predicate: "arrived-on-or-before", date: todayIso } }
           : { field: "startDate", equals: todayIso },
@@ -121,7 +162,7 @@ export function whenAssertions(
     case "evening":
       // The This-Evening sub-bucket: the `evening` marker (which implies `today`).
       return [
-        { field: "start", equals: "active" },
+        startInToday(opts),
         { field: "startDate", equals: todayIso },
         { field: "evening", equals: true },
       ];

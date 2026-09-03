@@ -202,6 +202,82 @@ describe("reminders through the pipeline", () => {
     if (result.kind === "ok") expect(result.observed?.["reminder"]).toBeNull();
   });
 
+  // ------------------------------------------------------------------ #699
+  //
+  // A PROVISIONAL Today member — an autonomous entrant the app has not
+  // materialized: `start=2` (someday) with an arrived `startDate` (BANNER1
+  // L1/L2). PROVREM1 measured what the app does to one, and these two cells are
+  // that measurement, held in place.
+
+  it("#699: clearing the reminder on a PROVISIONAL Today member verifies ok", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "Spawned",
+      start: "someday", // the app's own unmaterialized Today state
+      startDate: TODAY_ISO,
+      reminder: "12:00",
+    });
+    // PROVREM1 X4, verbatim: a `when=today` on such a row moves the reminder and
+    // nothing else — `start` stays 2, `startDate` stays the arrival day.
+    const { vector } = fakeVector("url-scheme", URL_MATRIX, () => {
+      touch(uuid, "reminderTime = NULL");
+    });
+    const result = await runMutation(deps([vector]), "todo.update", {
+      uuid,
+      when: "today",
+      reminder: null,
+    });
+    // Before #699 this was `verify-failed:mismatch` on `start` — a landed write
+    // reported as a failure, which is what left the field caller stranded.
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.observed?.["reminder"]).toBeNull();
+      expect(result.observed?.["start"]).toBe("someday");
+      expect(result.observed?.["today"]).toBe(true);
+    }
+  });
+
+  it("#699: --clear-reminder with when=anytime is ONE call", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "Spawned",
+      start: "someday",
+      startDate: TODAY_ISO,
+      reminder: "12:00",
+    });
+    // PROVREM1 X6, verbatim: `when=anytime` on a row holding a live reminder
+    // clears the reminder AND ejects the row from Today (start 2→1, date NULL).
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => {
+      touch(uuid, "reminderTime = NULL, start = 1, startDate = NULL");
+    });
+    const result = await runMutation(deps([vector]), "todo.update", {
+      uuid,
+      when: "anytime",
+      reminder: null,
+    });
+    expect(result.kind).toBe("ok"); // H-REMINDER-SCOPE used to refuse this
+    expect(calls[0]).toMatch(/when=anytime(&|$)/);
+    expect(calls[0]).not.toContain("%40"); // no @token — a bare when= IS the clear
+    if (result.kind === "ok") {
+      expect(result.observed?.["reminder"]).toBeNull();
+      expect(result.observed?.["startDate"]).toBeNull();
+    }
+  });
+
+  it("#699: a reminder clear on when=someday is still refused (unmeasured)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "S", startDate: TODAY_ISO, reminder: "12:00" });
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, null);
+    const result = await runMutation(deps([vector]), "todo.update", {
+      uuid,
+      when: "someday",
+      reminder: null,
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.hazard).toBe("H-REMINDER-SCOPE");
+      expect(result.remediation).toContain("anytime");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
   it("silent reminder loss is caught: app clears it but delta expected preservation", async () => {
     const uuid = seedTodo(fixture.db, {
       title: "Lost",

@@ -1330,8 +1330,8 @@ export function registerWriteCommands(program: Command): void {
           "`things todo reschedule-repeat` (change the series); title/notes apply to the " +
           "series as they always have. --reminder needs --when " +
           "today|evening|YYYY-MM-DD; when re-scheduling WITHOUT --reminder an existing " +
-          "reminder is auto-preserved. --clear-reminder works while the to-do is scheduled " +
-          "for today|evening — a DATED reminder can only be changed, not cleared " +
+          "reminder is auto-preserved. --clear-reminder needs --when today|evening|anytime in " +
+          "the same call — a DATED reminder can only be changed, not cleared " +
           "(re-schedule to today first). --append-notes/--prepend-notes join with a " +
           "newline (exclusive with --notes).",
       )
@@ -1341,7 +1341,10 @@ export function registerWriteCommands(program: Command): void {
       .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
       .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening|date")
-      .option("--clear-reminder", "clear the reminder (works while scheduled today|evening)")
+      .option(
+        "--clear-reminder",
+        "clear the reminder; needs --when today|evening|anytime in the same call",
+      )
       .option("--deadline <date>", "YYYY-MM-DD")
       .option("--clear-deadline", "remove the deadline")
       .option(
@@ -2298,7 +2301,10 @@ export function registerWriteCommands(program: Command): void {
     .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
     .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
     .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening|date")
-    .option("--clear-reminder", "clear the reminder (works while scheduled today|evening)")
+    .option(
+      "--clear-reminder",
+      "clear the reminder; needs --when today|evening|anytime in the same call",
+    )
     .option("--deadline <date>", "YYYY-MM-DD")
     .option("--clear-deadline", "remove the deadline")
     .option(

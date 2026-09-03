@@ -438,6 +438,23 @@ function effectiveReminderValue(
   return row?.reminderTime ?? null;
 }
 
+/**
+ * Is this row already a FLAT arrived Today member — `start` active or someday, a
+ * non-null `startDate` on or before today, and NOT in the evening sub-bucket?
+ * That is the shape a `when=today` write leaves untouched (see the call site).
+ * The evening sub-bucket is deliberately excluded: an evening→Today move is a
+ * real bucket change and no measurement says the app declines it.
+ */
+function isFlatArrivedToday(sim: DatabaseSync, uuid: string, todayIso: string): boolean {
+  const row = sim
+    .prepare("SELECT start, startDate, startBucket FROM TMTask WHERE uuid = ?")
+    .get(uuid) as { start: number; startDate: number | null; startBucket: number } | undefined;
+  if (row === undefined || row.startDate === null) return false;
+  if (row.start !== START.active && row.start !== START.someday) return false;
+  if (row.startBucket !== 0) return false;
+  return row.startDate <= encodePackedDate(todayIso);
+}
+
 /** Shared to-do/project field update (title/notes/when+reminder/deadline). */
 function applyEntityUpdate(
   sim: DatabaseSync,
@@ -470,9 +487,21 @@ function applyEntityUpdate(
     }
   }
   if (params.when !== undefined) {
-    const s = scheduleColumns(params.when, ctx.todayIso, true);
-    sets.push("start = ?", "startDate = ?", "startBucket = ?");
-    binds.push(s.start, s.startDate, s.startBucket);
+    // `when=today` aimed at a row that is ALREADY a flat arrived Today member is
+    // a schedule NO-OP in the app — it rewrites neither `start` nor `startDate`
+    // (PROVREM1 X4, golden-v4 / Things 3.23: the only columns a `when=today`
+    // moved on a spawned provisional occurrence were `reminderTime` and `umd`;
+    // SIT3 BANNERACK measured the same zero-write on a plain arrived provisional
+    // row, REMREV RR-SF-TODAY on a stale `start=1` one). The reminder leg still
+    // runs: a bare `when=` clears it regardless (R07). Modelled here so the
+    // simulator-backed engine tests see the state the field sees — the arrived
+    // `start` byte the app leaves alone, which is what #699's verify contradicted.
+    const noop = params.when === "today" && isFlatArrivedToday(sim, params.uuid, ctx.todayIso);
+    if (!noop) {
+      const s = scheduleColumns(params.when, ctx.todayIso, true);
+      sets.push("start = ?", "startDate = ?", "startBucket = ?");
+      binds.push(s.start, s.startDate, s.startBucket);
+    }
     sets.push("reminderTime = ?");
     binds.push(effectiveReminderValue(sim, params.uuid, params));
   } else if (params.reminder !== undefined) {

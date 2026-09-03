@@ -219,6 +219,79 @@ function whenTargetDay(when: string | undefined, todayIso: IsoDate): IsoDate | n
 }
 
 /**
+ * `--exception` aimed at a row that is not a repeating template (#699).
+ *
+ * The branch this replaces said "this to-do is no longer a repeating series"
+ * and offered "retry" — a lost-race story. That story is right for the STATUS
+ * composite, whose caller has already established the target IS a template, and
+ * wrong here: this composite's caller passes whatever uuid the user typed. The
+ * shape a user actually reaches it with is the series' OWN OCCURRENCE — the row
+ * an exception would have produced — which is why the field report read the
+ * refusal as a misdiagnosis and had nowhere to go from it.
+ *
+ * The occurrence is an ordinary to-do that keeps its series FK: re-dating it
+ * moves that row and leaves the template byte-untouched (REPX1 §3.1, both
+ * vectors; CNCAC1 §11 on an after-completion occurrence). So the answer is not
+ * "retry" — it is "this is already the exception; write to it directly".
+ */
+function notATemplateRefusal(deps: WriteDeps, op: OperationKind, uuid: string): MutationResult {
+  const target = byUuid(deps.db, uuid);
+  if (target === null) {
+    return blocked(
+      op,
+      "there is no to-do with that id",
+      "check the id with `things search <text>`",
+    );
+  }
+  if (target.type !== "heading" && target.repeating.isInstance) {
+    const series = target.repeating.templateUuid;
+    return blocked(
+      op,
+      "this to-do IS one occurrence of a repeating series — an exception is what it already " +
+        "is, so there is nothing to carve out of the rule" +
+        (series === null ? "" : ` (the series is ${series})`),
+      `change this occurrence on its own: \`things todo update ${uuid} …\` with no --exception ` +
+        "— the series and every other occurrence stay as they are",
+    );
+  }
+  return blocked(
+    op,
+    "this to-do does not repeat, so it has no occurrences to make an exception for",
+    `change it with \`things todo update ${uuid} …\` and no --exception`,
+  );
+}
+
+/**
+ * `--exception` on a series whose next occurrence is ALREADY HERE (#699).
+ *
+ * An after-completion series has no cursor until its current occurrence is
+ * resolved (CNCAC1 §7.1, REPX1 §2.5), so there is nothing for this composite to
+ * materialize — and the generic cursor-less refusal's remediation ("work on one
+ * of its occurrences directly") sent the field report back to a command that
+ * had just refused it. The way out of that circle is the occurrence's UUID: the
+ * series is holding exactly one open copy, and naming it makes the remediation
+ * a command the caller can run.
+ */
+function occurrenceAlreadyHereRefusal(
+  op: OperationKind,
+  state: SeriesState,
+  occurrence: { uuid: string; startDate: IsoDate | null },
+): MutationResult {
+  return blocked(
+    op,
+    `this repeating series has no occurrence left to create — ${occurrenceLabel(
+      occurrence.startDate,
+    )} is already here and unfinished` +
+      (state.afterCompletion
+        ? ", and this series counts from each completion, so its next date only exists once " +
+          "that one is resolved"
+        : ""),
+    `change that occurrence on its own: \`things todo update ${occurrence.uuid} …\` with no ` +
+      "--exception — the series and its schedule stay as they are",
+  );
+}
+
+/**
  * The refusal for a series with nothing pending, with the remedy that fits WHY
  * it is empty. A paused series is one command away from having a cursor again;
  * anything else is the app's own business.
@@ -644,9 +717,18 @@ export async function runTemplateExceptionWrite(
 
   async function exceptionBody(): Promise<MutationResult> {
     const state = readSeriesState(deps, uuid);
-    if (state === null) return blocked(op, "this to-do is no longer a repeating series", "retry");
+    if (state === null) return notATemplateRefusal(deps, op, uuid);
 
-    if (state.cursor === null) return noPendingRefusal(op, state);
+    if (state.cursor === null) {
+      // An open occurrence outranks both generic cursor-less remedies: it is the
+      // row the caller wanted, and it needs no composite (#699). Checked before
+      // the pause branch — "resume the series first" is not the answer to "change
+      // the copy I am looking at".
+      if (state.openInstance !== null) {
+        return occurrenceAlreadyHereRefusal(op, state, state.openInstance);
+      }
+      return noPendingRefusal(op, state);
+    }
 
     // The collision refusal (CNC1 §2). A day the rule will still fire on ends up
     // holding two copies of the series, and nothing in the app reconciles them.
