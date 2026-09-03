@@ -46,6 +46,21 @@ import {
   GUARD_REFUSED_TAG,
   parseGuardLog,
 } from "../../src/write/vectors/ui-state.ts";
+import { inertSettleInjector, settleInjectorFor } from "../../src/write/vectors/ui-observer.ts";
+import { makeRepeatingRecipe } from "../../src/write/vectors/ui-recipes.ts";
+
+/** How many PLURAL tree reads one generated script performs per round. */
+const pluralReads = (form: string): number =>
+  form.split("\n").filter((l) => /^\s+set (sv|sp|pp|ap) to \(/.test(l)).length;
+
+/** A live sidecar, so the observed form of every script is generated. */
+const LIVE_OBS = settleInjectorFor({
+  socketPath: "/tmp/things-api-observer/s-0123abcd.sock",
+  token: "0123456789abcdef0123456789abcdef",
+  logPath: "/tmp/things-api-observer/observer.log",
+  registered: "16/16",
+  pid: 4242,
+});
 
 describe("axSelectPopupCandidatesScript — plural-safe menu-item resolution (defect (c))", () => {
   const script = axSelectPopupCandidatesScript("pop up button 1 of group 1", ["week", "weeks"]);
@@ -270,41 +285,172 @@ describe("axAssertEligibleScript — reveal-landed-eligible check (ADR1, #480)",
 // menu, and converge the weekday rows in a closed loop.
 describe("axProbeDialogShapeScript — the STRUCTURAL version fork (RDLG2)", () => {
   const script = axProbeDialogShapeScript("group 1 of sheet 1");
+  const observed = axProbeDialogShapeScript("group 1 of sheet 1", 8, LIVE_OBS);
 
   it("anchors on the Next: LABEL's row, not on the label's mere presence", () => {
     // RDLG2d measured 3.22.14: it carries the same "Next:" static text as 3.23 —
     // only the control beside it changed, so presence alone misreads 3.22 as 3.23.
-    expect(script).toContain('if (v as text) is "Next:" then set nextY to');
-    expect(script).toContain('if nextY is missing value then return "unknown"');
+    for (const form of [script, observed]) {
+      expect(form).toContain('if (v as text) is "Next:" then set nextY to');
+      // A group with no `Next:` row decides nothing — it cannot reach either
+      // positive branch, and the verdict it carries out is the fail-closed one.
+      expect(form).toContain("if nextY is not missing value then");
+      expect(form).toContain('if verdict is "unknown" then return "unknown"');
+    }
   });
 
   it("takes the whole inventory in PLURAL reads (VOPAT2)", () => {
     // 15 Apple events for one structural question is ~700ms on the maintainer's
     // M1 at RDLAT2's fitted per-round-trip rate. The plural form asks three.
-    expect(script).toContain("set sv to (value of static texts of g)");
-    expect(script).toContain("set sp to (position of static texts of g)");
-    expect(script).toContain("set pp to (position of pop up buttons of g)");
-    expect(script).not.toContain("count of static texts of g");
-    expect(script).not.toContain("value of static text i of g");
-    // A tree that changed between the two class reads is a half-picture, and a
-    // half-picture is not a shape (cgSnap's own rule).
-    expect(script).toContain('if ((count of sv) is not (count of sp)) then return "unknown"');
-    // And it reports what the value read realized (RDLAT2 §E.1).
-    expect(script).toContain('log "#AXELEMS " & (count of sv)');
+    for (const form of [script, observed]) {
+      expect(form).toContain("set sv to (value of static texts of g)");
+      expect(form).toContain("set sp to (position of static texts of g)");
+      expect(form).toContain("set pp to (position of pop up buttons of g)");
+      expect(form).not.toContain("count of static texts of g");
+      expect(form).not.toContain("value of static text i of g");
+      // A tree that changed between the two class reads is a half-picture, and a
+      // half-picture is not a shape (cgSnap's own rule).
+      expect(form).toContain("if ((count of sv) is (count of sp)) then");
+      // And it reports what the value read realized (RDLAT2 §E.1).
+      expect(form).toContain('log "#AXELEMS " & (count of sv)');
+    }
   });
 
   it("decides by the CONTROL CLASS sharing that row — both branches a positive match", () => {
-    expect(script).toContain('if dy <= 8 then return "next-popup"');
-    expect(script).toContain('whose role is "AXDateTimeArea"');
-    expect(script).toContain('if dy <= 8 then return "legacy"');
+    for (const form of [script, observed]) {
+      expect(form).toContain('if dy <= 8 then set verdict to "next-popup"');
+      expect(form).toContain('whose role is "AXDateTimeArea"');
+      expect(form).toContain('if dy <= 8 then set verdict to "legacy"');
+    }
   });
 
   it("falls through to an explicit unknown (the driver's fail-closed refusal)", () => {
-    expect(script.trimEnd().endsWith('return "unknown"\nend tell')).toBe(true);
+    for (const form of [script, observed]) {
+      expect(form.trimEnd().endsWith('return "unknown"\n  return "unsettled"\nend tell')).toBe(
+        true,
+      );
+    }
   });
 
   it("never reads the app version — the fork is decided by the tree alone", () => {
     expect(script).not.toMatch(/version/i);
+    expect(observed).not.toMatch(/version/i);
+  });
+
+  // DEFAULTS3 (#700) — THE FIELD DEFECT. The probe runs immediately after the
+  // frequency selection, which rebuilds the cadence group ASYNCHRONOUSLY. With a
+  // sidecar the selection's own step waits to be TOLD the rebuild finished
+  // (SETTLE_POPUP_APPLIED); with none it waits for nothing, and the field read a
+  // group holding ONE static text and no `Next:` row at all — refusing a perfectly
+  // good drive with "a Things update has redesigned it again".
+  it("POLLS the rebuild out where there is no sidecar to announce it", () => {
+    // The certified budget, and the same constants cgSettle uses for the same
+    // re-layout (BEEP1/RDLAT2): 40 reads a tenth of a second apart.
+    expect(script).toContain("repeat 40 times");
+    expect(script).toContain("delay 0.1");
+    // TWO reads that agree, and a POSITIVE verdict. Either half alone is
+    // insufficient: agreement is also what a group that has not STARTED rebuilding
+    // looks like, and a positive verdict alone can be read off a half-laid-out
+    // group whose stale row positions would decide the version fork wrongly.
+    expect(script).toContain(
+      'if (verdict is not "unknown") and (sig is prevSig) then return verdict',
+    );
+    expect(script).toContain("set prevSig to sig");
+    // A budget spent with the shape still moving is NOT a redesign, and says so.
+    expect(script).toContain('return "unsettled"');
+  });
+
+  it("leaves the sidecar path a single round at the same Apple-event cost", () => {
+    // The observer is what makes the wait unnecessary, so the observed form takes
+    // no poll, no delay, and no agreement rule — it decides on the one read the
+    // selection's own settle already guaranteed was of a finished group.
+    expect(observed).not.toContain("repeat 40 times");
+    expect(observed).not.toContain("delay 0.1");
+    expect(observed).not.toContain("prevSig");
+    expect(observed).toContain('if verdict is not "unknown" then return verdict');
+    // Both forms ask the tree the SAME questions the same number of times per
+    // round — the poll adds rounds, never reads.
+    expect(pluralReads(observed)).toBe(pluralReads(script));
+  });
+});
+
+// DEFAULTS3 (#700) — THE ORDERING LAW, pinned at the RECIPE level rather than at
+// one script's text, because the defect was an ORDER: DEFAULTS2 moved the shape
+// probe ahead of the interval step (whose `cgSettle` had been absorbing the
+// frequency rebuild by accident) and then made that step skippable altogether.
+//
+// The probe stays where DEFAULTS2 put it — a reschedule opens the dialog
+// pre-populated, and an after-completion rule's cadence group carries no `Next:`
+// row at all, so a probe taken BEFORE the frequency selection would measure the
+// OUTGOING dialog and refuse a rule the drive can enter perfectly well. What must
+// hold instead is that no post-frequency READ is unguarded on a host with no
+// sidecar to announce the rebuild.
+describe("the observer-unavailable recipe settles before every post-frequency read", () => {
+  const inert = inertSettleInjector();
+  // The field's own command shape (`add-repeating --frequency weekly --interval 1`
+  // on a seed the pre-fill proves), which is what caught this.
+  const steps = makeRepeatingRecipe("T-1", "weekly", 1, {
+    weekdays: ["thursday"],
+    next: "2026-09-28",
+    seed: { scheduled: "2026-09-28", today: "2026-09-02", deadline: null, reminder: null },
+  }).steps;
+  const dialogSteps = steps.slice(steps.findIndex((s) => s.primitive === "dialog-open"));
+  const freqAt = dialogSteps.findIndex((s) => s.primitive === "select-popup");
+
+  it("puts the shape probe first after the frequency, carrying the polling settle", () => {
+    expect(freqAt).toBeGreaterThanOrEqual(0);
+    const next = dialogSteps[freqAt + 1];
+    expect(next?.primitive).toBe("probe-dialog-shape");
+    const command = commandForStep({ ...next!, path: STEP_ELEMENT_REF }, "T-1", inert);
+    expect(String(command.script)).toContain("repeat 40 times");
+    expect(String(command.script)).toContain(
+      'if (verdict is not "unknown") and (sig is prevSig) then return verdict',
+    );
+  });
+
+  it("lets NO reading step run before something has polled the rebuild out", () => {
+    // The law, stated as the defect's own shape: on a host with nothing to
+    // announce the rebuild, the frequency selection must not be followed by a step
+    // that READS the cadence group until some step has polled it settled. The
+    // probe is that step now; before this fix nothing was, and the probe itself
+    // was the read that raced.
+    //
+    // Downstream steps that carry their own `cgSettle` (the interval, the row
+    // fields) re-establish it for themselves, and the weekday converge is a
+    // closed loop with its own readback — but none of them may be the FIRST thing
+    // to look.
+    const READS = new Set([
+      "probe-dialog-shape",
+      "set-group-number",
+      "set-row-field",
+      "converge-weekdays",
+      "select-next-occurrence",
+      "settle-occurrences",
+      "verify-prefill",
+    ]);
+    const unguarded: string[] = [];
+    let settled = false;
+    for (const step of dialogSteps.slice(freqAt + 1)) {
+      const script = String(
+        commandForStep(
+          { ...step, ...(step.pathCandidates !== undefined && { path: STEP_ELEMENT_REF }) },
+          "T-1",
+          inert,
+        ).script,
+      );
+      // `verify-prefill` and `audit-dialog` compile in the driver (they need the
+      // live shell and the measured shape), and both open with `cgSettle`.
+      const polls =
+        step.primitive === "verify-prefill" ||
+        script.includes("my cgSettle(") ||
+        script.includes("repeat 40 times");
+      if (!settled && !polls && READS.has(step.primitive)) {
+        unguarded.push(`${step.primitive}: ${step.label}`);
+      }
+      if (polls) settled = true;
+    }
+    expect(unguarded).toEqual([]);
+    expect(settled).toBe(true);
   });
 });
 

@@ -2116,7 +2116,11 @@ end tell`;
  * unrecognized third dialog returns "unknown" and the driver refuses. Labels are
  * pinned English, exactly like every other selector here.
  */
-export function axProbeDialogShapeScript(groupPath: string, rowTolerance = 8): string {
+export function axProbeDialogShapeScript(
+  groupPath: string,
+  rowTolerance = 8,
+  obs: SettleInjector = inertSettleInjector(),
+): string {
   const tol = Math.max(1, Math.trunc(rowTolerance));
   // ONE INVENTORY, FOUR APPLE EVENTS (the RDLAT2 §4(a) plural-read law, applied
   // to the one script in this drive that never got it). It used to ask the tree
@@ -2136,48 +2140,109 @@ export function axProbeDialogShapeScript(groupPath: string, rowTolerance = 8): s
   // "unknown" so the drive refuses rather than pressing structural indices into a
   // tree it cannot identify — that property is what the step is for, and it is
   // not worth one hop to assume instead.
-  return `${SE}
-  set g to (${groupPath})
-  set sv to {}
+  //
+  // AND WITH NO SIDECAR IT POLLS FOR THE REBUILD FIRST (DEFAULTS3, issue #700).
+  //
+  // The step runs immediately after the FREQUENCY selection, which rebuilds the
+  // cadence group ASYNCHRONOUSLY: the old children are destroyed and the new ones
+  // built ~0.2–0.5 s later (NEXTPOP1/DEFAULTS1 "final by t+300 ms"; VOPAT1-12
+  // clocked the destroy burst at 535 ms). With a settle sidecar live the
+  // selection's own step WAITS for that — `AXValueChanged` on the pop-up it just
+  // set, arriving with the destroy burst (SETTLE_POPUP_APPLIED) — so this probe
+  // has always opened on a finished group. With NO sidecar the selection waits for
+  // nothing, and DEFAULTS2 removed the one thing that used to absorb the window
+  // here: the probe moved ahead of the interval step, whose `cgSettle` was the
+  // accidental gate, and the interval step then became skippable altogether. The
+  // FIELD read the group mid-rebuild — ONE static text, no `Next:` row at all —
+  // and the drive refused with "a Things update has redesigned it again".
+  //
+  // So the no-sidecar form takes the certified POLLING settle instead: the same
+  // `SETTLE_READS`/`SETTLE_POLL_S` budget `cgSettle` uses for the same re-layout,
+  // and the same two-part rule — a POSITIVE verdict, held across two reads a tick
+  // apart. Both halves are load-bearing. The positive verdict is what steps over
+  // the torn-down group (no `Next:` row exists, so there is nothing to mismeasure).
+  // The agreement is what stops a HALF-BUILT group deciding the version fork: this
+  // script decides by row adjacency, mid-layout positions are stale, and a stray
+  // pop-up transiently on the `Next:` row would read `next-popup` on a ≤3.22
+  // dialog — the wrong branch, and the whole reason the step exists.
+  //
+  // A budget that expires with the shape STILL MOVING is a distinct outcome from a
+  // dialog that never had a `Next:` row, and it says so (`unsettled`) rather than
+  // blaming a redesign for a group that simply never stopped. The sidecar form
+  // cannot reach it: it takes exactly one round, decides on a positive verdict
+  // alone, and returns "unknown" otherwise — the same verdict, from the same
+  // reads, at the same Apple-event cost as before.
+  const poll = !obs.live;
+  const measure = `  set sv to {}
   set sp to {}
   try
     set sv to (value of static texts of g)
     set sp to (position of static texts of g)
   end try
+  set verdict to "unknown"
+  set sig to ""
   -- Two reads of a class are two events, so a tree that changed between them can
   -- return mismatched lengths. That is not a shape, it is a half-picture, and it
-  -- fails closed (cgSnap's own rule).
-  if ((count of sv) is not (count of sp)) then return "unknown"
-  log "${AX_ELEMS_LOG_PREFIX}" & (count of sv)
-  set nextY to missing value
-  repeat with i from 1 to (count of sv)
-    set v to contents of (item i of sv)
-    if v is not missing value then
-      try
-        if (v as text) is "Next:" then set nextY to (item 2 of (contents of (item i of sp)))
-      end try
+  -- fails closed (cgSnap's own rule) — and under the poll it is simply "not yet".
+  if ((count of sv) is (count of sp)) then
+    log "${AX_ELEMS_LOG_PREFIX}" & (count of sv)
+    set nextY to missing value
+    repeat with i from 1 to (count of sv)
+      set v to contents of (item i of sv)
+      set vy to (item 2 of (contents of (item i of sp)))
+      set sig to sig & "|s:" & vy
+      if v is not missing value then
+        try
+          if (v as text) is "Next:" then set nextY to vy
+          set sig to sig & "=" & (v as text)
+        end try
+      end if
+    end repeat
+    set pp to {}
+    try
+      set pp to (position of pop up buttons of g)
+    end try
+    repeat with p in pp
+      set sig to sig & "|p:" & (item 2 of (contents of p))
+    end repeat
+    if nextY is not missing value then
+      repeat with p in pp
+        set dy to (item 2 of (contents of p)) - nextY
+        if dy < 0 then set dy to -dy
+        if dy <= ${tol} then set verdict to "next-popup"
+      end repeat
+      if verdict is "unknown" then
+        set ap to {}
+        try
+          set ap to (position of (every UI element of g whose role is "AXDateTimeArea"))
+        end try
+        repeat with p in ap
+          set dy to (item 2 of (contents of p)) - nextY
+          if dy < 0 then set dy to -dy
+          if dy <= ${tol} then set verdict to "legacy"
+        end repeat
+      end if
     end if
-  end repeat
-  if nextY is missing value then return "unknown"
-  set pp to {}
-  try
-    set pp to (position of pop up buttons of g)
-  end try
-  repeat with p in pp
-    set dy to (item 2 of (contents of p)) - nextY
-    if dy < 0 then set dy to -dy
-    if dy <= ${tol} then return "next-popup"
-  end repeat
-  set ap to {}
-  try
-    set ap to (position of (every UI element of g whose role is "AXDateTimeArea"))
-  end try
-  repeat with p in ap
-    set dy to (item 2 of (contents of p)) - nextY
-    if dy < 0 then set dy to -dy
-    if dy <= ${tol} then return "legacy"
-  end repeat
-  return "unknown"
+  end if`;
+  const indented = measure
+    .split("\n")
+    .map((line) => (line === "" ? line : `  ${line}`))
+    .join("\n");
+  const rounds = poll
+    ? `  set prevSig to "<none>"
+  repeat ${SETTLE_READS} times
+${indented}
+    if (verdict is not "unknown") and (sig is prevSig) then return verdict
+    set prevSig to sig
+    delay ${SETTLE_POLL_S}
+  end repeat`
+    : `${measure}
+  if verdict is not "unknown" then return verdict`;
+  return `${SE}
+  set g to (${groupPath})
+${rounds}
+  if verdict is "unknown" then return "unknown"
+  return "unsettled"
 end tell`;
 }
 
@@ -4056,7 +4121,7 @@ export function commandForStep(
       return {
         primitive: "probe-dialog-shape",
         label: step.label,
-        script: axProbeDialogShapeScript(step.path ?? ""),
+        script: axProbeDialogShapeScript(step.path ?? "", undefined, obs),
       };
     case "select-next-occurrence":
       return {
@@ -5119,7 +5184,17 @@ async function driveSteps(
         return partial(
           step.label,
           res.ok
-            ? 'its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date ' +
+            ? // A SHAPE THAT NEVER STOPPED MOVING IS NOT A REDESIGN (DEFAULTS3).
+              // The no-sidecar form polls the cadence group's rebuild out (see
+              // axProbeDialogShapeScript) and reports which way its budget went,
+              // because the two refusals send the reader somewhere completely
+              // different: one says the app changed, the other says this host
+              // never saw the group finish.
+              verdict === "unsettled"
+              ? "the Repeat dialog's cadence group never stopped re-laying out, so which control " +
+                'shares its first-occurrence row ("Next:") could not be measured; nothing was ' +
+                "entered into the rule"
+              : 'its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date ' +
                 "field, so the dialog matched neither known shape — a Things update has redesigned " +
                 "it again; nothing was entered into the rule"
             : res.timedOut === true
