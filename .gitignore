@@ -21,8 +21,11 @@ lab/cache/
 bench/artifacts/
 
 # Claude Code session-local state (agent worktrees live under here — must never
-# be committed or scanned by tooling)
-.claude/
+# be committed or scanned by tooling). The project hook config + hook scripts ARE
+# committed: they enforce the production-Things guard for every agent session.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 
 # Build artifacts (source + build.sh are the record)
 lab/guest/disruption-monitor/disruption-monitor

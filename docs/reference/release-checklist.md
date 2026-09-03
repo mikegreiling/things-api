@@ -72,6 +72,8 @@ Anything the batch newly *embeds* (a template literal shipped verbatim by `tsc`,
 
 ### Stage 5 — THE FIELD-SHAPED RC RUN (the gate)
 
+> **WHO RUNS IT (ruling 2026-09-03): the MAINTAINER, on his own machine — or an agent ONLY under his explicit, time-boxed sanction for THIS run (`scripts/sanction-prod.sh <minutes> "<reason>"`, run from HIS terminal).** This stage writes to and GUI-drives the production Things app; no orchestrator or delegate may do that unattended, and a sanction for one release does not carry to the next. The orchestrator's job here is to prepare the RC, the exact command list, and the cleanup list, hand them to the maintainer, and record his transcript in the PR body. `.claude/hooks/prod-things-guard.sh` refuses the commands otherwise; do not work around a refusal. (2026-09-03: a delegate ran this stage unattended while the maintainer was using the machine — the reason this paragraph exists.)
+
 The routed, real-CLI, real-display proof. Five steps; a failure at any of them means **no tag**.
 
 **(i) Build the RC from merged `main` and record its digest.**
