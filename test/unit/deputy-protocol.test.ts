@@ -61,6 +61,17 @@ describe("helpers version line", () => {
  * list is: a mismatch here is silent until a field drive quietly loses its
  * settles.
  */
+/**
+ * The `AX…` names inside the array literal that follows `marker`, from its
+ * OPENING BRACKET to its close — the Swift declaration's own `[String]`
+ * annotation sits before it and would otherwise end the slice immediately.
+ */
+function notificationNames(source: string, marker: string): string[] {
+  const open = source.indexOf("[", source.indexOf(marker) + marker.length);
+  const end = source.indexOf("]", open);
+  return [...source.slice(open, end).matchAll(/"(AX[A-Za-z]+)"/g)].map((m) => m[1] as string);
+}
+
 describe("the observer capability name", () => {
   it("matches deputy/src/main.swift", () => {
     const swift = readFileSync(
@@ -98,15 +109,8 @@ describe("the observer capability name", () => {
       fileURLToPath(new URL("../../src/write/vectors/ui-observer.ts", import.meta.url)),
       "utf8",
     );
-    const names = (source: string, marker: string): string[] => {
-      // From the OPENING BRACKET of the literal to its close — the Swift
-      // declaration's own `[String]` annotation sits before it.
-      const open = source.indexOf("[", source.indexOf(marker) + marker.length);
-      const end = source.indexOf("]", open);
-      return [...source.slice(open, end).matchAll(/"(AX[A-Za-z]+)"/g)].map((m) => m[1] as string);
-    };
-    const fromSwift = names(swift, "let OBSERVER_NOTIFICATIONS: [String] =");
-    const fromSidecar = names(python, "CLASSES =");
+    const fromSwift = notificationNames(swift, "let OBSERVER_NOTIFICATIONS: [String] =");
+    const fromSidecar = notificationNames(python, "CLASSES =");
     expect(fromSwift.length).toBeGreaterThan(10);
     expect(fromSwift).toEqual(fromSidecar);
   });

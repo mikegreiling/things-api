@@ -17,6 +17,7 @@ import type { Command } from "commander";
 
 import {
   CeremonyStopped,
+  deputyHostsObserver,
   type HelpersInstallResult,
   type HelpersOnboardResult,
   type HelpersStatus,
@@ -124,6 +125,16 @@ function renderStatus(status: HelpersStatus): string {
     if (deputy.hello.axTrusted !== undefined) {
       lines.push(`  accessibility: ${deputy.hello.axTrusted ? "granted" : "not granted"}`);
     }
+    // The settle observer (DEPOBS1). Absent on helpers older than 1.4.0, and
+    // the row says what that costs — a GUI drive on this Mac then waits on
+    // fixed timers instead of the app's own notifications — plus the remedy.
+    lines.push(
+      `  settle observer: ${
+        deputyHostsObserver(deputy.hello)
+          ? "hosted — GUI drives wait on the app's own notifications"
+          : "not hosted — GUI drives fall back to timed polling (rebuild with `bash scripts/build-helpers.sh`, then `things helpers install`)"
+      }`,
+    );
     if (
       deputy.hello.axTrusted === false ||
       deputy.hello.automation?.things === "denied" ||

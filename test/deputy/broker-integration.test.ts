@@ -190,6 +190,208 @@ echo "$1:$2:$3:$4:$5:$6"
     }
   });
 
+  /**
+   * THE SETTLE OBSERVER, AGAINST THE REAL BINARY (DEPOBS1).
+   *
+   * Everything here rides a SELF-TEST session: no `AXObserver`, no
+   * Accessibility, no other process's UI tree — arrivals are injected. That is
+   * deliberate and it is the only way this can be certified at all on the hosts
+   * that run it. A child deputy is not the installed bundle, so it is not
+   * Accessibility-trusted and never will be (asking would raise a dialog, which
+   * the permissions doctrine forbids outside a ceremony); what a REAL session
+   * adds on top of this is exactly one thing — whether Things posts the
+   * notifications — and VOPAT1 measured that in the lab.
+   *
+   * So these cells own the half that is protocol rather than app behavior: the
+   * cursor semantics, the ANY-OF/ALL-OF matcher, role discrimination, the burst
+   * debounce, the wait timeout, an unknown token, a stopped session, and the
+   * malformed-request refusals.
+   */
+  describe("the settle observer", () => {
+    function start(fields: Record<string, unknown> = {}) {
+      const res = request({ verb: "observer-start", selfTest: true, ...fields });
+      expect(res["ok"]).toBe(true);
+      return res["observer"] as string;
+    }
+
+    it("advertises the observer capability in the handshake", () => {
+      const res = request({ verb: "hello" });
+      expect(res["capabilities"]).toContain("observer");
+    });
+
+    it("mints a session, moves a cursor, and stops it", () => {
+      const observer = start();
+      expect(typeof observer).toBe("string");
+      const first = request({ verb: "observer-mark", observer });
+      expect(first["seq"]).toBe(0);
+      const injected = request({
+        verb: "observer-inject",
+        observer,
+        events: ["AXMenuOpened:AXMenu", "AXValueChanged:AXTextField"],
+      });
+      expect(injected["added"]).toBe(2);
+      const second = request({ verb: "observer-mark", observer });
+      expect(second["seq"]).toBe(2);
+      expect(request({ verb: "observer-stop", observer })["stopped"]).toBe(true);
+      // AND IT IS GONE: a second stop is honest about finding nothing, and
+      // every other verb refuses by name rather than answering out of thin air.
+      expect(request({ verb: "observer-stop", observer })["stopped"]).toBe(false);
+      const after = request({ verb: "observer-mark", observer });
+      expect(after["ok"]).toBe(false);
+      expect((after["error"] as { code: string }).code).toBe("no-session");
+    });
+
+    it("waits for an arrival past the cursor, and reports what fired", () => {
+      const observer = start();
+      const before = request({ verb: "observer-mark", observer })["seq"] as number;
+      request({ verb: "observer-inject", observer, events: ["AXSheetCreated:AXSheet"] });
+      const res = request({
+        verb: "observer-wait",
+        observer,
+        after: before,
+        want: ["AXSheetCreated"],
+        timeoutMs: 1000,
+      });
+      expect(res["ok"]).toBe(true);
+      expect(res["timedOut"]).toBe(false);
+      expect(res["fired"]).toBe("AXSheetCreated:AXSheet");
+      expect(res["seen"]).toBe(1);
+      request({ verb: "observer-stop", observer });
+    });
+
+    it("discriminates on ROLE, and an ALL-OF requirement must also land", () => {
+      const observer = start();
+      const before = request({ verb: "observer-mark", observer })["seq"] as number;
+      // The wrong role for the same notification is NOT the settle's arrival —
+      // this is the 366-ms-too-early defect VOPAT1 §4.2 g found.
+      request({ verb: "observer-inject", observer, events: ["AXValueChanged:AXStaticText"] });
+      const missed = request({
+        verb: "observer-wait",
+        observer,
+        after: before,
+        want: ["AXValueChanged:AXPopUpButton"],
+        timeoutMs: 150,
+      });
+      expect(missed["timedOut"]).toBe(true);
+      expect(missed["seen"]).toBe(1);
+      request({ verb: "observer-inject", observer, events: ["AXValueChanged:AXPopUpButton"] });
+      const hit = request({
+        verb: "observer-wait",
+        observer,
+        after: before,
+        want: ["AXValueChanged:AXPopUpButton"],
+        all: ["AXValueChanged:AXStaticText"],
+        timeoutMs: 1000,
+      });
+      expect(hit["timedOut"]).toBe(false);
+      expect(hit["fired"]).toBe("AXValueChanged:AXPopUpButton");
+      // An ALL-OF class that never arrives is named in the timeout's `missing`.
+      const incomplete = request({
+        verb: "observer-wait",
+        observer,
+        after: before,
+        want: ["AXValueChanged:AXPopUpButton"],
+        all: ["AXMenuClosed"],
+        timeoutMs: 150,
+      });
+      expect(incomplete["timedOut"]).toBe(true);
+      expect(incomplete["missing"]).toBe("AXMenuClosed");
+      request({ verb: "observer-stop", observer });
+    });
+
+    it("a wait with no matcher is the non-blocking count", () => {
+      // How a caller asks "did the previous step actuate ANYTHING?" — the
+      // question that is only meaningful because Things is silent when nothing
+      // happens (VOPAT1-6). No matcher, no budget, no waiting.
+      const observer = start();
+      const before = request({ verb: "observer-mark", observer })["seq"] as number;
+      const quiet = request({
+        verb: "observer-wait",
+        observer,
+        after: before,
+        want: [],
+        timeoutMs: 0,
+      });
+      expect(quiet["seen"]).toBe(0);
+      request({ verb: "observer-inject", observer, events: ["AXMoved", "AXResized"] });
+      const busy = request({
+        verb: "observer-wait",
+        observer,
+        after: before,
+        want: [],
+        timeoutMs: 0,
+      });
+      expect(busy["seen"]).toBe(2);
+      request({ verb: "observer-stop", observer });
+    });
+
+    it("times out inside its budget rather than hanging the connection", () => {
+      const observer = start();
+      const started = Date.now();
+      const res = request({
+        verb: "observer-wait",
+        observer,
+        after: 0,
+        want: ["AXMenuOpened"],
+        timeoutMs: 250,
+      });
+      const waited = Date.now() - started;
+      expect(res["timedOut"]).toBe(true);
+      expect(res["seen"]).toBe(0);
+      expect(waited).toBeGreaterThanOrEqual(200);
+      expect(waited).toBeLessThan(5000);
+      // The connection is still good afterwards — the wait is dispatched off
+      // the read loop precisely so it cannot strand what is queued behind it.
+      expect(request({ verb: "hello" })["ok"]).toBe(true);
+      request({ verb: "observer-stop", observer });
+    });
+
+    it("refuses malformed requests, an unknown token, and injection into a real session", () => {
+      const observer = start();
+      const cases: [Record<string, unknown>, string][] = [
+        [{ verb: "observer-mark" }, "bad-request"],
+        [{ verb: "observer-mark", observer: "" }, "bad-request"],
+        [{ verb: "observer-mark", observer: "deadbeef" }, "no-session"],
+        [{ verb: "observer-wait", observer, want: ["AXMenuOpened"] }, "bad-request"],
+        [{ verb: "observer-wait", observer, after: -1, timeoutMs: 10 }, "bad-request"],
+        [{ verb: "observer-inject", observer, events: "AXMoved" }, "bad-request"],
+        [{ verb: "observer-start", pid: 0 }, "bad-request"],
+      ];
+      for (const [fields, code] of cases) {
+        const res = request(fields);
+        expect(res["ok"], JSON.stringify(fields)).toBe(false);
+        expect((res["error"] as { code: string }).code, JSON.stringify(fields)).toBe(code);
+      }
+      // A REAL session that cannot attach refuses, and never prompts.
+      //
+      // The pid is deliberately one that cannot exist (macOS pid_max is 99998):
+      // this suite must never register an observer on the DEVELOPER MACHINE's
+      // running Things. It nearly did — the child deputy is signed with the same
+      // identity as the installed bundle, so TCC hands it the same Accessibility
+      // grant, and a bare `observer-start` here succeeded against the live app
+      // (2026-09-03). Passive or not, a test does not attach to the user's
+      // running app. What the cell is actually for is the REFUSAL path, and an
+      // unattachable pid exercises it on a trusted host and an untrusted one
+      // alike — the message says which.
+      const real = request({ verb: "observer-start", pid: 999_999 });
+      expect(real["ok"]).toBe(false);
+      expect((real["error"] as { code: string }).code).toBe("observer-unavailable");
+      expect(String((real["error"] as { message: string }).message)).toMatch(
+        /Accessibility|registrations|AXObserverCreate/,
+      );
+      request({ verb: "observer-stop", observer });
+    });
+
+    it("injection is refused on anything but a self-test session", () => {
+      // The seam cannot be turned on a live ledger: only a session that was
+      // STARTED as a self-test will take injected events, so nothing can put a
+      // fabricated arrival in front of a real settle.
+      const res = request({ verb: "observer-inject", observer: "deadbeef", events: ["AXMoved"] });
+      expect(res["ok"]).toBe(false);
+      expect((res["error"] as { code: string }).code).toBe("no-session");
+    });
+  });
+
   it("rejects a bad token", () => {
     const res = request({ verb: "hello" }, { token: "0".repeat(64) });
     expect(res["ok"]).toBe(false);

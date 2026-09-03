@@ -108,7 +108,7 @@
  * its own named reason, because a settle that gave up is a surface the drive
  * cannot vouch for (determinism doctrine, fail direction over-caution).
  */
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createConnection } from "node:net";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
@@ -792,6 +792,16 @@ function which(cmd: string, args: string[]): Promise<boolean> {
   });
 }
 
+/** The same probe for the synchronous caller (`doctor`). Bounded identically. */
+function whichSync(cmd: string, args: string[]): boolean {
+  try {
+    execFileSync(cmd, args, { timeout: 4_000, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * WHERE THIS DRIVE'S LEDGER WILL LIVE — one decision, taken once per drive.
  *
@@ -820,10 +830,8 @@ function which(cmd: string, args: string[]): Promise<boolean> {
 export async function observerTransport(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ObserverTransportChoice> {
-  if (observerDisabled(env)) {
-    return { transport: "none", why: `switched off by ${OBSERVER_ENV}` };
-  }
-  if (deputyExpected(env)) return routedObserverTransport(env);
+  const early = transportWithoutProbing(env);
+  if (early !== null) return early;
   if (availability !== null) return availability;
   if (!(await which("/usr/bin/xcode-select", ["-p"]))) {
     availability = {
@@ -838,6 +846,47 @@ export async function observerTransport(
   }
   availability = { transport: "sidecar", why: "" };
   return availability;
+}
+
+/**
+ * The same decision, answered WITHOUT awaiting — for `doctor`, which is
+ * synchronous end to end and must still be able to say which process would hold
+ * this host's ledger. The routed branch is sync anyway (it reads the handshake
+ * routing already performed); only the direct branch's two tool probes differ,
+ * and they share the memo with the async form, so whichever asks first pays for
+ * them once.
+ */
+export function observerTransportSync(
+  env: NodeJS.ProcessEnv = process.env,
+): ObserverTransportChoice {
+  const early = transportWithoutProbing(env);
+  if (early !== null) return early;
+  if (availability !== null) return availability;
+  if (!whichSync("/usr/bin/xcode-select", ["-p"])) {
+    availability = {
+      transport: "none",
+      why: "the Command Line Tools are not installed (xcode-select -p)",
+    };
+    return availability;
+  }
+  if (!whichSync("/usr/bin/python3", ["-c", "import ctypes,socketserver"])) {
+    availability = { transport: "none", why: "/usr/bin/python3 cannot load ctypes" };
+    return availability;
+  }
+  availability = { transport: "sidecar", why: "" };
+  return availability;
+}
+
+/**
+ * Everything the decision can answer from configuration alone: the off switch,
+ * and the whole routed branch. Null means "this host would run the sidecar if
+ * its tools are there", which is the only question a probe is needed for.
+ */
+function transportWithoutProbing(env: NodeJS.ProcessEnv): ObserverTransportChoice | null {
+  if (observerDisabled(env)) {
+    return { transport: "none", why: `switched off by ${OBSERVER_ENV}` };
+  }
+  return deputyExpected(env) ? routedObserverTransport(env) : null;
 }
 
 /**
