@@ -55,6 +55,7 @@ const pluralReads = (form: string): number =>
 
 /** A live sidecar, so the observed form of every script is generated. */
 const LIVE_OBS = settleInjectorFor({
+  transport: "sidecar",
   socketPath: "/tmp/things-api-observer/s-0123abcd.sock",
   token: "0123456789abcdef0123456789abcdef",
   logPath: "/tmp/things-api-observer/observer.log",

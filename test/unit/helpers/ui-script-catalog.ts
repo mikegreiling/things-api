@@ -63,6 +63,7 @@ export const POLLING_SHAPE: CatalogInjector = { tag: "polling", obs: inertSettle
 export const OBSERVED_SHAPE: CatalogInjector = {
   tag: "observed",
   obs: settleInjectorFor({
+    transport: "sidecar",
     socketPath: "/tmp/things-api-observer/s-0123abcd.sock",
     token: "0123456789abcdef0123456789abcdef",
     logPath: "/tmp/things-api-observer/observer.log",

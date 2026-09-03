@@ -37,7 +37,7 @@ import {
   observerSpawnScript,
   parseReply,
   parseSettleLog,
-  type ObserverSession,
+  type SidecarSession,
   type SettleSpec,
   settleInjectorFor,
   stopObserver,
@@ -58,7 +58,8 @@ import { makeRepeatingRecipe, rescheduleRepeatRecipe } from "../../src/write/vec
 const PYTHON = "/usr/bin/python3";
 const HAVE_PYTHON = existsSync(PYTHON);
 
-const SESSION: ObserverSession = {
+const SESSION: SidecarSession = {
+  transport: "sidecar",
   socketPath: "/tmp/things-api-observer/s-0123abcd.sock",
   token: "0123456789abcdef0123456789abcdef",
   logPath: "/tmp/things-api-observer/observer.log",
@@ -414,7 +415,7 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
 
   async function withSidecar(
     ttlMs: number,
-    body: (session: ObserverSession, inject: (spec: string) => void) => Promise<void>,
+    body: (session: SidecarSession, inject: (spec: string) => void) => Promise<void>,
   ): Promise<number | null> {
     const dir = mkdtempSync(join(tmpdir(), "obs-live-"));
     const file = join(dir, "ax-observer.py");
@@ -441,7 +442,8 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
       },
     );
     const exited = new Promise<number | null>((resolve) => child.on("exit", resolve));
-    const session: ObserverSession = {
+    const session: SidecarSession = {
+      transport: "sidecar",
       socketPath,
       token: TOKEN,
       logPath: join(dir, "log"),
@@ -540,7 +542,7 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
 
   it("refuses an unauthorized request", async () => {
     await withSidecar(20_000, async (session) => {
-      const wrong: ObserverSession = { ...session, token: "not-the-token" };
+      const wrong: SidecarSession = { ...session, token: "not-the-token" };
       expect(await observerMark(wrong)).toBeNull();
     });
   });
@@ -555,7 +557,8 @@ describe.skipIf(!HAVE_PYTHON)("the sidecar, live", () => {
       [file, "--socket", socketPath, "--token", TOKEN, "--self-test", "--ttl-ms", "20000"],
       { stdio: ["ignore", "ignore", "ignore"] },
     );
-    const session: ObserverSession = {
+    const session: SidecarSession = {
+      transport: "sidecar",
       socketPath,
       token: TOKEN,
       logPath: join(dir, "log"),

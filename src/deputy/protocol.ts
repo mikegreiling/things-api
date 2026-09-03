@@ -46,7 +46,35 @@ export const DEPUTY_BANNED_SCRIPT_PHRASES = ["do shell script", "do script"] as 
  * any helper-source change; a drift test asserts this constant matches it.
  * The PROTOCOL version above remains the hard compatibility gate.
  */
-export const EXPECTED_HELPERS_VERSION = "1.3.0";
+export const EXPECTED_HELPERS_VERSION = "1.4.0";
+
+/**
+ * THE HELPER CAPABILITY THAT HOSTS THE AX SETTLE OBSERVER (DEPOBS1, #695).
+ *
+ * A deputy that advertises this in `hello.capabilities` serves the
+ * `observer-*` verbs, so a routed host can have event settles instead of fixed
+ * timers. Helpers 1.3.0 and earlier do not, and their `hello` carries no list
+ * at all — the CLI reads that as "no observer" and generates the certified
+ * polling settles, which is what a routed host has been running since #698.
+ *
+ * WHY A CAPABILITY AND NOT A VERSION COMPARISON: the version line moves for
+ * every helper-source change, so testing against it would make every unrelated
+ * bump a settle regression. Why not a PROTOCOL bump: that number is the hard
+ * gate — moving it deactivates routing outright on hosts with an older helper
+ * (see reconcileVersions), which is the opposite of the graceful degrade this
+ * needs. Capability DETECTION is what the permissions doctrine asks for anyway;
+ * it is not a compatibility shim (ALPHA-CONTRACT — there is no alias map, no
+ * legacy reader, and nothing to delete at 1.0 except this comment).
+ *
+ * Mirrored in Swift as `DEPUTY_CAPABILITY_OBSERVER` (deputy/src/main.swift) and
+ * pinned across the seam by a drift test (test/unit/deputy-protocol.test.ts).
+ */
+export const DEPUTY_CAPABILITY_OBSERVER = "observer";
+
+/** Does this handshake come from a deputy that hosts the settle observer? */
+export function deputyHostsObserver(hello: DeputyHello | null): boolean {
+  return hello?.capabilities?.includes(DEPUTY_CAPABILITY_OBSERVER) === true;
+}
 
 /** The outer helper bundle's identifier (Things API Helper.app) — TCC + BTM identity. */
 export const HELPERS_BUNDLE_ID = "com.pixelcog.things-api-helper";
@@ -214,6 +242,59 @@ export interface DeputyHello {
   axTrusted?: boolean;
   /** The deputy's Automation standing per target. Absent on helpers older than 1.2.0. */
   automation?: DeputyAutomationStatus;
+  /**
+   * What this helper can do beyond the base verb set — see
+   * {@link DEPUTY_CAPABILITY_OBSERVER}. Absent on helpers older than 1.4.0
+   * (and on the reader), which means "only the base verbs", never "unknown".
+   */
+  capabilities?: string[];
+}
+
+/**
+ * ONE OBSERVER SESSION, as the deputy reports it (DEPOBS1).
+ *
+ * `observer` is the session token the DEPUTY minted — a capability handed to
+ * the one drive that asked for it, never a name the client chooses. `seq0` is
+ * the ledger cursor at arming: nothing has been actuated yet, so it is the
+ * point every later `after` is measured from.
+ */
+export interface DeputyObserverStart {
+  observer: string;
+  seq0: number;
+  /** How many of the notification classes the app accepted, out of `asked`. */
+  registered: number;
+  asked: number;
+  /** The observed process (Things), or 0 for a self-test session. */
+  pid: number;
+  selfTest: boolean;
+}
+
+/** One arrival, as the ledger recorded it: a name and a ROLE, never content. */
+export interface DeputyObserverEvent {
+  seq: number;
+  notification: string;
+  role: string;
+}
+
+/**
+ * The answer to one wait. `timedOut` is not a failure — a settle here is SOFT,
+ * and the step's own certified gate is still what refuses (see ui-observer.ts).
+ */
+export interface DeputyObserverWait {
+  /** The ledger's cursor now — what the next `after` should be. */
+  seq: number;
+  /** Arrivals since `after`, whether or not any matched. */
+  seen: number;
+  timedOut: boolean;
+  /** ANY-OF match that ended the wait, as `Notification[:Role]`. */
+  fired?: string;
+  /** Milliseconds from the marked actuation to the app's announcement. */
+  latencyMs?: number;
+  waitedMs: number;
+  hits?: number;
+  /** Events trimmed from a full ledger, so a verdict never hides lost evidence. */
+  dropped: number;
+  events: DeputyObserverEvent[];
 }
 
 /**

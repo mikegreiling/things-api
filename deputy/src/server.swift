@@ -111,7 +111,13 @@ final class Server {
     }
     let remaining = inflight
     inflightCond.unlock()
-    audit(["event": "stopped", "drained": remaining == 0, "inflight": remaining])
+    // No observer outlives the deputy that hosts it — a session's own idle
+    // reaper is the belt, this is the braces.
+    let observers = ObserverRegistry.shared.stopAll()
+    audit([
+      "event": "stopped", "drained": remaining == 0, "inflight": remaining,
+      "observersStopped": observers,
+    ])
     // The audit log is written asynchronously; a barrier makes "stopped" the
     // last thing on disk instead of a line lost to exit().
     logQueue.sync {}
@@ -138,7 +144,17 @@ final class Server {
   // --- connection handling ---
 
   private func handleConnection(_ conn: Int32) {
-    defer { close(conn) }
+    // Serializes writes on THIS connection: an offloaded settle wait and the
+    // read loop can otherwise be mid-write at the same time.
+    let writeLock = NSLock()
+    // Offloaded waits still hold this descriptor, so the close waits for them:
+    // a closed fd is recycled by the kernel, and a late write into a recycled
+    // number would land on somebody else's connection.
+    let offloaded = DispatchGroup()
+    defer {
+      offloaded.wait()
+      close(conn)
+    }
     var peerPid: pid_t = 0
     var pidLen = socklen_t(MemoryLayout<pid_t>.size)
     _ = getsockopt(conn, SOL_LOCAL, LOCAL_PEERPID, &peerPid, &pidLen)
@@ -150,7 +166,9 @@ final class Server {
       if n <= 0 { return }
       buffer.append(contentsOf: chunk[0..<n])
       if buffer.count > MAX_REQUEST_BYTES {
+        writeLock.lock()
         writeLine(conn, errorResponse(id: nil, code: "too-large", message: "request exceeds \(MAX_REQUEST_BYTES) bytes"))
+        writeLock.unlock()
         return
       }
       while let nl = buffer.firstIndex(of: 0x0A) {
@@ -159,12 +177,49 @@ final class Server {
         // In flight from dispatch until the response is on the wire — that
         // span is exactly what a drain must not cut short.
         beginRequest()
+        // A SETTLE WAIT BLOCKS FOR AS LONG AS ITS BUDGET, so it must not be
+        // dispatched on the read loop: a connection is multiplexed by request
+        // id (both TS transports match responses that way), and an in-flight
+        // wait holding the loop would stall every request behind it — the
+        // drive's next osascript included. Only that verb is offloaded, and the
+        // write lock keeps two responses from interleaving on the wire.
+        if isBlockingVerb(line) {
+          offloaded.enter()
+          let worker = Thread { [weak self] in
+            defer { offloaded.leave() }
+            guard let self else { return }
+            let response = self.dispatch(line: line, peerPid: peerPid)
+            writeLock.lock()
+            _ = self.writeLine(conn, response)
+            writeLock.unlock()
+            self.endRequest()
+          }
+          worker.name = "things-deputy.wait"
+          worker.start()
+          continue
+        }
         let response = dispatch(line: line, peerPid: peerPid)
+        writeLock.lock()
         let written = writeLine(conn, response)
+        writeLock.unlock()
         endRequest()
         if !written { return }
       }
     }
+  }
+
+  /**
+   * Does this request block for a client-chosen budget? Only `observer-wait`
+   * does — every other verb either answers immediately or is bounded by the
+   * deputy's own child-process deadline. Parsed cheaply and defensively: a line
+   * that is not a JSON object naming that verb takes the ordinary path, where
+   * the real dispatch produces the real error.
+   */
+  private func isBlockingVerb(_ line: Data) -> Bool {
+    guard let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else {
+      return false
+    }
+    return (obj["verb"] as? String) == "observer-wait"
   }
 
   @discardableResult
@@ -273,6 +328,13 @@ final class Server {
           args: ["run", name, "--input-path", inputPath, "--output-path", outputPath],
           timeoutMs: timeoutMs, id: id)
       }
+    case "observer-start", "observer-mark", "observer-wait", "observer-stop", "observer-inject":
+      // NOT on osaQueue: a settle wait blocks for its budget, and the whole
+      // point of the ledger is that it is recording WHILE a script runs.
+      result = handleObserver(verb: verb, obj: obj, id: id)
+      if verb == "observer-start" || verb == "observer-stop" {
+        auditExtra["observerSessions"] = ObserverRegistry.shared.liveCount()
+      }
     case "sql", "read-file", "locate":
       // File verbs live exclusively on the sandboxed things-reader.
       result = errorResponse(
@@ -331,11 +393,126 @@ final class Server {
       "pid": Int(getpid()),
       "uptimeMs": Int(Date().timeIntervalSince(startedAt) * 1000),
       "axTrusted": accessibilityTrusted(),
+      // WHAT THIS HELPER CAN DO, as a list the client reads rather than a
+      // version it has to interpret (DEPOBS1). The protocol number stays the
+      // hard compatibility gate — it does not move for an ADDED verb, because
+      // an old client and a new deputy still agree on every shape they both
+      // know. So a capability that a 1.3.0 helper simply does not have is
+      // ABSENT here, and a CLI that finds it absent degrades to the certified
+      // polling settles instead of speaking a verb nobody implements. This is
+      // capability DETECTION, which the permissions doctrine requires anyway —
+      // not a compatibility shim (ALPHA-CONTRACT).
+      "capabilities": [DEPUTY_CAPABILITY_OBSERVER],
       "automation": [
         "things": automationStatus(bundleID: "com.culturedcode.ThingsMac"),
         "systemEvents": automationStatus(bundleID: "com.apple.systemevents"),
       ],
     ]
+  }
+
+  /**
+   * THE SETTLE-OBSERVER VERBS (DEPOBS1) — the deputy hosting what the sidecar
+   * cannot be on a routed host (observer.swift explains why).
+   *
+   *   observer-start  {pid?, selfTest?}                  -> {token, seq0, registered, asked, pid}
+   *   observer-mark   {observer}                         -> {seq}
+   *   observer-wait   {observer, after, want[], all[]?, quietMs?, timeoutMs}
+   *                                                      -> {seq, seen, timedOut, fired?, latencyMs?, …}
+   *   observer-stop   {observer}                         -> {stopped}
+   *   observer-inject {observer, events[]}               -> {added}   (self-test sessions only)
+   *
+   * `observer` is the session token the deputy minted — a capability, not a
+   * name the client may choose. An unknown or reaped one is `no-session`, which
+   * the client turns into a polling fallback rather than a refusal, exactly as
+   * it treats a sidecar that stopped answering.
+   *
+   * A malformed request is `bad-request` and NOTHING is observed: the ledger is
+   * only ever advanced by the app's own notifications (or, in a self-test
+   * session, by an injection the deputy validates against the same allowlist it
+   * registers).
+   */
+  private func handleObserver(verb: String, obj: [String: Any], id: Any?) -> [String: Any] {
+    func ok(_ body: [String: Any]) -> [String: Any] {
+      var out: [String: Any] = ["id": id ?? NSNull(), "ok": true]
+      for (key, value) in body { out[key] = value }
+      return out
+    }
+
+    if verb == "observer-start" {
+      let selfTest = (obj["selfTest"] as? Bool) ?? false
+      var requested: pid_t? = nil
+      if let raw = obj["pid"] as? Int {
+        guard raw > 0 else {
+          return errorResponse(id: id, code: "bad-request", message: "pid must be positive")
+        }
+        requested = pid_t(raw)
+      }
+      switch ObserverRegistry.shared.start(pid: requested, selfTest: selfTest) {
+      case .refused(let why):
+        audit(["event": "observer-refused", "reason": why])
+        return errorResponse(id: id, code: "observer-unavailable", message: why)
+      case .started(let session):
+        return ok([
+          "observer": session.token,
+          "seq0": session.mark(),
+          "registered": session.registered,
+          "asked": session.asked,
+          "pid": Int(session.pid),
+          "selfTest": session.selfTest,
+        ])
+      }
+    }
+
+    guard let token = obj["observer"] as? String, !token.isEmpty else {
+      return errorResponse(
+        id: id, code: "bad-request", message: "\(verb) requires the observer session token")
+    }
+    if verb == "observer-stop" {
+      let session = ObserverRegistry.shared.stop(token)
+      return ok(["stopped": session != nil])
+    }
+    guard let session = ObserverRegistry.shared.session(token) else {
+      return errorResponse(
+        id: id, code: "no-session",
+        message: "no live observer session for that token (stopped, or reaped after \(Int(OBSERVER_IDLE_SECONDS))s idle)"
+      )
+    }
+    session.touch()
+
+    switch verb {
+    case "observer-mark":
+      return ok(["seq": session.mark()])
+    case "observer-inject":
+      guard session.selfTest else {
+        return errorResponse(
+          id: id, code: "bad-request",
+          message: "events can only be injected into a self-test session")
+      }
+      guard let specs = obj["events"] as? [String] else {
+        return errorResponse(
+          id: id, code: "bad-request", message: "observer-inject requires events: [String]")
+      }
+      return ok(["added": session.inject(specs)])
+    case "observer-wait":
+      guard let after = obj["after"] as? Int, after >= 0 else {
+        return errorResponse(
+          id: id, code: "bad-request", message: "observer-wait requires after: >= 0")
+      }
+      guard let timeoutRaw = obj["timeoutMs"] as? Int else {
+        return errorResponse(
+          id: id, code: "bad-request", message: "observer-wait requires timeoutMs")
+      }
+      let timeoutMs = min(OBSERVER_MAX_WAIT_MS, max(0, timeoutRaw))
+      let want = ((obj["want"] as? [String]) ?? []).compactMap(ObserverMatcher.parse)
+      let all = ((obj["all"] as? [String]) ?? []).compactMap(ObserverMatcher.parse)
+      let quietMs = min(2000, max(0, (obj["quietMs"] as? Int) ?? 0))
+      let body = session.wait(
+        after: after, want: want, all: all, quietMs: quietMs, timeoutMs: timeoutMs)
+      session.touch()
+      return ok(body)
+    default:
+      return errorResponse(id: id, code: "bad-request", message: "unknown verb \(verb)")
+    }
   }
 
   /**
