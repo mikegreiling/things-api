@@ -23,7 +23,9 @@
  * auto-scroll is REJECTED for production — app-controlled scroll velocity is
  * too brittle; AXDRAG1-c stays lab evidence only):
  *  - Rung 1 (common case): pre-scroll until the source row and the drop
- *    boundary are simultaneously visible, then one certified AXDRAG1 drag.
+ *    boundary are simultaneously visible, then one drag whose drop point is
+ *    CLOSED-LOOP — re-resolved from live row frames with the button held
+ *    (DRPLC1, #729), never from the pre-drag estimate.
  *  - Rung 2 (scroll-while-held): grab the source, synthesize SCROLL-WHEEL
  *    events while the drag is held so the list scrolls underneath the held
  *    item, re-resolve the target row's live frame, drop at the computed slot
@@ -47,11 +49,17 @@
  *    row sits between entity rows, the shared edge otherwise.
  *  - Slot pitch, where an estimate is needed (hop-cap sizing, span fallback),
  *    is the median adjacent y-delta of the resolved area rows.
- *  - Lifting the source collapses its slot (its whole group — nested project
- *    rows travel with it), so for DOWNWARD drags every static coordinate below
- *    the source shifts up by the source's group span. The span is computed
- *    from resolved frames (next area row top − source row top), so areas with
- *    visible nested projects stay correct.
+ *  - Lifting the source takes its whole group out of the table (nested project
+ *    rows travel with it) — but the slot does NOT simply close. DRPLC1 measured
+ *    3.23/3.23.3: a ~48 pt LANDING GAP takes the group's place, and that gap
+ *    TRACKS THE POINTER, so mid-drag a row above the current insertion point
+ *    sits at `static − span` while a row below it sits at `static − span + gap`.
+ *    The old rule (subtract the span from every static coordinate below the
+ *    source, AXDRAG1-a on 3.22.11) is therefore an ESTIMATE only: it is what the
+ *    pre-scroll centres and what the wall pre-flight measures, and the drop
+ *    itself aims at a boundary re-read from the live frames while the drag is
+ *    held. #729 is what aiming at the estimate looks like when the app settles
+ *    into the other of the two self-consistent layouts.
  *  - Off-viewport rows still expose valid virtualized frames; visibility must
  *    be cross-checked against the scroll-area viewport rect.
  *  - Row identity: the AppleScript-seeded sidebar rows carry an EMPTY
@@ -481,49 +489,436 @@ if (sb === null) { 'NO_SIDEBAR' } else {
 }
 
 /**
- * Drag: the NATIVE1 gesture verbatim — move, down, 3px wiggle to open the drag
- * session, ~25 interpolated drag events, a settle so the drop indicator locks,
- * then up. Coordinates are AX-resolved frames + slot-boundary geometry computed
- * by the caller in the SAME snapshot generation.
+ * How hard the closed loop tries, and how long it lets the app re-lay-out
+ * between reads.
  *
- * GUARDED (PTRGD1). Nothing is posted until Things is proven frontmost, both
- * endpoints are proven inside its window and unoccluded, and the row LIVE under
- * the grab point is proven to be the very row `source` describes — which is the
- * same-app half of the hazard: a user scroll between the census and the gesture
- * leaves these coordinates over a different row, and the driver's own invariants
- * (area count + assignment digest) do not see a to-do dragged into another list.
- * The law is re-asserted at the drop point before the button comes up, because
- * the gesture itself takes about a second and a window can arrive during it; a
- * failed re-check Escape-aborts instead of dropping.
+ * The loop is not a poll for stillness — it is a poll for AGREEMENT between the
+ * pointer and the boundary, which is a positive condition (RDLAT2's settle law).
+ * Two agreeing reads end it; DRPLC1 measured convergence in one move on both
+ * 3.23 and 3.23.3, and the ceiling is what turns a layout that oscillates into
+ * a clean Escape-abort rather than a blind drop.
  */
-export function jxaSidebarDragScript(
+const LIVE_AIM_MAX_ITER = 12;
+const LIVE_AIM_SETTLE_MS = 180;
+
+/**
+ * HOW FAR THE HELD POINTER MUST STAY FROM THE SCROLL AREA'S EDGES.
+ *
+ * [AXDRAG1-c](../../../docs/lab/axdrag1-reorder.md) measured Things' own
+ * mid-drag EDGE AUTO-SCROLL: a held pointer ~5 pt above the viewport floor ran
+ * the list from 0.036 to 1.0 in 2.5 s, and ~9 pt below its ceiling ran it back
+ * to 0. Edge-hover auto-scroll was REJECTED for production (app-controlled
+ * velocity is not something a deterministic driver can steer), so the closed
+ * loop must not accidentally invoke it: it holds the button for up to
+ * `LIVE_AIM_MAX_ITER` reads, which is long enough for a boundary parked one
+ * `BAND_PAD` from the floor to scroll the list out from under itself.
+ *
+ * This is a CLEARANCE, not an aim point — the same kind of number as
+ * `BAND_PAD`, and 2-3x the measured trigger zone.
+ */
+const HELD_BAND_PAD = 24;
+
+/** Is `y` far enough inside the viewport to be HELD there without auto-scroll? */
+export function inHeldBand(y: number, viewport: SidebarRect): boolean {
+  return inBand(y, viewport, HELD_BAND_PAD);
+}
+
+/**
+ * It is a PREFERENCE, not a gate. A boundary outside the held band is still
+ * aimable — the script swaps the inter-row point for the quarter point inside
+ * the anchor row, which says the same thing and sits further from the edge —
+ * and the loop watches the scroll fraction so a list that DOES start moving
+ * under the pointer refuses instead of being chased. Making it a planning gate
+ * would cost rung 1 two row-heights of reach at both ends and push ordinary
+ * moves onto the multi-hop floor, which inherits the same constraint per hop.
+ */
+
+/**
+ * Drag: the NATIVE1 gesture, with a CLOSED LOOP on the drop point (DRPLC1, #729).
+ *
+ * Move, down, a 3 px wiggle to open the drag session, ~25 interpolated events
+ * toward the caller's static ESTIMATE — and then, with the button still held,
+ * re-resolve the drop boundary from the LIVE row frames and aim at that, moving
+ * and re-reading until two consecutive reads agree with where the pointer
+ * already is. Only then does the button come up.
+ *
+ * WHY THE ESTIMATE IS NOT THE AIM. The pre-drag correction assumed Things
+ * COLLAPSES the lifted row's slot, so every static coordinate below the source
+ * shifts up by the source's group span (AXDRAG1-a, measured on 3.22.11). DRPLC1
+ * measured 3.23/3.23.3 and the app does something else: the lifted group leaves
+ * the table and a ~48 pt LANDING GAP takes its place — and that gap TRACKS THE
+ * POINTER, so rows above the current insertion point sit at `static - span`
+ * while rows below it sit at `static - span + gap`. The corrected estimate for a
+ * to-last drop therefore lands 8 pt inside the trailing gap of ONE of two
+ * self-consistent layouts, and in the OTHER one (gap still above the last row)
+ * the very same point falls in that row's top half, which inserts ABOVE it —
+ * the area lands second-to-last, which is #729. Which layout the app is in when
+ * the button comes up is a question about rendering latency, and a drop whose
+ * correctness depends on that is exactly what the determinism doctrine forbids.
+ *
+ * WHAT THE LIVE READ COSTS. Geometry only: `AXRows` plus one batched
+ * position+size fetch per row, which realizes nothing (~2 ms for 174 rows in
+ * the field, VOPAT1 §3). A to-last drop realizes ZERO rows — "below the last
+ * table row" is pure geometry — and an insert-above drop realizes exactly ONE,
+ * the anchor, before the gesture starts; from then on it is addressed by its own
+ * AX element and re-read for free. The pane is addressed by the index the
+ * planning census resolved (VOPAT2 PR 2) and confirmed by finding the source's
+ * own frame among its rows, so no semantic census runs inside the gesture.
+ *
+ * GUARDED (PTRGD1), twice. Nothing is posted until Things is proven frontmost,
+ * both endpoints are proven inside its window and unoccluded, and the row LIVE
+ * under the grab point is proven to be the very row `source` describes. The law
+ * is re-asserted AT THE LIVE DROP POINT before the button comes up — the point
+ * it will actually release on, not the estimate it was planned with.
+ *
+ * FAIL CLOSED. An unresolvable pane, an unconfirmable source row, an anchor that
+ * will not resolve, a boundary that never stabilizes, or a live boundary outside
+ * the visible band all Escape-abort with the button held (AXDRAG1-d: a
+ * byte-identical index vector) and report. There is no blind drop.
+ */
+export function jxaSidebarLiveDragScript(
   sx: number,
   sy: number,
-  tx: number,
-  ty: number,
+  /** The static estimate the pointer travels to before the loop takes over. */
+  staticY: number,
   source: SidebarRect,
+  areaTitles: readonly string[],
+  /** The row to insert above, or null for "below the last table row". */
+  anchor: LiveDropAnchor | null,
+  /** The pane a census already resolved, or null to locate it semantically. */
+  paneIndex: number | null,
+  /**
+   * The source's GROUP SPAN — its own row plus every row that travels with it.
+   * The app hit-tests the pointer against the layout the lift leaves behind, so
+   * this is what converts a pre-grab frame into the frame the drop is judged in.
+   */
+  span: number,
 ): string {
-  const [a, b, c, d] = [sx, sy, tx, ty].map(Math.round) as [number, number, number, number];
+  const [a, b, c] = [sx, sy, staticY].map(Math.round) as [number, number, number];
   return `${JXA_PRELUDE}
-var sx=${a}, sy=${b}, tx=${c}, ty=${d}, steps=25;
+var TITLES = ${JSON.stringify([...areaTitles])};
+var sx=${a}, sy=${b}, STATIC_Y=${c}, PANE=${paneIndex === null ? -1 : Math.trunc(paneIndex)};
+var A_TITLE = ${JSON.stringify(anchor === null ? null : anchor.title)};
+var A_ORD = ${anchor === null ? -1 : Math.trunc(anchor.ordinal)};
+var A_UNIQUE = ${anchor === null ? "false" : anchor.unique ? "true" : "false"};
 var SRC = ${JSON.stringify({ x: source.x, y: source.y, w: source.w, h: source.h })};
+var SPAN = ${Math.max(0, Math.round(span))};
+var DEPTH = ${ROW_TEXT_DEPTH_FAST}, MAX_ITER = ${LIVE_AIM_MAX_ITER};
+var T0 = Date.now(), ANCHOR_EL = null, ITERS = [];
+function out(o){ o.axCalls = AXN; o.realized = AXR; o.ms = Date.now() - T0;
+  o.iterations = ITERS; o.staticY = STATIC_Y; return JSON.stringify(o) }
+
+/* Rows + geometry in one pass. Nothing here realizes a row (VOPAT1 §3). */
+function liveState(table){ var els = rowsOf(table); if (els === null) return null;
+  var geo = [], i; for (i=0;i<els.length;i++) geo.push(geom(els[i]));
+  return { els: els, geo: geo } }
+function frameIndex(geo, want){ var i, best=-1, bd=1e9;
+  for (i=0;i<geo.length;i++){ var g=geo[i]; if(!g) continue;
+    var d = Math.abs(g.y-want.y) + Math.abs(g.h-want.h) + Math.abs(g.x-want.x);
+    if (d < bd){ bd = d; best = i } }
+  return bd <= 3 ? best : -1 }
+/*
+ * WHERE THE APP SAYS THE DROP WILL LAND — read it, do not compute it.
+ *
+ * Three DRPLC1 measurements decide the shape of this loop, and each was paid
+ * for by a build that failed:
+ *
+ *  1. Lifting a row takes its whole group out of the table and leaves a LANDING
+ *     GAP in its place — measured at 48 pt on 3.23 and 3.23.3, against group
+ *     spans of 112 pt and 40 pt, so rows below shift by (gap - span): -64 pt
+ *     in one fixture and +8 pt (DOWNWARD) in the other. The old model said
+ *     -span. It is also not a distinct row: the placeholder renders as
+ *     ordinary 24 pt rows, so it cannot be found by its height.
+ *  2. The gap MOVES WITH THE POINTER, so the rendered layout is a function of
+ *     where the pointer currently is (DRPLC1 §2).
+ *  3. **The app resolves the pointer against the layout WITHOUT the gap.** This
+ *     is what makes a loop that aims at a point read off the LIVE frames chase
+ *     itself: it moves to where the anchor renders, the app resolves that point
+ *     in the gap-free layout, decides the other slot, moves the gap, and the
+ *     anchor moves back. Measured twice, amplitude exactly one gap:
+ *     176->224, 224->176, 176->224, 224->176.
+ *
+ * So the aim is computed in the COLLAPSED frame — every row's pre-grab frame,
+ * minus the source's group span for the rows below it, which is exactly the
+ * frame the app hit-tests in — and it is a strictly INTERIOR point of the
+ * target row (its top quarter to insert before it, its bottom quarter to insert
+ * after it, AXDRAG1-a), never the boundary between two slots, which is the one
+ * point a small shift can flip.
+ *
+ * And then it is CONFIRMED against the app's own rendering, which is the part
+ * that makes this a closed loop rather than a better guess: the app opens its
+ * gap where it has decided to insert, so the anchor row is pushed DOWN by one
+ * gap exactly when the insertion point is immediately above it, and the row
+ * before the anchor is NOT pushed. Both together say "the app will drop it
+ * where we asked". For a to-last move the test is the mirror image: the last
+ * real row is NOT pushed, i.e. the gap is below everything. The button comes up
+ * without the pointer moving again after that read.
+ */
+var A0 = null, CT = [], CH = [], CA = null, FITTED = false;
+function belowSrc(y){ return y > SRC.y + 0.5 }
+function collapsedY(y){ return belowSrc(y) ? y - SPAN : y }
+/*
+ * THE COLLAPSED MODEL, built once from the pre-grab geometry: every row's top
+ * (and height) as it will sit once the source's group has left the table —
+ * which is the layout the app hit-tests the pointer against. The source's own
+ * rows are excluded: they are the rows that leave.
+ */
+function buildCollapsed(span){
+  var i, g, ys = [];
+  CT = []; CH = []; SPAN = span;
+  for (i = 0; i < ST0.geo.length; i++){
+    g = ST0.geo[i]; if (!g) continue;
+    if (g.y >= SRC.y - 0.5 && g.y < SRC.y + span - 0.5) continue;
+    ys.push({ y: collapsedY(g.y), h: g.h });
+  }
+  ys.sort(function(a, b){ return a.y - b.y });
+  for (i = 0; i < ys.length; i++){ CT.push(ys[i].y); CH.push(ys[i].h) }
+  CA = (A0 === null) ? null : collapsedY(A0.y);
+}
+/*
+ * THE SPAN IS A HYPOTHESIS, and the live table is what confirms it.
+ *
+ * sourceGroupSpan() reads the distance to the NEXT area row, which is exactly
+ * the group for every area but the last one — and for the last one it has to
+ * infer the section's end from the table. Rather than trust either, the loop
+ * tries the computed span first and then a few neighbouring row/spacer
+ * multiples, and keeps the first that makes the live table read as "the
+ * collapsed list plus a placeholder". A wrong span cannot pass that test: it
+ * leaves the wrong number of rows and misaligns the tops.
+ */
+function fitModel(geo){
+  var base = SPAN, ent = 24, sp = 16, i, g;
+  var mh = modalH(ST0.geo); if (mh !== null && mh > 0) ent = mh;
+  var shortest = null;
+  for (i = 0; i < ST0.geo.length; i++){ g = ST0.geo[i];
+    if (g && g.h < ent - 1 && (shortest === null || g.h < shortest)) shortest = g.h }
+  if (shortest !== null) sp = shortest;
+  var cands = [base, base + sp, base - sp, base + ent, base - ent,
+               base + ent + sp, base - ent - sp, base + 2 * ent, base - 2 * ent,
+               base + 3 * ent, base + 2 * ent + sp, base + 3 * ent + sp];
+  for (i = 0; i < cands.length; i++){
+    if (cands[i] <= 0) continue;
+    buildCollapsed(cands[i]);
+    if (slotIndex(geo) >= 0) return true;
+  }
+  buildCollapsed(base);
+  return false;
+}
+/*
+ * WHICH SLOT THE APP HAS OPENED, from geometry alone.
+ *
+ * The live table IS the collapsed model with a PLACEHOLDER inserted at the
+ * app's current insertion point (everything after it pushed down by the
+ * placeholder's height). So the first live top that disagrees with the
+ * collapsed model is where the placeholder begins, and the collapsed row it
+ * displaced is the row the drop would land ABOVE. No element identity is
+ * involved, which matters because an AXUIElementRef taken before the grab reads
+ * a STALE frame after the app re-lays-out (measured: a build of this loop
+ * watched the last row sit motionless at its pre-drag y through four iterations
+ * while the row COUNT showed the lift had plainly happened).
+ *
+ * The placeholder is not one row and not a distinct height: measured on 3.23 it
+ * is TWO ordinary 24 pt rows totalling 48 pt (65 rows -> 62 with a five-row
+ * group lifted; 39 -> 36 with a five-row group lifted). So the count is a
+ * PARAMETER read from the live table, never a constant — and a live table that
+ * is not the collapsed model plus between one and four rows returns -1, a shape
+ * this reading cannot account for and therefore must not guess at.
+ */
+var MAX_PLACEHOLDER_ROWS = 4, DBG = '', SHIFT = 0;
+function slotIndex(geo){
+  var live = [], i;
+  for (i = 0; i < geo.length; i++){ if (geo[i]) live.push(geo[i].y) }
+  live.sort(function(a, b){ return a - b });
+  var extra = live.length - CT.length;
+  DBG = 'n=' + live.length + '/' + CT.length;
+  if (extra < 1 || extra > MAX_PLACEHOLDER_ROWS || CT.length === 0) return -1;
+  /*
+   * A UNIFORM OFFSET FIRST. A sidebar scrolled to its bottom cannot stay there
+   * when the lift makes the content shorter, so the app reduces the scroll
+   * offset and EVERY row moves — measured at +64 pt on a bottom-pinned list
+   * whose lifted group was 112 pt against a 48 pt placeholder. The collapsed
+   * model is therefore matched up to a translation, read off the topmost row
+   * (which is above any insertion point an area reorder can ask for).
+   */
+  SHIFT = live[0] - CT[0];
+  for (i = 0; i < CT.length; i++){ if (Math.abs(live[i] - CT[i] - SHIFT) > 1.5){
+    DBG += ' shift=' + Math.round(SHIFT) + ' live[' + i + ']=' + Math.round(live[i])
+        + ' vs ' + Math.round(CT[i] + SHIFT);
+    return i } }
+  DBG += ' shift=' + Math.round(SHIFT);
+  return CT.length;
+}
+/*
+ * THE SLOT THE MOVE IS ASKING FOR, as an index into the collapsed model: the
+ * end of the list for to-last, or the anchor's own place for insert-above.
+ */
+function targetSlot(){
+  if (ANCHOR_EL === null) return CT.length;
+  if (CA === null) return -1;
+  for (var i = 0; i < CT.length; i++){ if (Math.abs(CT[i] - CA) < 1.5) return i }
+  return -1;
+}
+/* The first guess: an interior point of the target row in the collapsed frame. */
+function firstAim(){
+  if (ANCHOR_EL === null){
+    if (CT.length === 0) return null;
+    var last = CT.length - 1;
+    return CT[last] + SHIFT + CH[last] * 0.75;
+  }
+  if (CA === null || A0 === null) return null;
+  return CA + SHIFT + A0.h * 0.25;
+}
+
+var pane = null, sbWhy = '';
+(function(){
+  var w = mainWindow();
+  if (w === null){ sbWhy = 'no-window'; return }
+  var panes = listPanes(w, 8, [], null);
+  if (PANE >= 0 && PANE < panes.length){ pane = panes[PANE]; return }
+  var r = resolveSidebar(TITLES, DEPTH);
+  if (r.ok !== true){ sbWhy = r.why; return }
+  pane = { table: r.table, scroll: r.scroll };
+})();
+if (pane === null) { out({aborted:true, stop:'sidebar-unresolved',
+  why:'the sidebar did not resolve before the drag (' + sbWhy + ')'}) } else {
+var VP = pane.scroll === null ? null : frame(pane.scroll);
+var ST0 = liveState(pane.table);
+if (VP === null || ST0 === null) { out({aborted:true, stop:'sidebar-unresolved',
+  why:'the sidebar viewport or row list did not resolve before the drag'}) } else {
+/*
+ * The HELD band, not the visible band: Things auto-scrolls the list under a
+ * pointer held near either edge (AXDRAG1-c, ~5-9 pt), and this loop holds the
+ * button for several reads. A boundary the pointer cannot be parked at is one
+ * this gesture may not aim at.
+ */
+var bandTop = VP.y + ${BAND_PAD}, bandBot = VP.y + VP.h - ${BAND_PAD};
+/*
+ * PANE CONFIRMATION, geometry-only: the row this drag was planned against must
+ * still be one of THIS pane's rows, at the frame the census measured it at. A
+ * pane whose rows do not contain it is not the pane that was censused.
+ */
+var srcIdx = frameIndex(ST0.geo, SRC);
+if (srcIdx < 0) { out({aborted:true, stop:'source-row-moved',
+  why:'the sidebar rows no longer include the row this drag was planned against, so its frames are stale'}) } else {
+/* The anchor: addressed by the ordinal the map named, CONFIRMED by title. */
+var A_IDX = -1;
+if (A_TITLE !== null){
+  if (A_ORD >= 0 && A_ORD < ST0.els.length && segMatch(rowText(ST0.els[A_ORD], DEPTH), A_TITLE)){
+    ANCHOR_EL = ST0.els[A_ORD]; A_IDX = A_ORD;
+  } else if (A_UNIQUE) {
+    for (var q=0;q<ST0.els.length;q++){
+      if (q === srcIdx) continue;
+      if (segMatch(rowText(ST0.els[q], DEPTH), A_TITLE)){ ANCHOR_EL = ST0.els[q]; A_IDX = q; break }
+    }
+  }
+}
+if (A_TITLE !== null && ANCHOR_EL === null) { out({aborted:true, stop:'anchor-unresolved',
+  why:'the sidebar row for "' + A_TITLE + '" did not resolve before the drag'}) } else {
+/* The collapsed model, and the anchor's place in it. Both from the pre-grab
+ * geometry, before a single event is posted. */
+if (A_IDX >= 0) A0 = ST0.geo[A_IDX] || null;
+buildCollapsed(SPAN);
 var G0 = Date.now();
-var refusal = ptrGuard('drag the area row', [{x:sx,y:sy},{x:tx,y:ty}], { identity: function(chain){
+var refusal = ptrGuard('drag the area row', [{x:sx,y:sy},{x:sx,y:STATIC_Y}], { identity: function(chain){
   if (chain.length === 0) return 'the grab point resolves to no element inside Things, so the row frame this drag was planned against is stale';
   if (!ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)) return 'the sidebar row under the grab point is not the row this drag was planned against (the point sits in ' + ptrChainRoles(chain) + '), so the frames are stale';
   return null } });
 var G1 = Date.now() - G0;
-if (refusal !== null) { 'REFUSED ' + JSON.stringify({refused:true, why:refusal, ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
+if (refusal !== null) { out({refused:true, stop:'ptrgd1-refused', why:refusal,
+  ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
 postHID(mev(MOVED, sx, sy, 0)); sleep(30);
 postHID(mev(DOWN, sx, sy, 1)); sleep(120);
 postHID(mev(DRAG, sx, sy - 3, 1)); sleep(30);
-for (var i = 1; i <= steps; i++) { postHID(mev(DRAG, sx + (tx-sx)*i/steps, sy + (ty-sy)*i/steps, 1)); sleep(25) }
-postHID(mev(DRAG, tx, ty, 1)); sleep(400);
-var late = ptrGuard('drop the area row', [{x:tx,y:ty}], {});
-if (late !== null) { postEscape(); postHID(mev(UP, tx, ty, 1));
-  'ABORTED ' + JSON.stringify({aborted:true, why:late, ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
-postHID(mev(UP, tx, ty, 1));
-'DONE ptrgd1=' + PTR_OPS + 'ops/' + G1 + 'ms' }}`;
+var steps = 25, cur = sy, i2;
+for (i2 = 1; i2 <= steps; i2++){ cur = sy + (STATIC_Y - sy) * i2/steps; postHID(mev(DRAG, sx, cur, 1)); sleep(25) }
+cur = STATIC_Y; postHID(mev(DRAG, sx, cur, 1)); sleep(${LIVE_AIM_SETTLE_MS});
+/*
+ * THE CLOSED LOOP. Read the live boundary, walk the pointer to it, read again.
+ * The gap moves with the pointer, so the first read after an approach can name
+ * a boundary that the move itself invalidates — which is why the drop waits for
+ * two consecutive reads that AGREE with each other AND with where the pointer
+ * already is. Convergence is measured, not assumed: the iteration ledger rides
+ * the result either way.
+ */
+var aim = null, stop = 'iterations-exhausted', detail = '', k;
+var WANT_SLOT = targetSlot(), aimed = false;
+var scroll0 = scrollFraction(pane.scroll);
+if (WANT_SLOT < 0){ stop = 'anchor-unresolved'; detail = 'the anchor row is not in the collapsed model' }
+for (k = 0; WANT_SLOT >= 0 && k < MAX_ITER; k++){
+  /*
+   * A FRESH geometry pass every iteration. Geometry realizes nothing (VOPAT1
+   * §3), and it must be fresh: the frames are read out of a row list re-taken
+   * from the app, never out of references held since before the grab — a build
+   * of this loop that reused pre-grab element refs watched the last row sit
+   * motionless at its pre-drag y while the row count proved the lift had
+   * plainly happened.
+   */
+  var st = liveState(pane.table);
+  if (st === null){ stop = 'live-read-failed'; break }
+  var slot = slotIndex(st.geo);
+  if (slot < 0 && !FITTED){ FITTED = true; if (fitModel(st.geo)){ slot = slotIndex(st.geo);
+    WANT_SLOT = targetSlot() } }
+  var sc = scrollFraction(pane.scroll);
+  ITERS.push({k:k, at:Math.round(cur*10)/10, slot:slot, want:WANT_SLOT, dbg:DBG,
+              rows:st.geo.length, was:CT.length, scroll:sc});
+  /*
+   * The list must not be moving. If it is, the app is auto-scrolling under the
+   * held pointer (AXDRAG1-c) and every frame this loop reads is a moving
+   * target — refuse rather than chase it.
+   */
+  if (scroll0 !== null && sc !== null && Math.abs(sc - scroll0) > 0.002){
+    stop = 'auto-scrolling';
+    detail = 'the list scrolled under the held pointer (' + scroll0.toFixed(3) + ' to ' + sc.toFixed(3) + ')';
+    break }
+  /*
+   * THE APP HAS ANSWERED. Its landing slot is the one this move asked for, so
+   * the drop lands there — and the pointer does not move again between this
+   * read and the release, which is the whole reason to poll the app's own
+   * indicator rather than a point computed from a model of its hit test.
+   */
+  if (slot === WANT_SLOT){ aim = cur; stop = 'placed'; break }
+  /*
+   * STEER. The first move goes to the computed interior point, which is right
+   * nearly always; after that the loop simply walks half a row toward the slot
+   * it wants and asks again. This is what makes the drive independent of where
+   * exactly the app puts its slot boundaries — a model of that was wrong twice
+   * in this campaign, and the app renders the answer on every frame.
+   */
+  var next, guess = firstAim();
+  if (!aimed && guess !== null && Math.abs(cur - guess) > 1){ next = guess; aimed = true }
+  else if (slot < 0){ stop = 'unknown-layout';
+    detail = 'the sidebar mid-drag is not the pre-drag list plus a placeholder (' + DBG + ')';
+    break }
+  else {
+    var mh = modalH(st.geo);
+    var step = Math.max(6, (mh === null ? 24 : mh) / 2);
+    next = cur + (slot < WANT_SLOT ? step : -step);
+    aimed = true;
+  }
+  if (next < bandTop || next > bandBot){ stop = 'off-band';
+    detail = 'steering toward slot ' + WANT_SLOT + ' left the visible band at y=' + Math.round(next)
+             + ' (' + Math.round(bandTop) + '-' + Math.round(bandBot) + ')';
+    break }
+  cur = next;
+  postHID(mev(DRAG, sx, cur, 1));
+  sleep(${LIVE_AIM_SETTLE_MS});
+}
+if (aim === null) { postEscape(); postHID(mev(UP, sx, cur, 1));
+  if (detail === ''){ var trail = [];
+    for (var t2 = Math.max(0, ITERS.length - 4); t2 < ITERS.length; t2++){
+      trail.push('y=' + ITERS[t2].at + ' opened slot ' + ITERS[t2].slot + ', wanted '
+                 + ITERS[t2].want + ' of ' + ITERS[t2].was + '; ' + ITERS[t2].dbg) }
+    detail = 'the app never opened its landing slot where the drop was asked for (' + trail.join(', ') + ')' }
+  out({aborted:true, stop:stop, ptrgd1:{ops:PTR_OPS, ms:G1},
+    why:'the drop point could not be resolved from the live sidebar while the drag was held ('
+        + stop + ': ' + detail + ')'}) } else {
+postHID(mev(DRAG, sx, aim, 1)); sleep(400);
+var late = ptrGuard('drop the area row', [{x:sx,y:aim}], {});
+if (late !== null) { postEscape(); postHID(mev(UP, sx, aim, 1));
+  out({aborted:true, stop:'ptrgd1-late', why:late, ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
+postHID(mev(UP, sx, aim, 1));
+out({dropped:true, stop:stop, dropY:Math.round(aim*10)/10,
+  delta:Math.round((aim - STATIC_Y)*10)/10, ptrgd1:{ops:PTR_OPS, ms:G1}}) }}}}}}}`;
 }
 
 /**
@@ -878,15 +1273,25 @@ function scrollToCommand(
 function dragCommand(
   sx: number,
   sy: number,
-  tx: number,
-  ty: number,
+  staticY: number,
   source: SidebarRect,
+  areaTitles: readonly string[],
+  anchor: LiveDropAnchor | null,
+  paneIndex: number | null,
+  span: number,
 ): UiCommand {
   return {
     primitive: "sidebar-drag",
-    label: "drag the area row to the computed slot boundary",
+    label: "drag the area row to the live slot boundary",
     lang: "javascript",
-    script: jxaSidebarDragScript(sx, sy, tx, ty, source),
+    script: jxaSidebarLiveDragScript(sx, sy, staticY, source, areaTitles, anchor, paneIndex, span),
+    meta: {
+      staticY,
+      span,
+      anchor: anchor === null ? "end-of-list" : anchor.title,
+      anchorOrdinal: anchor?.ordinal ?? null,
+      paneIndex,
+    },
   };
 }
 
@@ -1450,9 +1855,28 @@ export function sourceGroupSpan(
   if (idx < 0) return pitch;
   const source = orderedAreaRows[idx];
   const next = orderedAreaRows[idx + 1];
-  if (source === undefined || next === undefined) return pitch;
+  if (source === undefined) return pitch;
+  if (next === undefined) return lastAreaGroupSpan(source.row, allRows) ?? pitch;
   const span = next.row.y - source.row.y;
   return span > 0 ? span : pitch;
+}
+
+/**
+ * The same span for the LAST area, whose section has no next-area row to end
+ * it: it runs to the bottom of the table. One pitch (the old fallback) is right
+ * only for an area with no visible projects, and the live-aim drag's collapsed
+ * model is built on this number — a span short by three project rows makes the
+ * mid-drag layout unaccountable and the drop refuses (measured, DRPLC1 §4).
+ */
+function lastAreaGroupSpan(source: SidebarRowInfo, allRows: SidebarRowInfo[]): number | null {
+  let bottom: number | null = null;
+  for (const row of allRows) {
+    const edge = row.y + row.h;
+    if (bottom === null || edge > bottom) bottom = edge;
+  }
+  if (bottom === null) return null;
+  const span = bottom - source.y;
+  return span > 0 ? span : null;
 }
 
 /**
@@ -1749,14 +2173,24 @@ const SIDEBAR_STEP_CEILING_MS = 240_000;
  * click settles, so a budget equal to one census was never going to hold it.
  *
  * Primitives whose cost is INDEPENDENT of sidebar size are absent on purpose and
- * keep the flat step timeout: `sidebar-drag` posts ~28 CGEvents and reads
- * nothing; `sidebar-visibility` clicks one View-menu item; `key` posts one key.
+ * keep the flat step timeout: `sidebar-visibility` clicks one View-menu item;
+ * `key` posts one key.
  */
 const CENSUS_EQUIVALENTS = {
   /** One census; the harvest IS the product. */
   "sidebar-snapshot": 1,
   /** One census to locate the sidebar, then one AX write (or a wheel burst). */
   "sidebar-scroll": 1,
+  /**
+   * The drag USED to read nothing — it aimed at a pre-computed number. Since
+   * DRPLC1 it re-resolves the drop boundary from live frames while the button is
+   * held, up to `LIVE_AIM_MAX_ITER` times, plus one pre-gesture row pass. Those
+   * reads are GEOMETRY (position+size per row, realizing nothing — ~2 ms for 174
+   * rows in the field, VOPAT1 §3), so they are a small fraction of a content
+   * census each; two census-equivalents covers the whole loop plus the ~2 s of
+   * gesture and settles with room for a slow host.
+   */
+  "sidebar-drag": 2,
   /**
    * Census + per-row title harvest + the picked row's chevron subtree + the
    * click's own ~640ms of settles. Three is the measured-cost estimate with the
@@ -3005,10 +3439,111 @@ function withCollapseOutcome(
   };
 }
 
+/**
+ * WHAT THE DROP AIMS AT, once the drag is already held (DRPLC1, #729).
+ *
+ * Every placement reduces to "insert above this area row" or "drop below the
+ * last table row" — the same reduction rung 2 has always made. The live read
+ * inside the drag script re-resolves THIS, mid-gesture, and the pre-drag static
+ * numbers below are only an estimate to travel toward.
+ */
+export interface LiveDropAnchor {
+  /** The area title the live read must confirm before it aims at the row. */
+  title: string;
+  /** Its row ordinal in the planning census, or -1 when no map named one. */
+  ordinal: number;
+  /** Is the title unique among the areas? A duplicate may not be title-hunted. */
+  unique: boolean;
+}
+
 interface PlannedDrop {
   source: SidebarRowInfo;
+  /**
+   * The static ESTIMATE — the pre-drag boundary corrected by the old collapse
+   * model. DRPLC1 measured that model wrong on 3.23/3.23.3 (a ~48 pt landing
+   * gap replaces the lifted group and MOVES WITH THE POINTER), so this is no
+   * longer what the drop aims at: it is what the pre-scroll centres, what the
+   * wall pre-flight measures, and what the pointer travels toward before the
+   * live re-resolution takes over.
+   */
   dropY: number;
+  /** The UNCORRECTED static boundary; the live boundary lies between the two. */
+  staticY: number;
+  /** What the live re-resolution aims at; null = below the last table row. */
+  live: LiveDropAnchor | null;
+  /**
+   * The source's group span — its row plus every row that travels with it. The
+   * live aim needs it because the app hit-tests against the layout the LIFT
+   * leaves behind (DRPLC1 §4), which is every frame below the source minus this.
+   */
+  span: number;
   anchor: string;
+}
+
+/**
+ * Which area row the drop must land ABOVE, as an index into the visual-ordered
+ * area rows — or null for "below the last row" (to-last, and to-after the last
+ * area). `undefined` = the placement's anchor did not resolve in this snapshot.
+ *
+ * This is `staticBoundaryY`'s own case analysis, factored out so the LIVE read
+ * and the static estimate can never disagree about which row is the anchor.
+ */
+export function liveAnchorIndex(
+  orderedAreaRows: { title: string; row: SidebarRowInfo }[],
+  sourceTitle: string,
+  placement: SidebarPlacement,
+  anchorRank = -1,
+): number | null | undefined {
+  const others = orderedAreaRows.filter((a) => a.title !== sourceTitle);
+  if (others.length === 0) return undefined;
+  const indexOf = (title: string): number =>
+    anchorRank >= 0
+      ? nthByTitle(orderedAreaRows, title, anchorRank)
+      : orderedAreaRows.findIndex((a) => a.title === title);
+  switch (placement.kind) {
+    case "first": {
+      const first = others[0] as { title: string };
+      return orderedAreaRows.findIndex((a) => a.title === first.title);
+    }
+    case "last":
+      return null;
+    case "before": {
+      const i = indexOf(placement.title);
+      return i >= 0 ? i : undefined;
+    }
+    case "after": {
+      const i = indexOf(placement.title);
+      if (i < 0) return undefined;
+      // The row after the anchor — skipping the SOURCE's own row, which is
+      // about to leave the list.
+      for (let j = i + 1; j < orderedAreaRows.length; j++) {
+        const cand = orderedAreaRows[j] as { title: string };
+        if (j === indexOf(sourceTitle) && cand.title === sourceTitle) continue;
+        return j;
+      }
+      return null;
+    }
+  }
+}
+
+/**
+ * The live anchor for an area row index: its title, the row ordinal the map
+ * knows it by (or -1), and whether the title is unique enough to hunt for.
+ */
+function liveAnchorAt(
+  orderedAreaRows: { title: string; row: SidebarRowInfo }[],
+  index: number,
+  map: SidebarAreaMap | null,
+): LiveDropAnchor | undefined {
+  const entry = orderedAreaRows[index];
+  if (entry === undefined) return undefined;
+  const unique = orderedAreaRows.filter((a) => a.title === entry.title).length === 1;
+  // The map's areas are in database order and the sidebar renders that order
+  // (AXDRAG3), so index N of one is index N of the other — but the ordinal is
+  // only used when the two AGREE about the title there, never on faith.
+  const mapped = map?.areas[index];
+  const ordinal = mapped !== undefined && mapped.title === entry.title ? mapped.ordinal : -1;
+  return { title: entry.title, ordinal, unique };
 }
 
 /** Resolve source row + corrected drop Y against ONE snapshot generation. */
@@ -3021,6 +3556,8 @@ function planDrop(
   // by the driver each hop: `sourceRank` = which same-titled row is the target,
   // `anchorRank` = which same-titled row is the before/after anchor; -1 = unique.
   ranks: { sourceRank: number; anchorRank: number } = { sourceRank: -1, anchorRank: -1 },
+  /** The row map, so the live re-resolution can address its anchor by ordinal. */
+  map: SidebarAreaMap | null = null,
 ): PlannedDrop | { error: string } {
   const source = resolveAreaRow(snap.rows, spec.targetTitle, ranks.sourceRank);
   if (source === null) {
@@ -3040,13 +3577,53 @@ function planDrop(
     ranks.anchorRank,
   );
   if ("error" in boundary) return boundary;
+  const index = liveAnchorIndex(ordered, spec.targetTitle, placement, ranks.anchorRank);
+  if (index === undefined) {
+    return { error: `the sidebar row for ${describeAnchor(boundary.anchor)} did not resolve` };
+  }
+  const live = index === null ? null : liveAnchorAt(ordered, index, map);
+  if (live === undefined) {
+    return { error: `the sidebar row for ${describeAnchor(boundary.anchor)} did not resolve` };
+  }
   const span = sourceGroupSpan(ordered, spec.targetTitle, snap.rows);
   const sourceCenter = source.y + source.h / 2;
   return {
     source,
     dropY: correctedDropY(boundary.y, sourceCenter, span),
+    staticY: boundary.y,
+    live,
+    span,
     anchor: boundary.anchor,
   };
+}
+
+/**
+ * The Y band a rung-1 gesture must have visible AT ONCE.
+ *
+ * Before DRPLC1 this was one number — the collapse model's corrected boundary.
+ * The model is wrong (the lifted group is replaced by a landing gap that TRACKS
+ * the pointer), so the live boundary lies somewhere between the corrected
+ * estimate and the uncorrected static one, and the pre-scroll has to bring the
+ * whole interval into view or the closed loop can be handed a boundary it is
+ * not allowed to aim at.
+ */
+function dropInterval(plan: PlannedDrop): { lo: number; hi: number } {
+  return {
+    lo: Math.min(plan.dropY, plan.staticY),
+    hi: Math.max(plan.dropY, plan.staticY),
+  };
+}
+
+/** Is every point the gesture may need to aim at inside the visible band? */
+function dropIntervalInBand(plan: PlannedDrop, viewport: SidebarRect): boolean {
+  const { lo, hi } = dropInterval(plan);
+  return inBand(lo, viewport) && inBand(hi, viewport);
+}
+
+/** The travel a gesture must cover, taking the WIDER of the two candidates. */
+function travelNeeded(plan: PlannedDrop, grabY: number): number {
+  const { lo, hi } = dropInterval(plan);
+  return Math.max(Math.abs(grabY - lo), Math.abs(grabY - hi));
 }
 
 /**
@@ -3065,8 +3642,43 @@ async function performDrag(
   const grab = grabPoint(drop.source);
   const since = await markNow(ctx);
   ctx.tally.gestures.drag += 1;
-  const res = await runCmd(ctx, dragCommand(grab.x, grab.y, grab.x, drop.dropY, drop.source));
-  if (res.ok && res.stdout.includes("DONE")) {
+  const res = await runCmd(
+    ctx,
+    dragCommand(
+      grab.x,
+      grab.y,
+      drop.dropY,
+      drop.source,
+      ctx.areaTitles,
+      drop.live,
+      ctx.map?.paneIndex ?? null,
+      drop.span,
+    ),
+  );
+  const outcome = parseLiveDragResult(res);
+  // WHERE THE GESTURE ACTUALLY AIMED, against where the static model said to
+  // (DRPLC1). This is the instrument the next field trace needs: the delta is
+  // the app's landing-gap displacement, and it is the number a re-run on the
+  // maintainer's own hardware can be read off directly.
+  trace(() => ({
+    phase: "sidebar-drop-target",
+    anchor: drop.live === null ? "end-of-list" : drop.live.title,
+    anchorOrdinal: drop.live?.ordinal ?? null,
+    staticY: Math.round(drop.staticY * 10) / 10,
+    correctedY: Math.round(drop.dropY * 10) / 10,
+    span: Math.round(drop.span * 10) / 10,
+    liveY: outcome.dropY ?? null,
+    // Live minus the corrected estimate: 0 would mean the old collapse model
+    // was right on this build; DRPLC1 measured ~+32 to +48 pt on 3.23/3.23.3.
+    liveVsStatic: outcome.dropY === undefined ? null : outcome.dropY - drop.dropY,
+    stop: outcome.stop ?? null,
+    iterations: outcome.iterations ?? null,
+    axCalls: outcome.axCalls ?? null,
+    realized: outcome.realized ?? null,
+  }));
+  if (outcome.axCalls !== undefined) ctx.tally.axCalls += outcome.axCalls;
+  if (outcome.realized !== undefined) ctx.tally.rowsRealized += outcome.realized;
+  if (outcome.dropped) {
     // What a reordering sidebar announces on DROP was never measured (VOPAT1
     // observed no drop), so this waits for the plausible candidates and costs
     // nothing when they do not come: the database assert that follows is the
@@ -3074,8 +3686,73 @@ async function performDrag(
     await settleSoft(ctx, SETTLE_DROP, since, 0);
     return { ok: true };
   }
-  const why = pointerGuardWhy(res);
-  return { ok: false, ...(why !== null && { why }) };
+  const why = outcome.why ?? pointerGuardWhy(res);
+  return { ok: false, ...(why !== null && why !== undefined && { why }) };
+}
+
+/** What the live-aim drag script reported, in one shape for every outcome. */
+interface LiveDragOutcome {
+  dropped: boolean;
+  /** The LIVE boundary the button came up on. */
+  dropY?: number;
+  /** Why the loop ended: `stable`, `off-band`, `anchor-unresolved`, … */
+  stop?: string;
+  /** The closed loop's own ledger (pointer vs boundary per iteration). */
+  iterations?: { k: number; at: number; boundary: number; rows: number }[];
+  axCalls?: number;
+  realized?: number;
+  why?: string;
+}
+
+export function parseLiveDragResult(res: UiRunResult): LiveDragOutcome {
+  if (!res.ok) {
+    const why = pointerGuardWhy(res) ?? scriptDeathWhy(res);
+    return { dropped: false, ...(why !== null && { why }) };
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(res.stdout.trim()) as Record<string, unknown>;
+  } catch {
+    // A script that neither dropped nor refused nor printed a verdict DIED, and
+    // the interpreter said why. Losing that leaves the field with "the drag
+    // gesture did not complete" and nothing else — which is exactly how a
+    // one-line typo in this script cost a whole certification sitting.
+    const why = scriptDeathWhy(res);
+    return { dropped: false, ...(why !== null && { why }) };
+  }
+  const num = (key: string): number | undefined =>
+    typeof parsed[key] === "number" ? (parsed[key] as number) : undefined;
+  const out: LiveDragOutcome = { dropped: parsed["dropped"] === true };
+  const dropY = num("dropY");
+  if (dropY !== undefined) out.dropY = dropY;
+  if (typeof parsed["stop"] === "string") out.stop = parsed["stop"];
+  if (Array.isArray(parsed["iterations"])) {
+    out.iterations = parsed["iterations"] as NonNullable<LiveDragOutcome["iterations"]>;
+  }
+  const axCalls = num("axCalls");
+  if (axCalls !== undefined) out.axCalls = axCalls;
+  const realized = num("realized");
+  if (realized !== undefined) out.realized = realized;
+  if (typeof parsed["why"] === "string" && parsed["why"] !== "") out.why = parsed["why"];
+  return out;
+}
+
+/** The first line of a stream, trimmed and capped — for a one-clause report. */
+function firstLine(text: string): string {
+  return (text.trim().split("\n")[0] ?? "").slice(0, 200).trim();
+}
+
+/**
+ * What the interpreter said when the drag script died outright — its first line
+ * of stderr, or the stray thing it printed instead of a verdict. Null when it
+ * said nothing at all.
+ */
+function scriptDeathWhy(res: UiRunResult): string | null {
+  const err = firstLine(res.stderr);
+  if (err !== "") return `the drag gesture did not complete (${err})`;
+  const out = firstLine(res.stdout);
+  if (out !== "") return `the drag gesture did not complete (it reported "${out}")`;
+  return null;
 }
 
 /**
@@ -3428,7 +4105,7 @@ async function runDragLadder(
     }
     // Recompute duplicate-title ranks from live state for THIS hop's planning.
     const ranks = ranksNow();
-    const finalPlan = planDrop(snap, spec, areaTitles, spec.placement, ranks);
+    const finalPlan = planDrop(snap, spec, areaTitles, spec.placement, ranks, ctx.map);
     if ("error" in finalPlan) {
       if (!resolveRetried) {
         resolveRetried = true;
@@ -3440,7 +4117,10 @@ async function runDragLadder(
     }
     resolveRetried = false;
     const grab = grabPoint(finalPlan.source);
-    const spanNeeded = Math.abs(grab.y - finalPlan.dropY);
+    // The WIDER of the two candidates (DRPLC1): the live boundary lies
+    // between the corrected estimate and the uncorrected static one, and the
+    // gesture must be able to reach whichever the app hands it.
+    const spanNeeded = travelNeeded(finalPlan, grab.y);
 
     // PRE-FLIGHT (#658, AXDRAG5): every shipped rung needs the grab point and
     // the drop boundary inside the viewport AT ONCE, so a sidebar SECTION taller
@@ -3483,25 +4163,26 @@ async function runDragLadder(
     // into simultaneous view) → one certified drag.
     if (spanNeeded < usableDragSpan(viewport)) {
       let ready: SidebarSnapshot | null = snap;
-      if (!inBand(grab.y, viewport) || !inBand(finalPlan.dropY, viewport)) {
+      if (!inBand(grab.y, viewport) || !dropIntervalInBand(finalPlan, viewport)) {
         // pre-scroll must land before the drag
         ready = (
           await scrollUntil(ctx, (s) => {
-            const p = planDrop(s, spec, areaTitles, spec.placement, ranks);
+            const p = planDrop(s, spec, areaTitles, spec.placement, ranks, ctx.map);
             if ("error" in p || s.viewport === null) return null;
             const g = grabPoint(p.source);
-            if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
-            const mid = (g.y + p.dropY) / 2;
+            if (inBand(g.y, s.viewport) && dropIntervalInBand(p, s.viewport)) return null;
+            const { lo, hi } = dropInterval(p);
+            const mid = (Math.min(g.y, lo) + Math.max(g.y, hi)) / 2;
             const bandMid = s.viewport.y + s.viewport.h / 2;
             return bandMid - mid;
           })
         ).snapshot;
       }
       if (ready !== null) {
-        const plan = planDrop(ready, spec, areaTitles, spec.placement, ranks);
+        const plan = planDrop(ready, spec, areaTitles, spec.placement, ranks, ctx.map);
         if (!("error" in plan) && ready.viewport !== null) {
           const g = grabPoint(plan.source);
-          if (inBand(g.y, ready.viewport) && inBand(plan.dropY, ready.viewport)) {
+          if (inBand(g.y, ready.viewport) && dropIntervalInBand(plan, ready.viewport)) {
             // the gesture must land before the DB assert
             const landed = await performDrag(ctx, plan);
             if (!landed.ok) {
@@ -3605,7 +4286,7 @@ async function runDragLadder(
         );
         if (src !== null && anchor !== undefined) {
           const g = grabPoint(src);
-          const plan2 = planDrop(grabbable, spec, areaTitles, spec.placement, ranks);
+          const plan2 = planDrop(grabbable, spec, areaTitles, spec.placement, ranks, ctx.map);
           const travel = "error" in plan2 ? viewport.h * 4 : Math.abs(plan2.dropY - g.y);
           // TRAVEL CAP (AXDRAG2-c): held-scroll is proven up to ~1.5 viewport
           // heights; beyond that the app's AX mirror can lose row names for
@@ -3717,8 +4398,14 @@ async function runDragLadder(
     const sourceCenter = source.row.y + source.row.h / 2;
     // Candidate anchors: area rows toward the target whose corrected boundary
     // stays inside the visible band; take the furthest for maximum progress.
-    let hopAnchor: { title: string; uuid: string; dropY: number; visualDelta: number } | null =
-      null;
+    let hopAnchor: {
+      title: string;
+      uuid: string;
+      dropY: number;
+      staticY: number;
+      live: LiveDropAnchor;
+      visualDelta: number;
+    } | null = null;
     for (let i = 0; i < ordered.length; i++) {
       if (i === srcIdx) continue;
       const cand = ordered[i] as { title: string; row: SidebarRowInfo };
@@ -3728,11 +4415,16 @@ async function runDragLadder(
       // Dropping ABOVE the anchor: downward needs ≥2 rows of travel to be a
       // real move; upward ≥1.
       if (down && visualDelta < 2) continue;
-      const dropY = correctedDropY(boundaryAboveRow(parkedSnap.rows, cand.row), sourceCenter, span);
-      if (!inBand(dropY, parkedSnap.viewport)) continue;
+      const staticY = boundaryAboveRow(parkedSnap.rows, cand.row);
+      const dropY = correctedDropY(staticY, sourceCenter, span);
+      // A HOP is closed-loop too (DRPLC1): both candidate boundaries have to
+      // fit the band, because the live one lies between them.
+      if (!inBand(dropY, parkedSnap.viewport) || !inBand(staticY, parkedSnap.viewport)) continue;
+      const live = liveAnchorAt(ordered, i, ctx.map);
+      if (live === undefined) continue;
       const uuid = pre.areas.find((a) => a.title === cand.title)?.uuid ?? "";
       if (hopAnchor === null || visualDelta > hopAnchor.visualDelta) {
-        hopAnchor = { title: cand.title, uuid, dropY, visualDelta };
+        hopAnchor = { title: cand.title, uuid, dropY, staticY, live, visualDelta };
       }
     }
     if (hopAnchor === null) {
@@ -3740,7 +4432,7 @@ async function runDragLadder(
       // destination begins a section taller than the visible list, which no
       // window size fixes. Only fall back to the generic sentence when the
       // geometry does NOT show such a section.
-      const planNow = planDrop(parkedSnap, spec, areaTitles, spec.placement, ranks);
+      const planNow = planDrop(parkedSnap, spec, areaTitles, spec.placement, ranks, ctx.map);
       const wallsHere =
         "error" in planNow
           ? []
@@ -3788,6 +4480,9 @@ async function runDragLadder(
     const landed = await performDrag(ctx, {
       source: source.row,
       dropY: hopAnchor.dropY,
+      staticY: hopAnchor.staticY,
+      live: hopAnchor.live,
+      span,
       anchor: hopAnchor.title,
     });
     if (!landed.ok) {
@@ -3988,18 +4683,18 @@ async function refuseOrRecover(
   // A bounded, single-pass recovery: same rung-1 mechanics, no hop budget.
   const snap = (
     await scrollUntil(ctx, (s) => {
-      const p = planDrop(s, restoreSpec, areaTitles, placement, restoreRanks());
+      const p = planDrop(s, restoreSpec, areaTitles, placement, restoreRanks(), ctx.map);
       if ("error" in p || s.viewport === null) return null;
       const g = grabPoint(p.source);
-      if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
+      if (inBand(g.y, s.viewport) && dropIntervalInBand(p, s.viewport)) return null;
       return s.viewport.y + s.viewport.h / 2 - (g.y + p.dropY) / 2;
     })
   ).snapshot;
   if (snap !== null && snap.viewport !== null) {
-    const plan = planDrop(snap, restoreSpec, areaTitles, placement, restoreRanks());
+    const plan = planDrop(snap, restoreSpec, areaTitles, placement, restoreRanks(), ctx.map);
     if (!("error" in plan)) {
       const g = grabPoint(plan.source);
-      if (inBand(g.y, snap.viewport) && inBand(plan.dropY, snap.viewport)) {
+      if (inBand(g.y, snap.viewport) && dropIntervalInBand(plan, snap.viewport)) {
         const landed = await performDrag(ctx, plan);
         if (landed.ok) {
           const state = await pollState(ctx, (s) => positionOf(s, displaced) === preIdx);

@@ -1501,6 +1501,23 @@ One more wrinkle for anyone reading the field programmatically: **the clamp is a
 
 Evidence: [lab/defaults2-minimal-recipe.md](lab/defaults2-minimal-recipe.md) §2.
 
+## 33. Things 3.23/3.23.3: the sidebar's drag placeholder is in the Accessibility tree but carries nothing that says what it is — two anonymous rows an assistive client can only find by arithmetic (DRPLC1, 2026-09-04, golden-v4 / Things 3.23 build 32300036, and 3.23.3 build 32303001)
+
+This one is a *near miss* rather than a defect, and it is filed here only because the last inch is missing. The generous half is recorded in the [craft log](things-app-craft.md) §11: while a sidebar row is held, Things takes the whole group out of the list and renders a **48 pt landing gap** at the insertion point, moving it as the pointer moves — and it does that IN THE ACCESSIBILITY TREE, so a client reading `AXRows` mid-gesture sees the same arrangement a sighted user sees. Most apps draw a drop indicator straight into a custom view, where no assistive client can reach it. Things did the hard part.
+
+**What is missing is the label.** The placeholder is two ordinary rows of the sidebar's normal 24 pt entity height, with nothing to distinguish them:
+
+```
+row heights before the lift:  {24 pt: 50, 16 pt: 15}
+row heights during the lift:  {24 pt: 48, 16 pt: 14}     <- the same two classes
+```
+
+No `AXSubrole`, no `AXDescription`, no distinct height, no static text. So a client that wants to answer "where will this drop land?" — which is exactly what the accessible rendering makes possible in principle — cannot simply *read* the answer. It has to reconstruct the layout the list would have without the dragged group, match the live rows against it (up to the scroll translation the app applies when the shortened content unpins from the bottom), and infer the placeholder from where the two disagree. That works, and it is what [DRPLC1](lab/drplc1-drop-slot.md) §5 ships, but it is a diff where a read would do, and it is fragile in the way any reconstruction is: it needs the group's exact extent, and it fails closed rather than wrong when a build changes the arrangement.
+
+**The ask is one attribute.** An `AXSubrole` (or an `AXDescription`) on the placeholder rows — anything that says "this is the drop target" — would turn the reconstruction into a lookup, and would let VoiceOver announce the destination during a drag, which today it cannot. Everything needed for that is already exposed; only the name is absent.
+
+Both measured builds behave identically, so this is not a regression — it is the state of a feature that is one attribute short of complete. Evidence: [lab/drplc1-drop-slot.md](lab/drplc1-drop-slot.md) §1 (height histograms and the 48 pt gap on both builds), §3 (the collapsed-frame hit test), §4 (what the reconstruction has to get right).
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

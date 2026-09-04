@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fixed — moving an area to the bottom of the sidebar could put it second-to-last instead, and then report that it had failed.** The command worked out where to let go of the area before it picked it up, using an arithmetic model of what the list looks like mid-drag: Things closes the gap where the dragged area used to be, so everything below it moves up by the height of what you lifted.
+
+  That is not what Things does. It takes the area and its projects out of the list and leaves a landing gap in their place — a gap that follows the pointer as you move — so rows below the insertion point sit lower than the model expected, by about the height of two rows. Every placement except "to the bottom" aims between two rows, where being off by a little does not change the answer. "To the bottom" was the one that aimed just past the end of the list, where it does. On the reporting Mac it landed one slot short, twice, and the command exited reporting the mismatch it had verified for itself.
+
+  The command no longer computes a point and hopes. It picks the area up, reads the list back while holding it, works out from the row positions where Things is currently offering to drop it, and adjusts until that is the slot you asked for — then lets go without moving again. If it cannot tell where the drop would land, it presses Escape while still holding the button, which Things treats as a cancelled drag and which leaves the sidebar exactly as it was, and reports what it saw. Refs #729, #676.
+
+- **Improved — a GUI-driven sidebar move that fails now says what it measured.** "The drag gesture did not complete" was every failure's report, including the ones where the script itself had died and macOS had said why. A refusal now carries the numbers behind it: where the drop point ended up relative to the visible list, whether the list scrolled out from under the pointer, the last few positions it tried and what Things offered at each, or — when the script did not run at all — the first line of the interpreter's own error. `THINGS_API_TRACE=1` additionally records, for every drag, the point the old arithmetic would have aimed at, the point the live reading chose, and the difference between them. Refs #729.
+
 ## 0.20.10 — 2026-09-04
 
 - **Changed — reordering an area in the sidebar reads the sidebar the way a screen reader would, instead of the way a web crawler does.** Every time the command needed to know where the areas were — before each scroll, after each fold, before each hop — it read the CONTENT of every row in the sidebar. On a large sidebar that is around 900 requests to Things and 16–18 seconds, each time, because the expensive part is not asking but making the app draw a row it was not drawing. A single move to the end of a 174-row sidebar took over seven minutes on real hardware, and the gestures were about five seconds of it.

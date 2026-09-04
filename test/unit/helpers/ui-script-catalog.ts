@@ -39,7 +39,7 @@ import {
 } from "../../../src/write/vectors/ui.ts";
 import {
   jxaSidebarChevronClickScript,
-  jxaSidebarDragScript,
+  jxaSidebarLiveDragScript,
   jxaSidebarHeldScrollDragScript,
   jxaSidebarScrollScript,
   jxaSidebarScrollToScript,
@@ -283,8 +283,21 @@ export function everyUiScript(
   const SIDEBAR_ROW = { x: 12, y: 208, w: 240, h: 24 };
   for (const gesture of [
     {
-      label: "driver · sidebar-drag",
-      script: jxaSidebarDragScript(180, 220, 180, 420, SIDEBAR_ROW),
+      label: "driver · sidebar-drag (live-aim, insert above)",
+      script: jxaSidebarLiveDragScript(
+        180,
+        220,
+        420,
+        SIDEBAR_ROW,
+        SIDEBAR_TITLES,
+        { title: "Reading", ordinal: 17, unique: true },
+        1,
+        40,
+      ),
+    },
+    {
+      label: "driver · sidebar-drag (live-aim, to last)",
+      script: jxaSidebarLiveDragScript(180, 220, 420, SIDEBAR_ROW, SIDEBAR_TITLES, null, null, 40),
     },
     {
       label: "driver · sidebar-held-drag",
