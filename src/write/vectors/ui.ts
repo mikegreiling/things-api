@@ -56,6 +56,7 @@ import {
   stopObserver,
 } from "./ui-observer.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
+import { POINTER_GUARD_STANDALONE } from "./ui-pointer-guard.ts";
 import {
   type CadenceExpectation,
   cadenceExpectationFor,
@@ -3395,16 +3396,29 @@ end tell`;
  * first. Event types are the stable CGEventType values (5 = mouse-moved,
  * 1 = left-down, 2 = left-up).
  */
-export function jxaClickScript(x: number, y: number): string {
+export function jxaClickScript(x: number, y: number, what = "click the control"): string {
   const xi = Math.round(x);
   const yi = Math.round(y);
-  return `ObjC.import('Foundation');
-ObjC.import('CoreGraphics');
-function sleep(ms){ $.NSThread.sleepForTimeInterval(ms/1000); }
-function mev(t){ return $.CGEventCreateMouseEvent($(), t, $.CGPointMake(${xi}, ${yi}), 0); }
+  return `${POINTER_GUARD_STANDALONE}
+var CX=${xi}, CY=${yi};
+/*
+ * PTRGD1. The frame this click aims at was resolved in a PREVIOUS osascript
+ * hop, and a click at a stale coordinate is a click in whatever has since
+ * arrived over it. Containment accepts any Things window or sheet, because the
+ * Repeat dialog is presented as a DETACHED editor window whenever Things is not
+ * frontmost (MODALX1/#629); the identity leg then requires the point to land
+ * inside that dialog surface rather than merely inside the app's screen area.
+ */
+var refusal = ptrGuard(${JSON.stringify(what)}, [{x:CX,y:CY}], { anyWindow: true, identity: function(chain){
+  if (chain.length === 0) return 'the control\\'s position resolves to no element inside Things, so its frame is stale';
+  if (!ptrChainHasRole(chain, ['AXSheet','AXWindow'])) return 'the element at the control\\'s position belongs to no Things window or dialog (the point sits in ' + ptrChainRoles(chain) + '), so its frame is stale';
+  return null } });
+if (refusal !== null) { throw new Error(refusal) }
+function mev(t){ return $.CGEventCreateMouseEvent($(), t, $.CGPointMake(CX, CY), 0); }
 $.CGEventPost($.kCGHIDEventTap, mev(5)); sleep(20);
 $.CGEventPost($.kCGHIDEventTap, mev(1)); sleep(15);
-$.CGEventPost($.kCGHIDEventTap, mev(2));`;
+$.CGEventPost($.kCGHIDEventTap, mev(2));
+'DONE ptrgd1=' + PTR_OPS + 'ops'`;
 }
 
 /** The command that posts an AX-resolved mouse click (one stable JXA shape). */
@@ -3414,7 +3428,14 @@ $.CGEventPost($.kCGHIDEventTap, mev(2));`;
  * — a second construction site is a second place for the event sequence to drift.
  */
 export function uiClickPointCommand(x: number, y: number, label: string): UiCommand {
-  return { primitive: "click-point", label, lang: "javascript", script: jxaClickScript(x, y) };
+  // The label completes the guard's own sentence ("refused to <label>: …"), so
+  // a refusal names the control the caller asked for, not a generic "click".
+  return {
+    primitive: "click-point",
+    label,
+    lang: "javascript",
+    script: jxaClickScript(x, y, label),
+  };
 }
 
 /**
@@ -4261,12 +4282,17 @@ async function driveClickElement(
   }
   const clickRes = await run(uiClickPointCommand(center.x, center.y, step.label), STEP_TIMEOUT_MS);
   if (!clickRes.ok) {
+    // A pre-gesture guard refusal (PTRGD1) arrives here as a script error, and
+    // its sentence is the whole diagnosis — surface it, unwrapped, rather than
+    // osascript's `execution error: … (-2700)` chrome. Nothing was posted, so
+    // there is nothing to abort.
+    const named = scriptErrorText(clickRes.stderr);
     return {
       ok: false,
       why:
         clickRes.timedOut === true
           ? "the click timed out"
-          : clickRes.stderr.trim() || "the click failed",
+          : (named ?? clickRes.stderr.trim()) || "the click failed",
       needsAbort: true,
     };
   }

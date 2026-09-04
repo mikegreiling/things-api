@@ -40,6 +40,15 @@ Follow the setup.md hardening / TCC ladder ([setup.md](../setup.md) "Hardening a
 
 Keep the session **unlocked** for the whole sitting (LOCK1): a locked session presents only the lock screen.
 
+### Screen preconditions for the POINTER-driven ops (PTRGD1)
+
+Every synthesized click, drag and scroll now asserts, in the same script that posts it, that Things is frontmost, that the point lies inside Things' own window, that no other application's window covers that point, and that the element under the pointer is still the row or control the step aimed at ([design/decisions.md](../design/decisions.md), 2026-09-03; [ptrgd1-pointer-guards.md](ptrgd1-pointer-guards.md)). A sitting that ignores this will read the guard's refusals as recipe failures. So, for the whole sitting:
+
+- Leave Things **frontmost** and its window **unobscured** — no floating palette, no always-on-top utility, no picture-in-picture window over the Things window, and nothing over the sidebar in particular.
+- Do not scroll the sidebar or resize the window while an `area reorder` is running: a scroll between the census and the gesture is exactly the stale-frame case the identity check refuses.
+- Expect a **refusal, never a mis-click**, if any of that is violated. The refusal names the application that owns the screen at the point and the coordinates; re-run with the window moved.
+- The **Dock is exempt by design and by measurement** — it owns one full-screen mouse-transparent window on every Mac — so a Dock at the bottom of the screen is not a reason for a reorder to refuse. If a refusal names "Dock", the pointer really was over the Dock's own strip.
+
 ## 2. Accessibility Inspector discovery pass
 
 Before driving anything, walk each recipe's element paths in **Accessibility Inspector** (Xcode ▸ Open Developer Tool ▸ Accessibility Inspector) with Things frontmost and a subject selected. For each step in the [recipe addressing table](../design/ui-vector.md#recipe-addressing-table-intended--pending-certification):
