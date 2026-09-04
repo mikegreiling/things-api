@@ -89,7 +89,7 @@ For scale: the census that same chevron step opens with costs 786 ms and scans 1
 
 ## 4. The cells
 
-All verdicts below are from the certification pass; the driver is idempotent and was run four times over the campaign (the first three convicted the design decisions recorded in §2 and §5).
+Verdicts below are from the certification passes; the driver is idempotent and was run five times over the campaign — the earlier passes convicted the design decisions recorded in §2 and §5, and the last two agree cell for cell. **A, B, B2, B3, C, D and E1 are certified. E2 and F are NOT** — §4 says exactly why for each, and §7 carries them forward.
 
 ### A — baseline: the guarded reorder still works
 
@@ -174,25 +174,35 @@ Guard cost on this path: 36 reads / 27–30 ms (the identity leg walks the chain
 
 Every leg 1–3 passes here (Things frontmost, point inside, unoccluded, hit test says Things). Only the identity leg refuses, which is exactly the class it was added for.
 
-### E — the drop-time re-check
+### E — the drop-time re-check (PARTLY certified; the live firing is this campaign's one open cell)
 
-The occluder covers the sidebar band from just below the grab row to the bottom of the viewport; the grab row itself is left clear. (An earlier pass covered only a spot at the *planned* drop point and the held drag, which re-resolves its boundary live, dropped somewhere else — a cell design error, not a guard failure, recorded here so it is not repeated.)
+The occluder covers the sidebar band from just below the grab row to the bottom of the viewport, plus a second panel above it, leaving a narrow clear band on the grab row itself.
 
 - **legs at the GRAB point:** every leg passes, `sentence_drag: null`.
-- **legs at the DROP point:** the scan names the occluder, refusal sentence produced.
-- **E1 — the plain drag** pre-checks BOTH endpoints, so it never presses: `REFUSED {…}`; order and digest unchanged.
-- **E2 — the held drag** pre-checks the GRAB only, and computes its drop point mid-gesture: this is the drop-time re-check firing on a LIVE gesture — `{"aborted":true,"why":"refused to drop the area row: …"}`, Escape posted while held, order and digest unchanged.
-- cover removed, the same held drag lands.
+- **legs at the DROP point:** `L3_topBanded: osascript`, and the sentence
+  > `refused to drag the area row: "osascript" owns the screen at (208, 521), not Things — a pointer gesture goes to whatever is under it, so nothing was posted`
+- **E1 — the plain drag pre-checks BOTH endpoints, so it never presses.** `REFUSED {"refused":true,"why":"refused to drag the area row: \"osascript\" owns the screen at (208, 521), …","ptrgd1":{"ops":13,"ms":22}}`. **Order unchanged, assignment digest unchanged.** CERTIFIED.
+- **E2 — the held drag's DROP-TIME re-check did NOT fire, and the cell is why, not the guard.** The held drag re-resolves its drop boundary LIVE, and across three attempts it chose a point the cover did not reach: first a spot cover at the *planned* drop y (it landed 150 pt away), then a below-the-grab band (it chose a point 20 pt ABOVE the grab), then a second panel above as well — where it landed on `dropY: 371` against a panel spanning `y 259…371`, i.e. exactly the half-open bottom edge the containment test excludes. Each time it reported `{"dropped":true,"ticks":0,"dropY":371}` with the **order and the assignment digest unchanged** (the drop was into the row's own slot), so nothing incorrect happened — the guard simply had nothing to refuse.
 
-### F — the Repeat dialog's `click-point`
+  **The re-check is code-locked, not lab-fired.** `test/unit/pointer-gesture-guard.test.ts` requires `ptrGuard('drop the area row'`, `postEscape()` and `aborted:true` in BOTH drag scripts, and E1 fires the identical `ptrGuard` call on the identical `points` shape at the identical drop coordinate — what is unproven in-lab is the timing (the guard running mid-gesture with the button held), not the verdict. Steering a live held drag onto a chosen pixel is what the cell would need, and that is a rig problem: see §7.
 
-The dialog is opened the way the recipe reveals it (`things:///show?id=` then `Items ▸ Repeat…`, the menu item found by INDEX from the live menu — its title ends in a real U+2026 and the literal does not survive the ssh quoting round-trip) and left standing, so nothing races a live drive.
+### F — the Repeat dialog's `click-point` (NOT certified in-lab)
 
-With nothing over the Cancel button, the legs pass. With the panel over it, `jxaClickScript` refuses, **the dialog is left standing**, and nothing is typed or clicked into the panel. Cover removed, the same `click-point` lands on Cancel and the sheet closes; the subject is still non-repeating. A dialog reopened and left standing is then cleared by the normal rung (`things rescue dismiss --dangerously-dismiss-dialog`).
+Two arms, and the honest result is that neither closes:
 
-**F2, and a finding worth recording.** Driving `todo make-repeating --frequency daily --interval 1 --dangerously-drive-gui` through the normal CLI with a panel over the WHOLE Things window **succeeds** (`ok:true`, tier 3, ~3.4 s). That is correct, not a gap: a to-do Repeat drive addresses every dialog control by ELEMENT — `AXPress` and `set-value` through System Events — and element-addressed automation is unaffected by what is drawn on top of it (and is HARDEN1's `element-addressed hops pass straight through` by design). The recipe's only pointer hops are the Cancel rung's fallback (F1, guarded) and the PROJECT verbs' repeat-bar popover (`click-element`, which compiles to the same guarded `click-point`). Anyone auditing this vector should know that covering the window is not a way to test it.
+**F1 — the dialog would not open.** The plan was to open the Repeat dialog through the recipe's own reveal and leave it standing (`things:///show?id=` then `Items ▸ Repeat…`, the menu item found by INDEX from the live menu — its title ends in a real U+2026 and the literal does not survive the ssh quoting round-trip), then cover its Cancel button and run the shipped `jxaClickScript`. The menu resolves and the item reports itself ENABLED:
 
----
+```
+Items menu: …, Shortcuts, missing value, Repeat…, Get Info, Convert to Project…, …
+Repeat… is item 11; enabled=true
+sheets on window 1: 0
+```
+
+but pressing it from a bare script — with the reveal done, Things activated, and up to 16 s of polling for the sheet — does not open the dialog. This is ADR1's silent-no-op shape (#480) in a new place: enabled-and-pressed is not the same as selected-and-pressed, and the recipe's own preamble does more than a reveal. **The cell was not weakened to make it pass**, and no verdict is claimed for it.
+
+What IS proven about this exact code path: `jxaClickScript` carries the same `ptrGuard` invocation that B3 and E1 fire, with an additional identity leg (the chain must reach an `AXSheet` or `AXWindow`); the render test requires the guard's verdict before the first `CGEventPost`; and the leg probe's `sentence_click` is produced by the same `ptrGuard(…, { anyWindow: true })` call the script makes, and refused correctly in every covered cell above.
+
+**F2 — an auditor's trap worth recording.** Driving `todo make-repeating --frequency daily --interval 1 --dangerously-drive-gui` through the normal CLI with a floating panel over the WHOLE Things window **succeeds** (`ok:true`, tier 3, 3.2 s). That is correct, not a gap: a to-do Repeat drive addresses every dialog control by ELEMENT — `AXPress` and `set-value` — and element-addressed automation is unaffected by what is drawn on top of it (which is also why HARDEN1 lets element-addressed hops through without a census). The recipe's only pointer hops are the Cancel rung's fallback and the PROJECT verbs' repeat-bar popover (`click-element`, which compiles to the same guarded `click-point`). Covering the window is not a way to test this vector.
 
 ## 5. What this campaign changed in the design, and why
 
@@ -219,6 +229,8 @@ The keyboard tap is deliberately out of scope: `CGEventPostToPid` (`ui-chord.ts`
 
 ## 7. What remains
 
+- **E2 — firing the drop-time re-check on a LIVE held drag.** Code-locked and unproven in-lab (§4 E). What the cell needs is a way to steer where a held drag decides to drop, or a cover that arrives DURING the gesture rather than before it; the second is the field shape and is a timing rig, not a fixture. Worth one cell on the framebuffer/HID rig, where a cover can be raised by hand mid-drag.
+- **F1 — opening the Repeat dialog from a bare script and leaving it standing.** `Items ▸ Repeat…` reports `enabled=true` after a reveal and pressing it opens nothing (§4 F) — ADR1's silent-no-op shape. Whatever the recipe's preamble does beyond the reveal is what a probe needs to replicate; until then the dialog-standing arm of the click-point guard is unmeasured.
 - **The refusal's error CLASS.** A guard refusal surfaces through the drag driver's existing failure path, which the standing AXDRAG5/SBRES1 item says maps pre-flight refusals onto `verify-failed:silent-noop` ("transport failed") rather than a `blocked`-family refusal. The SENTENCE is now right and rides all the way to the caller; the class is the open item already queued in [up-next.md](../up-next.md), and this change adds one more producer to it.
 - **A real-display arm.** Everything here is a headless clone. The release gate's real-display leg (`docs/reference/release-checklist.md`) is where the guard meets actual window-server compositing, a Dock that is visible rather than auto-hidden, and Stage Manager / multiple Spaces — none of which a `--no-graphics` guest reproduces.
 - **A deputy-ROUTED arm.** Certified here by DIRECT execution. The guard shells out nowhere and the broker-safety suite covers the catalog, but the routed arm of the gate is still the maintainer's-host smoke until helpers-in-the-guest exists ([up-next.md](../up-next.md)).

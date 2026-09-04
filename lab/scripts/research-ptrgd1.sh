@@ -487,6 +487,13 @@ occluder_open() { # <x> <y> <w> <h>
   P windows > "$OUT/ax/windows-occluded.json" 2>/dev/null
   OCCLUDER_LAYER="$layer"
 }
+# A SECOND panel, for a cell that must cover both sides of a clear band.
+occluder_add() { # <x> <y> <w> <h>
+  lab_ssh "$IP" "nohup /usr/bin/osascript -l JavaScript ~/labh/panel.jxa.js $1 $2 $3 $4 ${OCCLUDER_SECS:-240} >/dev/null 2>&1 & echo started" </dev/null >/dev/null 2>&1
+  sleep 3
+  activate_things
+  note "  second panel at ($1,$2 ${3}x${4})"
+}
 occluder_close() {
   lab_ssh "$IP" 'pkill -f panel.jxa.js' </dev/null >/dev/null 2>&1
   sleep 2
@@ -664,6 +671,12 @@ case "$E_PLAN" in
   # a spot cover can (and in an earlier pass did) miss where it decides to land.
   occluder_open "$(python3 -c "print(int($E_VPX) - 10)")" "$(python3 -c "print(int($E_COVER_TOP))")" \
                 "$(python3 -c "print(int($E_W) + 40)")" "$(python3 -c "print(int($E_VPBOT - $E_COVER_TOP) + 10)")"
+  # The held drag re-resolves its drop boundary LIVE and was MEASURED choosing a
+  # point 20 pt ABOVE the grab row, so covering only the band below leaves it a
+  # legal place to land. Cover above as well, leaving a narrow clear band on the
+  # grab row itself -- which is what the pre-check needs and all it needs.
+  occluder_add "$(python3 -c "print(int($E_VPX) - 10)")" "$(python3 -c "print(int($E_Y) - 120)")" \
+               "$(python3 -c "print(int($E_W) + 40)")" 112
   note "  legs at the GRAB point (must PASS):"
   P legs "$E_GX" "$E_GY" | sed 's/^/    /' | tee -a "$REPORT" > "$OUT/ax/legs-e-grab.json"
   note "  legs at the DROP point (must REFUSE):"
@@ -715,11 +728,19 @@ hits = [i + 1 for i, s in enumerate(items) if s.startswith('Repeat') and s != 'R
 print(hits[0] if hits else 0)
 ")"
 note "  Repeat… is item $F_IDX; enabled=$(OSA "tell application \"System Events\" to tell process \"Things3\" to return enabled of menu item $F_IDX of menu \"Items\" of menu bar 1" 2>&1)"
-if [ "${F_IDX:-0}" -gt 0 ] 2>/dev/null; then
+sheet_count() { OSA 'tell application "System Events" to tell process "Things3" to return (count of sheets of window 1)' 2>&1 | tail -1; }
+open_repeat_sheet() { # press the Repeat item, then WAIT for the sheet to arrive
+  local i
+  [ "${F_IDX:-0}" -gt 0 ] 2>/dev/null || return 1
   OSA "tell application \"System Events\" to tell process \"Things3\" to click menu item $F_IDX of menu \"Items\" of menu bar 1" >/dev/null 2>&1
-  sleep 3
-fi
-note "  sheets on window 1: $(OSA 'tell application "System Events" to tell process "Things3" to return (count of sheets of window 1)' 2>&1 | tail -1)"
+  for i in 1 2 3 4 5 6 7 8; do
+    [ "$(sheet_count)" = "1" ] && return 0
+    sleep 2
+  done
+  return 1
+}
+open_repeat_sheet
+note "  sheets on window 1: $(sheet_count)"
 F_CANCEL="$(OSA 'tell application "System Events" to tell process "Things3" to tell (first button of sheet 1 of window 1 whose title is "Cancel") to return (position as text) & " " & (size as text)' 2>&1)"
 note "  Cancel button frame: $F_CANCEL"
 if [[ "$F_CANCEL" == *","* ]]; then
@@ -747,11 +768,8 @@ print(' '.join(re.findall(r'-?[0-9]+', '''$F_CANCEL''')[:4]))
   note "  sheets now: $(OSA 'tell application "System Events" to tell process "Things3" to return (count of sheets of window 1)' 2>&1 | tail -1)"
   note "  the subject is still non-repeating? $(gq "SELECT CASE WHEN rt1_recurrenceRule IS NULL THEN 'YES' ELSE 'NO' END FROM TMTask WHERE uuid='$F_UUID'")"
   note "  --- and the Cancel rung on a dialog reopened and left standing ---"
-  if [ "${F_IDX:-0}" -gt 0 ] 2>/dev/null; then
-    OSA "tell application \"System Events\" to tell process \"Things3\" to click menu item $F_IDX of menu \"Items\" of menu bar 1" >/dev/null 2>&1
-    sleep 3
-  fi
-  note "  sheets before the rung: $(OSA 'tell application "System Events" to tell process "Things3" to return (count of sheets of window 1)' 2>&1 | tail -1)"
+  open_repeat_sheet
+  note "  sheets before the rung: $(sheet_count)"
   G rescue dismiss --dangerously-dismiss-dialog --json > "$OUT/f-rescue.json" 2>&1
   grep -v -e ExperimentalWarning -e trace-warnings "$OUT/f-rescue.json" | sed 's/^/    /' | head -4 | tee -a "$REPORT"
   note "  sheets after the rung: $(OSA 'tell application "System Events" to tell process "Things3" to return (count of sheets of window 1)' 2>&1 | tail -1)"
@@ -764,6 +782,8 @@ note ""
 note "  F2 — the same op through the NORMAL CLI with the WHOLE Things window covered:"
 warm; set_things 40 44 "${WIN_W:-935}" "${WIN_H:-620}" >/dev/null; sleep 2; activate_things
 F2_UUID="$(gq "SELECT uuid FROM TMTask WHERE title='PTRGD1-F-subject' AND trashed=0 LIMIT 1")"
+G rescue dismiss --dangerously-dismiss-dialog --json >/dev/null 2>&1
+sleep 2
 occluder_open 40 44 "${WIN_W:-935}" "${WIN_H:-620}"
 G todo make-repeating "$F2_UUID" --frequency daily --interval 1 --dangerously-drive-gui --json > "$OUT/f2-drive.json" 2>&1
 grep -v -e ExperimentalWarning -e trace-warnings "$OUT/f2-drive.json" | sed 's/^/    /' | head -6 | tee -a "$REPORT"
