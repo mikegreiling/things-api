@@ -59,10 +59,15 @@ if (VERB === 'windows') {
   var wins = front === null ? [] : ptrThingsWindows(front.pid, true);
   var inside = false, k;
   for (k = 0; k < wins.length; k++) if (ptrRectHas(wins[k].f, x, y)) inside = true;
+  var screen = ptrScreenAt(x, y);
   JSON.stringify({ point:[x,y], L1_front: front, L2_mainWindow: wins.length ? wins[0].f : null,
-    L2_contains: inside, L3_topBanded: list === null ? null : ptrTopWindowAt(list, x, y),
+    L2_contains: inside,
+    L3_order: 'the hit test is authoritative; the scan speaks only when it answers nothing (PTRGD1 §8)',
+    L3_screen: screen,
+    L3_scanOwner: list === null ? null : ptrScanOwnerAt(list, x, y, screen, ptrIsSystemOwner),
     L3_hitPid: ptrHitPidAt(x, y),
     L3_hitApp: (function(){ var p = ptrHitPidAt(x, y); return p === null ? null : ptrAppName(p) })(),
+    L3_verdict: ptrOcclusionVerdict(front === null ? null : front.pid, ptrHitPidAt(x, y), list, x, y, screen, ptrIsSystemOwner),
     sentence_drag: ptrGuard('drag the area row', [{x:x,y:y}], {}) }, null, 1)
 } else { JSON.stringify({error:'?'}) }
 \`);

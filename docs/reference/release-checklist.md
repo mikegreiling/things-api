@@ -205,6 +205,8 @@ spctl --assess --type exec -vv "$B"     # Gatekeeper accepts it offline, from th
 
 `spctl` accepting it with no network is the whole point of notarizing: a consumer installing the tarball gets a bundle launchd can start without a quarantine prompt. Finish with the same smoke the tarball drill used — the installed `things` answering against a throwaway fixture DB — then remove the temp prefixes.
 
+**WHERE IT RUNS: in the guest, like every other stage.** The host may `npm view` the published version and DOWNLOAD the tarball; it may not install or run it. [`lab/scripts/consumer-drill.sh`](../../lab/scripts/consumer-drill.sh) takes the downloaded tarball into a disposable clone and runs [`lab/guest/consumer-cells.sh`](../../lab/guest/consumer-cells.sh) there. Two notes it saves the next agent from rediscovering: the package's runtime dependencies must be shipped in beside it (`DEPS=`), because an airgapped guest has neither a registry nor npm and a raw tarball extract cannot start; and `xcrun stapler validate` exits **68** on an airgapped guest — it reaches for CloudKit — so `spctl --assess`, which reads the stapled ticket off the disk, is the offline proof, not stapler.
+
 ### Stage 10 — close out
 
 - Delete the landed items from [up-next.md](../up-next.md); update [roadmap.md](../roadmap.md), [capability-matrix.md](../capability-matrix.md) and [suite-audit.md](suite-audit.md) if the batch moved anything they track (usually done per-PR; check, don't assume).
