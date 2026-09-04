@@ -176,6 +176,24 @@ Guard cost on this path: 36 reads / 27–30 ms (the identity leg walks the chain
 
 Every leg 1–3 passes here (Things frontmost, point inside, unoccluded, hit test says Things). Only the identity leg refuses, which is exactly the class it was added for.
 
+### D again, under §8 — and the identity leg is WEAKER than §4 D claimed
+
+The §8 re-run fired cells A, B, B2, B3, C and E1 exactly as before (B3 still refuses naming `"osascript"`, so the second leg still does its job). **D did not fire**, and the reason is a real limitation, not a flake:
+
+```
+planned against Iota at grab (208,503), row {"x":40,"y":491,"w":240,"h":24}
+scrolled: {"ok":true,"axError":0,"wanted":0.45,"before":0,"after":0.45}
+the stale-framed drag script says: DONE ptrgd1=52ops/36ms      <- NOT refused
+```
+
+The sidebar after that scroll has **no area row anywhere near y = 491** (the nearest are 690 and 778) — so the grab point was over a PROJECT row, which is exactly the wrong-row class the identity leg exists to catch. It passed anyway, because **every sidebar row is the same shape**: `x = 40`, `w = 240`, `h = 24`, on a 40 pt pitch. Frame equality against `{40, 491, 240, 24}` therefore degenerates to a Y comparison with a 2 pt tolerance, and after any scroll some row is almost always inside it — here a project row at y = 490, one pixel out.
+
+The three earlier passes fired only because their scroll happened to land off-grid.
+
+**What this does and does not mean.** The cross-application half is untouched: legs 1–3 do not rely on frames at all, and D's own DB invariants held (order and assignment digest both unchanged). What is weaker than §4 D reads is the SAME-APP half — the identity leg is a geometry check on a uniform grid, and geometry alone cannot tell two identically-shaped rows apart. The fix is to compare the row's TEXT as well as its frame (the planned row's title is already in hand at the call site); it needs its own certification round and is filed in [up-next.md](../up-next.md) rather than smuggled into the occlusion fix.
+
+§4 D's verdict above stands as *what was measured on those passes* — the refusal sentence is real and the mechanism is real — but it is not the general guarantee the section implied.
+
 ### E — the drop-time re-check (PARTLY certified; the live firing is this campaign's one open cell)
 
 The occluder covers the sidebar band from just below the grab row to the bottom of the viewport, plus a second panel above it, leaving a narrow clear band on the grab row itself.
@@ -231,6 +249,7 @@ The keyboard tap is deliberately out of scope: `CGEventPostToPid` (`ui-chord.ts`
 
 ## 7. What remains
 
+- **The identity leg compares GEOMETRY on a uniform grid.** Every sidebar row is `x = 40, w = 240, h = 24` on a 40 pt pitch, so frame equality with a 2 pt tolerance is effectively a Y check and a scrolled-in row of a different KIND can satisfy it (measured above: a project row one pixel from the planned area row's frame). Compare the row's harvested TEXT as well as its frame — the title is already at the call site — and re-run cell D against several scroll offsets rather than one.
 - **E2 — firing the drop-time re-check on a LIVE held drag.** Code-locked and unproven in-lab (§4 E). What the cell needs is a way to steer where a held drag decides to drop, or a cover that arrives DURING the gesture rather than before it; the second is the field shape and is a timing rig, not a fixture. Worth one cell on the framebuffer/HID rig, where a cover can be raised by hand mid-drag.
 - **F1 — opening the Repeat dialog from a bare script and leaving it standing.** `Items ▸ Repeat…` reports `enabled=true` after a reveal and pressing it opens nothing (§4 F) — ADR1's silent-no-op shape. Whatever the recipe's preamble does beyond the reveal is what a probe needs to replicate; until then the dialog-standing arm of the click-point guard is unmeasured.
 - **The refusal's error CLASS.** A guard refusal surfaces through the drag driver's existing failure path, which the standing AXDRAG5/SBRES1 item says maps pre-flight refusals onto `verify-failed:silent-noop` ("transport failed") rather than a `blocked`-family refusal. The SENTENCE is now right and rides all the way to the caller; the class is the open item already queued in [up-next.md](../up-next.md), and this change adds one more producer to it.
