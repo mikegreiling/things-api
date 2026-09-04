@@ -34,13 +34,7 @@ lab_scp "$NODE_BIN" "admin@$IP:things-lab/bin/node"
 lab_scp -r "$RC_DIST" "admin@$IP:things-lab/things-api/dist"
 # commander by RESOLVED path — an agent worktree has no node_modules of its own
 # and resolves the primary checkout's by walking up, so the relative path is absent.
-COMMANDER_DIR=$(node -e "
-  const { dirname, join } = require('node:path'); const { existsSync } = require('node:fs');
-  let d = process.cwd();
-  for (;;) { const c = join(d, 'node_modules', 'commander');
-    if (existsSync(join(c, 'package.json'))) { console.log(c); break }
-    const up = dirname(d); if (up === d) break; d = up }
-")
+COMMANDER_DIR=$(lab_commander_dir)
 [ -d "$COMMANDER_DIR" ] || { echo "[diag] commander not resolvable from $PWD" >&2; exit 2; }
 lab_scp -r "$COMMANDER_DIR" "admin@$IP:things-lab/things-api/node_modules/commander"
 lab_scp package.json "admin@$IP:things-lab/things-api/package.json"
