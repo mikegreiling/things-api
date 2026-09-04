@@ -65,7 +65,25 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { trace } from "../../trace/tracer.ts";
 import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
+import {
+  observerAwait,
+  observerMark,
+  type ObserverSession,
+  type SettleSpec,
+} from "./ui-observer.ts";
 import { POINTER_GUARD_AX_HELPERS, POINTER_GUARD_JXA } from "./ui-pointer-guard.ts";
+import {
+  classifySpacerRows,
+  isSpacerRow,
+  mapAfterReorder,
+  mapFromCensus,
+  ordinalsToRealize,
+  rowMatchesTitle,
+  type MapSource,
+  type SidebarAreaMap,
+  type SidebarRect,
+  type SidebarRowInfo,
+} from "./ui-sidebar-map.ts";
 import type { UiCommand, UiCommandPrimitive, UiRunner, UiRunResult } from "./ui.ts";
 
 // ------------------------------------------------------------------- types
@@ -124,17 +142,13 @@ export function createUiDriveAux(db: DatabaseSync): UiDriveAux {
   };
 }
 
-export interface SidebarRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-export interface SidebarRowInfo extends SidebarRect {
-  /** Concatenated descendant static-text segments, joined with "|". */
-  text: string;
-}
+/**
+ * The row geometry + identity types live in `ui-sidebar-map.ts` beside the
+ * predictors that reason about them (VOPAT2 PR 2), and are re-exported here so
+ * every consumer of this module keeps its single import.
+ */
+export type { SidebarRect, SidebarRowInfo } from "./ui-sidebar-map.ts";
+export { isSpacerRow, rowMatchesTitle } from "./ui-sidebar-map.ts";
 
 export interface SidebarSnapshot {
   /** The sidebar scroll-area viewport rect (the visible band). */
@@ -153,6 +167,15 @@ export interface SidebarSnapshot {
   /** Area titles the harvest matched, against how many the database holds. */
   matched?: number;
   expected?: number;
+  /** Did this census read SPARSELY (geometry for all, content for the few)? */
+  sparse?: boolean;
+  /** AX round-trips this census made, and rows it REALIZED (VOPAT2 PR 2). */
+  axCalls?: number;
+  realized?: number;
+  /** Which candidate list pane was the sidebar — the next primitive's address. */
+  paneIndex?: number;
+  /** Rows whose geometry did not resolve; any at all invalidates the ordinals. */
+  geomFailed?: number;
 }
 
 // -------------------------------------------------- JXA command shapes
@@ -162,7 +185,7 @@ export interface SidebarSnapshot {
 
 const JXA_PRELUDE = `${POINTER_GUARD_AX_HELPERS}
 var NODE_ATTRS=$(['AXValue','AXDescription','AXTitle','AXChildren','AXPosition','AXSize','AXRole']);
-function node(el){ var out=Ref();
+function node(el){ AXN++; var out=Ref();
   if($.AXUIElementCopyMultipleAttributeValues(el,NODE_ATTRS,0,out)!==0) return null;
   var a=ObjC.castRefToObject(out[0]); if(!a||Number(a.count)<7) return null;
   function s(i){ var v=a.objectAtIndex(i); if(!v) return ''; var j; try{ j=v.js }catch(e){ return '' } return typeof j==='string'? j:'' }
@@ -192,9 +215,43 @@ function listPanes(el, depth, acc, sa){ if(depth<0) return acc; var ch=kids(el);
 function harvestRows(tableEl, depth){ var out=[], ch=kids(tableEl);
   for(var i=0;i<ch.length;i++){ var n=node(ch[i]); if(n===null) continue;
     if(n.role!=='AXRow'&&n.role!=='AXTableRow') continue;
+    AXR++;
     var f=n.frame;
     out.push({ text: textOf(n,[],depth).join('|'), x:f?f.x:null, y:f?f.y:null, w:f?f.w:null, h:f?f.h:null }) }
   return out }
+/*
+ * GEOMETRY WITHOUT REALIZATION (VOPAT1 §3, the sparse read's whole basis). One
+ * batched position+size fetch per row: it is ONE round-trip, it touches no
+ * content, and it therefore does not make Things realize the row's custom view
+ * — the ~115 ms/row the field pays for a sweep and the clone cannot reproduce.
+ */
+var GEO_ATTRS=$(['AXPosition','AXSize']);
+function geom(el){ AXN++; var out=Ref();
+  if($.AXUIElementCopyMultipleAttributeValues(el,GEO_ATTRS,0,out)!==0) return null;
+  var a=ObjC.castRefToObject(out[0]); if(!a||Number(a.count)<2) return null;
+  try{ return rectOf(a.objectAtIndex(0), a.objectAtIndex(1)) }catch(e){ return null } }
+/*
+ * The table's rows in ONE round-trip. AXRows and the table's AXChildren
+ * enumerate the same list in the same order with frames identical to 0.00 px
+ * (VOPAT1-5), which is what makes addressing a row by ORDINAL sound.
+ */
+function rowsOf(tableEl){ var r=attr(tableEl,'AXRows'); if(r===null) return null;
+  var a=[]; try{ var n=Number(r.count); for(var i=0;i<n;i++) a.push(r.objectAtIndex(i)) }catch(e){ return null }
+  return a }
+/* Row heights are constant per KIND (SBCHV1 §0), so the modal height is the
+ * entity-row height and anything shorter is a spacer — a classification the
+ * geometry pass makes for free, on rows no one has realized. */
+function modalH(geo){ var m={}, best=null, bc=0;
+  for(var i=0;i<geo.length;i++){ if(!geo[i]) continue; var k=Math.round(geo[i].h*2)/2;
+    m[k]=(m[k]||0)+1;
+    if(m[k]>bc || (m[k]===bc && best!==null && k>best)){ bc=m[k]; best=k } }
+  return best }
+function spacerAt(geo, i, h){ var g=geo[i]; if(!g) return false; return h!==null && g.h < h-1 }
+function startsOf(geo){ var h=modalH(geo), out=[];
+  for(var i=0;i<geo.length;i++){ if(!geo[i]) continue; if(spacerAt(geo,i,h)) continue;
+    if(i===0 || spacerAt(geo,i-1,h)) out.push(i) }
+  return out }
+function rowText(el, depth){ AXR++; return textOf(node(el),[],depth).join('|') }
 function segMatch(text, title){ var segs=text.split('|');
   for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.') return true } return false }
 function countTitles(rows, titles){ var n=0;
@@ -234,7 +291,7 @@ function resolveSidebar(titles, depth){
   var scored = [], i;
   for (i=0;i<panes.length;i++){
     var rows = harvestRows(panes[i].table, depth);
-    scored.push({ pane:panes[i], rows:rows, hits:countTitles(rows,titles), frame:frame(panes[i].table) });
+    scored.push({ pane:panes[i], rows:rows, hits:countTitles(rows,titles), frame:frame(panes[i].table), idx:i });
   }
   var best=null, tie=false;
   for (i=0;i<scored.length;i++){
@@ -257,7 +314,8 @@ function resolveSidebar(titles, depth){
   }
   if (vp === null) return { ok:false, why:'no-viewport' };
   if (best.rows.length === 0) return { ok:false, why:'no-rows' };
-  return { ok:true, table:best.pane.table, scroll:best.pane.scroll, viewport:vp, rows:best.rows, hits:best.hits };
+  return { ok:true, table:best.pane.table, scroll:best.pane.scroll, viewport:vp, rows:best.rows,
+           hits:best.hits, paneIndex:best.idx };
 }
 var MOVED=5, DOWN=1, UP=2, DRAG=6;
 function mev(t,x,y,cs){ var e=$.CGEventCreateMouseEvent($(), t, $.CGPointMake(x,y), 0); if(cs) $.CGEventSetIntegerValueField(e,1,cs); return e }
@@ -316,7 +374,8 @@ else {
   }
   out = { ok:true, viewport:r.viewport, scroll:scrollFraction(r.scroll), rows:r.rows,
           deep:deep, depth:(deep? ${ROW_TEXT_DEPTH_FULL} : START),
-          matched:r.hits, expected:TITLES.length };
+          matched:r.hits, expected:TITLES.length,
+          sparse:false, axCalls:AXN, realized:AXR, paneIndex:r.paneIndex };
 }
 JSON.stringify(out)`;
 }
@@ -467,6 +526,288 @@ postHID(mev(UP, tx, ty, 1));
 'DONE ptrgd1=' + PTR_OPS + 'ops/' + G1 + 'ms' }}`;
 }
 
+/**
+ * WHERE THE SIDEBAR IS, WITHOUT A CENSUS (VOPAT2 PR 2).
+ *
+ * The shipped locator is SEMANTIC — it harvests every candidate list pane's rows
+ * and picks the one whose rows carry the caller's own area titles (SBRES1) —
+ * and semantic is why it is expensive: on the maintainer's M1 it realizes 186
+ * rows and costs 16–18 s, and EVERY sidebar primitive opens by running it
+ * (SBCHV1 §1). Once one census has resolved the sidebar, the pane's INDEX in the
+ * window's own list-pane walk is all a later primitive needs to find it again —
+ * and it is re-CONFIRMED semantically for the price of ONE realized row, by
+ * reading the area row a previous census already identified and requiring it to
+ * still carry that title. Wrong pane, moved row, relaunched app: the read
+ * disagrees and the primitive refuses instead of aiming at whatever is there.
+ */
+export interface SidebarAddress {
+  /** The candidate list pane a previous census resolved as the sidebar. */
+  paneIndex: number;
+  /** An area row's ordinal in `AXRows`, and the title it must still carry. */
+  verifyOrdinal: number;
+  verifyTitle: string;
+}
+
+/** What content a sparse census should realize, and where to look for it. */
+export interface SparseReadPlan {
+  /** The pane a previous census resolved, or null to search every candidate. */
+  paneIndex: number | null;
+  /** Realize these row ordinals; empty = the script's own section starts. */
+  ordinals: readonly number[];
+  /** Ceiling on section-start candidates realized per pane when self-selecting. */
+  maxCandidates: number;
+}
+
+/**
+ * SPARSE SNAPSHOT — geometry for every row, content for the predicted few.
+ *
+ * The shape VOPAT1 §3 measured and §8 R1 specified: `AXRows` plus ONE batched
+ * position+size fetch per row (which realizes nothing), then a content read on
+ * the rows a prediction says are area rows — the caller's `ordinals`, or, when
+ * it has no prediction yet, the SECTION STARTS the geometry itself exposes
+ * (Things renders a spacer row between sections and row heights are constant per
+ * kind, SBCHV1 §0). Measured in the lab at 14 rows realized against the sweep's
+ * 174, finding the same 14 of 14 areas.
+ *
+ * It is not an approximation and it is not trusted on its own: the caller aligns
+ * the realized rows against the database's own area order and escalates to the
+ * full sweep — retained byte-for-byte as the oracle — on ANY disagreement,
+ * exactly as SBRES1 kept its depth-6 walk behind the depth-2 harvest.
+ */
+export function jxaSidebarSparseSnapshotScript(
+  areaTitles: readonly string[],
+  plan: SparseReadPlan,
+): string {
+  return `${JXA_PRELUDE}
+var TITLES = ${JSON.stringify([...areaTitles])};
+var WANT = ${JSON.stringify(plan.ordinals.map((n) => Math.trunc(n)))};
+var PANE = ${plan.paneIndex === null ? -1 : Math.trunc(plan.paneIndex)};
+var MAXC = ${Math.max(1, Math.trunc(plan.maxCandidates))};
+var DEPTH = ${ROW_TEXT_DEPTH_FAST};
+function scan(pane, ords){
+  var els = rowsOf(pane.table);
+  if (els === null) return null;
+  var geo = [], bad = 0, i;
+  for (i=0;i<els.length;i++){ var g = geom(els[i]); if (g===null) bad++; geo.push(g) }
+  var idx = ords !== null ? ords : startsOf(geo).slice(0, MAXC);
+  var texts = {};
+  for (i=0;i<idx.length;i++){ var o = idx[i]; if (o<0 || o>=els.length) continue; texts[o] = rowText(els[o], DEPTH) }
+  var hits = 0, t, k;
+  for (t=0;t<TITLES.length;t++){ for (k in texts){ if (segMatch(texts[k], TITLES[t])) { hits++; break } } }
+  var rows = [];
+  for (i=0;i<geo.length;i++){ var f = geo[i], has = texts.hasOwnProperty(i);
+    rows.push({ x:f?f.x:null, y:f?f.y:null, w:f?f.w:null, h:f?f.h:null,
+                text: has? texts[i] : '', read: has }) }
+  return { rows:rows, hits:hits, bad:bad, realized:idx.length };
+}
+var w = mainWindow();
+var out;
+if (w === null) { out = { ok:false, why:'no-window' } } else {
+var panes = listPanes(w, 8, [], null);
+if (panes.length === 0) { out = { ok:false, why:'no-list-candidates', windowFrame:frame(w) } } else {
+var chosen = null, chosenIdx = -1, tie = false, seen = [];
+if (PANE >= 0 && PANE < panes.length) {
+  var only = scan(panes[PANE], WANT.length ? WANT : null);
+  if (only !== null && only.hits > 0) { chosen = only; chosenIdx = PANE }
+}
+if (chosen === null) {
+  for (var pi=0; pi<panes.length; pi++){
+    var sc = scan(panes[pi], null);
+    if (sc === null) continue;
+    seen.push({ frame: frame(panes[pi].table), rows: sc.rows.length });
+    if (chosen === null || sc.hits > chosen.hits) { chosen = sc; chosenIdx = pi; tie = false }
+    else if (sc.hits === chosen.hits && chosen.hits > 0) { tie = true }
+  }
+  if (chosen !== null && chosen.hits === 0) chosen = null;
+}
+if (chosen === null) { out = { ok:false, why:'no-title-match', searched:seen, titles:TITLES.length } }
+else if (tie) { out = { ok:false, why:'ambiguous-sidebar', titles:TITLES.length } }
+else {
+  var best = panes[chosenIdx];
+  var vp = best.scroll === null ? null : frame(best.scroll);
+  var hidden = false;
+  for (var q=0;q<panes.length;q++){ if (q===chosenIdx || panes[q].scroll===null) continue;
+    if (overlapPx(vp, frame(panes[q].scroll)) > 1) hidden = true }
+  if (hidden) { out = { ok:false, why:'sidebar-hidden' } }
+  else if (vp === null) { out = { ok:false, why:'no-viewport' } }
+  else if (chosen.rows.length === 0) { out = { ok:false, why:'no-rows' } }
+  else { out = { ok:true, viewport:vp, scroll:scrollFraction(best.scroll), rows:chosen.rows,
+                 sparse:true, paneIndex:chosenIdx, matched:chosen.hits, expected:TITLES.length,
+                 depth:DEPTH, geomFailed:chosen.bad, axCalls:AXN, realized:AXR } }
+}
+}}
+JSON.stringify(out)`;
+}
+
+/**
+ * The pointerless scroll (SBSCR1), addressed by pane index instead of by a
+ * census. Identical write, identical report; what it drops is the full sidebar
+ * harvest every scroll dispatch used to open with — on the field host, a
+ * 16–18 s census per scroll iteration, spent to find a scroll bar.
+ *
+ * It still proves the pane is the sidebar before it writes anything, and it does
+ * it the only way that cannot be faked: by realizing the ONE row a previous
+ * census identified and requiring it to still carry that area's title.
+ */
+export function jxaSidebarSparseScrollToScript(fraction: number, addr: SidebarAddress): string {
+  const want = Math.max(0, Math.min(1, fraction));
+  return `${JXA_PRELUDE}
+${sparseAddressPrelude(addr)}
+if (sb === null) { JSON.stringify({ok:false, why:'no-sidebar', detail:sbWhy}) } else {
+var bar = scrollBarOf(sb.scroll);
+if (bar === null) { JSON.stringify({ok:false, why:'no-scrollbar'}) } else {
+var before = barValue(bar);
+var err = $.AXUIElementSetAttributeValue(bar, $('AXValue'), $.NSNumber.numberWithDouble(${want}));
+sleep(250);
+JSON.stringify({ ok: err === 0, axError: err, wanted: ${want}, before: before, after: barValue(bar),
+                 axCalls: AXN, realized: AXR })
+}}`;
+}
+
+/**
+ * The wheel fallback (no scroll bar), addressed by pane index — and GUARDED
+ * exactly as its census-addressed twin is (PTRGD1). Addressing the sidebar more
+ * cheaply changes nothing about the hazard: a wheel event goes to the view under
+ * the POINTER and nowhere else, so the pointer's destination must still be
+ * proven to be Things' own sidebar list and not a window someone put over it.
+ */
+export function jxaSidebarSparseScrollScript(clicks: number, addr: SidebarAddress): string {
+  const n = Math.trunc(clicks);
+  return `${JXA_PRELUDE}
+${sparseAddressPrelude(addr)}
+if (sb === null) { 'NO_SIDEBAR' } else {
+var vp = sb.scroll === null ? null : frame(sb.scroll);
+if (vp === null) { 'NO_SIDEBAR' } else {
+  var px = vp.x + vp.w/2, py = vp.y + vp.h/2;
+  var G0 = Date.now();
+  var TABLE = frame(sb.table);
+  var refusal = ptrGuard('scroll the sidebar with the wheel', [{x:px,y:py}], { identity: function(chain){
+    if (chain.length === 0) return 'the sidebar centre resolves to no element inside Things, so the wheel events would go somewhere else';
+    if (!ptrChainHasFrame(chain, ['AXTable','AXOutline','AXList'], TABLE)) return 'the element at the sidebar centre does not belong to the sidebar list (the point sits in ' + ptrChainRoles(chain) + ')';
+    return null } });
+  var G1 = Date.now() - G0;
+  if (refusal !== null) { throw new Error(refusal) }
+  postHID(mev(MOVED, px, py, 0)); sleep(50);
+  var n = ${n}, dir = n < 0 ? -1 : 1;
+  for (var i = 0; i < Math.abs(n); i++) {
+    var ev = $.CGEventCreateScrollWheelEvent($(), $.kCGScrollEventUnitLine, 1, dir * 3);
+    postHID(ev); sleep(60);
+  }
+  'DONE ptrgd1=' + PTR_OPS + 'ops/' + G1 + 'ms'
+}}`;
+}
+
+/**
+ * The disclosure click (SBCOL1), addressed by ROW ORDINAL instead of by a title
+ * hunt across every row in the table.
+ *
+ * The shipped script's matcher is already batched and depth-guarded (SBCHV1 §2)
+ * but it still realizes every row to find one, and the collapse rung clicks two
+ * to four chevrons per move. Given the ordinal a census already established, the
+ * whole cost is: one round-trip for `AXRows`, ONE realized row (the HXPC1
+ * confirmation that this really is the row named), and the chevron subtree.
+ *
+ * Every refusal wears the same `reason` vocabulary as the full-harvest script,
+ * so the diagnostic ladder above it is unchanged — `ptrgd1-refused` included:
+ * the cheaper address does not buy an exemption from the pointer guard, and the
+ * identity leg here has MORE to check with rather than less, because the census
+ * that supplied the ordinal also supplied the row frame it was measured at.
+ */
+export function jxaSidebarSparseChevronClickScript(
+  addr: SidebarAddress,
+  /** The row's frame as the census that produced the ordinal measured it. */
+  rowFrame: SidebarRect,
+): string {
+  return `${JXA_PRELUDE}
+var T0 = Date.now(), MS = {}, STAGE = 'start';
+function mark(name, from){ MS[name] = Date.now() - from; return Date.now() }
+function out(o){ o.ms = MS; o.ms.total = Date.now() - T0; o.stage = STAGE;
+  o.ms.axCalls = AXN; o.ms.realized = AXR; return JSON.stringify(o) }
+function chevronOf(el, depth){ if(depth<0) return null; var ch=kids(el);
+  for(var i=0;i<ch.length;i++){
+    if(sv(ch[i],'AXRole')==='AXImage' && sv(ch[i],'AXDescription').indexOf('Toggle')>=0) return ch[i];
+    var r=chevronOf(ch[i], depth-1); if(r) return r }
+  return null }
+var ROWF = ${JSON.stringify({ x: rowFrame.x, y: rowFrame.y, w: rowFrame.w, h: rowFrame.h })};
+${sparseAddressPrelude(addr)}
+STAGE = 'sidebar';
+if (sb === null) { out({clicked:false, reason:'chevron-sidebar-unresolved', why:'the sidebar did not resolve (' + sbWhy + ')'}) } else {
+var vp = sb.scroll === null ? null : frame(sb.scroll);
+if (vp === null) { out({clicked:false, reason:'chevron-sidebar-unresolved', why:'the sidebar viewport did not resolve'}) } else {
+STAGE = 'rows';
+/* The row is the one sparseAddressPrelude already realized and matched by
+ * title — the HXPC1 confirmation, paid once. */
+var el = sbRows[VORD];
+MS.rowsScanned = 1; MS.rowDepth = ${ROW_TEXT_DEPTH_FAST};
+if (el === undefined) {
+  out({clicked:false, reason:'chevron-row-unresolved', why:'the area row did not resolve uniquely', rows:0})
+} else {
+  STAGE = 'chevron';
+  var tm = Date.now();
+  var img = chevronOf(el, 5);
+  mark('chevron', tm);
+  if (img === null) { out({clicked:false, reason:'chevron-unresolved', why:'the row exposes no disclosure chevron'}) }
+  else {
+    var cf = frame(img);
+    if (cf === null) { out({clicked:false, reason:'chevron-unresolved', why:'the chevron exposed no frame'}) }
+    else {
+      var cx = cf.x + cf.w/2, cy = cf.y + cf.h/2;
+      if (cy < vp.y + 6 || cy > vp.y + vp.h - 6) {
+        out({clicked:false, reason:'chevron-off-band', why:'the chevron is outside the visible sidebar band', y:cy})
+      } else {
+        STAGE = 'guard';
+        // PTRGD1, unchanged in substance from the census-addressed script: the
+        // chevron's frame was read live a line ago, but the frame is not the
+        // proof — that Things owns this pixel is.
+        var G0 = Date.now();
+        var refusal = ptrGuard('click the disclosure arrow', [{x:cx,y:cy}], { identity: function(chain){
+          if (chain.length === 0) return 'the arrow\\'s position resolves to no element inside Things, so its frame is stale';
+          if (!ptrChainHasFrame(chain, null, cf) && !ptrChainHasFrame(chain, ['AXRow','AXTableRow'], ROWF)) return 'the element at the arrow\\'s position is not the arrow (the point sits in ' + ptrChainRoles(chain) + '), so its frame is stale';
+          return null } });
+        var G1 = Date.now() - G0;
+        MS.guard = G1; MS.guardOps = PTR_OPS;
+        if (refusal !== null) { out({clicked:false, reason:'ptrgd1-refused', why:refusal, x:cx, y:cy}) } else {
+        STAGE = 'click';
+        var tc = Date.now();
+        var mv=mev(MOVED,cx,cy,0); $.CGEventSetFlags(mv,0); postHID(mv); sleep(300);
+        var dn=mev(DOWN,cx,cy,1); $.CGEventSetFlags(dn,0); postHID(dn); sleep(90);
+        var up=mev(UP,cx,cy,1); $.CGEventSetFlags(up,0); postHID(up); sleep(250);
+        mark('click', tc);
+        STAGE = 'clicked';
+        out({clicked:true, x:cx, y:cy})
+        }
+      }
+    }
+  }
+}
+}}`;
+}
+
+/**
+ * The shared opening of every ordinal-addressed primitive: resolve the pane the
+ * last census named, take its rows in one round-trip, and CONFIRM the pane by
+ * realizing the single row that census identified. Leaves `sb` (the pane),
+ * `sbRows` (its `AXRows`) and `sbWhy` (the refusal detail) in scope.
+ */
+function sparseAddressPrelude(addr: SidebarAddress): string {
+  return `var PANE = ${Math.trunc(addr.paneIndex)}, VORD = ${Math.trunc(addr.verifyOrdinal)};
+var VTITLE = ${JSON.stringify(addr.verifyTitle)};
+var sb = null, sbRows = [], sbWhy = '';
+(function(){
+  var w = mainWindow();
+  if (w === null) { sbWhy = 'no-window'; return }
+  var panes = listPanes(w, 8, [], null);
+  if (PANE < 0 || PANE >= panes.length) { sbWhy = 'the sidebar pane moved in the window'; return }
+  var pane = panes[PANE];
+  var els = rowsOf(pane.table);
+  if (els === null) { sbWhy = 'the sidebar table exposed no rows'; return }
+  if (VORD < 0 || VORD >= els.length) { sbWhy = 'the sidebar row count changed underneath the step'; return }
+  if (!segMatch(rowText(els[VORD], ${ROW_TEXT_DEPTH_FAST}), VTITLE)) {
+    sbWhy = 'the row the step was addressed at no longer carries "' + VTITLE + '"'; return }
+  sb = pane; sbRows = els;
+})();`;
+}
+
 function snapshotCommand(areaTitles: readonly string[], depthHint?: number): UiCommand {
   return {
     primitive: "sidebar-snapshot",
@@ -474,6 +815,20 @@ function snapshotCommand(areaTitles: readonly string[], depthHint?: number): UiC
     lang: "javascript",
     script: jxaSidebarSnapshotScript(areaTitles, depthHint),
     ...(depthHint !== undefined && { meta: { depthHint } }),
+  };
+}
+
+function sparseSnapshotCommand(areaTitles: readonly string[], plan: SparseReadPlan): UiCommand {
+  return {
+    primitive: "sidebar-snapshot",
+    label: "read the sidebar geometry (content only where the areas are predicted)",
+    lang: "javascript",
+    script: jxaSidebarSparseSnapshotScript(areaTitles, plan),
+    meta: {
+      sparse: true,
+      paneIndex: plan.paneIndex,
+      ordinals: [...plan.ordinals],
+    },
   };
 }
 
@@ -486,23 +841,37 @@ function sidebarVisibilityCommand(want: "show" | "hide"): UiCommand {
   };
 }
 
-function scrollCommand(clicks: number, areaTitles: readonly string[]): UiCommand {
+function scrollCommand(
+  clicks: number,
+  areaTitles: readonly string[],
+  addr: SidebarAddress | null,
+): UiCommand {
   return {
     primitive: "sidebar-scroll",
     label: `scroll the sidebar (${clicks} clicks)`,
     lang: "javascript",
-    script: jxaSidebarScrollScript(clicks, areaTitles),
-    meta: { mechanism: "wheel", clicks },
+    script:
+      addr === null
+        ? jxaSidebarScrollScript(clicks, areaTitles)
+        : jxaSidebarSparseScrollScript(clicks, addr),
+    meta: { mechanism: "wheel", clicks, sparse: addr !== null },
   };
 }
 
-function scrollToCommand(fraction: number, areaTitles: readonly string[]): UiCommand {
+function scrollToCommand(
+  fraction: number,
+  areaTitles: readonly string[],
+  addr: SidebarAddress | null,
+): UiCommand {
   return {
     primitive: "sidebar-scroll",
     label: `scroll the sidebar (to ${fraction.toFixed(3)} of its range)`,
     lang: "javascript",
-    script: jxaSidebarScrollToScript(fraction, areaTitles),
-    meta: { mechanism: "scrollbar", fraction },
+    script:
+      addr === null
+        ? jxaSidebarScrollToScript(fraction, areaTitles)
+        : jxaSidebarSparseScrollToScript(fraction, addr),
+    meta: { mechanism: "scrollbar", fraction, sparse: addr !== null },
   };
 }
 
@@ -777,17 +1146,29 @@ if (pick === null) {
 }}`;
 }
 
+/**
+ * `addr` and `rowFrame` travel together or not at all: the ordinal-addressed
+ * script needs the ordinal to reach the row AND the frame the census measured
+ * it at, because that frame is what the pointer guard's identity leg compares
+ * the live hit test against. With neither, the census-addressed script is
+ * generated byte for byte.
+ */
 function chevronClickCommand(
   title: string,
   ordinal: number,
   areaTitles: readonly string[],
+  addr: SidebarAddress | null,
+  rowFrame: SidebarRect | null,
 ): UiCommand {
+  const sparse = addr !== null && rowFrame !== null;
   return {
     primitive: "sidebar-chevron",
     label: `toggle the disclosure arrow on the area row "${title}"`,
     lang: "javascript",
-    script: jxaSidebarChevronClickScript(title, ordinal, areaTitles),
-    meta: { title, ordinal },
+    script: sparse
+      ? jxaSidebarSparseChevronClickScript(addr, rowFrame)
+      : jxaSidebarChevronClickScript(title, ordinal, areaTitles),
+    meta: { title, ordinal, sparse },
   };
 }
 
@@ -823,9 +1204,13 @@ function median(values: number[]): number | null {
   return sorted[Math.floor(sorted.length / 2)] ?? null;
 }
 
-/** Median height of the table's spacer rows (rows with no static text). */
+/**
+ * Median height of the table's spacer rows. "Spacer" is asked of the row rather
+ * than inferred from empty text here: a SPARSE census (VOPAT2 PR 2) leaves most
+ * rows unrealized, and an unrealized row's text is empty because nobody read it.
+ */
 export function medianSpacerHeight(rows: SidebarRowInfo[]): number | null {
-  return median(rows.filter((r) => r.text === "").map((r) => r.h));
+  return median(rows.filter((r) => isSpacerRow(r)).map((r) => r.h));
 }
 
 /**
@@ -845,7 +1230,7 @@ export function slotPitch(
   }
   const m = median(deltas);
   if (m !== null && m > 0) return m;
-  const entityH = median(allRows.filter((r) => r.text !== "").map((r) => r.h)) ?? 24;
+  const entityH = median(allRows.filter((r) => !isSpacerRow(r)).map((r) => r.h)) ?? 24;
   const spacerH = medianSpacerHeight(allRows) ?? entityH / 2;
   return entityH + spacerH;
 }
@@ -863,7 +1248,7 @@ export function boundaryAboveRow(allRows: SidebarRowInfo[], ref: SidebarRowInfo)
     // drop in a row's top half resolves to insert-BEFORE it (AXDRAG1-a/D1).
     return ref.y + ref.h / 4;
   }
-  if (above.text === "") return above.y + above.h / 2; // spacer center
+  if (isSpacerRow(above)) return above.y + above.h / 2; // spacer center
   return (above.y + above.h + ref.y) / 2; // shared-edge midpoint
 }
 
@@ -876,7 +1261,7 @@ export function boundaryAboveRow(allRows: SidebarRowInfo[], ref: SidebarRowInfo)
 export function boundaryBelowLast(allRows: SidebarRowInfo[]): number | null {
   const last = allRows.toSorted((a, b) => a.y - b.y).at(-1);
   if (last === undefined) return null;
-  if (last.text === "") return last.y + last.h / 2; // trailing spacer center
+  if (isSpacerRow(last)) return last.y + last.h / 2; // trailing spacer center
   const half = (medianSpacerHeight(allRows) ?? last.h / 2) / 2;
   return last.y + last.h + half;
 }
@@ -962,19 +1347,13 @@ export function parseSidebarSnapshot(stdout: string): SnapshotOutcome {
       ...(typeof obj["deep"] === "boolean" && { escalated: obj["deep"] }),
       ...(typeof obj["matched"] === "number" && { matched: obj["matched"] }),
       ...(typeof obj["expected"] === "number" && { expected: obj["expected"] }),
+      ...(typeof obj["sparse"] === "boolean" && { sparse: obj["sparse"] }),
+      ...(typeof obj["axCalls"] === "number" && { axCalls: obj["axCalls"] }),
+      ...(typeof obj["realized"] === "number" && { realized: obj["realized"] }),
+      ...(typeof obj["paneIndex"] === "number" && { paneIndex: obj["paneIndex"] }),
+      ...(typeof obj["geomFailed"] === "number" && { geomFailed: obj["geomFailed"] }),
     },
   };
-}
-
-/**
- * Does a row's static-text carry this exact title as a segment? Sidebar row
- * text concatenates descendant static texts with "|" (AXDRAG1: e.g.
- * "Area-05.|Source Toggle Template|Area-05") — an exact segment match avoids
- * substring collisions; the trailing-dot variant covers the AXDescription-like
- * first segment some rows carry.
- */
-export function rowMatchesTitle(text: string, title: string): boolean {
-  return text.split("|").some((seg) => seg === title || seg === `${title}.`);
 }
 
 /** All rows matching known area titles, in visual (y) order. */
@@ -1527,6 +1906,8 @@ const CHEVRON_SCRIPT_REASONS: Readonly<Record<string, ChevronStop>> = {
 
 /** One internal step of the disclosure rung, as the trace records it. */
 interface ChevronStepRecord {
+  /** How the post-click wait ended, when this step is the settle (VOPAT2). */
+  settle?: "observed" | "missed" | "timer";
   step: "scroll-into-view" | "census-before" | "click" | "settle" | "census-after" | "confirm";
   durationMs: number;
   ok: boolean;
@@ -1586,6 +1967,47 @@ export function describeChevronStop(
   return parts.join("; ");
 }
 
+/**
+ * The switch that turns the sparse census off, for the lab's own A/B and for an
+ * operator whose sidebar the predictors cannot follow. Off = every census is
+ * the full depth-2 sweep, i.e. the code that shipped before VOPAT2 PR 2.
+ */
+export const SPARSE_ENV = "THINGS_API_SIDEBAR_SPARSE";
+
+/**
+ * Ceiling on the section-start candidates one sparse census realizes while it
+ * has no prediction to work from. A 14-area / 174-row sidebar exposes 17 of
+ * them (SBCHV1 §0); the ceiling is what stops a pane whose rows are ALL section
+ * starts (a flat content list) from turning the cheap read into a sweep.
+ */
+const SPARSE_MAX_CANDIDATES = 28;
+
+/** What one move spent, in the units that transfer between hosts (VOPAT1 §0). */
+export interface MoveTally {
+  censuses: number;
+  sparse: number;
+  sweeps: number;
+  /** Sparse censuses whose prediction did not confirm and fell back to a sweep. */
+  escalations: number;
+  axCalls: number;
+  rowsRealized: number;
+  gestures: { drag: number; chevron: number; scroll: number; visibility: number };
+  settles: { observed: number; missed: number; timer: number };
+}
+
+function newTally(): MoveTally {
+  return {
+    censuses: 0,
+    sparse: 0,
+    sweeps: 0,
+    escalations: 0,
+    axCalls: 0,
+    rowsRealized: 0,
+    gestures: { drag: 0, chevron: 0, scroll: 0, visibility: 0 },
+    settles: { observed: 0, missed: 0, timer: 0 },
+  };
+}
+
 interface DriveCtx {
   run: UiRunner;
   state: () => AreaSidebarState;
@@ -1602,6 +2024,126 @@ interface DriveCtx {
    * the snapshot budget scales from.
    */
   read: { depth?: number; rows?: number; scrollbar?: boolean };
+  /**
+   * The AX settle observer, when this host can have one (VOPAT2). Null is never
+   * a refusal: every settle below is SOFT and falls through to the fixed wait
+   * the polling path has always used.
+   */
+  observer: ObserverSession | null;
+  /** Which rows are area rows, carried across censuses (VOPAT2 PR 2). */
+  map: SidebarAreaMap | null;
+  /** The sidebar's candidate-pane index, once any census has resolved it. */
+  paneIndex: number | null;
+  /** May a census read sparsely at all? */
+  sparse: boolean;
+  tally: MoveTally;
+}
+
+/**
+ * The address an ordinal-addressed primitive needs: the pane a census resolved,
+ * plus one area row to re-confirm it by. Null whenever there is no map — and
+ * then every primitive generates the script it generated before this campaign.
+ */
+function addressFor(ctx: DriveCtx): SidebarAddress | null {
+  if (!ctx.sparse || ctx.map === null || ctx.map.paneIndex === null) return null;
+  const first = ctx.map.areas[0];
+  if (first === undefined) return null;
+  return {
+    paneIndex: ctx.map.paneIndex,
+    verifyOrdinal: first.ordinal,
+    verifyTitle: first.title,
+  };
+}
+
+/** The address of ONE area's row — the chevron's target, confirmed by title. */
+function chevronAddressFor(
+  ctx: DriveCtx,
+  title: string,
+  sameTitleOrdinal: number,
+): SidebarAddress | null {
+  if (!ctx.sparse || ctx.map === null || ctx.map.paneIndex === null) return null;
+  const matches = ctx.map.areas.filter((a) => a.title === title);
+  const pick =
+    sameTitleOrdinal < 0
+      ? matches.length === 1
+        ? matches[0]
+        : undefined
+      : matches[sameTitleOrdinal];
+  if (pick === undefined) return null;
+  return { paneIndex: ctx.map.paneIndex, verifyOrdinal: pick.ordinal, verifyTitle: pick.title };
+}
+
+/**
+ * SETTLES, the observer's way (VOPAT1 §4, VOPAT2). Every one of these is SOFT:
+ * a notification that does not arrive costs the fixed wait it was replacing and
+ * the step's own closed loop — a re-census, a database assert — still decides.
+ * That is the AX-scrutiny doctrine's over-caution direction: the fast path is
+ * the notification, the verdict is never the notification.
+ */
+const SETTLE_FOLD: SettleSpec = {
+  what: "the sidebar to finish folding",
+  // MEASURED (VOPAT1 §4.1 d/d'): one `AXRowCountChanged` per row on the AXTable,
+  // 65 of them for a 65-row section, the burst starting ~62 ms after the click
+  // completes and landing inside ~10 ms. So: the first arrival, then quiet.
+  want: ["AXRowCountChanged:AXTable", "AXRowCountChanged"],
+  timeoutMs: 4_000,
+  quietMs: 120,
+  fallbackDelayS: 0.6,
+};
+
+const SETTLE_SCROLL: SettleSpec = {
+  what: "the sidebar scroll position to change",
+  // VOPAT1-7: a scroll's ONLY observable is the scroll bar's own AXValueChanged
+  // (6.5 ms). VOPAT2 §2 could not re-confirm it — the unseeded golden's sidebar
+  // has no scroll bar at all — so this campaign's fixture seeds one and the
+  // trace records whether it fired. Nothing depends on it: the loop's own
+  // measured travel is still what decides.
+  want: ["AXValueChanged:AXScrollBar"],
+  timeoutMs: 1_200,
+};
+
+const SETTLE_DROP: SettleSpec = {
+  what: "the sidebar to report the drop",
+  // MEASURED for the first time by this campaign (VOPAT1 never dropped anything
+  // under an observer): a drop is LOUD — `AXRowCountChanged` on the table 350
+  // times and `AXValueChanged` on the scroll bar 81 times across one move, both
+  // arriving immediately. Two plausible candidates were tried and DO NOT fire,
+  // and neither is listed here, because an observable named in a settle that the
+  // app never posts is what VOPAT2-4 cost a whole budget to learn:
+  // `AXSelectedRowsChanged` (a reorder selects nothing) and `AXLayoutChanged`
+  // (VOPAT1-12, silent for a third campaign running).
+  want: ["AXRowCountChanged:AXTable", "AXValueChanged:AXScrollBar"],
+  timeoutMs: 1_500,
+};
+
+/** The ledger's sequence right before an actuation, or null with no observer. */
+async function markNow(ctx: DriveCtx): Promise<number | null> {
+  return ctx.observer === null ? null : await observerMark(ctx.observer);
+}
+
+/**
+ * Wait to be TOLD, and fall through to the wait it replaced when nothing is
+ * said. Returns which of the three happened, for the move's own tally.
+ */
+async function settleSoft(
+  ctx: DriveCtx,
+  spec: SettleSpec,
+  since: number | null,
+  fallbackMs: number,
+): Promise<"observed" | "missed" | "timer"> {
+  if (ctx.observer === null || since === null) {
+    if (fallbackMs > 0) await ctx.sleep(fallbackMs);
+    ctx.tally.settles.timer += 1;
+    return "timer";
+  }
+  const outcome = await observerAwait(ctx.observer, since, spec);
+  if (outcome.ok) {
+    ctx.tally.settles.observed += 1;
+    return "observed";
+  }
+  ctx.tally.settles.missed += 1;
+  if (fallbackMs > 0) await ctx.sleep(fallbackMs);
+  return "missed";
 }
 
 /**
@@ -1617,32 +2159,166 @@ export function snapshotTimeoutMs(rows: number | undefined): number {
   return sidebarStepBudget(rows, CENSUS_EQUIVALENTS["sidebar-snapshot"]);
 }
 
-async function takeSnapshot(ctx: DriveCtx): Promise<SnapshotOutcome> {
-  const res = await runCmd(ctx, snapshotCommand(ctx.areaTitles, ctx.read.depth));
-  if (res.timedOut === true) return { ok: false, why: "timeout" };
-  if (!res.ok) {
-    return { ok: false, why: "dispatch-failed", ...(res.stderr.trim() && { stderr: res.stderr }) };
-  }
-  const out = parseSidebarSnapshot(res.stdout);
-  if (out.ok) {
-    // Remember what this read cost so the next one does not rediscover it.
-    ctx.read.rows = out.snapshot.rows.length;
-    if (out.snapshot.escalated === true && out.snapshot.depth !== undefined) {
-      ctx.read.depth = out.snapshot.depth;
-    }
-    if (out.snapshot.scroll !== null) ctx.read.scrollbar = true;
+/**
+ * Refusals a SPARSE census is not allowed to be believed about. Everything else
+ * it reports — no window, a hidden sidebar, no viewport — it learned from the
+ * same geometry the sweep would have used, so it is reported as it stands.
+ */
+const SPARSE_ESCALATES: ReadonlySet<SnapshotFailure> = new Set<SnapshotFailure>([
+  "no-title-match",
+  "ambiguous-sidebar",
+  "unparsable",
+]);
+
+/**
+ * Carry the map across a DROP: the areas kept their sections and only their
+ * order changed, and the post-drop database assert has already read the new one.
+ */
+function reconcileMap(ctx: DriveCtx, liveTitles: readonly string[]): void {
+  if (ctx.map === null) return;
+  const mapped = ctx.map.areas.map((a) => a.title);
+  if (mapped.length === liveTitles.length && mapped.every((t, i) => t === liveTitles[i])) return;
+  ctx.map = mapAfterReorder(ctx.map, liveTitles);
+}
+
+/**
+ * THE CENSUS (VOPAT2 PR 2). Sparse first, sweep as the oracle.
+ *
+ * The sparse read is believed only when it CONFIRMS: every database area, once,
+ * in database order, among the rows it realized, with every row frame resolved
+ * and the two spacer discriminators agreeing. Any other outcome escalates to the
+ * full depth-2 sweep — the code that shipped before this campaign, unchanged —
+ * and the miss is named in the trace rather than absorbed.
+ */
+async function runCensus(
+  ctx: DriveCtx,
+  cmd: UiCommand,
+  source: MapSource,
+  liveTitles: readonly string[],
+): Promise<SnapshotOutcome | null> {
+  const started = Date.now();
+  const res = await runCmd(ctx, cmd);
+  const outcome: SnapshotOutcome =
+    res.timedOut === true
+      ? { ok: false, why: "timeout" }
+      : res.ok
+        ? parseSidebarSnapshot(res.stdout)
+        : { ok: false, why: "dispatch-failed", ...(res.stderr.trim() && { stderr: res.stderr }) };
+  ctx.tally.censuses += 1;
+  if (source === "sweep") ctx.tally.sweeps += 1;
+  else ctx.tally.sparse += 1;
+
+  const escalate = (miss: string): null => {
+    ctx.tally.escalations += 1;
     trace(() => ({
-      phase: "sidebar-snapshot",
-      rows: out.snapshot.rows.length,
-      depth: out.snapshot.depth ?? null,
-      escalated: out.snapshot.escalated ?? false,
-      matched: out.snapshot.matched ?? null,
-      expected: out.snapshot.expected ?? null,
-      scroll: out.snapshot.scroll,
-      budgetMs: snapshotTimeoutMs(ctx.read.rows),
+      phase: "sidebar-census",
+      source,
+      ok: false,
+      escalated: true,
+      miss,
+      durationMs: Date.now() - started,
     }));
+    return null;
+  };
+
+  if (!outcome.ok) {
+    if (source !== "sweep" && SPARSE_ESCALATES.has(outcome.why)) return escalate(outcome.why);
+    trace(() => ({
+      phase: "sidebar-census",
+      source,
+      ok: false,
+      escalated: false,
+      miss: outcome.why,
+      durationMs: Date.now() - started,
+    }));
+    return outcome;
   }
-  return out;
+
+  const snap = outcome.snapshot;
+  ctx.tally.axCalls += snap.axCalls ?? 0;
+  ctx.tally.rowsRealized += snap.realized ?? snap.rows.length;
+  const classified = classifySpacerRows(snap.rows);
+  const paneIndex = snap.paneIndex ?? ctx.paneIndex;
+  const mapped = mapFromCensus(classified.rows, liveTitles, source, paneIndex);
+  const geomFailed = snap.geomFailed ?? 0;
+  const miss =
+    geomFailed > 0
+      ? `${geomFailed} row frame(s) did not resolve`
+      : classified.disagreements > 0
+        ? `${classified.disagreements} realized row(s) disagree with the height classification`
+        : mapped.ok
+          ? null
+          : mapped.why;
+  if (miss !== null && source !== "sweep") return escalate(miss);
+
+  // Remember what this read cost so the next one does not rediscover it.
+  ctx.read.rows = classified.rows.length;
+  if (snap.escalated === true && snap.depth !== undefined) ctx.read.depth = snap.depth;
+  if (snap.scroll !== null) ctx.read.scrollbar = true;
+  if (paneIndex !== null) ctx.paneIndex = paneIndex;
+  ctx.map = mapped.ok ? mapped.map : null;
+  trace(() => ({
+    phase: "sidebar-census",
+    source,
+    ok: true,
+    escalated: false,
+    rows: classified.rows.length,
+    realized: snap.realized ?? classified.rows.length,
+    axCalls: snap.axCalls ?? null,
+    areasMapped: mapped.ok ? mapped.map.areas.length : 0,
+    ...(miss !== null && { miss }),
+    paneIndex,
+    scroll: snap.scroll,
+    durationMs: Date.now() - started,
+    budgetMs: snapshotTimeoutMs(ctx.read.rows),
+  }));
+  // The trace record the field already reads, kept at its own phase name so the
+  // #672/#676 instrumentation keeps working across this change.
+  trace(() => ({
+    phase: "sidebar-snapshot",
+    rows: classified.rows.length,
+    depth: snap.depth ?? null,
+    escalated: snap.escalated ?? false,
+    matched: snap.matched ?? null,
+    expected: snap.expected ?? null,
+    scroll: snap.scroll,
+    sparse: snap.sparse ?? false,
+    budgetMs: snapshotTimeoutMs(ctx.read.rows),
+  }));
+  return { ok: true, snapshot: { ...snap, rows: classified.rows } };
+}
+
+async function takeSnapshot(ctx: DriveCtx): Promise<SnapshotOutcome> {
+  const liveTitles = ctx.state().areas.map((a) => a.title);
+  reconcileMap(ctx, liveTitles);
+  if (ctx.sparse) {
+    const ordinals =
+      ctx.map === null
+        ? []
+        : ordinalsToRealize(
+            ctx.map.areas.map((a) => a.ordinal),
+            ctx.map.totalRows,
+          );
+    const plan: SparseReadPlan = {
+      paneIndex: ctx.map?.paneIndex ?? ctx.paneIndex,
+      ordinals,
+      maxCandidates: SPARSE_MAX_CANDIDATES,
+    };
+    const sparse = await runCensus(
+      ctx,
+      sparseSnapshotCommand(ctx.areaTitles, plan),
+      ordinals.length > 0 ? "carried" : "section-starts",
+      liveTitles,
+    );
+    if (sparse !== null) return sparse;
+  }
+  const sweep = await runCensus(
+    ctx,
+    snapshotCommand(ctx.areaTitles, ctx.read.depth),
+    "sweep",
+    liveTitles,
+  );
+  return sweep ?? { ok: false, why: "unparsable" };
 }
 
 /** The snapshot when only its presence matters (scroll loops, re-censuses). */
@@ -1744,6 +2420,8 @@ export interface ScrollIteration {
   /** First/last row index inside the visible band, before and after. */
   visibleRowsBefore: [number, number] | null;
   visibleRowsAfter: [number, number] | null;
+  /** Did the scroll bar announce its own change (VOPAT1-7), or was it a timer? */
+  settle?: "observed" | "missed" | "timer";
   stalls: number;
 }
 
@@ -1899,7 +2577,15 @@ async function scrollUntil(
         const ok = goodEnough !== undefined && goodEnough(snap);
         return done(ok ? snap : null, ok ? "reached" : "pinned-at-boundary");
       }
-      res = await runCmd(ctx, scrollToCommand(target, ctx.areaTitles));
+      const sinceBar = await markNow(ctx);
+      ctx.tally.gestures.scroll += 1;
+      res = await runCmd(ctx, scrollToCommand(target, ctx.areaTitles, addressFor(ctx)));
+      // VOPAT1-7's observable, recorded rather than relied on: the write's own
+      // in-script settle has already elapsed by the time this asks, so what
+      // this buys is the CONFIRMATION that the bar moved (and, on a build that
+      // does not post it, a trace record saying so). The loop's verdict is
+      // still its own measured travel.
+      rec.settle = await settleSoft(ctx, SETTLE_SCROLL, sinceBar, 0);
     } else {
       // A wheel click is a QUANTUM: below half of one, the smallest step
       // available overshoots and the loop can only oscillate around the aim
@@ -1915,7 +2601,8 @@ async function scrollUntil(
       lastRequest = clicks;
       rec.requested = clicks;
       rec.direction = clicks < 0 ? -1 : 1;
-      res = await runCmd(ctx, scrollCommand(clicks, ctx.areaTitles));
+      ctx.tally.gestures.scroll += 1;
+      res = await runCmd(ctx, scrollCommand(clicks, ctx.areaTitles, addressFor(ctx)));
     }
 
     if (res.timedOut === true) {
@@ -2116,9 +2803,15 @@ async function toggleDisclosure(
     return refuse("chevron-row-unresolved", false, `"${title}"'s row did not resolve`);
   }
   // the gesture must land before the re-census that judges it
+  const addr = chevronAddressFor(ctx, title, ordinal);
+  // The frame the census that supplied the ordinal measured the row at — the
+  // pointer guard's identity oracle, and null whenever the map is (PTRGD1).
+  const addrRow = addr === null ? null : resolveAreaRow(ready.rows, title, ordinal);
+  const sinceFold = await markNow(ctx);
+  ctx.tally.gestures.chevron += 1;
   const res = await timed(
     "click",
-    () => runCmd(ctx, chevronClickCommand(title, ordinal, ctx.areaTitles)),
+    () => runCmd(ctx, chevronClickCommand(title, ordinal, ctx.areaTitles, addr, addrRow)),
     (r) => {
       const said = r.ok ? parseChevronVerdict(r.stdout) : null;
       return {
@@ -2166,10 +2859,17 @@ async function toggleDisclosure(
   //
   // RE-CENSUS after the input step — a gesture whose effect we cannot see is
   // still never allowed to carry the ladder forward.
+  // The fold changes which ordinal every row below it has, so the map the next
+  // census predicts from is stale the instant the click goes out.
+  ctx.map = null;
+  // SETTLE ON THE APP'S OWN REPORT (VOPAT1-8): a fold posts one
+  // `AXRowCountChanged` per row on the table, ~62 ms after the gesture
+  // completes. The 600 ms it replaces is what a miss still costs, and the
+  // re-census below is still what decides.
   await timed(
     "settle",
-    () => ctx.sleep(600),
-    () => ({ ok: true }),
+    () => settleSoft(ctx, SETTLE_FOLD, sinceFold, 600),
+    (how) => ({ ok: true, extra: { settle: how } }),
   );
   const after = await timed(
     "census-after",
@@ -2363,8 +3063,17 @@ async function performDrag(
   drop: PlannedDrop,
 ): Promise<{ ok: boolean; why?: string }> {
   const grab = grabPoint(drop.source);
+  const since = await markNow(ctx);
+  ctx.tally.gestures.drag += 1;
   const res = await runCmd(ctx, dragCommand(grab.x, grab.y, grab.x, drop.dropY, drop.source));
-  if (res.ok && res.stdout.includes("DONE")) return { ok: true };
+  if (res.ok && res.stdout.includes("DONE")) {
+    // What a reordering sidebar announces on DROP was never measured (VOPAT1
+    // observed no drop), so this waits for the plausible candidates and costs
+    // nothing when they do not come: the database assert that follows is the
+    // oracle, and it is a local SQLite read.
+    await settleSoft(ctx, SETTLE_DROP, since, 0);
+    return { ok: true };
+  }
   const why = pointerGuardWhy(res);
   return { ok: false, ...(why !== null && { why }) };
 }
@@ -2462,6 +3171,13 @@ export async function driveSidebarAreaReorder(
   run: UiRunner,
   aux: UiDriveAux,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  /**
+   * The drive's AX settle observer, when the host can have one (VOPAT2). Null on
+   * a deputy-routed Mac, a Mac with no Command Line Tools, or with the observer
+   * switched off — and then every settle here is the fixed wait it always was.
+   */
+  observer: ObserverSession | null = null,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<DragDriveResult> {
   if (aux.areaState === undefined) {
     return {
@@ -2478,6 +3194,11 @@ export async function driveSidebarAreaReorder(
     sleep,
     areaTitles: areaTitlesForRestore,
     read: {},
+    observer,
+    map: null,
+    paneIndex: null,
+    sparse: env[SPARSE_ENV] !== "0",
+    tally: newTally(),
   };
   // The collapse rung's ledger, owned OUT HERE so the restore epilogue covers
   // every way the ladder can end — including a throw (FGRD2 cleanup shape).
@@ -2486,17 +3207,37 @@ export async function driveSidebarAreaReorder(
   // revealed is hidden again on EVERY exit path. The user's window chrome is
   // theirs; a move must not silently leave it changed (SBCOL1 precedent).
   const chrome: ChromeLedger = { revealedSidebar: false };
+  const started = Date.now();
+  /**
+   * WHAT THE MOVE COST, in the units that transfer between hosts (VOPAT1 §0):
+   * censuses, round-trips, ROWS REALIZED, gestures and how each settle ended.
+   * This is the instrument the next decision needs — the fold-all-then-one-drag
+   * ladder has to be priced by MODEL at the field's constants, because the lab
+   * is ~25× optimistic on exactly the term being compared (SBCHV1 §4).
+   */
+  const report = (): void => {
+    trace(() => ({
+      phase: "sidebar-move-cost",
+      elapsedMs: Date.now() - started,
+      sparseEnabled: ctx.sparse,
+      observer: ctx.observer !== null,
+      rows: ctx.read.rows ?? null,
+      ...ctx.tally,
+    }));
+  };
   try {
     const result = await runDragLadder(ctx, spec, collapsed, chrome);
     // the ladder (and any recovery drag inside it) must finish before the
     // sidebar is folded back — the recovery needs the cleared path too
     const restoreFailed = await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
     const chromeNote = await restoreChrome(ctx, chrome);
+    report();
     return withChromeOutcome(withCollapseOutcome(result, collapsed, restoreFailed), chromeNote);
   } catch (err) {
     // the sidebar is put back even when the ladder blew up
     await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
     await restoreChrome(ctx, chrome);
+    report();
     throw err;
   }
 }
@@ -2519,6 +3260,7 @@ async function revealSidebar(
   ctx: DriveCtx,
   chrome: ChromeLedger,
 ): Promise<{ ok: true; snapshot: SidebarSnapshot } | { ok: false; why: string }> {
+  ctx.tally.gestures.visibility += 1;
   const res = await runCmd(ctx, sidebarVisibilityCommand("show"));
   let clicked = false;
   let why = "the View menu did not respond";
@@ -2542,6 +3284,7 @@ async function revealSidebar(
 /** Put the window chrome back. Runs on every exit path. */
 async function restoreChrome(ctx: DriveCtx, chrome: ChromeLedger): Promise<string | null> {
   if (!chrome.revealedSidebar) return null;
+  ctx.tally.gestures.visibility += 1;
   const res = await runCmd(ctx, sidebarVisibilityCommand("hide"));
   let clicked = false;
   if (res.ok) {

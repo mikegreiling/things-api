@@ -130,7 +130,22 @@ ObjC.import('ApplicationServices');
 ObjC.import('CoreGraphics');
 function pidOf(n){ return Application('System Events').processes.byName(n).unixId() }
 function sleep(ms){ $.NSThread.sleepForTimeInterval(ms/1000) }
-function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]) }
+/*
+ * TWO COUNTERS EVERY SCRIPT REPORTS (VOPAT2 PR 2). They live here because this
+ * is where the calls are made, and they are the two quantities that TRANSFER
+ * between hosts — a lab wall time does not.
+ *   AXN  synchronous AX round-trips into Things' main thread. SBCHV1 §4 priced
+ *        one at 18.6 ms on the maintainer's M1 against 0.73 ms in a clone.
+ *   AXR  ROWS REALIZED — rows whose CONTENT was touched, which is what makes
+ *        the app draw a custom row view it was not drawing (~115 ms apiece on a
+ *        real display, VOPAT1 §7). This is the term the sparse census cuts, and
+ *        the one a headless clone can count but never feel.
+ * Incrementing here also prices the pointer guard itself, which is the honest
+ * place for its cost to show up.
+ */
+var AXN = 0;
+var AXR = 0;
+function attr(el,name){ AXN++; var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]) }
 function sv(el,name){ var v=attr(el,name); return v? v.js : '' }
 function rectOf(p,z){ if(!p||!z) return null;
   var pd=ObjC.castRefToObject($.CFCopyDescription(p)).js, zd=ObjC.castRefToObject($.CFCopyDescription(z)).js;

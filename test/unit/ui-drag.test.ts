@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { ObserverSession } from "../../src/write/vectors/ui-observer.ts";
 import type { UiCommand, UiRunResult } from "../../src/write/vectors/ui.ts";
 import {
   areaRowsInOrder,
@@ -19,6 +20,7 @@ import {
   driveSidebarAreaReorder,
   findAreaRow,
   findAreaRowNth,
+  jxaSidebarScrollToScript,
   jxaSidebarSnapshotScript,
   describeScrollStop,
   jxaSidebarVisibilityScript,
@@ -254,6 +256,12 @@ interface SimOptions {
   sidebarHidden?: boolean;
   /** The View menu has no Show Sidebar item — the rung cannot normalize. */
   revealRefused?: boolean;
+  /**
+   * VOPAT2 PR 2. The Nth sparse census (1-based) hands back a WRONG title at one
+   * of the ordinals it was asked to realize — the prediction-missed case, which
+   * must escalate to the full sweep rather than be believed.
+   */
+  sparseMismatchAt?: number;
 }
 
 interface Sim {
@@ -263,6 +271,10 @@ interface Sim {
   /** Every command as dispatched — `meta` carries the scroll MECHANISM. */
   commands: UiCommand[];
   order: () => string[];
+  /** ROWS REALIZED across the whole drive — the metric that transfers (VOPAT1). */
+  realized: () => number;
+  /** One entry per census: "sparse" or "sweep". */
+  censuses: () => string[];
 }
 
 const uuidOf = (t: string): string => `u-${t}`;
@@ -295,6 +307,48 @@ function makeSim(options: SimOptions): Sim {
       ],
     });
 
+  /**
+   * THE SPARSE CENSUS, simulated (VOPAT2 PR 2): geometry for every row, content
+   * for the ordinals the driver predicted — or, with no prediction, for the
+   * section starts the geometry itself exposes. The counters it reports are the
+   * ones the driver tallies, so a test can assert what a move COST.
+   */
+  const sparseSnapshot = (ordinals: number[]): string => {
+    const parsed = JSON.parse(snapshot()) as {
+      viewport: SidebarRect;
+      scroll: number | null;
+      rows: SidebarRowInfo[];
+    };
+    const all = parsed.rows;
+    const starts = all
+      .map((_, i) => i)
+      .filter((i) => all[i]?.h === ROW_H && (i === 0 || all[i - 1]?.h !== ROW_H));
+    const want = ordinals.length > 0 ? ordinals : starts;
+    sparseCensuses += 1;
+    const spoil = options.sparseMismatchAt === sparseCensuses;
+    const rows = all.map((r, i) => {
+      if (!want.includes(i)) return { x: r.x, y: r.y, w: r.w, h: r.h, text: "", read: false };
+      const text = spoil && want.indexOf(i) === want.length - 1 ? "Somewhere Else" : r.text;
+      return { x: r.x, y: r.y, w: r.w, h: r.h, text, read: true };
+    });
+    realizedRows += want.length;
+    return JSON.stringify({
+      ok: true,
+      viewport: parsed.viewport,
+      scroll: parsed.scroll,
+      rows,
+      sparse: true,
+      paneIndex: 1,
+      depth: 2,
+      geomFailed: 0,
+      // AXRows + one batched geometry fetch per row + ~5 calls per realized row.
+      axCalls: 1 + all.length + want.length * 5,
+      realized: want.length,
+      matched: order.filter((t) => rows.some((r) => r.read && r.text.includes(t))).length,
+      expected: order.length,
+    });
+  };
+
   const applyDrag = (sy: number, ty: number): void => {
     const si = order.findIndex((_, i) => sy >= staticTop(i) && sy <= staticTop(i) + ROW_H);
     if (si < 0) return; // grab missed — no-op, like the real app
@@ -322,6 +376,9 @@ function makeSim(options: SimOptions): Sim {
 
   const commands: UiCommand[] = [];
   let snapshots = 0;
+  let sparseCensuses = 0;
+  let realizedRows = 0;
+  const censusKinds: string[] = [];
   const run = (command: UiCommand): Promise<UiRunResult> => {
     log.push(command.primitive);
     commands.push(command);
@@ -341,7 +398,19 @@ function makeSim(options: SimOptions): Sim {
           stderr: "",
         });
       }
-      return Promise.resolve({ ok: true, stdout: snapshot(), stderr: "" });
+      const meta = command.meta as { sparse?: boolean; ordinals?: number[] } | undefined;
+      if (meta?.sparse === true) {
+        censusKinds.push("sparse");
+        return Promise.resolve({
+          ok: true,
+          stdout: sparseSnapshot(meta.ordinals ?? []),
+          stderr: "",
+        });
+      }
+      censusKinds.push("sweep");
+      const full = snapshot();
+      realizedRows += (JSON.parse(full) as { rows: unknown[] }).rows.length;
+      return Promise.resolve({ ok: true, stdout: full, stderr: "" });
     }
     if (command.primitive === "sidebar-visibility") {
       const showing = script.includes("Show Sidebar");
@@ -427,6 +496,8 @@ function makeSim(options: SimOptions): Sim {
     log,
     commands,
     order: () => [...order],
+    realized: () => realizedRows,
+    censuses: () => [...censusKinds],
     aux: {
       areaState: (): AreaSidebarState => ({
         areas: order.map((t, i) => ({ uuid: uuidOf(t), title: t, index: (i + 1) * 10 })),
@@ -442,12 +513,16 @@ function drive(
   sim: Sim,
   target: string,
   placement: SidebarPlacement,
+  env: NodeJS.ProcessEnv = {},
+  observer: ObserverSession | null = null,
 ): ReturnType<typeof driveSidebarAreaReorder> {
   return driveSidebarAreaReorder(
     { targetUuid: `u-${target}`, targetTitle: target, placement },
     sim.run,
     sim.aux,
     instantSleep,
+    observer,
+    env,
   );
 }
 
@@ -1390,5 +1465,122 @@ describe("the sidebar read scales with the sidebar", () => {
     expect(line).toContain('script reached "rows"');
     expect(line).toContain("in-script sidebar=16033 rows=13900");
     expect(line).not.toContain("total=");
+  });
+});
+
+// ---------------------------- the sparse census (VOPAT2 PR 2, #676)
+
+describe("the sparse census — geometry for all, content for the predicted few", () => {
+  it("realizes a handful of rows per census, not the whole sidebar", async () => {
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    const res = await drive(sim, "A2", { kind: "last" });
+    expect(res.ok, res.detail).toBe(true);
+    // Every census read sparsely; none had to fall back to the sweep.
+    expect(sim.censuses().length).toBeGreaterThan(3);
+    expect(sim.censuses().every((k) => k === "sparse")).toBe(true);
+    // 20 areas + 2 built-ins, each with a spacer = 44 rows per census. The sweep
+    // realized all of them every time; the sparse read realizes the area rows
+    // (plus the built-in section start on the first census, before there is a
+    // prediction to work from).
+    const sweepWouldHave = sim.censuses().length * 44;
+    expect(sim.realized()).toBeLessThan(sweepWouldHave / 2);
+  });
+
+  it("addresses the scroll bar by pane index once a census has resolved one", async () => {
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    await drive(sim, "A2", { kind: "last" });
+    const scrolls = sim.commands.filter((c) => c.primitive === "sidebar-scroll");
+    expect(scrolls.length).toBeGreaterThan(0);
+    for (const c of scrolls) {
+      // The ordinal-addressed form: no census, and it re-confirms the pane by
+      // realizing the one area row the map named.
+      expect((c.meta as { sparse: boolean }).sparse).toBe(true);
+      expect(c.script ?? "").toContain("var PANE = 1");
+      expect(c.script ?? "").not.toContain("resolveSidebar(TITLES");
+    }
+  });
+
+  it("the FIRST census has no prediction and lets the geometry choose", async () => {
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    await drive(sim, "A2", { kind: "last" });
+    const censuses = sim.commands.filter((c) => c.primitive === "sidebar-snapshot");
+    const first = censuses[0]?.meta as { paneIndex: number | null; ordinals: number[] };
+    expect(first.paneIndex).toBeNull();
+    expect(first.ordinals).toEqual([]);
+    // and by the second one the map is carrying ordinals forward
+    const second = censuses[1]?.meta as { paneIndex: number | null; ordinals: number[] };
+    expect(second.paneIndex).toBe(1);
+    expect(second.ordinals.length).toBe(20);
+  });
+
+  it("escalates to the full sweep when a prediction does not confirm", async () => {
+    // The second sparse census hands back a wrong title at an ordinal it was
+    // asked to realize. That is a prediction that cannot be believed, so the
+    // census re-runs as the depth-2 sweep — the oracle — and the move lands.
+    const sim = makeSim({ titles: tall(20), viewportH: 200, sparseMismatchAt: 2 });
+    const res = await drive(sim, "A2", { kind: "last" });
+    expect(res.ok, res.detail).toBe(true);
+    expect(sim.order().at(-1)).toBe("A2");
+    expect(sim.censuses()[0]).toBe("sparse");
+    // The miss was answered by the oracle, in the same census slot.
+    expect(sim.censuses()[1]).toBe("sparse");
+    expect(sim.censuses()[2]).toBe("sweep");
+  });
+
+  it("switched off, every census is the sweep and every script is the old one", async () => {
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    // The locator's title list is the drive's OPENING order, read once (SBRES1).
+    const titles = sim.aux.areaState().areas.map((a) => a.title);
+    const res = await drive(sim, "A2", { kind: "last" }, { THINGS_API_SIDEBAR_SPARSE: "0" });
+    expect(res.ok, res.detail).toBe(true);
+    expect(sim.censuses().every((k) => k === "sweep")).toBe(true);
+    // BYTE-IDENTICAL FALLBACK: the scroll dispatches are the census-addressed
+    // scripts that shipped before this campaign, not a variant of them.
+    const scrolls = sim.commands.filter((c) => c.primitive === "sidebar-scroll");
+    expect(scrolls.length).toBeGreaterThan(0);
+    for (const c of scrolls) {
+      const fraction = (c.meta as { fraction: number }).fraction;
+      expect(c.script).toBe(jxaSidebarScrollToScript(fraction, titles));
+    }
+  });
+
+  it("a fold invalidates the ordinals it moved, so the next census re-derives", async () => {
+    // A collapse changes which ordinal every row below it has. The census after
+    // one must therefore arrive with NO carried prediction.
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    await drive(sim, "A2", { kind: "last" });
+    const seq = sim.commands
+      .filter((c) => c.primitive === "sidebar-snapshot" || c.primitive === "sidebar-chevron")
+      .map((c) => ({
+        primitive: c.primitive,
+        ordinals: (c.meta as { ordinals?: number[] }).ordinals,
+      }));
+    const firstChevron = seq.findIndex((e) => e.primitive === "sidebar-chevron");
+    if (firstChevron >= 0) {
+      const next = seq.slice(firstChevron + 1).find((e) => e.primitive === "sidebar-snapshot");
+      expect(next?.ordinals).toEqual([]);
+    }
+  });
+});
+
+describe("the settle observer, when it is not there (VOPAT2 PR 2)", () => {
+  it("a session whose socket never answers is a FALLBACK, not a failure", async () => {
+    // The AX-scrutiny doctrine's fail direction, in the one shape that is easy
+    // to get wrong: an ARMED settle that never resolves must cost the fixed wait
+    // it replaced and let the step's own closed loop decide — never refuse the
+    // move. This session points at a socket that does not exist, which is what a
+    // sidecar reaped mid-drive looks like from node.
+    const dead: ObserverSession = {
+      transport: "sidecar",
+      socketPath: "/tmp/things-api-vopat2-no-such-socket.sock",
+      token: "0".repeat(32),
+      logPath: "/tmp/things-api-vopat2-no-such.log",
+      registered: "0/0",
+      pid: 0,
+    };
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    const res = await drive(sim, "A2", { kind: "last" }, {}, dead);
+    expect(res.ok, res.detail).toBe(true);
+    expect(sim.order().at(-1)).toBe("A2");
   });
 });

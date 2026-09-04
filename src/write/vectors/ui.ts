@@ -4604,7 +4604,13 @@ function auditFailureText(res: UiRunResult): string {
  * spawns nothing (VOPAT2).
  */
 function recipeWantsObserver(recipe: UiRecipe): boolean {
-  return recipe.steps.some((step) => step.settle !== undefined);
+  // A drag-reorder step carries no `settle` of its own — its settles live inside
+  // the ladder (ui-drag.ts), which is handed the session below — so it has to
+  // ask for the sidecar here or the sidebar drive would never get one
+  // (VOPAT2 PR 2: the fold's `AXRowCountChanged` is the 600 ms it replaces).
+  return recipe.steps.some(
+    (step) => step.settle !== undefined || step.primitive === "drag-reorder",
+  );
 }
 
 /**
@@ -5069,7 +5075,13 @@ async function driveSteps(
       // No sheet is involved in a drag, so no dismissal clause.
       if (step.drag === undefined) return partial(step.label, "no drag spec compiled");
       // the drag ladder depends on the UI state the preamble produced
-      const outcome = await driveSidebarAreaReorder(step.drag, run, aux);
+      const outcome = await driveSidebarAreaReorder(
+        step.drag,
+        run,
+        aux,
+        undefined,
+        observer.session,
+      );
       // SBCOL1: a move that needed the collapse rung changed the sidebar's
       // disclosure state to get there. That state lives in Things' own
       // preferences and SURVIVES A RELAUNCH, so the caller is told which areas
