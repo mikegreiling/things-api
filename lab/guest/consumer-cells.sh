@@ -1,6 +1,10 @@
 #!/bin/bash
 # Runs ON THE GUEST, offline. The artifact under test is the tarball npm serves.
 set -u
+# The version this drill is certifying. `consumer-drill.sh` passes it from the
+# tarball it downloaded; hardcoding one release's number meant the NEXT release
+# failed the drill on nothing but a stale literal (v0.20.10).
+EXPECT_VERSION="${EXPECT_VERSION:-}"
 FAIL=0
 ok(){ echo "ok   $*"; }
 bad(){ echo "FAIL $*"; FAIL=$((FAIL+1)); }
@@ -11,7 +15,8 @@ shasum -a 256 published.tgz
 rm -rf pkg && mkdir pkg && tar xzf published.tgz -C pkg
 PKG="$HOME/consumer/pkg/package"
 VER=$(python3 -c "import json;print(json.load(open('$PKG/package.json'))['version'])")
-[ "$VER" = "0.20.9" ] && ok "package.json version 0.20.9" || bad "version is $VER"
+[ -n "$EXPECT_VERSION" ] || EXPECT_VERSION="$VER"
+[ "$VER" = "$EXPECT_VERSION" ] && ok "package.json version $VER" || bad "version is $VER, expected $EXPECT_VERSION"
 
 echo ""
 echo "== the installed CLI answers =="
@@ -23,7 +28,7 @@ mkdir -p "$PKG/node_modules"
 cp -R "$HOME/consumer/deps/." "$PKG/node_modules/" 2>/dev/null || true
 echo "     node_modules provided: $(ls "$PKG/node_modules" | tr '\n' ' ')"
 OUT=$("$HOME/consumer/bin/node" "$PKG/bin/things.js" --version 2>/dev/null)
-[ "$OUT" = "0.20.9" ] && ok "things --version -> $OUT" || bad "things --version -> $OUT"
+[ "$OUT" = "$EXPECT_VERSION" ] && ok "things --version -> $OUT" || bad "things --version -> $OUT, expected $EXPECT_VERSION"
 "$HOME/consumer/bin/node" "$PKG/bin/things.js" --help >/dev/null 2>&1 && ok "things --help renders" || bad "things --help failed"
 
 echo ""

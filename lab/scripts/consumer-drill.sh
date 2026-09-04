@@ -43,7 +43,11 @@ lab_ssh "$IP" 'chmod +x ~/consumer/bin/node'
 lab_scp "${CELLS:-lab/guest/consumer-cells.sh}" "admin@$IP:consumer/cells.sh"
 lab_ssh "$IP" 'chmod +x ~/consumer/cells.sh'
 set +e
-lab_ssh "$IP" 'bash ~/consumer/cells.sh' | tee "$ART/consumer-transcript.log"
+# The version under test comes from the tarball's own package.json, so the
+# drill never has to be edited for a new release.
+EXPECT_VERSION="${EXPECT_VERSION:-$(tar xzOf "$TGZ" package/package.json | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')}"
+echo "[drill] certifying version $EXPECT_VERSION"
+lab_ssh "$IP" "EXPECT_VERSION='$EXPECT_VERSION' bash ~/consumer/cells.sh" | tee "$ART/consumer-transcript.log"
 RESULT=${PIPESTATUS[0]}
 set -e
 echo "[drill] exit=$RESULT — artifacts in $ART"
