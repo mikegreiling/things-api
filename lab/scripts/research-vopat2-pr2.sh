@@ -85,6 +85,18 @@ RUNAS="$LAB_DIRECT"
 [ "$ROUTED" = "1" ] && RUNAS=""
 G() { lab_ssh "$IP" "$RUNAS $CLI $*; echo EXIT=\$?" </dev/null 2>&1; }
 
+PLIST_PATH='~/Library/Group\ Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist'
+# The ONLY place a disclosure fold lives (SBCOL1 §3), and it survives a relaunch —
+# which is what makes an unrestored fold a durable change to the user's sidebar,
+# and what makes it the honest restoration oracle. Comparing per-section row
+# COUNTS across a move is the WRONG test and SBCHV1 §8.2 already said so: the
+# last area's section runs to the table bottom, so a reorder swaps neighbouring
+# counts and the comparison reports NO for a sidebar that is perfectly restored.
+# `plutil -extract <array> raw` prints the element COUNT, not the elements.
+collapsed_uuids() {
+  lab_ssh "$IP" "plutil -extract collapsedAreaUUIDs xml1 -o - $PLIST_PATH 2>/dev/null || true" </dev/null \
+    | sed -n 's:.*<string>\(.*\)</string>.*:\1:p' | tr -d '\r'
+}
 area_order()    { gq 'SELECT COALESCE(group_concat(t," < "),"(none)") FROM (SELECT title AS t FROM TMArea ORDER BY "index", uuid)'; }
 areacount()     { gq 'SELECT COUNT(*) FROM TMArea'; }
 assign_digest() { gq "SELECT uuid||':'||COALESCE(area,'') FROM TMTask WHERE trashed=0 ORDER BY uuid" | shasum | cut -c1-12; }
@@ -190,6 +202,7 @@ if [ "$CMD" = "setup" ]; then
   note "airgap: $AG"; [ "$AG" = "AIRGAP-OK" ] || exit 1
   lab_ssh "$IP" "sudo systemsetup -setusingnetworktime off >/dev/null 2>&1; sudo date $PIN >/dev/null" </dev/null
   note "clock: $(lab_ssh "$IP" 'date +%Y-%m-%dT%H:%M' </dev/null) (trial wall 2026-07-18 — never rolled)"
+  lab_mute_guest "$IP"
 
   lab_ssh "$IP" 'mkdir -p ~/labh ~/things-lab/run ~/things-lab/bin ~/things-lab/things-api/node_modules' </dev/null
   printf '%s\n' "$GSQL" | lab_ssh "$IP" 'cat > ~/labh/gsql.sh; chmod +x ~/labh/gsql.sh'
@@ -210,7 +223,7 @@ if [ "$CMD" = "setup" ]; then
   scpO "$NODE_BIN" "admin@$IP:/Users/admin/things-lab/bin/node" >/dev/null
   lab_ssh "$IP" 'rm -rf ~/things-lab/things-api/dist' </dev/null
   scpO -r dist "admin@$IP:/Users/admin/things-lab/things-api/" >/dev/null
-  scpO -r node_modules/commander "admin@$IP:/Users/admin/things-lab/things-api/node_modules/commander" >/dev/null
+  scpO -r "$(lab_commander_dir)" "admin@$IP:/Users/admin/things-lab/things-api/node_modules/commander" >/dev/null
   scpO package.json "admin@$IP:/Users/admin/things-lab/things-api/package.json" >/dev/null
   lab_ssh "$IP" 'chmod +x ~/things-lab/bin/node' </dev/null
   lab_ssh "$IP" "$CLI config set ui-enabled true" </dev/null >/dev/null 2>&1
@@ -384,8 +397,6 @@ if [ "$CMD" = "dbpredict" ]; then
   warm; setwin "${WIN_W:-935}" "${WIN_H:-420}" >/dev/null; sleep 2; activate
   to_top
   note "=== dbpredict — the DB row model vs the sweep's ordinals ==="
-  PLIST='~/Library/Group\ Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist'
-  collapsed_uuids() { lab_ssh "$IP" "plutil -extract collapsedAreaUUIDs raw -o - $PLIST 2>/dev/null || echo '(absent)'" </dev/null | tr -d '\r'; }
   note "  collapsedAreaUUIDs (all expanded): [$(collapsed_uuids | tr '\n' ' ')]"
   gq 'SELECT a.uuid||":"||a.title||":"||(SELECT COUNT(*) FROM TMTask t WHERE t.area=a.uuid AND t.type=1 AND t.trashed=0 AND t.status=0) FROM TMArea a ORDER BY a."index", a.uuid' > "$OUT/ax/db-areas.txt"
   runjs sweep.jxa.js > "$OUT/ax/sweep-dbpredict.json"
@@ -459,6 +470,22 @@ if [ "$CMD" = "e2e" ]; then
   # ADVERSARIAL POINTER (SBSCR1): parked OFF the sidebar for the first half of
   # the cells and ON it for the second, because a synthesized wheel event goes
   # to the view under the pointer and a drag must not care where it was.
+  first_area() { gq 'SELECT title FROM TMArea ORDER BY "index", uuid LIMIT 1'; }
+  last_area()  { gq 'SELECT title FROM TMArea ORDER BY "index" DESC, uuid DESC LIMIT 1'; }
+  # ends <label> <area> <cmd...> — drive <area> to whichever end it is NOT at, so
+  # a cell run twice in a row still drives a real move both times.
+  ends() {
+    local label="$1" area="$2"; shift 2
+    local far="--end" near="--start"
+    case "$1" in "area") far="--last"; near="--first" ;; esac
+    if [ "$(last_area)" = "$area" ]; then
+      note "  ($label: \"$area\" is already last — aiming at the other end)"
+      move "$label" "$@" "$area" "$near"
+    else
+      move "$label" "$@" "$area" "$far"
+    fi
+  }
+
   move() { # <label> <cli args...>
     local label="$1"; shift
     to_top
@@ -480,16 +507,33 @@ if [ "$CMD" = "e2e" ]; then
     note "    assignments invariant: $([ "$B_DIG" = "$(assign_digest)" ] && echo PASS || echo FAIL)"
     sleep 2
     runjs sweep.jxa.js > "$OUT/ax/e2e-$label-post.json"
-    note "    disclosure restored? $(python3 lab/scripts/vopat2pr2-rowkinds.py --sections-equal "$OUT/ax/e2e-$label-pre.json" "$OUT/ax/e2e-$label-post.json" "$TITLES")"
+    local ROWS_PRE ROWS_POST FOLDS
+    ROWS_PRE=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("rows",[])))' "$OUT/ax/e2e-$label-pre.json")
+    ROWS_POST=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("rows",[])))' "$OUT/ax/e2e-$label-post.json")
+    FOLDS=$(collapsed_uuids | grep -c . || true)
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ "${FOLDS:-0}" = "0" ] && break
+      sleep 1
+      FOLDS=$(collapsed_uuids | grep -c . || true)
+    done
+    note "    disclosure restored? $([ "$ROWS_PRE" = "$ROWS_POST" ] && [ "${FOLDS:-0}" = "0" ] && echo "YES (rows $ROWS_PRE, collapsedAreaUUIDs empty)" || echo "NO (rows $ROWS_PRE -> $ROWS_POST, collapsedAreaUUIDs=$FOLDS)")"
     lab_ssh "$IP" 'THINGS_LAB_BEEPS_OK=1 ~/labh/beep-sentinel.sh assert --json ~/labh/beeps.json --name vopat2pr2' </dev/null 2>&1 | tail -3 | sed 's/^/    beeps: /' | tee -a "$REPORT"
   }
   note "  pointer parked OFF the sidebar: $(M park 5 5)"
-  move "to-last-two-walls" reorder Alpha --end
-  move "to-first"          reorder Mu --start
-  move "mid-before"        area reorder Beta --before Iota
+  ends "to-last-two-walls" Alpha reorder
+  ends "to-first"          Mu    reorder
+  nth_area() { gq "SELECT title FROM TMArea ORDER BY \"index\", uuid LIMIT 1 OFFSET $1"; }
+  move "mid-before"        area reorder Beta --before "$(nth_area 3)"
   note "  pointer parked ON the sidebar: $(M park 120 200)"
-  move "mid-after"         area reorder Kappa --after Zeta
-  move "dupe-pair"         area reorder Twin --start
+  move "mid-after"         area reorder Kappa --after "$(nth_area 11)"
+  # `area reorder` takes --first/--last; --start/--end belong to the universal
+  # `reorder`. And a duplicate NAME ref is refused BY DESIGN
+  # (H-UNKNOWN-DESTINATION) — AXDRAG4's positional path is reached by targeting
+  # the UUID, so both halves are certified: the refusal, and the move.
+  TWIN_UUID=$(gq 'SELECT uuid FROM TMArea WHERE title="Twin" ORDER BY "index", uuid LIMIT 1')
+  note "  duplicate-title pair: the first \"Twin\" by uuid is $TWIN_UUID"
+  move "dupe-name-refused" area reorder Twin --first
+  ends "dupe-pair"         "$TWIN_UUID" area reorder
   exit 0
 fi
 
@@ -502,25 +546,59 @@ if [ "$CMD" = "abort" ]; then
   warm; setwin "${WIN_W:-935}" "${WIN_H:-420}" >/dev/null; sleep 2; activate
   to_top
   note "=== abort — the drive dies after the fold; is the sidebar put back? ==="
-  PLIST='~/Library/Group\ Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist'
-  collapsed_n() { lab_ssh "$IP" "plutil -extract collapsedAreaUUIDs raw -o - $PLIST 2>/dev/null | grep -c . || echo 0" </dev/null | tr -d ' \r\n'; }
-  note "  collapsed before: $(collapsed_n)"
-  note "  rows before: $(rows_now)"
-  lab_ssh "$IP" "$RUNAS THINGS_API_TRACE=1 $CLI reorder Alpha --end --dangerously-drive-gui --json >/tmp/abort.json 2>&1 & echo started" </dev/null
+  collapsed_n() { collapsed_uuids | grep -c . || true; }
+  # WATCH THE ROWS, NOT THE PREFERENCE. `collapsedAreaUUIDs` is where a fold
+  # LIVES (SBCOL1 §3) but Things writes it lazily — measured this campaign at
+  # more than two seconds behind a completed drive, in both directions — so it
+  # cannot tell this cell when to pull the trigger. The AX row count can: a
+  # fold is visible in the tree the instant the section collapses.
+  BASE_ROWS=$(rows_now)
+  note "  collapsed before: $(collapsed_n)   rows before: $BASE_ROWS"
+  SUBJ_ABORT="${SUBJ_ABORT:-$(gq 'SELECT title FROM TMArea ORDER BY "index", uuid LIMIT 1')}"
+  note "  driving \"$SUBJ_ABORT\" --last, killing it the moment a section folds"
+  lab_ssh "$IP" "$RUNAS THINGS_API_TRACE=1 $CLI area reorder '$SUBJ_ABORT' --last --dangerously-drive-gui --json >/tmp/abort.json 2>&1 & echo started" </dev/null
+  FOLDED=no
   for i in $(seq 1 90); do
-    C=$(collapsed_n)
-    if [ "${C:-0}" != "0" ]; then note "  fold landed after ${i}s (collapsed=$C) — killing the drive"; break; fi
+    R=$(rows_now)
+    if [ -n "$R" ] && [ "$R" -lt "$BASE_ROWS" ]; then
+      note "  fold landed after ${i}s (rows $BASE_ROWS -> $R) — killing the drive"; FOLDED=yes; break
+    fi
     sleep 1
   done
+  [ "$FOLDED" = "yes" ] || note "  WARNING: no fold observed — the kill below proves nothing"
   lab_ssh "$IP" 'pkill -f "dist/cli/main.js" ; true' </dev/null >/dev/null 2>&1
   sleep 3
-  note "  collapsed after the kill: $(collapsed_n)  (a durable change if non-zero)"
-  note "  rows after the kill: $(rows_now)"
-  note "  --- the NEXT drive must restore what the killed one left folded ---"
-  G reorder Alpha --start --dangerously-drive-gui --json > "$OUT/abort-recover.json" 2>&1
-  head -c 1200 "$OUT/abort-recover.json" | tee -a "$REPORT"; echo | tee -a "$REPORT"
-  note "  collapsed after the recovery drive: $(collapsed_n)"
-  note "  rows after the recovery drive: $(rows_now)"
+  KILLED_ROWS=$(rows_now)
+  note "  collapsed after the kill: $(collapsed_n)   rows: $KILLED_ROWS"
+  # WHAT THE CONTRACT ACTUALLY SAYS (SBCOL1 §6). A SIGKILLed drive cannot
+  # restore anything — no `finally` runs in a process that is gone — so the
+  # fold is EXPECTED to survive, and that is precisely why the disclosure
+  # state is disclosed in the result rather than assumed: an unrestored fold
+  # is a durable change to the user's sidebar. What must hold is the pair
+  # below: the residue is real and visible, and a LATER drive neither adopts
+  # it nor is confused by it — it folds and restores only what it did itself.
+  note "  residue is real and visible? $([ "$KILLED_ROWS" -lt "$BASE_ROWS" ] && echo "YES (the killed drive left a section folded)" || echo "NO")"
+  note "  --- a LATER drive on the folded sidebar: does it work, and leave the residue alone? ---"
+  SUBJ2=$(gq 'SELECT title FROM TMArea ORDER BY "index", uuid LIMIT 1')
+  BEFORE2=$(area_order)
+  G area reorder "$SUBJ2" --last --dangerously-drive-gui --json > "$OUT/abort-recover.json" 2>&1
+  head -c 900 "$OUT/abort-recover.json" | tee -a "$REPORT"; echo | tee -a "$REPORT"
+  note "  order before: $BEFORE2"
+  note "  order after:  $(area_order)"
+  note "  rows after the later drive: $(rows_now) (the residue is the caller's to undo, not ours)"
+  note "  --- fixture hygiene: unfold everything again ---"
+  # Toggling every chevron is NOT an unfold — it collapses whatever was
+  # expanded. The fold set is a single preference key (SBCOL1 §3), so the
+  # deterministic reset is to empty it with the app closed and reopen. This is
+  # a FIXTURE reset in a disposable clone, never a shipped mechanism: the
+  # driver may only ever fold and unfold through the app's own chevrons.
+  # The GROUP CONTAINER plist, not the `defaults` user domain of the same name —
+  # they are different files and deleting the key in the latter does nothing.
+  PREF_DOMAIN='$HOME/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac'
+  lab_ssh "$IP" "osascript -e 'tell application \"Things3\" to quit' >/dev/null 2>&1; sleep 5; defaults delete \"$PREF_DOMAIN\" collapsedAreaUUIDs >/dev/null 2>&1; true" </dev/null
+  warm
+  ship_snap
+  note "  rows after the reset: $(rows_now)   collapsedAreaUUIDs: $(collapsed_n)"
   exit 0
 fi
 

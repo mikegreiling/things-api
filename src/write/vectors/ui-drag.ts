@@ -2104,10 +2104,15 @@ const SETTLE_SCROLL: SettleSpec = {
 
 const SETTLE_DROP: SettleSpec = {
   what: "the sidebar to report the drop",
-  // UNMEASURED before this campaign: VOPAT1 never dropped anything under an
-  // observer. The candidates are what a reordering table could plausibly post;
-  // the database assert below is the oracle either way.
-  want: ["AXRowCountChanged:AXTable", "AXSelectedRowsChanged", "AXValueChanged:AXTable"],
+  // MEASURED for the first time by this campaign (VOPAT1 never dropped anything
+  // under an observer): a drop is LOUD — `AXRowCountChanged` on the table 350
+  // times and `AXValueChanged` on the scroll bar 81 times across one move, both
+  // arriving immediately. Two plausible candidates were tried and DO NOT fire,
+  // and neither is listed here, because an observable named in a settle that the
+  // app never posts is what VOPAT2-4 cost a whole budget to learn:
+  // `AXSelectedRowsChanged` (a reorder selects nothing) and `AXLayoutChanged`
+  // (VOPAT1-12, silent for a third campaign running).
+  want: ["AXRowCountChanged:AXTable", "AXValueChanged:AXScrollBar"],
   timeoutMs: 1_500,
 };
 
