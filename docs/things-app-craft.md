@@ -494,6 +494,28 @@ The one gap, recorded for completeness rather than as a complaint: **`AXLayoutCh
 
 ---
 
+## 11. The sidebar renders the drop it is about to make — into the accessibility tree
+
+Pick a sidebar area up and hold it. Things does not merely dim the row and wait: it takes the whole group out of the list (the area row and every project row under it) and opens a **48 pt landing gap** where the drop would go — and it *moves that gap* as the pointer moves, so at every instant the list on screen is the list you would get if you let go. It is the ordinary courtesy of a good drag, and Things does it without a stutter.
+
+The part worth the entry is that **all of it is in the accessibility tree.** The gap is real rows with real frames; a client reading `AXRows` mid-gesture sees the same arrangement a sighted user sees, and can therefore answer "where will this land?" *before* committing to the drop. Nothing in AppKit obliges an app to keep its drag preview accessible — a drop indicator drawn straight into a custom view would be invisible to every assistive client, which is what most apps ship — and Things' sidebar is entirely custom-drawn, so this is a choice rather than a freebie.
+
+There is a second, quieter piece of care underneath. The app resolves the pointer against the list **without** the gap — the collapsed layout — and only then draws the gap at the slot it picked. That is the right order: it means the insertion point is a function of where your hand is, not of a layout the app itself just changed, so the gap cannot chase the pointer into an oscillation. Anyone who has written a reordering list knows how easy the other way round is to get wrong.
+
+And a third: when the lift shortens a list that was scrolled to its bottom, the app reduces the scroll offset to keep the content pinned rather than leaving a strip of empty space under the last row.
+
+The measurements, both builds, both group sizes:
+
+```
+Things 3.23     group 112 pt (area + 3 projects + spacer):  every row below shifts -64 pt
+Things 3.23.3   group  40 pt (area + spacer, no projects):  every row below shifts  +8 pt
+                                          derived gap in both cases: 48 pt
+```
+
+`static − span + 48` in both directions, including the case where the placeholder is *larger* than what it replaced and the list below moves **down**. Rows above the gap sit at `static − span`, rows below it at `static − span + 48`; the boundary between the two classes is exactly the pointer.
+
+The bounded credit, because this project needed it the hard way: the gap is not *labelled*. It is two ordinary 24 pt rows with no role, subrole or description distinguishing them from any other empty row, so a client can only find it by diffing the live table against the layout it expects — which is what [DRPLC1](lab/drplc1-drop-slot.md) ended up doing. An `AXSubrole` on the placeholder would turn a diff into a read. Evidence: [lab/drplc1-drop-slot.md](lab/drplc1-drop-slot.md) §1–§3 (DRPLC1, 2026-09-04). Things 3.23 (golden-v4) and 3.23.3.
+
 ## Edge cases this project routed through
 
 Project-side context: the modeling problems the app's craft created for us. Brief by design — the app engineering above is the star; these are where we had to build to match it.

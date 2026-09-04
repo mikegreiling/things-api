@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ObserverSession } from "../../src/write/vectors/ui-observer.ts";
 import type { UiCommand, UiRunResult } from "../../src/write/vectors/ui.ts";
+import { setTraceSink } from "../../src/trace/tracer.ts";
 import {
   areaRowsInOrder,
   areaTitleRank,
@@ -20,10 +21,13 @@ import {
   driveSidebarAreaReorder,
   findAreaRow,
   findAreaRowNth,
+  jxaSidebarLiveDragScript,
   jxaSidebarScrollToScript,
   jxaSidebarSnapshotScript,
   describeScrollStop,
   jxaSidebarVisibilityScript,
+  liveAnchorIndex,
+  parseLiveDragResult,
   parseSidebarSnapshot,
   placementSatisfied,
   rowMatchesTitle,
@@ -52,6 +56,13 @@ import {
 const ROW_H = 24;
 const SPACER_H = 16;
 const PITCH = ROW_H + SPACER_H; // 40 — the lab-observed slot, produced by frames here
+/**
+ * The LANDING GAP DRPLC1 measured on 3.23/3.23.3: lifting a row takes its group
+ * out of the table and a ~48 pt placeholder takes its place, tracking the
+ * pointer. It is here so the simulator answers a live-aim drag with a nonzero
+ * live-vs-static delta, which is the number the trace record carries.
+ */
+const LIVE_GAP = 48;
 const VIEW_X = 44;
 const VIEW_Y = 63;
 
@@ -154,9 +165,21 @@ describe("frame-derived geometry (no hardcoded pixels)", () => {
     const orderedAreas = areaRowsInOrder(rowsWithProjects, ["A1", "A2", "A3"]);
     expect(sourceGroupSpan(orderedAreas, "A2", rowsWithProjects)).toBe(2 * PITCH);
     expect(sourceGroupSpan(orderedAreas, "A1", rowsWithProjects)).toBe(PITCH);
-    // Last area falls back to the median adjacent delta (never load-bearing:
-    // a downward correction cannot apply to the bottom-most area).
-    expect(sourceGroupSpan(orderedAreas, "A3", rowsWithProjects)).toBe(2 * PITCH);
+    // The LAST area's section has no next-area row to end it, so it runs to the
+    // bottom of the table (DRPLC1 §4). The old fallback — the median adjacent
+    // delta — is right only for an area with no visible projects, and the
+    // live-aim drag's collapsed model is built on this number: a span short by
+    // three project rows makes the mid-drag layout unaccountable and the drop
+    // refuses rather than landing.
+    expect(sourceGroupSpan(orderedAreas, "A3", rowsWithProjects)).toBe(PITCH);
+    const withTail: SidebarRowInfo[] = [
+      ...rowsWithProjects,
+      entityRow("Proj-Y", VIEW_Y + 4 * PITCH),
+      spacerRow(VIEW_Y + 4 * PITCH + ROW_H),
+    ];
+    expect(sourceGroupSpan(areaRowsInOrder(withTail, ["A1", "A2", "A3"]), "A3", withTail)).toBe(
+      2 * PITCH,
+    );
   });
 });
 
@@ -249,6 +272,8 @@ interface SimOptions {
   failHeldDrag?: boolean;
   /** Make the held gesture land ONE SLOT SHORT (benign off-slot landing). */
   heldDragOffByOne?: boolean;
+  /** Make the rung-1/rung-3 drag land ONE SLOT SHORT (benign off-slot landing). */
+  dragOffByOne?: boolean;
   /**
    * The sidebar starts HIDDEN (View ▸ Hide Sidebar): every snapshot refuses
    * `sidebar-hidden` until the drive runs the normalization rung (SBRES1).
@@ -349,27 +374,24 @@ function makeSim(options: SimOptions): Sim {
     });
   };
 
-  const applyDrag = (sy: number, ty: number): void => {
+  /**
+   * The live-aim drag's outcome, in the app's own terms: the source lands
+   * immediately ABOVE the named anchor row, or at the end of the list. Returns
+   * null when it landed, or the script's `stop` reason when it aborted.
+   */
+  const applyLiveDrag = (sy: number, anchor: string): string | null => {
     const si = order.findIndex((_, i) => sy >= staticTop(i) && sy <= staticTop(i) + ROW_H);
-    if (si < 0) return; // grab missed — no-op, like the real app
+    if (si < 0) return "source-row-moved"; // grab missed — nothing is posted
     const source = order[si] as string;
     const remaining = order.filter((_, i) => i !== si);
-    // Live tops after the lift: rows below the source shift up one slot.
-    const liveTop = (j: number): number => {
-      const origIdx = order.indexOf(remaining[j] as string);
-      return origIdx > si ? staticTop(origIdx) - PITCH : staticTop(origIdx);
-    };
-    let k = remaining.length;
-    for (let j = 0; j < remaining.length; j++) {
-      if (ty < liveTop(j) + ROW_H / 2) {
-        k = j;
-        break;
-      }
-    }
+    let k = anchor === "end-of-list" ? remaining.length : remaining.indexOf(anchor);
+    if (k < 0) return "anchor-unresolved";
+    if (options.dragOffByOne === true) k = Math.max(0, k - 1);
     remaining.splice(k, 0, source);
     order = remaining;
     drags += 1;
     if (options.corruptDigestAfterDrag === true && drags === 1) digest = "D-CORRUPT";
+    return null;
   };
 
   let hidden = options.sidebarHidden === true;
@@ -456,9 +478,50 @@ function makeSim(options: SimOptions): Sim {
       return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
     }
     if (command.primitive === "sidebar-drag") {
-      const m = script.match(/var sx=(-?\d+), sy=(-?\d+), tx=(-?\d+), ty=(-?\d+)/);
-      if (m !== null) applyDrag(Number(m[2]), Number(m[4]));
-      return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
+      // THE LIVE-AIM DRAG (DRPLC1). The script no longer aims at a number the
+      // caller computed — it re-resolves the boundary from live frames until
+      // the pointer and the boundary agree, so the app-side outcome is decided
+      // by the ANCHOR the caller named, not by pre-drag arithmetic. The
+      // simulator answers in those terms and reports the same JSON envelope.
+      const m = script.match(/var sx=(-?\d+), sy=(-?\d+), STATIC_Y=(-?\d+)/);
+      const dragMeta = command.meta as { anchor: string; staticY: number };
+      if (m === null) {
+        return Promise.resolve({
+          ok: true,
+          stdout: JSON.stringify({ aborted: true, stop: "live-read-failed" }),
+          stderr: "",
+        });
+      }
+      const stopped = applyLiveDrag(Number(m[2]), dragMeta.anchor);
+      if (stopped !== null) {
+        return Promise.resolve({
+          ok: true,
+          stdout: JSON.stringify({ aborted: true, stop: stopped }),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        stdout: JSON.stringify({
+          dropped: true,
+          stop: "stable",
+          dropY: dragMeta.staticY + LIVE_GAP,
+          staticY: dragMeta.staticY,
+          delta: LIVE_GAP,
+          iterations: [
+            { k: 0, at: dragMeta.staticY, boundary: dragMeta.staticY + LIVE_GAP, rows: 1 },
+            {
+              k: 1,
+              at: dragMeta.staticY + LIVE_GAP,
+              boundary: dragMeta.staticY + LIVE_GAP,
+              rows: 1,
+            },
+          ],
+          axCalls: 24,
+          realized: dragMeta.anchor === "end-of-list" ? 0 : 1,
+        }),
+        stderr: "",
+      });
     }
     if (command.primitive === "sidebar-held-drag") {
       if (options.failHeldDrag === true) {
@@ -981,13 +1044,17 @@ function collapseSim(opts: {
           return Promise.resolve({ ok: false, stdout: "", stderr: "the gesture did not complete" });
         }
         // The only move this fixture needs: pull the subject out and reinsert
-        // it directly above the anchor.
+        // it directly above the anchor the live-aim drag named.
         const from = order.indexOf(SUBJECT);
         if (from >= 0) {
           order.splice(from, 1);
           order.splice(order.indexOf(ANCHOR), 0, SUBJECT);
         }
-        return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
+        return Promise.resolve({
+          ok: true,
+          stdout: JSON.stringify({ dropped: true, stop: "stable", dropY: 0, axCalls: 12 }),
+          stderr: "",
+        });
       }
       return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
     },
@@ -1393,8 +1460,10 @@ describe("the sidebar read scales with the sidebar", () => {
     // The held drag re-reads the sidebar once per tick, so it scales with ticks
     // too — and with the absolute ceiling.
     expect(stepBudgetFor("sidebar-held-drag", 174, { maxTicks: 90 })).toBe(240_000);
+    // The live-aim drag reads the sidebar now — geometry only, but per row and
+    // once per loop iteration (DRPLC1) — so it scales too, at two equivalents.
+    expect(stepBudgetFor("sidebar-drag", 174)).toBe(139_200);
     // Primitives whose cost does NOT depend on the sidebar keep the flat step.
-    expect(stepBudgetFor("sidebar-drag", 174)).toBe(30_000);
     expect(stepBudgetFor("sidebar-visibility", 174)).toBe(30_000);
     expect(stepBudgetFor("key", 174)).toBe(30_000);
   });
@@ -1582,5 +1651,188 @@ describe("the settle observer, when it is not there (VOPAT2 PR 2)", () => {
     const res = await drive(sim, "A2", { kind: "last" }, {}, dead);
     expect(res.ok, res.detail).toBe(true);
     expect(sim.order().at(-1)).toBe("A2");
+  });
+});
+
+describe("the drop point is CLOSED-LOOP on the live sidebar (DRPLC1, #729)", () => {
+  const SIDEBAR_ROW = { x: 12, y: 208, w: 240, h: 24 };
+  const TITLES = ["Errands", "Reading"] as const;
+
+  it("re-resolves the boundary BEFORE the final DRAG and the UP", () => {
+    const script = jxaSidebarLiveDragScript(180, 220, 420, SIDEBAR_ROW, TITLES, null, 1, 40);
+    // The whole point of the fix: a live read stands between the approach and
+    // the release. Assert the ORDER, because a re-resolution that happens after
+    // the button comes up is decoration.
+    expect(script).toContain("if (slot === WANT_SLOT){ aim = cur; stop = 'placed'; break }");
+    const loop = script.indexOf("slotIndex(st.geo)");
+    const finalDrag = script.indexOf("postHID(mev(DRAG, sx, aim, 1))");
+    const up = script.indexOf("postHID(mev(UP, sx, aim, 1))");
+    expect(loop).toBeGreaterThan(-1);
+    expect(finalDrag).toBeGreaterThan(loop);
+    expect(up).toBeGreaterThan(finalDrag);
+    // And the drop-time guard is re-taken at the LIVE point, not the estimate.
+    expect(script).toContain("ptrGuard('drop the area row', [{x:sx,y:aim}]");
+    // No blind drop: every way out of the loop that has no aim Escape-aborts.
+    expect(script).toContain("if (aim === null) { postEscape()");
+  });
+
+  it("reads GEOMETRY for the loop and realizes nothing for a to-last drop", () => {
+    const script = jxaSidebarLiveDragScript(180, 220, 420, SIDEBAR_ROW, TITLES, null, 1, 40);
+    // `geom` is the batched position+size read that realizes no row (VOPAT1 §3);
+    // `rowText` is the one that costs ~115 ms apiece in the field. A to-last
+    // boundary is pure geometry, so no content read can be REACHED: the only
+    // `rowText` call sites sit behind the anchor branch, and there is no anchor.
+    expect(script).toContain("geo.push(geom(els[i]))");
+    expect(script).toContain("var A_TITLE = null;");
+    const anchorBranch = script.indexOf("if (A_TITLE !== null){");
+    expect(anchorBranch).toBeGreaterThan(-1);
+    for (const at of [...script.matchAll(/rowText\(ST0/g)].map((m) => m.index)) {
+      expect(at).toBeGreaterThan(anchorBranch);
+    }
+  });
+
+  it("addresses an insert-above anchor by ordinal and CONFIRMS it by title", () => {
+    const script = jxaSidebarLiveDragScript(
+      180,
+      220,
+      420,
+      SIDEBAR_ROW,
+      TITLES,
+      {
+        title: "Reading",
+        ordinal: 17,
+        unique: true,
+      },
+      1,
+      40,
+    );
+    expect(script).toContain('var A_TITLE = "Reading";');
+    expect(script).toContain("var A_ORD = 17");
+    expect(script).toContain("segMatch(rowText(ST0.els[A_ORD], DEPTH), A_TITLE)");
+    // A DUPLICATE-titled anchor may not be hunted for by title — the ordinal is
+    // the only disambiguation there is (AXDRAG3), so a stale one must refuse.
+    const dupe = jxaSidebarLiveDragScript(
+      180,
+      220,
+      420,
+      SIDEBAR_ROW,
+      TITLES,
+      {
+        title: "Reading",
+        ordinal: 17,
+        unique: false,
+      },
+      1,
+      40,
+    );
+    expect(dupe).toContain("var A_UNIQUE = false");
+  });
+
+  it("names the anchor each placement reduces to", () => {
+    const rows = ["A1", "A2", "A3", "A4"].map((t, i) => ({
+      title: t,
+      row: { x: 0, y: 100 + i * PITCH, w: 200, h: ROW_H, text: t },
+    }));
+    expect(liveAnchorIndex(rows, "A2", { kind: "last" })).toBeNull();
+    // to-first inserts above the first row that is NOT the source
+    expect(liveAnchorIndex(rows, "A2", { kind: "first" })).toBe(0);
+    expect(liveAnchorIndex(rows, "A1", { kind: "first" })).toBe(1);
+    expect(liveAnchorIndex(rows, "A1", before("A3"))).toBe(2);
+    // after A3 == above A4; after the LAST row == the end of the list
+    expect(liveAnchorIndex(rows, "A1", after("A3"))).toBe(3);
+    expect(liveAnchorIndex(rows, "A1", after("A4"))).toBeNull();
+    // an anchor that is not in the sidebar is not something to guess at
+    expect(liveAnchorIndex(rows, "A1", before("Nope"))).toBeUndefined();
+  });
+
+  it("the trace records the LIVE aim against the static estimate", async () => {
+    const sim = makeSim({ titles: ["A1", "A2", "A3", "A4", "A5"], viewportH: 610 });
+    const records: Record<string, unknown>[] = [];
+    setTraceSink({
+      path: "/dev/null",
+      startedAt: Date.now(),
+      write: (event) => records.push(event as Record<string, unknown>),
+      close: () => {},
+    });
+    try {
+      const res = await drive(sim, "A2", { kind: "last" });
+      expect(res.ok, res.detail).toBe(true);
+    } finally {
+      setTraceSink(null);
+    }
+    const drop = records.find((r) => r["phase"] === "sidebar-drop-target");
+    expect(drop).toBeDefined();
+    expect(drop?.["anchor"]).toBe("end-of-list");
+    // The delta IS the finding: zero would mean the old collapse model was
+    // right on this build. The simulator answers with the measured gap.
+    expect(drop?.["liveVsStatic"]).toBe(LIVE_GAP);
+    expect(drop?.["stop"]).toBe("stable");
+  });
+
+  it("an unstable or off-band boundary REFUSES rather than dropping blind", async () => {
+    const sim = makeSim({ titles: ["A1", "A2", "A3", "A4", "A5"], viewportH: 610 });
+    const run = (command: UiCommand, timeoutMs: number): Promise<UiRunResult> => {
+      if (command.primitive === "sidebar-drag") {
+        return Promise.resolve({
+          ok: true,
+          stdout: JSON.stringify({
+            aborted: true,
+            stop: "off-band",
+            why: "the drop point could not be resolved from the live sidebar while the drag was held (off-band)",
+          }),
+          stderr: "",
+        });
+      }
+      return sim.run(command, timeoutMs);
+    };
+    const res = await driveSidebarAreaReorder(
+      { targetUuid: "u-A2", targetTitle: "A2", placement: { kind: "last" } },
+      run,
+      sim.aux,
+      instantSleep,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain("could not be resolved from the live sidebar");
+    // Nothing moved: an abort with the button held is byte-identical (AXDRAG1-d).
+    expect(sim.order()).toEqual(["A1", "A2", "A3", "A4", "A5"]);
+  });
+
+  it("pre-scroll brings BOTH candidate boundaries into the band", async () => {
+    // The live boundary lies between the corrected estimate and the uncorrected
+    // static one, so a pre-scroll that only centres the corrected one can hand
+    // the loop a boundary it is not allowed to aim at.
+    const titles = Array.from({ length: 12 }, (_, i) => `A${i + 1}`);
+    const sim = makeSim({ titles, viewportH: 300 });
+    const res = await drive(sim, "A1", { kind: "last" });
+    expect(res.ok, res.detail).toBe(true);
+    expect(sim.order().at(-1)).toBe("A1");
+  });
+
+  it("parses every outcome shape the live-aim script can report", () => {
+    const ok = parseLiveDragResult({
+      ok: true,
+      stdout: JSON.stringify({
+        dropped: true,
+        dropY: 452,
+        staticY: 420,
+        stop: "stable",
+        axCalls: 9,
+      }),
+      stderr: "",
+    });
+    expect(ok.dropped).toBe(true);
+    expect(ok.dropY).toBe(452);
+    expect(ok.axCalls).toBe(9);
+    const aborted = parseLiveDragResult({
+      ok: true,
+      stdout: JSON.stringify({ aborted: true, stop: "anchor-unresolved", why: "no anchor" }),
+      stderr: "",
+    });
+    expect(aborted.dropped).toBe(false);
+    expect(aborted.why).toBe("no anchor");
+    // A script that died outright still yields the guard's sentence when it has
+    // one, and never a false "dropped".
+    const dead = parseLiveDragResult({ ok: false, stdout: "", stderr: "-1719" });
+    expect(dead.dropped).toBe(false);
   });
 });

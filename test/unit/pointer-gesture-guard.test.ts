@@ -30,7 +30,7 @@ import { describe, expect, it } from "vitest";
 import { DEPUTY_BANNED_SCRIPT_PHRASES } from "../../src/deputy/protocol.ts";
 import {
   jxaSidebarChevronClickScript,
-  jxaSidebarDragScript,
+  jxaSidebarLiveDragScript,
   jxaSidebarHeldScrollDragScript,
   jxaSidebarScrollScript,
   jxaSidebarSparseChevronClickScript,
@@ -70,7 +70,8 @@ const GUARDED_SITES: Readonly<Record<string, string>> = {
   // them, and it compiles the guard in beside them, so every script built on it
   // has `ptrGuard` in scope.
   JXA_PRELUDE: "defines the posting helpers; the guard ships in the same prelude",
-  jxaSidebarDragScript: "guards both endpoints, and re-checks at the drop",
+  jxaSidebarLiveDragScript:
+    "guards the grab and the estimate, and re-checks at the LIVE drop point",
   jxaSidebarHeldScrollDragScript: "guards the grab, and re-checks at the drop",
   jxaSidebarChevronClickScript: "guards the arrow's point with an identity check",
   jxaSidebarScrollScript: "guards the sidebar centre the wheel events go to",
@@ -131,7 +132,23 @@ const SIDEBAR_TITLES = ["Errands", "Reading"] as const;
 const SIDEBAR_ROW = { x: 12, y: 208, w: 240, h: 24 };
 const SPARSE_ADDR = { paneIndex: 1, verifyOrdinal: 13, verifyTitle: "Errands" };
 const RENDERED: { label: string; script: string }[] = [
-  { label: "sidebar-drag", script: jxaSidebarDragScript(180, 220, 180, 420, SIDEBAR_ROW) },
+  {
+    label: "sidebar-drag (live-aim)",
+    script: jxaSidebarLiveDragScript(
+      180,
+      220,
+      420,
+      SIDEBAR_ROW,
+      SIDEBAR_TITLES,
+      { title: "Reading", ordinal: 17, unique: true },
+      1,
+      40,
+    ),
+  },
+  {
+    label: "sidebar-drag (live-aim, to last)",
+    script: jxaSidebarLiveDragScript(180, 220, 420, SIDEBAR_ROW, SIDEBAR_TITLES, null, null, 40),
+  },
   {
     label: "sidebar-held-drag",
     script: jxaSidebarHeldScrollDragScript(180, 220, "Reading", 40, SIDEBAR_TITLES, SIDEBAR_ROW),
@@ -221,7 +238,7 @@ describe("every rendered pointer gesture carries the guard", () => {
   });
 
   it("re-checks at the drop point in both drag scripts, and aborts with Escape", () => {
-    for (const label of ["sidebar-drag", "sidebar-held-drag"]) {
+    for (const label of ["sidebar-drag (live-aim)", "sidebar-held-drag"]) {
       const script = (RENDERED.find((r) => r.label === label) as { script: string }).script;
       expect(script).toContain("ptrGuard('drop the area row'");
       // AXDRAG1-d's abort vector, not a bare mouse-up.
@@ -231,7 +248,7 @@ describe("every rendered pointer gesture carries the guard", () => {
   });
 
   it("takes the identity check at the GRAB point, against the planned row frame", () => {
-    for (const label of ["sidebar-drag", "sidebar-held-drag"]) {
+    for (const label of ["sidebar-drag (live-aim)", "sidebar-held-drag"]) {
       const script = (RENDERED.find((r) => r.label === label) as { script: string }).script;
       expect(script).toContain('var SRC = {"x":12,"y":208,"w":240,"h":24}');
       expect(script).toContain("ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)");
