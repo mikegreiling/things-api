@@ -22,8 +22,22 @@ APP="$2/dist/cli/main.js"
 #                            against — the verdict is `direct-unknown` and every
 #                            AppleScript-vector step below (plus every composite
 #                            with an AppleScript leg) refuses without this.
-export THINGS_API_UI_DIRECT=1
-export THINGS_API_WRITE_DIRECT=1
+#
+# ...unless this is the ROUTED arm (HELPGST1). `THINGS_LAB_ARM=routed` says the
+# guest has the helper pair installed and granted (golden-v4h) and
+# `helpers-enabled` set to true, which is the shape every FIELD host runs: the
+# deputy holds the Automation grant, the sandboxed reader holds the read
+# bookmark, and every AppleScript/GUI hop is brokered. Neither escape is
+# exported there — a routed host does not need them, and exporting one would
+# paper over a grant that never landed. There is no silent host fallback on this
+# path (#620): with the helpers expected, an osascript the deputy cannot carry
+# REFUSES (exit 126) instead of quietly running under this shell's identity, so
+# every AppleScript-vector step that passes below is a step the deputy brokered.
+ARM="${THINGS_LAB_ARM:-direct}"
+if [ "$ARM" != "routed" ]; then
+  export THINGS_API_UI_DIRECT=1
+  export THINGS_API_WRITE_DIRECT=1
+fi
 FAILURES=0
 STEP=0
 
@@ -130,8 +144,41 @@ fi
 # it (measured stale on the first full e2e since 2026-08-22).
 EXIT_TODAY_WITH_PROJECT=0
 
+echo "== arm: $ARM =="
+
 echo "== doctor =="
 run_step 0 "doctor" doctor
+
+# --- the routing proof (HELPGST1, routed arm only) ---------------------------
+# Identity is a certification dimension, so the arm says out loud which identity
+# it is running as and PROVES it before any write. Three assertions, in the
+# order they can fail: the deputy answers, it holds the grant routing requires,
+# and the configured mode is the explicit `true` (not `auto`, which would fall
+# back to direct execution the moment a grant lapsed).
+if [ "$ARM" = "routed" ]; then
+  echo "== routing proof =="
+  # `helpers setup --gui` turns `ui-enabled` ON as part of gathering the GUI
+  # tier, and the provisioning step runs it on every routed clone. Turn it back
+  # OFF here: the two heading gates below assert the ui-enabled REFUSAL, and
+  # both arms of this smoke have to run the same 130-odd steps for their
+  # transcripts to be comparable at all. The real GUI drive is a separate leg
+  # (lab/guest/routed-gui-smoke.sh), which switches it on for itself.
+  # `config set` takes no --json, so this is a bare call rather than a run_step.
+  things config set ui-enabled false >/dev/null || {
+    echo "FAIL could not switch ui-enabled off"
+    FAILURES=$((FAILURES + 1))
+  }
+  echo "ok   ui-enabled off (this smoke asserts its refusals, it never drives)"
+  run_step 0 "helpers status" helpers status
+  ROUTING=$(json_get "'%s %s %s %s' % (d['data']['mode'], d['data']['deputy']['running'], (d['data']['deputy']['hello'] or {}).get('automation', {}).get('things'), d['data']['reader']['granted'])")
+  echo "     mode/deputy-running/automation-things/reader-granted: $ROUTING"
+  if [ "$ROUTING" = "true True granted True" ]; then
+    echo "ok   the deputy is live, onboarded and carrying traffic (mode=true)"
+  else
+    echo "FAIL routed arm is not actually routed — $ROUTING"
+    FAILURES=$((FAILURES + 1))
+  fi
+fi
 
 echo "== todo lifecycle (url-scheme + applescript vectors) =="
 run_step 0 "todo add (when=today, existing tag)" todo add "E2E-1" --when today --tags lab-tag-1
@@ -499,6 +546,47 @@ print(row[0])
 run_step 4 "repeating-template when= is hard-blocked (would crash Things)" todo update "$TEMPLATE_UUID" --when today
 run_step 4 "empty trash requires --dangerously-permanent" trash empty
 run_step 0 "empty trash (acknowledged, verified)" trash empty --dangerously-permanent
+
+# --- the routing NEGATIVE control (HELPGST1, routed arm only) ----------------
+# Every assertion above is "the step passed"; none of them, alone, proves the
+# DEPUTY is what made it pass — the lab's own standing rule is that a result
+# from an oracle that has never been shown its opposite is not evidence
+# (CNCAC1/URLEN1). So: stop the deputy, run one AppleScript-vector write, and
+# require it to REFUSE rather than fall through to this shell's identity (#620,
+# src/deputy/osa.ts). A run where this step SUCCEEDS was never routed.
+if [ "$ARM" = "routed" ]; then
+  echo "== routing negative control =="
+  launchctl bootout "gui/$(id -u)/com.pixelcog.things-deputy" >/dev/null 2>&1
+  # bootout returns before the socket is gone; wait for the real absence.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$HOME/.local/state/things-api/deputy/deputy.sock" ] || break
+    sleep 1
+  done
+  NEG=$(things tag add e2e-negative-control --json 2>&1)
+  NEG_CODE=$?
+  # Two fail-closed layers can catch this, and either is a pass. The write gate
+  # refuses FIRST (exit 4): with the deputy down the capability read falls to the
+  # host, an sshd-descended shell has no bundle id, and `direct-unknown` blocks
+  # pre-dispatch. Behind it stands the osascript seam's no-fallback refusal
+  # (#620) for anything that gets past the gate. What must never happen is a
+  # SUCCESS — that would mean the step ran under this shell's identity.
+  if [ "$NEG_CODE" -eq 0 ]; then
+    echo "FAIL a deputy-less AppleScript write SUCCEEDED — the arm was not routed"
+    FAILURES=$((FAILURES + 1))
+  elif grep -qE "no socket at|will not silently run it under this terminal" <<<"$NEG"; then
+    echo "ok   a deputy-less AppleScript write refuses naming the helper (exit $NEG_CODE, no host fallback)"
+  else
+    echo "FAIL deputy-less write failed for the wrong reason (exit $NEG_CODE): $(tr '\n' ' ' <<<"$NEG" | head -c 400)"
+    FAILURES=$((FAILURES + 1))
+  fi
+  launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.pixelcog.things-deputy.plist" >/dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$HOME/.local/state/things-api/deputy/deputy.sock" ] && break
+    sleep 1
+  done
+  run_step 0 "the deputy is back and carrying traffic" tag add e2e-negative-control
+  run_step 0 "clean up the control tag" tag delete e2e-negative-control --dangerously-permanent
+fi
 
 echo "== audit trail =="
 AUDIT_LINES=$(cat ~/.local/state/things-api/audit/*.jsonl 2>/dev/null | wc -l | tr -d ' ')

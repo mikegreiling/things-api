@@ -1,0 +1,240 @@
+// A process-agnostic AX driver for the guest (HELPGST1).
+//
+// The lab's existing axtool.jxa (research-syncx1.sh) is hard-pinned to Things3
+// because every campaign before this one drove the app. The helpers ceremony
+// does not: its dialogs belong to System Settings, to the TCC consent agent,
+// and to the sandboxed reader's own open panel — three processes, none of them
+// Things. So the process is the first argument here, and everything else is the
+// same vocabulary the Things tool established.
+//
+// Usage (in the guest, under the AXVM1 Accessibility grant):
+//   osascript -l JavaScript ax-any.jxa procs
+//   osascript -l JavaScript ax-any.jxa dump "System Settings"
+//   osascript -l JavaScript ax-any.jxa find "System Settings" "Things API Helper"
+//   osascript -l JavaScript ax-any.jxa press "UserNotificationCenter" "Allow"
+//   osascript -l JavaScript ax-any.jxa clicklabel "System Settings" "Things API Helper"
+//   osascript -l JavaScript ax-any.jxa toggle "System Settings" "Things API Helper"
+//   osascript -l JavaScript ax-any.jxa type "admin"
+//
+// NOTE the standing traps this inherits, both already paid for elsewhere in the
+// lab: an AX frame resolves whether or not the element is scrolled into view, so
+// a blind click at an off-screen frame lands on the desktop (CNCAC1); and a
+// SHEET is not a window, so a census of AXChildren of the application element
+// misses modals entirely (URLEN1) — `dump` walks the whole tree for that reason.
+ObjC.import('AppKit')
+ObjC.import('ApplicationServices')
+ObjC.import('CoreGraphics')
+
+function pidOf(name) {
+  return Application('System Events').processes.byName(name).unixId()
+}
+function attr(el, n) {
+  var o = Ref()
+  if ($.AXUIElementCopyAttributeValue(el, $(n), o) !== 0) return null
+  return ObjC.castRefToObject(o[0])
+}
+function sv(el, n) {
+  var v = attr(el, n)
+  try { return v ? String(v.js) : '' } catch (e) { return '' }
+}
+function kids(el) {
+  var c = attr(el, 'AXChildren')
+  if (!c) return []
+  var a = []
+  for (var i = 0; i < c.count; i++) a.push(c.objectAtIndex(i))
+  return a
+}
+function flat(el, acc, d) {
+  acc.push(el)
+  if (d > 24) return acc
+  var ch = kids(el)
+  for (var i = 0; i < ch.length; i++) flat(ch[i], acc, d + 1)
+  return acc
+}
+function frame(el) {
+  var p = attr(el, 'AXPosition'), z = attr(el, 'AXSize')
+  function d(x) { if (!x) return null; return ObjC.castRefToObject($.CFCopyDescription(x)).js }
+  var pp = d(p), zz = d(z)
+  var mp = pp && pp.match(/x:([-0-9.]+) y:([-0-9.]+)/)
+  var mz = zz && zz.match(/w:([-0-9.]+) h:([-0-9.]+)/)
+  return { x: mp ? +mp[1] : null, y: mp ? +mp[2] : null, w: mz ? +mz[1] : null, h: mz ? +mz[2] : null }
+}
+function label(el) {
+  return [sv(el, 'AXTitle'), sv(el, 'AXDescription'), sv(el, 'AXValue'), sv(el, 'AXIdentifier'),
+    sv(el, 'AXHelp'), sv(el, 'AXPlaceholderValue')].join(' ')
+}
+function line(el, d, ix) {
+  var p = ['[' + ix + '] role=' + sv(el, 'AXRole')]
+  var s = sv(el, 'AXSubrole'); if (s) p.push('sub=' + s)
+  var t = sv(el, 'AXTitle'); if (t) p.push('ttl=' + t)
+  var de = sv(el, 'AXDescription'); if (de) p.push('desc=' + de.slice(0, 140))
+  var v = sv(el, 'AXValue'); if (v) p.push('val=' + String(v).slice(0, 140))
+  var id = sv(el, 'AXIdentifier'); if (id) p.push('id=' + id)
+  if (sv(el, 'AXEnabled') === 'false') p.push('DISABLED')
+  var f = frame(el); if (f.x !== null) p.push('@[' + f.x + ',' + f.y + ' ' + f.w + 'x' + f.h + ']')
+  return Array(d + 1).join('  ') + p.join(' | ')
+}
+function walk(el, d, acc, ix) {
+  acc.push(line(el, d, ix))
+  if (d > 20) return acc
+  var ch = kids(el)
+  for (var i = 0; i < ch.length; i++) walk(ch[i], d + 1, acc, i + 1)
+  return acc
+}
+function clickPt(x, y) {
+  var pt = $.CGPointMake(x, y)
+  function post(t) {
+    $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), t, pt, $.kCGMouseButtonLeft))
+  }
+  post($.kCGEventMouseMoved); delay(0.3)
+  post($.kCGEventLeftMouseDown); delay(0.12)
+  post($.kCGEventLeftMouseUp)
+}
+
+function run(argv) {
+  var cmd = argv[0] || 'procs'
+
+  if (cmd === 'procs') {
+    // Which processes currently own a window or a sheet — the census a
+    // ceremony driver starts from when it does not know who put the dialog up.
+    var se = Application('System Events')
+    var out = []
+    var procs = se.processes.whose({ backgroundOnly: false })()
+    for (var i = 0; i < procs.length; i++) {
+      var n = procs[i].name()
+      var w = 0
+      try { w = procs[i].windows.length } catch (e) { w = -1 }
+      out.push(n + ' windows=' + w + ' frontmost=' + procs[i].frontmost())
+    }
+    return out.join('\n')
+  }
+
+  if (cmd === 'click') {
+    // A raw synthetic click at a LOGICAL screen point. The last resort, for the
+    // controls AX cannot address at all — an NSOpenPanel presented by AppKit's
+    // out-of-process panel service has no AX windows under its own process name,
+    // so its buttons are reachable only by coordinate. Read the point off a
+    // `screencapture` frame and HALVE it: the guest's framebuffer is 2x its
+    // logical point space, and CGEventPost speaks points.
+    clickPt(parseFloat(argv[1]), parseFloat(argv[2]))
+    return 'CLICKED (' + argv[1] + ',' + argv[2] + ')'
+  }
+  if (cmd === 'screen') {
+    var scr = $.NSScreen.mainScreen.frame
+    return 'logical ' + scr.size.width + 'x' + scr.size.height +
+      ' backingScale=' + $.NSScreen.mainScreen.backingScaleFactor
+  }
+  if (cmd === 'type') {
+    // Keystrokes go through System Events, which under the AXVM1 grant reaches
+    // even an authentication sheet's secure field.
+    Application('System Events').keystroke(argv[1] || '')
+    return 'TYPED ' + (argv[1] || '').length + ' chars'
+  }
+  if (cmd === 'key') {
+    Application('System Events').keyCode(parseInt(argv[1], 10))
+    return 'KEYCODE ' + argv[1]
+  }
+
+  var proc = argv[1]
+  if (!proc) return 'usage: ' + cmd + ' <process> [...]'
+  var pid
+  try { pid = pidOf(proc) } catch (e) { return 'NO PROCESS "' + proc + '"' }
+  var app = $.AXUIElementCreateApplication(pid)
+
+  if (cmd === 'dump') {
+    var ws = kids(app), acc = []
+    for (var j = 0; j < ws.length; j++) {
+      var w2 = ws[j], f2 = frame(w2)
+      acc.push('=== WINDOW ' + (j + 1) + ' sub=' + sv(w2, 'AXSubrole') + ' ttl=' + sv(w2, 'AXTitle') +
+        ' @[' + f2.x + ',' + f2.y + ' ' + f2.w + 'x' + f2.h + '] ===')
+      walk(w2, 0, acc, j + 1)
+    }
+    return acc.length ? acc.join('\n') : '(no windows)'
+  }
+
+  var all = []
+  flat(app, all, 0)
+
+  if (cmd === 'sheets') {
+    var sh = all.filter(function (e) { return sv(e, 'AXRole') === 'AXSheet' })
+    if (!sh.length) return '(no sheets)'
+    var o2 = []
+    for (var k = 0; k < sh.length; k++) {
+      o2.push('=== SHEET ' + (k + 1) + ' ===')
+      walk(sh[k], 0, o2, k + 1)
+    }
+    return o2.join('\n')
+  }
+  if (cmd === 'find') {
+    var nd = (argv[2] || '').toLowerCase(), out2 = []
+    for (var m = 0; m < all.length; m++) {
+      if (label(all[m]).toLowerCase().indexOf(nd) >= 0) out2.push(line(all[m], 0, m))
+    }
+    return out2.length ? out2.join('\n') : 'NO ELEMENT matching "' + argv[2] + '"'
+  }
+  if (cmd === 'press') {
+    var want = argv[2]
+    var press = all.filter(function (e) {
+      var r = sv(e, 'AXRole')
+      return r === 'AXButton' || r === 'AXRadioButton' || r === 'AXCheckBox' || r === 'AXSwitch'
+    })
+    var names = press.map(function (e) {
+      return sv(e, 'AXRole') + ':' + (sv(e, 'AXTitle') || sv(e, 'AXDescription') || '?')
+    })
+    for (var n2 = 0; n2 < press.length; n2++) {
+      if (sv(press[n2], 'AXTitle') === want || sv(press[n2], 'AXIdentifier') === want ||
+        sv(press[n2], 'AXDescription') === want) {
+        var rc = $.AXUIElementPerformAction(press[n2], $('AXPress'))
+        return 'PRESSED "' + want + '" (AXError=' + rc + '); present: ' + names.join(' | ')
+      }
+    }
+    return 'NO PRESSABLE "' + want + '" — present: ' + names.join(' | ')
+  }
+  if (cmd === 'clicklabel') {
+    var nd2 = (argv[2] || '').toLowerCase(), nth = parseInt(argv[3] || '1', 10)
+    var hits = all.filter(function (e) {
+      return label(e).toLowerCase().indexOf(nd2) >= 0 && frame(e).w > 2
+    })
+    if (hits.length < nth) return 'ONLY ' + hits.length + ' elements match "' + argv[2] + '"'
+    var el = hits[nth - 1], f3 = frame(el)
+    clickPt(f3.x + f3.w / 2, f3.y + f3.h / 2)
+    return 'CLICKED ' + sv(el, 'AXRole') + ' (' + nth + ' of ' + hits.length + ') at (' +
+      (f3.x + f3.w / 2) + ',' + (f3.y + f3.h / 2) + ') label=' + label(el).slice(0, 100)
+  }
+  if (cmd === 'toggle') {
+    // The Privacy pane's per-app control is an AXSwitch/AXCheckBox sitting in
+    // the same row as the app's name. Find the name, then the nearest switch
+    // whose frame overlaps that row vertically — addressing it by ROW rather
+    // than by index, because the list's length changes with what is installed.
+    var name = (argv[2] || '').toLowerCase()
+    var labels = all.filter(function (e) {
+      return label(e).toLowerCase().indexOf(name) >= 0 && frame(e).h > 2
+    })
+    if (!labels.length) return 'NO ROW for "' + argv[2] + '"'
+    var lf = frame(labels[0])
+    var rowY = lf.y + lf.h / 2
+    var switches = all.filter(function (e) {
+      var r = sv(e, 'AXRole')
+      if (r !== 'AXSwitch' && r !== 'AXCheckBox') return false
+      var f4 = frame(e)
+      return f4.y !== null && rowY >= f4.y - 4 && rowY <= f4.y + f4.h + 4
+    })
+    if (!switches.length) {
+      return 'ROW FOUND at y=' + rowY + ' but no switch on it; switches present: ' +
+        all.filter(function (e) {
+          var r = sv(e, 'AXRole'); return r === 'AXSwitch' || r === 'AXCheckBox'
+        }).map(function (e) { var f5 = frame(e); return sv(e, 'AXValue') + '@y=' + f5.y }).join(' | ')
+    }
+    var before = sv(switches[0], 'AXValue')
+    var rc2 = $.AXUIElementPerformAction(switches[0], $('AXPress'))
+    delay(1.0)
+    return 'TOGGLED row "' + argv[2] + '" (AXError=' + rc2 + ') value ' + before + ' -> ' +
+      sv(switches[0], 'AXValue')
+  }
+  if (cmd === 'readswitches') {
+    return all.filter(function (e) {
+      var r = sv(e, 'AXRole'); return r === 'AXSwitch' || r === 'AXCheckBox'
+    }).map(function (e, i) { return (i + 1) + ': ' + line(e, 0, i + 1) }).join('\n') || '(no switches)'
+  }
+  return 'unknown cmd ' + cmd
+}
