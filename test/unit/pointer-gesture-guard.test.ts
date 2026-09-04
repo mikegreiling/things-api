@@ -37,6 +37,7 @@ import {
   jxaSidebarSnapshotScript,
 } from "../../src/write/vectors/ui-drag.ts";
 import {
+  POINTER_GUARD_DECISION_JS,
   POINTER_GUARD_JXA,
   PTRGD1_GUARD_END,
   PTRGD1_MARKER,
@@ -193,10 +194,10 @@ describe("every rendered pointer gesture carries the guard", () => {
     expect(POINTER_GUARD_JXA).toContain("kCGWindowListOptionOnScreenOnly");
     expect(POINTER_GUARD_JXA).toContain("kCGWindowListExcludeDesktopElements");
     expect(POINTER_GUARD_JXA).toContain("AXUIElementCreateSystemWide");
-    // The window scan's ONE exemption is the Dock's mouse-transparent
-    // full-screen backstop, and nothing else — a floating panel at layer 3 is
-    // an occluder the scan must name.
-    expect(POINTER_GUARD_JXA).toContain("name === 'Dock'");
+    // The scan's exemption is a CLASS, not an instance: a system-owned window
+    // that covers the whole display. Naming the Dock was the defect.
+    expect(POINTER_GUARD_JXA).toContain("ptrCoversScreen");
+    expect(POINTER_GUARD_JXA).toContain("isSystemOwner");
     // 4 identity, from the app-scoped hit test up the AXParent chain
     expect(POINTER_GUARD_JXA).toContain("AXUIElementCopyElementAtPosition");
     expect(POINTER_GUARD_JXA).toContain("'AXParent'");
@@ -237,5 +238,205 @@ describe("every rendered pointer gesture carries the guard", () => {
   it("reaches its verdict without a phrase the deputy's broker refuses", () => {
     const lowered = POINTER_GUARD_JXA.toLowerCase();
     for (const phrase of DEPUTY_BANNED_SCRIPT_PHRASES) expect(lowered).not.toContain(phrase);
+  });
+});
+
+/**
+ * THE OCCLUSION DECISION TABLE, EXECUTED.
+ *
+ * `POINTER_GUARD_DECISION_JS` is deliberately free of the ObjC bridge so this
+ * suite can run the shipped source rather than pattern-match it. The table is
+ * what the v0.20.9 release gate bought: the first cut asked the window scan
+ * first, and refused every gesture on every real Mac, because macOS keeps
+ * full-screen mouse-transparent system surfaces permanently above every
+ * ordinary window and the window list has no field that says so.
+ */
+interface Verdict {
+  ok?: boolean;
+  pid?: number;
+  name?: string | null;
+  unanswered?: boolean;
+}
+type VerdictFn = (
+  frontPid: number,
+  hitPid: number | null,
+  list: unknown[],
+  x: number,
+  y: number,
+  screen: { x: number; y: number; w: number; h: number } | null,
+  isSystemOwner: (pid: number) => boolean,
+) => Verdict;
+
+const occlusionVerdict = new Function(
+  `${POINTER_GUARD_DECISION_JS}\nreturn ptrOcclusionVerdict;`,
+)() as VerdictFn;
+
+const THINGS_PID = 665;
+const SYSTEM_PID = 411;
+const FOREIGN_PID = 1778;
+/** The guest's display, and the full-screen Notification Center over it. */
+const SCREEN = { x: 0, y: 0, w: 1024, h: 768 };
+function win(pid: number, name: string, b: [number, number, number, number]) {
+  return {
+    kCGWindowOwnerPID: pid,
+    kCGWindowOwnerName: name,
+    kCGWindowBounds: { X: b[0], Y: b[1], Width: b[2], Height: b[3] },
+  };
+}
+/** Exactly the guest list the release gate captured, front to back. */
+const GUEST_LIST = [
+  win(155, "Window Server", [6, 6, 17, 23]),
+  win(331, "Control Center", [843, 0, 34, 24]),
+  win(155, "Window Server", [0, 0, 1024, 24]),
+  win(SYSTEM_PID, "Notification Center", [0, 0, 1024, 768]),
+  win(329, "Dock", [0, 0, 1024, 768]),
+  win(THINGS_PID, "Things", [44, 25, 935, 684]),
+];
+const isSystem = (pid: number): boolean => pid === SYSTEM_PID || pid === 329 || pid === 155;
+const POINT: [number, number] = [212, 524];
+
+describe("the occlusion decision table", () => {
+  it("passes when the hit test says Things — the scan is not consulted at all", () => {
+    // The v0.20.9 defect verbatim: hit test 665, scan Notification Center.
+    const v = occlusionVerdict(
+      THINGS_PID,
+      THINGS_PID,
+      GUEST_LIST,
+      POINT[0],
+      POINT[1],
+      SCREEN,
+      () => {
+        throw new Error("the scan must not run when the hit test has an answer");
+      },
+    );
+    expect(v.ok).toBe(true);
+  });
+
+  it("refuses and names the app when the hit test says another application", () => {
+    const v = occlusionVerdict(
+      THINGS_PID,
+      FOREIGN_PID,
+      GUEST_LIST,
+      POINT[0],
+      POINT[1],
+      SCREEN,
+      isSystem,
+    );
+    expect(v.ok).toBe(false);
+    // The pid is returned so the caller can name it from NSRunningApplication;
+    // the hit test itself carries no name.
+    expect(v.pid).toBe(FOREIGN_PID);
+    expect(v.name).toBeNull();
+  });
+
+  it("passes when the hit test says NOTHING and only display-sized system windows are above", () => {
+    const v = occlusionVerdict(THINGS_PID, null, GUEST_LIST, POINT[0], POINT[1], SCREEN, isSystem);
+    expect(v.ok).toBe(true);
+  });
+
+  it("refuses and names it when the hit test says NOTHING and the window is not system-owned", () => {
+    const list = [win(FOREIGN_PID, "osascript", [118, 463, 260, 90]), ...GUEST_LIST];
+    const v = occlusionVerdict(THINGS_PID, null, list, 208, 503, SCREEN, isSystem);
+    expect(v.ok).toBe(false);
+    expect(v.name).toBe("osascript");
+  });
+
+  it("refuses a system window that is NOT display-sized — a banner swallows the click", () => {
+    const banner = win(SYSTEM_PID, "Notification Center", [700, 40, 320, 100]);
+    const v = occlusionVerdict(
+      THINGS_PID,
+      null,
+      [banner, ...GUEST_LIST],
+      800,
+      80,
+      SCREEN,
+      isSystem,
+    );
+    expect(v.ok).toBe(false);
+    expect(v.name).toBe("Notification Center");
+  });
+
+  it("refuses a display-sized window that is NOT system-owned — both halves are required", () => {
+    const overlay = win(FOREIGN_PID, "Screen Sharing", [0, 0, 1024, 768]);
+    const v = occlusionVerdict(
+      THINGS_PID,
+      null,
+      [overlay, ...GUEST_LIST],
+      POINT[0],
+      POINT[1],
+      SCREEN,
+      isSystem,
+    );
+    expect(v.ok).toBe(false);
+    expect(v.name).toBe("Screen Sharing");
+  });
+
+  it("exempts the maintainer's host surfaces too — loginwindow at layers 2004 and 2001", () => {
+    // Measured read-only on the host: both sit above every ordinary window, and
+    // the second is far larger than the display.
+    const hostScreen = { x: 0, y: 0, w: 2056, h: 1329 };
+    const LOGINWINDOW = 214;
+    const host = [
+      win(LOGINWINDOW, "loginwindow", [0, 0, 2056, 1329]),
+      win(LOGINWINDOW, "loginwindow", [-15000, -15000, 30000, 30000]),
+      win(82034, "Dock", [0, 0, 2056, 1329]),
+      win(THINGS_PID, "Things", [273, 44, 1252, 1002]),
+    ];
+    const v = occlusionVerdict(
+      THINGS_PID,
+      null,
+      host,
+      900,
+      545,
+      hostScreen,
+      (pid) => pid === LOGINWINDOW || pid === 82034,
+    );
+    expect(v.ok).toBe(true);
+  });
+
+  it("reports the unanswered case rather than guessing when no window owns the point", () => {
+    const v = occlusionVerdict(THINGS_PID, null, [], 10, 10, SCREEN, isSystem);
+    expect(v.ok).toBe(false);
+    expect(v.unanswered).toBe(true);
+  });
+
+  it("never lets a name stand in for an identity — the exemption is by pid", () => {
+    // A process that merely CALLS itself Dock is not exempt: `isSystemOwner`
+    // is asked about the pid, and the shipped predicate reads the executable
+    // path rather than the window's owner name.
+    const impostor = win(FOREIGN_PID, "Dock", [0, 0, 1024, 768]);
+    const v = occlusionVerdict(
+      THINGS_PID,
+      null,
+      [impostor, ...GUEST_LIST],
+      POINT[0],
+      POINT[1],
+      SCREEN,
+      isSystem,
+    );
+    expect(v.ok).toBe(false);
+    expect(v.name).toBe("Dock");
+  });
+});
+
+describe("the shipped system-owner predicate", () => {
+  it("judges by executable path, in exactly two directories", () => {
+    expect(POINTER_GUARD_JXA).toContain("/System/Library/CoreServices");
+    expect(POINTER_GUARD_JXA).toContain("/System/Library/PrivateFrameworks");
+    expect(POINTER_GUARD_JXA).toContain("executableURL");
+    // Never by name: the old Dock-by-name exemption is gone.
+    expect(POINTER_GUARD_JXA).not.toContain("=== 'Dock'");
+  });
+
+  it("asks the hit test BEFORE the scan, and only scans when it answered nothing", () => {
+    const body = POINTER_GUARD_JXA.slice(POINTER_GUARD_JXA.indexOf("function ptrGuard("));
+    expect(body).toContain("ptrOcclusionVerdict(front.pid, ptrHitPidAt(px, py)");
+    // The scan is reached only through the verdict function, never directly.
+    expect(body).not.toContain("ptrScanOwnerAt(");
+  });
+
+  it("measures the display the point is on, not a hardcoded screen", () => {
+    expect(POINTER_GUARD_JXA).toContain("NSScreen.screens");
+    expect(POINTER_GUARD_JXA).toContain("ptrScreenAt(px, py)");
   });
 });
