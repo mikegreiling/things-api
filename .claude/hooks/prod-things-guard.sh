@@ -29,6 +29,20 @@ ti=d.get("tool_input") or {}
 print(ti.get("command","") if isinstance(ti,dict) else "")' 2>/dev/null || true)"
 [ -z "$cmd" ] && exit 0
 
+# Heredoc bodies are data, not commands: drop every line between a `<<MARKER`
+# (optionally quoted or `<<-`) and its terminator before matching the rules
+# below that reason about command position.
+cmdnh="$(printf '%s' "$cmd" | python3 -c 'import re,sys
+src=sys.stdin.read().split("\n"); out=[]; term=None
+for line in src:
+    if term is not None:
+        if line.strip()==term: term=None
+        continue
+    m=re.search(r"<<-?[[:space:]]*[\x27\"]?([A-Za-z_][A-Za-z0-9_]*)[\x27\"]?".replace("[[:space:]]","\\s"), line)
+    out.append(line)
+    if m: term=m.group(1)
+print("\n".join(out))' 2>/dev/null || printf '%s' "$cmd")"
+
 deny() {
   if [ -f "$LIVE" ]; then
     age=$(( $(date +%s) - $(stat -f %m "$LIVE" 2>/dev/null || echo 0) ))
@@ -56,7 +70,7 @@ fi
 #     commit message cannot trip it (a delegate's `git commit -m "... a kill
 #     timer the deputy owns"` was refused, 2026-09-03). Matched on the RAW
 #     command because the helper's name is usually quoted.
-if printf '%s' "$cmd" | grep -Eq '(^|[;&|(`][[:space:]]*)(sudo[[:space:]]+)?(launchctl[[:space:]]+(kickstart|bootout|unload|kill|stop|remove)|pkill|killall|kill)[[:space:]][^;&|]*(things-deputy|Things API Helper|deputy)'; then
+if printf '%s' "$cmdnh" | grep -Eq '(^|[;&|(`][[:space:]]*)(sudo[[:space:]]+)?(launchctl[[:space:]]+(kickstart|bootout|unload|kill|stop|remove)|pkill|killall|kill)[[:space:]][^;&|]*(things-deputy|Things API Helper|deputy)'; then
   deny "signalling or unloading the installed helper"
 fi
 
@@ -75,18 +89,22 @@ if printf '%s' "$cmd" | grep -Eq 'things://'; then
 fi
 
 # Strip quoted strings so search terms / commit messages cannot false-match.
-stripped="$(printf '%s' "$cmd" | sed -E 's/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')"
+stripped="$(printf '%s' "$cmdnh" | sed -E 's/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')"
 
-# 4. Direct GUI / AppleEvent interaction with the production app.
-if printf '%s' "$stripped" | grep -Eq '(^|[^A-Za-z0-9_-])osascript([[:space:]]|$)' \
-   && printf '%s' "$cmd" | grep -Eq 'Things3|Things([^A-Za-z]|$)|System Events|CGEvent|AXUIElement'; then
+# 4. Direct GUI / AppleEvent interaction with the production app. `osascript`
+#    must sit at COMMAND POSITION (prose in a heredoc commit message tripped the
+#    old any-position match, 2026-09-04).
+if printf '%s' "$cmdnh" | grep -Eq '(^|[;&|(`][[:space:]]*)([A-Z_]+=[^[:space:]]*[[:space:]]+)*(sudo[[:space:]]+)?osascript[[:space:]][^;&|]*(Things3|Things[^A-Za-z]|System Events|CGEvent|AXUIElement)'; then
   deny "osascript against the production Things app / System Events"
 fi
 
 # 5. The things CLI (npm-linked, temp-prefix install, or the source/dist entry)
-#    invoked with a WRITE verb, a GUI drive, or a host-state change.
-if printf '%s' "$stripped" | grep -Eq '(^|[^A-Za-z0-9_./-])things([[:space:]]|$)|/bin/things([[:space:]]|$)|dist/cli/index\.js|src/cli/index\.ts'; then
-  if printf '%s' "$stripped" | grep -Eq -- '--dangerously-drive-gui|(^|[[:space:]])(add|add-heading|add-repeating|archive-heading|batch|cancel|checklist|clear-reminder|clone|complete|delete|dismiss|dissolve-heading|duplicate|empty|make-repeating|move|move-heading|move-heading-to-project|promote-heading|relaunch|rename-heading|reopen|reorder|reschedule-repeat|rescue|restart|restore|undo|unarchive-heading|update|log-now|open|setup)([[:space:]]|$)|config[[:space:]]+set|helpers[[:space:]]+(install|uninstall|enable|disable|update|restart)'; then
+#    at COMMAND POSITION, invoked with a WRITE verb, a GUI drive, or a host-state
+#    change. Quoted strings are stripped first so search terms / commit messages
+#    do not false-match; the command-position anchor keeps heredoc prose out too.
+if printf '%s' "$stripped" | grep -Eq '(^|[;&|(`][[:space:]]*)([A-Z_]+=[^[:space:]]*[[:space:]]+)*(sudo[[:space:]]+|time[[:space:]]+)?([^[:space:];&|]*/)?(things|node[[:space:]]+[^[:space:]]*dist/cli/index\.js|npx[[:space:]]+tsx[[:space:]]+[^[:space:]]*src/cli/index\.ts)[[:space:]]'; then
+  seg="$(printf '%s' "$stripped" | grep -Eo '(^|[;&|(`][[:space:]]*)([A-Z_]+=[^[:space:]]*[[:space:]]+)*(sudo[[:space:]]+|time[[:space:]]+)?([^[:space:];&|]*/)?(things|node[[:space:]]+[^[:space:]]*dist/cli/index\.js|npx[[:space:]]+tsx[[:space:]]+[^[:space:]]*src/cli/index\.ts)[[:space:]][^;&|]*' | head -5)"
+  if printf '%s' "$seg" | grep -Eq -- '--dangerously-drive-gui|[[:space:]](add|add-heading|add-repeating|archive-heading|batch|cancel|checklist|clear-reminder|clone|complete|delete|dismiss|dissolve-heading|duplicate|empty|make-repeating|move|move-heading|move-heading-to-project|promote-heading|relaunch|rename-heading|reopen|reorder|reschedule-repeat|rescue|restart|restore|undo|unarchive-heading|update|log-now|open|setup)([[:space:]]|$)|config[[:space:]]+set|helpers[[:space:]]+(install|uninstall|enable|disable|update|restart)'; then
     deny "things CLI write / GUI drive / host-state change against production"
   fi
 fi
