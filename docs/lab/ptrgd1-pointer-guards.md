@@ -66,6 +66,8 @@ So the AUTHORITATIVE test is the window server's own hit test — `AXUIElementCo
 
 The hit test respects z-order **and** mouse-transparency, which the raw window list cannot.
 
+> **SUPERSEDED IN PART BY §8.** Everything above is still the measurement that chose the INSTRUMENT, and it stands. What §2 got wrong is the ORDER and the shape of the exemption, and the v0.20.9 release gate caught it: read §8 before relying on anything below this line.
+
 **The window scan is kept beside it with ONE named exemption — windows owned by the Dock — and NOT a layer band.** The first cut banded the scan to `kCGWindowLayer <= 0`, and cell B3 convicted that: an ordinary floating palette sits at layer 3, and the band made the scan blind to exactly the occluder class the guard exists for. With the Dock exemption instead, the scan names it (§4 B3).
 
 **Both must agree.** The scan is asked first, because it is the leg that can NAME the culprit — cell B3 measured a case where the hit test resolves *nothing* (a foreign window whose owner has no accessibility tree) while the window list names the owner outright. Asking the hit test first threw that name away and refused with "nothing on screen answered", which is true and useless.
@@ -208,8 +210,8 @@ What IS proven about this exact code path: `jxaClickScript` carries the same `pt
 
 | the first cut | what convicted it | what shipped |
 |---|---|---|
-| window scan banded to `kCGWindowLayer <= 0` | B3: an ordinary floating palette is layer 3; the band reported `Things` and would have passed the gesture into it | the scan counts every layer, with ONE named exemption — Dock-owned windows — because the Dock's full-screen backstop is mouse-transparent and universal (§2) |
-| hit test asked before the window scan | B3: over a window whose owner has no AX tree the hit test resolves nothing, so the refusal read "nothing on screen answered" while the scan knew the name | the scan is asked first and names the culprit; the hit test remains authoritative for transparency and z-order |
+| window scan banded to `kCGWindowLayer <= 0` | B3: an ordinary floating palette is layer 3; the band reported `Things` and would have passed the gesture into it | the scan counts every layer; the Dock-by-name exemption that replaced the band was itself wrong and is replaced again in §8 by system-owner + display-sized |
+| hit test asked before the window scan | B3: over a window whose owner has no AX tree the hit test resolves nothing, so the refusal read "nothing on screen answered" while the scan knew the name | the scan was moved first — **and that was the v0.20.9 defect; §8 puts the hit test back in front and makes the scan the second leg** |
 | `abortPartial`'s Escape assumed unguarded | reading `guardedRun`: `primitive: "key"` is in `KEYSTROKE_CLASS`, so the folded census already sits in front of that script | left alone, with a comment naming why the primitive must stay `key` |
 
 ---
@@ -235,3 +237,91 @@ The keyboard tap is deliberately out of scope: `CGEventPostToPid` (`ui-chord.ts`
 - **A real-display arm.** Everything here is a headless clone. The release gate's real-display leg (`docs/reference/release-checklist.md`) is where the guard meets actual window-server compositing, a Dock that is visible rather than auto-hidden, and Stage Manager / multiple Spaces — none of which a `--no-graphics` guest reproduces.
 - **A deputy-ROUTED arm.** Certified here by DIRECT execution. The guard shells out nowhere and the broker-safety suite covers the catalog, but the routed arm of the gate is still the maintainer's-host smoke until helpers-in-the-guest exists ([up-next.md](../up-next.md)).
 - **Notification banners** were not exercised. They are a layer-25 window owned by `NotificationCenter` with a real AX tree, so both occlusion legs should name them; unmeasured.
+
+---
+
+## 8. The full-screen system surfaces — the v0.20.9 release-gate defect
+
+**§2's design was right about the instrument and wrong about the order, and the release gate caught it before a tag existed.** The first cut asked the window scan FIRST (because it is the leg that can name a culprit) and exempted exactly one thing: windows owned by the **Dock**. That is one instance of a class, and the class is large.
+
+### What the gate saw
+
+In the ROUTED guest (`golden-v4h`, helpers installed and enabled), `things area reorder … --first --dangerously-drive-gui` refused **at every point**:
+
+> `refused to drag the area row: "Notification Center" owns the screen at (212, 524), not Things — a pointer gesture goes to whatever is under it, so nothing was posted`
+
+The guest's on-screen window list, front to back, with Things frontmost:
+
+```
+L2147483630 a1 pid155 Window Server       [6,6 17x23]
+L25         a1 pid461 Spotlight           [811,0 32x24]
+L25         a1 pid331 Control Center      [843,0 34x24]
+L25         a1 pid331 Control Center      [877,0 147x24]
+L24         a1 pid155 Window Server       [0,0 1024x24]
+L23         a1 pid411 Notification Center [0,0 1024x768]   <- the whole display
+L20         a1 pid329 Dock                [0,0 1024x768]   <- the whole display
+L3          a0 pid665 Things              [0,728 40x40]
+L0          a1 pid665 Things              [44,25 935x684]
+```
+
+and the four-leg probe at the grab point, which is the whole diagnosis in five lines:
+
+```
+L1_front    : Things (com.culturedcode.ThingsMac, pid 665)
+L2_contains : true
+L3_hitPid   : 665   <- the hit test says THINGS
+L3_topBanded: { pid: 411, name: "Notification Center" }   <- the scan says otherwise
+sentence    : refused to drag the area row: "Notification Center" owns the screen …
+```
+
+The hit test was right and was overruled by the leg that was asked first.
+
+### And it is worse than the guest suggests
+
+A read-only window list on the maintainer's own Mac shows **`loginwindow`** holding two surfaces above everything:
+
+```
+L2004 [0,0 2056x1329]          <- the whole display
+L2001 [-15000,-15000 30000x30000]   <- far larger than the display
+```
+
+So the shipped scan would have refused **every pointer gesture on every real Mac**, not only in the lab. Naming the Dock had made a universal failure look like a guest quirk.
+
+### The ruling, and why this shape
+
+Recorded in [design/decisions.md](../design/decisions.md) (2026-09-03):
+
+1. **The system-wide AX hit test is AUTHORITATIVE for occlusion.** It is z-order *and* transparency aware — §2's own host measurement, through the very Dock window that broke the naive scan, answered `Ghostty`/`AXTextArea` over an ordinary window and `Dock`/`AXDockItem` over the real dock strip. When it answers, its answer stands and the scan is not consulted.
+2. **The window scan is the SECOND leg**, consulted only where the hit test resolves **nothing** — the cell B3 case, an owner with no accessibility tree.
+3. **In that leg a window is exempt iff BOTH hold:** its owner is a **system process** (executable under `/System/Library/CoreServices` or `/System/Library/PrivateFrameworks` — Dock, Notification Center, loginwindow, Control Center, Window Server) **AND** its bounds cover the **entire display the point is on**.
+
+Both halves are load-bearing, and each rules out a different mistake:
+
+| exemption test | what it alone would wave through |
+|---|---|
+| display-sized only | a full-screen presentation, a screen-sharing overlay, a kiosk window |
+| system-owned only | a **Notification Center banner** — small, opaque, and it really does swallow the click |
+
+The owner is judged by **executable path, never by name**: a window's `kCGWindowOwnerName` is a string any process may claim, and the old `name === 'Dock'` test would have exempted an impostor. A unit test drives that case.
+
+### The decision table, and how it is tested
+
+`POINTER_GUARD_DECISION_JS` is deliberately free of the ObjC bridge, so `test/unit/pointer-gesture-guard.test.ts` **evaluates the shipped source** and drives the table rather than pattern-matching it:
+
+| the hit test says | the scan | verdict |
+|---|---|---|
+| Things | not consulted | **pass** |
+| another application | not consulted | **refuse**, named from the pid |
+| nothing, and a display-sized SYSTEM window is above | exempt, keep looking | **pass** |
+| nothing, and anything else is above | named | **refuse**, named |
+| nothing, and no window owns the point at all | — | **refuse** ("nothing on screen answered") |
+
+Nine executed cases, including the two guest surfaces above, both host `loginwindow` surfaces, a Notification Center banner, a display-sized non-system overlay, and the name-impostor.
+
+### What did NOT change
+
+The refusal copy family, the other three legs, the drop-time re-check, and cell B3's verdict. B3 is the case the scan exists for — an opaque floating panel whose owner has no AX tree, where the hit test resolves nothing — and under the new order it still refuses, still naming `"osascript"`, because that panel is neither system-owned nor display-sized.
+
+### Second finding from the same gate — an OPEN cell
+
+A **fired 12:00 reminder banner** made the Repeat-dialog shape probe fail once with `-1700`. That is the DEFAULTS3 failure shape, and it is **unmeasured**: whether a banner can break a dialog-shape read (as opposed to a pointer gesture, which this guard now refuses cleanly) is not established, nor is how often. It needs its own cell — seed a reminder, let it fire, and drive the Repeat dialog across the banner's lifetime. Filed in [up-next.md](../up-next.md).

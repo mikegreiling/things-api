@@ -88,11 +88,17 @@
  * real dock strip it answers Dock (`AXDockItem`) — it respects z-order AND
  * mouse-transparency, which the raw window list cannot.
  *
- * The window-list scan is kept beside it, with ONE named exemption — windows
- * owned by the Dock — rather than a layer band: an ordinary floating panel over
- * the sidebar sits at layer 3 and must be caught by the scan too, not left to
- * the hit test alone. The scan is the second opinion, and it is what NAMES the
- * occluding application in the refusal.
+ * The window-list scan is the SECOND leg, consulted only where the hit test
+ * resolves NOTHING — an owner with no accessibility tree (cell B3). There a
+ * window is exempt iff BOTH halves hold: a SYSTEM process owns it, judged by
+ * executable path rather than by name, AND it covers the whole display the
+ * point is on. That is the class, not the instance: the guest carries a
+ * full-screen Notification Center at layer 23 and a Dock at layer 20, and the
+ * maintainer's host carries two loginwindow surfaces at layers 2004 and 2001.
+ * A Notification Center BANNER passes neither half and is named.
+ *
+ * The ORDER is load-bearing and was learned the expensive way — see §8 of the
+ * campaign doc. Asking the scan first refused every gesture on every real Mac.
  */
 
 /**
@@ -158,6 +164,60 @@ function mainWindow(){ var ws=kids(appEl()), std=[];
  * test and a short AXParent walk. `PTR_OPS` counts them so a caller can report
  * the guard's own price.
  */
+/**
+ * THE OCCLUSION DECISION TABLE, as pure JavaScript.
+ *
+ * Split out and kept free of the ObjC bridge so it can be EXECUTED by a unit
+ * test rather than pattern-matched (test/unit/pointer-gesture-guard.test.ts
+ * evaluates this exact source and drives the table). The shipped ruling, after
+ * the v0.20.9 release gate caught the first cut refusing on every real Mac:
+ *
+ * | the window server's hit test says | the scan | verdict |
+ * |---|---|---|
+ * | Things | not consulted | **pass** |
+ * | another application | not consulted | **refuse**, named |
+ * | nothing, and above Things sits a display-sized SYSTEM window | exempt, keep looking | **pass** |
+ * | nothing, and above Things sits anything else | named | **refuse**, named |
+ *
+ * The exemption needs BOTH halves. Display-sized alone would wave through a
+ * full-screen presentation or a screen-sharing overlay; system-owned alone
+ * would wave through a Notification Center BANNER, which is small and would
+ * genuinely swallow the click.
+ */
+export const POINTER_GUARD_DECISION_JS = `/* PTRGD1 — the occlusion decision, pure: no ObjC bridge, no I/O. */
+function ptrCoversScreen(b, s){
+  var T = 1;
+  return s !== null && b.X <= s.x + T && b.Y <= s.y + T &&
+    b.X + b.Width >= s.x + s.w - T && b.Y + b.Height >= s.y + s.h - T }
+
+/*
+ * The topmost window containing the point that is NOT an exempt system
+ * surface. Front-to-back, every layer: an ordinary floating palette is layer 3
+ * and must be named here, and the first cut's layer band is exactly what made
+ * the scan blind to it.
+ */
+function ptrScanOwnerAt(list, x, y, screen, isSystemOwner){
+  for (var i = 0; i < list.length; i++){
+    var w = list[i], b = w['kCGWindowBounds'];
+    if (!b) continue;
+    if (x < b.X || y < b.Y || x >= b.X + b.Width || y >= b.Y + b.Height) continue;
+    var pid = Number(w['kCGWindowOwnerPID']);
+    if (ptrCoversScreen(b, screen) && isSystemOwner(pid)) continue;
+    var name = w['kCGWindowOwnerName'];
+    return { pid: pid, name: (typeof name === 'string' && name !== '') ? name : null } }
+  return null }
+
+function ptrOcclusionVerdict(frontPid, hitPid, list, x, y, screen, isSystemOwner){
+  /* The hit test is authoritative wherever it has an answer. */
+  if (hitPid !== null) {
+    if (hitPid === frontPid) return { ok: true };
+    return { ok: false, pid: hitPid, name: null } }
+  /* It answered nothing — an owner with no accessibility tree. Now the scan. */
+  var top = ptrScanOwnerAt(list, x, y, screen, isSystemOwner);
+  if (top === null) return { ok: false, unanswered: true };
+  if (top.pid === frontPid) return { ok: true };
+  return { ok: false, pid: top.pid, name: top.name } }`;
+
 export const POINTER_GUARD_JXA = `var PTRGD1_BUNDLE = '${THINGS_BUNDLE_ID}';
 /* CGWindow.h list options; kCGNullWindowID is not bridged, and it is 0. */
 var PTRGD1_LIST_OPTS = $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements;
@@ -189,43 +249,54 @@ function ptrWindowList(){ PTR_OPS++;
   } catch(e){ return null } }
 
 /*
- * The topmost window containing the point, at ANY layer, with ONE named
- * exemption: windows owned by the Dock.
- *
- * The exemption is measured, not defensive. The Dock owns a full-screen
- * layer-20 window on every Mac (host: Dock [0,0 2056x1329]; guest:
- * [0,0 1024x768]), alpha 1, above every ordinary window and kept by
- * kCGWindowListExcludeDesktopElements. It is mouse-transparent and the window
- * list exposes no field that says so, so counting it refuses every gesture on
- * every Mac. The Dock's REAL surfaces -- the strip, Mission Control -- are what
- * the system-wide hit test catches instead, measured answering AXDockItem
- * over the strip while answering the app underneath everywhere else.
- *
- * Everything else counts, at every layer, so an ordinary floating panel over
- * the sidebar is named here rather than left to the hit test alone.
- */
-function ptrTopWindowAt(list, x, y){
-  for (var i = 0; i < list.length; i++){
-    var w = list[i], b = w['kCGWindowBounds'];
-    if (!b) continue;
-    var name = w['kCGWindowOwnerName'];
-    if (Number(w['kCGWindowLayer']) > 0 && name === 'Dock') continue;
-    if (x < b.X || y < b.Y || x >= b.X + b.Width || y >= b.Y + b.Height) continue;
-    return { pid: Number(w['kCGWindowOwnerPID']),
-             name: (typeof name === 'string' && name !== '') ? name : 'an unnamed window' } }
-  return null }
-
-/*
- * The name of a running application by pid — how an occluder the BANDED window
- * scan cannot see still gets named. The Dock is the case that needs it: its
- * strip sits above every ordinary window, so the hit test catches a point over
- * it while the layer<=0 scan honestly reports Things' own window underneath.
+ * The name of a running application by pid — how the hit test's answer, which
+ * is a bare pid, gets a name in the refusal.
  */
 function ptrAppName(pid){
   try { var a = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
     if (!a) return null;
     var n = ObjC.unwrap(a.localizedName);
     return (typeof n === 'string' && n !== '') ? n : null } catch(e){ return null } }
+
+/*
+ * Is this pid a SYSTEM process — one of macOS' own always-on-top surfaces?
+ * Judged by where its executable lives, never by its name: a name is not an
+ * identity, and "Dock" or "Notification Center" is a string any process may
+ * claim. Only these two directories count.
+ */
+var PTRGD1_SYSTEM_DIRS = ['/System/Library/CoreServices', '/System/Library/PrivateFrameworks'];
+function ptrIsSystemOwner(pid){
+  try {
+    var a = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
+    if (!a) return false;
+    var path = null;
+    try { if (a.executableURL) path = ObjC.unwrap(a.executableURL.path) } catch(e){ path = null }
+    if (typeof path !== 'string') {
+      try { if (a.bundleURL) path = ObjC.unwrap(a.bundleURL.path) } catch(e){ path = null } }
+    if (typeof path !== 'string') return false;
+    for (var i = 0; i < PTRGD1_SYSTEM_DIRS.length; i++)
+      if (path.indexOf(PTRGD1_SYSTEM_DIRS[i]) === 0) return true;
+    return false;
+  } catch(e){ return false } }
+
+/*
+ * The rect of the display the point is on, in the TOP-LEFT space the window
+ * list and CGEvent both use. NSScreen speaks bottom-left and measures every
+ * screen against the PRIMARY screen's height, which is the flip below.
+ */
+function ptrScreenAt(x, y){
+  try {
+    var scr = $.NSScreen.screens, n = Number(scr.count), i;
+    if (!(n > 0)) return null;
+    var primaryH = Number(scr.objectAtIndex(0).frame.size.height);
+    for (i = 0; i < n; i++){
+      var f = scr.objectAtIndex(i).frame;
+      var r = { x: Number(f.origin.x),
+                y: primaryH - (Number(f.origin.y) + Number(f.size.height)),
+                w: Number(f.size.width), h: Number(f.size.height) };
+      if (x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h) return r }
+    return null;
+  } catch(e){ return null } }
 
 /* What a click at this point would actually reach, per the window server. */
 function ptrHitPidAt(x, y){ PTR_OPS++;
@@ -289,6 +360,8 @@ function ptrChainRoles(chain){
   for (var i = 0; i < chain.length; i++) out.push(chain[i].role || '?');
   return out.length ? out.join(' < ') : 'nothing' }
 
+${POINTER_GUARD_DECISION_JS}
+
 /*
  * THE GUARD. \`what\` completes the sentence "refused to <what>: ...".
  * \`points\` is every screen point the gesture will visit. \`opts.anyWindow\`
@@ -317,21 +390,36 @@ function ptrGuard(what, points, opts){
     for (var k = 0; k < wins.length; k++) if (ptrRectHas(wins[k].f, px, py)) { inside = true; break }
     if (!inside) return lead + at + " is outside Things' window, so the gesture would land somewhere else" + DASH;
     /*
-     * THE SCAN IS ASKED FIRST, because it is the leg that can NAME the culprit.
-     * Measured (PTRGD1 cell B3): over an opaque floating panel belonging to a
-     * process with no accessibility tree, the window server's hit test resolves
-     * NOTHING while the window list names the owner outright. Asking the hit
-     * test first threw that name away and refused with "nothing answered",
-     * which is true and useless.
+     * THE OCCLUSION DECISION (§8, the v0.20.9 release-gate defect).
+     *
+     * The hit test is AUTHORITATIVE and is asked FIRST. The window scan is the
+     * SECOND leg, consulted ONLY when the hit test resolves nothing.
+     *
+     * The first cut had this the other way round, and it refused every gesture
+     * on every real Mac. macOS keeps full-screen, mouse-transparent system
+     * surfaces permanently above every ordinary window — the guest carries
+     * Notification Center [0,0 1024x768] at layer 23 and Dock at layer 20;
+     * the maintainer's host carries loginwindow [0,0 2056x1329] at layer 2004
+     * and loginwindow [-15000,-15000 30000x30000] at 2001 — and the window
+     * list has no field that says a window passes clicks through. Exempting the
+     * Dock by name was treating one instance of a whole class.
+     *
+     * The hit test knows the difference, measured: through those same surfaces
+     * it answers Things over Things and AXDockItem over the real dock strip.
+     * So when it answers, its answer stands. It is only when it answers NOTHING
+     * — an owner with no accessibility tree, cell B3 — that the scan speaks, and
+     * there a window is exempt iff BOTH: a SYSTEM process owns it (judged by
+     * executable path, never by name) AND it covers the whole display the point
+     * is on. A Notification Center BANNER is neither display-sized nor exempt,
+     * and it would genuinely swallow the click.
      */
     var owner = function(name){ return lead + (name === null ? 'another application' : '"' + name + '"') +
       ' owns the screen at ' + at + ', not Things — a pointer gesture goes to whatever is under it' + SO };
-    var top = ptrTopWindowAt(list, px, py);
-    if (top !== null && top.pid !== front.pid) return owner(top.name);
-    var hit = ptrHitPidAt(px, py);
-    if (hit === null) return lead + 'nothing on screen answered for ' + at + ', so there is no proof the gesture would reach Things' + DASH;
-    if (hit !== front.pid) return owner(ptrAppName(hit));
-    if (top === null) return lead + 'no on-screen window owns ' + at + ', so there is no proof the gesture would reach Things' + DASH }
+    var v = ptrOcclusionVerdict(front.pid, ptrHitPidAt(px, py), list, px, py,
+                                ptrScreenAt(px, py), ptrIsSystemOwner);
+    if (v.ok !== true) {
+      if (v.unanswered === true) return lead + 'nothing on screen answered for ' + at + ', so there is no proof the gesture would reach Things' + DASH;
+      return owner(v.name !== null ? v.name : ptrAppName(v.pid)) } }
   if (typeof opts.identity === 'function' && points.length > 0) {
     var bad = opts.identity(ptrChainAt(front.pid, points[0].x, points[0].y));
     if (bad) return lead + bad + DASH }
