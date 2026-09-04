@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { ObserverSession } from "../../src/write/vectors/ui-observer.ts";
 import type { UiCommand, UiRunResult } from "../../src/write/vectors/ui.ts";
 import {
   areaRowsInOrder,
@@ -513,13 +514,14 @@ function drive(
   target: string,
   placement: SidebarPlacement,
   env: NodeJS.ProcessEnv = {},
+  observer: ObserverSession | null = null,
 ): ReturnType<typeof driveSidebarAreaReorder> {
   return driveSidebarAreaReorder(
     { targetUuid: `u-${target}`, targetTitle: target, placement },
     sim.run,
     sim.aux,
     instantSleep,
-    null,
+    observer,
     env,
   );
 }
@@ -1558,5 +1560,27 @@ describe("the sparse census — geometry for all, content for the predicted few"
       const next = seq.slice(firstChevron + 1).find((e) => e.primitive === "sidebar-snapshot");
       expect(next?.ordinals).toEqual([]);
     }
+  });
+});
+
+describe("the settle observer, when it is not there (VOPAT2 PR 2)", () => {
+  it("a session whose socket never answers is a FALLBACK, not a failure", async () => {
+    // The AX-scrutiny doctrine's fail direction, in the one shape that is easy
+    // to get wrong: an ARMED settle that never resolves must cost the fixed wait
+    // it replaced and let the step's own closed loop decide — never refuse the
+    // move. This session points at a socket that does not exist, which is what a
+    // sidecar reaped mid-drive looks like from node.
+    const dead: ObserverSession = {
+      transport: "sidecar",
+      socketPath: "/tmp/things-api-vopat2-no-such-socket.sock",
+      token: "0".repeat(32),
+      logPath: "/tmp/things-api-vopat2-no-such.log",
+      registered: "0/0",
+      pid: 0,
+    };
+    const sim = makeSim({ titles: tall(20), viewportH: 200 });
+    const res = await drive(sim, "A2", { kind: "last" }, {}, dead);
+    expect(res.ok, res.detail).toBe(true);
+    expect(sim.order().at(-1)).toBe("A2");
   });
 });
