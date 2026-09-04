@@ -38,6 +38,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 source lab/scripts/env.sh
+# The routed arm installs the host-built helper bundle into the clone and puts
+# it under launchd — HELPGST1's own sequence, reused rather than re-derived.
+source lab/scripts/helpers-guest.sh
 
 CMD="${1:-}"
 VM="${VM:-vopat2pr2-lab}"
@@ -213,8 +216,11 @@ if [ "$CMD" = "setup" ]; then
   lab_ssh "$IP" "$CLI config set ui-enabled true" </dev/null >/dev/null 2>&1
   lab_ssh "$IP" "$CLI config set experimental-area-reorder true" </dev/null >/dev/null 2>&1
   if [ "$ROUTED" = "1" ]; then
-    lab_ssh "$IP" "$CLI config set helpers-enabled true" </dev/null >/dev/null 2>&1
-    note "ROUTED arm: helpers-enabled true"
+    # Ship + install + onboard + enable, then ASSERT the drive is actually
+    # routed — "which identity executes this script" is a value this cell SETS
+    # and then proves, never one it assumes (harness.md §Routing-arm law).
+    note "ROUTED arm: provisioning the helper pair in the guest"
+    guest_helpers_provision "$IP" "$CLI" 2>&1 | sed 's/^/  /' | tee -a "$REPORT"
     note "  helpers: $(lab_ssh "$IP" "$CLI helpers status" </dev/null 2>&1 | tr '\n' ' ' | head -c 400)"
   fi
   note "cli: $(lab_ssh "$IP" "$CLI --version" </dev/null 2>&1 | tail -1)"
