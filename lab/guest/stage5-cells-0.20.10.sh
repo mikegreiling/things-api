@@ -476,13 +476,25 @@ except Exception: print('')
   echo "     cmd:    things $* ${envs:+[$envs]}"
   echo "     before: $before"
   echo "     after:  $after"
-  echo "     result: $(python3 -c "
-import json,sys
+  # NEVER put a `{...}` comprehension inside a `$( )` inside a double-quoted
+  # string: the guest runs macOS /bin/bash 3.2, which brace-expands the python
+  # source at its commas and hands the shell three fragments (the v0.20.10 gate
+  # run printed three SyntaxErrors per move where this summary belongs — display
+  # only, every assertion around it reads the DB, the trace or the envelope).
+  # Assign at statement level and keep the python loop brace-free.
+  local summary
+  summary=$(python3 -c "
+import json, sys
 try:
-  d=json.loads(sys.stdin.read())
-  print(json.dumps({k:v for k,v in (d.get('data') or {}).items() if k in ('detail','collapsed','collapseUnrestored','ok')})[:400])
-except Exception: print('(unparseable)')
-" <<<"$out")"
+    d = json.loads(sys.stdin.read()).get('data') or dict()
+    out = dict()
+    for k in ('detail', 'collapsed', 'collapseUnrestored', 'notes'):
+        if k in d: out[k] = d[k]
+    print(json.dumps(out)[:400])
+except Exception:
+    print('(unparseable)')
+" <<<"$out")
+  echo "     result: $summary"
   local tr rec
   tr=$(newest_trace); rec=$(cost_record "$tr")
   SB_COST="$rec"
