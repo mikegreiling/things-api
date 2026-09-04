@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.9 — 2026-09-04
+
 - **Fixed — the new pointer-gesture safety check refused every GUI-driven command on every Mac.** The check added just before this release asks whether anything is covering the point it is about to click or drag. It asked the question two ways and let the wrong answer win: macOS keeps invisible, click-through windows the size of the whole screen permanently in front of every application — Notification Center and the Dock on any Mac, and two more belonging to the login window — and the check counted those as something being in the way. So `area reorder` and the `--dangerously-drive-gui` repeat verbs refused with "Notification Center owns the screen", or "Dock", having sent nothing, every time.
 
   The reliable answer, which the check was already getting and then discarding, comes from asking the window server what a click at that point would actually reach; it knows which windows pass clicks through and which do not. That answer now decides. The window list is consulted only when the window server has no answer at all, and there a window is ignored only if it both belongs to macOS itself and covers the entire display — so a notification *banner*, which is small and does swallow clicks, still stops the gesture and is named. Refs #676.
