@@ -65,6 +65,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { trace } from "../../trace/tracer.ts";
 import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
+import { POINTER_GUARD_AX_HELPERS, POINTER_GUARD_JXA } from "./ui-pointer-guard.ts";
 import type { UiCommand, UiCommandPrimitive, UiRunner, UiRunResult } from "./ui.ts";
 
 // ------------------------------------------------------------------- types
@@ -159,26 +160,7 @@ export interface SidebarSnapshot {
 // verbatim where they are load-bearing). All dispatch through the injectable
 // UiRunner seam, so ladder logic is unit-testable without a GUI.
 
-const JXA_PRELUDE = `ObjC.import('AppKit');
-ObjC.import('ApplicationServices');
-ObjC.import('CoreGraphics');
-function pidOf(n){ return Application('System Events').processes.byName(n).unixId() }
-function sleep(ms){ $.NSThread.sleepForTimeInterval(ms/1000) }
-function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]) }
-function sv(el,name){ var v=attr(el,name); return v? v.js : '' }
-function rectOf(p,z){ if(!p||!z) return null;
-  var pd=ObjC.castRefToObject($.CFCopyDescription(p)).js, zd=ObjC.castRefToObject($.CFCopyDescription(z)).js;
-  var pm=pd.match(/x:([-0-9.]+) y:([-0-9.]+)/), zm=zd.match(/w:([-0-9.]+) h:([-0-9.]+)/);
-  return (pm&&zm)?{x:+pm[1],y:+pm[2],w:+zm[1],h:+zm[2]}:null }
-function frame(el){ return rectOf(attr(el,'AXPosition'), attr(el,'AXSize')) }
-function kids(el){ var c=attr(el,'AXChildren'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a }
-function findAll(el, wantRole, depth, acc){ acc=acc||[]; if(depth<0) return acc; var ch=kids(el);
-  for(var i=0;i<ch.length;i++){ if(sv(ch[i],'AXRole')===wantRole) acc.push(ch[i]); findAll(ch[i], wantRole, depth-1, acc) } return acc }
-function appEl(){ return $.AXUIElementCreateApplication(pidOf('Things3')) }
-function mainWindow(){ var ws=kids(appEl()), std=[];
-  for(var i=0;i<ws.length;i++){ if(sv(ws[i],'AXRole')==='AXWindow' && sv(ws[i],'AXSubrole')==='AXStandardWindow') std.push(ws[i]) }
-  for(var k=0;k<std.length;k++){ if(sv(std[k],'AXMain')===true) return std[k] }
-  return std.length? std[0] : null }
+const JXA_PRELUDE = `${POINTER_GUARD_AX_HELPERS}
 var NODE_ATTRS=$(['AXValue','AXDescription','AXTitle','AXChildren','AXPosition','AXSize','AXRole']);
 function node(el){ var out=Ref();
   if($.AXUIElementCopyMultipleAttributeValues(el,NODE_ATTRS,0,out)!==0) return null;
@@ -279,7 +261,11 @@ function resolveSidebar(titles, depth){
 }
 var MOVED=5, DOWN=1, UP=2, DRAG=6;
 function mev(t,x,y,cs){ var e=$.CGEventCreateMouseEvent($(), t, $.CGPointMake(x,y), 0); if(cs) $.CGEventSetIntegerValueField(e,1,cs); return e }
-function postHID(ev){ $.CGEventPost($.kCGHIDEventTap, ev) }`;
+function postHID(ev){ $.CGEventPost($.kCGHIDEventTap, ev) }
+/* Escape while the button is still held — AXDRAG1-d's byte-identical abort. */
+function postEscape(){ var kd=$.CGEventCreateKeyboardEvent($(),53,true), ku=$.CGEventCreateKeyboardEvent($(),53,false);
+  postHID(kd); sleep(20); postHID(ku); sleep(150) }
+${POINTER_GUARD_JXA}`;
 
 /**
  * How deep the per-row text walk goes on the FAST path, and on the fallback.
@@ -409,13 +395,29 @@ var TITLES = ${JSON.stringify([...areaTitles])};
 var r = resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST});
 var sb = r.ok === true ? r.viewport : null;
 if (sb === null) { 'NO_SIDEBAR' } else {
-  postHID(mev(MOVED, sb.x + sb.w/2, sb.y + sb.h/2, 0)); sleep(50);
+  var px = sb.x + sb.w/2, py = sb.y + sb.h/2;
+  /*
+   * PTRGD1. A wheel event goes to the view under the POINTER and nowhere else
+   * (SBSCR1 §1), which is precisely why this fallback moves the pointer — and
+   * precisely why it must prove first that the pointer's destination is
+   * Things' sidebar and not a window someone put over it. The identity leg
+   * asks for the sidebar's own table under that point.
+   */
+  var G0 = Date.now();
+  var TABLE = frame(r.table);
+  var refusal = ptrGuard('scroll the sidebar with the wheel', [{x:px,y:py}], { identity: function(chain){
+    if (chain.length === 0) return 'the sidebar centre resolves to no element inside Things, so the wheel events would go somewhere else';
+    if (!ptrChainHasFrame(chain, ['AXTable','AXOutline','AXList'], TABLE)) return 'the element at the sidebar centre does not belong to the sidebar list (the point sits in ' + ptrChainRoles(chain) + ')';
+    return null } });
+  var G1 = Date.now() - G0;
+  if (refusal !== null) { throw new Error(refusal) }
+  postHID(mev(MOVED, px, py, 0)); sleep(50);
   var n = ${n}, dir = n < 0 ? -1 : 1;
   for (var i = 0; i < Math.abs(n); i++) {
     var ev = $.CGEventCreateScrollWheelEvent($(), $.kCGScrollEventUnitLine, 1, dir * 3);
     postHID(ev); sleep(60);
   }
-  'DONE'
+  'DONE ptrgd1=' + PTR_OPS + 'ops/' + G1 + 'ms'
 }`;
 }
 
@@ -424,18 +426,45 @@ if (sb === null) { 'NO_SIDEBAR' } else {
  * session, ~25 interpolated drag events, a settle so the drop indicator locks,
  * then up. Coordinates are AX-resolved frames + slot-boundary geometry computed
  * by the caller in the SAME snapshot generation.
+ *
+ * GUARDED (PTRGD1). Nothing is posted until Things is proven frontmost, both
+ * endpoints are proven inside its window and unoccluded, and the row LIVE under
+ * the grab point is proven to be the very row `source` describes — which is the
+ * same-app half of the hazard: a user scroll between the census and the gesture
+ * leaves these coordinates over a different row, and the driver's own invariants
+ * (area count + assignment digest) do not see a to-do dragged into another list.
+ * The law is re-asserted at the drop point before the button comes up, because
+ * the gesture itself takes about a second and a window can arrive during it; a
+ * failed re-check Escape-aborts instead of dropping.
  */
-export function jxaSidebarDragScript(sx: number, sy: number, tx: number, ty: number): string {
+export function jxaSidebarDragScript(
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  source: SidebarRect,
+): string {
   const [a, b, c, d] = [sx, sy, tx, ty].map(Math.round) as [number, number, number, number];
   return `${JXA_PRELUDE}
 var sx=${a}, sy=${b}, tx=${c}, ty=${d}, steps=25;
+var SRC = ${JSON.stringify({ x: source.x, y: source.y, w: source.w, h: source.h })};
+var G0 = Date.now();
+var refusal = ptrGuard('drag the area row', [{x:sx,y:sy},{x:tx,y:ty}], { identity: function(chain){
+  if (chain.length === 0) return 'the grab point resolves to no element inside Things, so the row frame this drag was planned against is stale';
+  if (!ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)) return 'the sidebar row under the grab point is not the row this drag was planned against (the point sits in ' + ptrChainRoles(chain) + '), so the frames are stale';
+  return null } });
+var G1 = Date.now() - G0;
+if (refusal !== null) { 'REFUSED ' + JSON.stringify({refused:true, why:refusal, ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
 postHID(mev(MOVED, sx, sy, 0)); sleep(30);
 postHID(mev(DOWN, sx, sy, 1)); sleep(120);
 postHID(mev(DRAG, sx, sy - 3, 1)); sleep(30);
 for (var i = 1; i <= steps; i++) { postHID(mev(DRAG, sx + (tx-sx)*i/steps, sy + (ty-sy)*i/steps, 1)); sleep(25) }
 postHID(mev(DRAG, tx, ty, 1)); sleep(400);
+var late = ptrGuard('drop the area row', [{x:tx,y:ty}], {});
+if (late !== null) { postEscape(); postHID(mev(UP, tx, ty, 1));
+  'ABORTED ' + JSON.stringify({aborted:true, why:late, ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
 postHID(mev(UP, tx, ty, 1));
-'DONE'`;
+'DONE ptrgd1=' + PTR_OPS + 'ops/' + G1 + 'ms' }}`;
 }
 
 function snapshotCommand(areaTitles: readonly string[], depthHint?: number): UiCommand {
@@ -477,12 +506,18 @@ function scrollToCommand(fraction: number, areaTitles: readonly string[]): UiCom
   };
 }
 
-function dragCommand(sx: number, sy: number, tx: number, ty: number): UiCommand {
+function dragCommand(
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  source: SidebarRect,
+): UiCommand {
   return {
     primitive: "sidebar-drag",
     label: "drag the area row to the computed slot boundary",
     lang: "javascript",
-    script: jxaSidebarDragScript(sx, sy, tx, ty),
+    script: jxaSidebarDragScript(sx, sy, tx, ty, source),
   };
 }
 
@@ -502,9 +537,11 @@ export function jxaSidebarHeldScrollDragScript(
   anchorTitle: string | null, // null = drop below the last row (to-last)
   maxTicks: number,
   areaTitles: readonly string[],
+  source: SidebarRect,
 ): string {
   const [a, b] = [sx, sy].map(Math.round) as [number, number];
   const anchor = JSON.stringify(anchorTitle);
+  const src = JSON.stringify({ x: source.x, y: source.y, w: source.w, h: source.h });
   return `${JXA_PRELUDE}
 var TITLES = ${JSON.stringify([...areaTitles])};
 function liveRows(){ var r=resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST}); if(r.ok!==true) return [];
@@ -516,9 +553,24 @@ function matches(text, title){ var segs=text.split('|');
   for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.') return true } return false }
 function viewportRect(){ var r=resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST}); return r.ok===true? r.viewport : null }
 var sx=${a}, sy=${b}, anchorTitle=${anchor}, maxTicks=${Math.trunc(maxTicks)};
+var SRC = ${src};
 var vp = viewportRect();
 if (vp === null) { JSON.stringify({aborted:true, why:'no sidebar viewport'}) } else {
 var bandTop = vp.y + 6, bandBot = vp.y + vp.h - 6;
+/*
+ * PTRGD1. The grab is guarded before the first event, and every DROP below is
+ * guarded again at the point it is about to release on (this gesture runs for
+ * seconds while it scrolls, which is exactly long enough for a window to
+ * arrive). A late refusal Escape-aborts, which is what the abort rungs here
+ * already do for their own reasons.
+ */
+var G0 = Date.now();
+var refusal = ptrGuard('drag the area row', [{x:sx,y:sy}], { identity: function(chain){
+  if (chain.length === 0) return 'the grab point resolves to no element inside Things, so the row frame this drag was planned against is stale';
+  if (!ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)) return 'the sidebar row under the grab point is not the row this drag was planned against (the point sits in ' + ptrChainRoles(chain) + '), so the frames are stale';
+  return null } });
+var G1 = Date.now() - G0;
+if (refusal !== null) { JSON.stringify({refused:true, why:refusal, ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
 postHID(mev(MOVED, sx, sy, 0)); sleep(30);
 postHID(mev(DOWN, sx, sy, 1)); sleep(120);
 postHID(mev(DRAG, sx, sy - 3, 1)); sleep(30);
@@ -543,8 +595,7 @@ function boundaryNow(){
 }
 var b0 = boundaryNow(), ticks = 0, result = null;
 if (b0 === null) {
-  var kd=$.CGEventCreateKeyboardEvent($(),53,true), ku=$.CGEventCreateKeyboardEvent($(),53,false);
-  postHID(kd); sleep(20); postHID(ku); sleep(150); postHID(mev(UP, sx, sy, 1));
+  postEscape(); postHID(mev(UP, sx, sy, 1));
   result = {aborted:true, why:'anchor row did not resolve mid-drag'};
 } else {
   while (b0 !== null && b0.ready === 0 && ticks < maxTicks) {
@@ -554,8 +605,7 @@ if (b0 === null) {
     b0 = boundaryNow(); ticks++;
   }
   if (b0 === null || b0.ready === 0) {
-    var kd2=$.CGEventCreateKeyboardEvent($(),53,true), ku2=$.CGEventCreateKeyboardEvent($(),53,false);
-    postHID(kd2); sleep(20); postHID(ku2); sleep(150); postHID(mev(UP, sx, sy, 1));
+    postEscape(); postHID(mev(UP, sx, sy, 1));
     result = {aborted:true, why:'anchor never entered the band', ticks:ticks};
   } else {
     // Post-wheel SETTLE: the list can drift a few px after the last tick
@@ -570,8 +620,7 @@ if (b0 === null) {
       lastY = bs.y; b0 = bs;
     }
     if (b0 === null || b0.ready === 0 || stable < 2) {
-      var kd3=$.CGEventCreateKeyboardEvent($(),53,true), ku3=$.CGEventCreateKeyboardEvent($(),53,false);
-      postHID(kd3); sleep(20); postHID(ku3); sleep(150); postHID(mev(UP, sx, sy, 1));
+      postEscape(); postHID(mev(UP, sx, sy, 1));
       result = {aborted:true, why:'boundary never stabilized in the band before the drop', ticks:ticks};
     } else {
       var ty = b0.y;
@@ -581,13 +630,22 @@ if (b0 === null) {
       var bf = boundaryNow();
       if (bf !== null && bf.ready === 1) ty = bf.y;
       postHID(mev(DRAG, sx, ty, 1)); sleep(400);
-      postHID(mev(UP, sx, ty, 1));
-      result = {dropped:true, ticks:ticks, dropY:ty};
+      // PTRGD1 drop-time re-check: the law again, at the point about to be
+      // released on. A window that arrived during the scroll would otherwise
+      // take the drop.
+      var late = ptrGuard('drop the area row', [{x:sx,y:ty}], {});
+      if (late !== null) {
+        postEscape(); postHID(mev(UP, sx, ty, 1));
+        result = {aborted:true, why:late, ticks:ticks, ptrgd1:{ops:PTR_OPS, ms:G1}};
+      } else {
+        postHID(mev(UP, sx, ty, 1));
+        result = {dropped:true, ticks:ticks, dropY:ty, ptrgd1:{ops:PTR_OPS, ms:G1}};
+      }
     }
   }
 }
 JSON.stringify(result)
-}`;
+}}`;
 }
 
 /**
@@ -690,6 +748,18 @@ if (pick === null) {
       if (cy < vp.y + 6 || cy > vp.y + vp.h - 6) {
         out({clicked:false, reason:'chevron-off-band', why:'the chevron is outside the visible sidebar band', y:cy})
       } else {
+        STAGE = 'guard';
+        // PTRGD1: the chevron's frame was read live a line ago, but the frame
+        // is not the proof — that Things owns this pixel is. The identity leg
+        // asks the app's own hit test whether the chevron IS what sits there.
+        var G0 = Date.now();
+        var refusal = ptrGuard('click the disclosure arrow', [{x:cx,y:cy}], { identity: function(chain){
+          if (chain.length === 0) return 'the arrow\\'s position resolves to no element inside Things, so its frame is stale';
+          if (!ptrChainHasFrame(chain, null, cf) && !ptrChainHasFrame(chain, ['AXRow','AXTableRow'], pick.f)) return 'the element at the arrow\\'s position is not the arrow (the point sits in ' + ptrChainRoles(chain) + '), so its frame is stale';
+          return null } });
+        var G1 = Date.now() - G0;
+        MS.guard = G1; MS.guardOps = PTR_OPS;
+        if (refusal !== null) { out({clicked:false, reason:'ptrgd1-refused', why:refusal, x:cx, y:cy}) } else {
         STAGE = 'click';
         // REPX1 §1.2 rig law: flags set EXPLICITLY on EVERY synthetic event
         // (zero included), and a MOVED settle before the press.
@@ -699,6 +769,7 @@ if (pick === null) {
         mark('click', tm);
         STAGE = 'clicked';
         out({clicked:true, x:cx, y:cy})
+        }
       }
     }
   }
@@ -726,12 +797,13 @@ function heldScrollDragCommand(
   anchorTitle: string | null,
   maxTicks: number,
   areaTitles: readonly string[],
+  source: SidebarRect,
 ): UiCommand {
   return {
     primitive: "sidebar-held-drag",
     label: "held-scroll drag toward the destination",
     lang: "javascript",
-    script: jxaSidebarHeldScrollDragScript(sx, sy, anchorTitle, maxTicks, areaTitles),
+    script: jxaSidebarHeldScrollDragScript(sx, sy, anchorTitle, maxTicks, areaTitles, source),
     meta: { sx, sy, anchorTitle, maxTicks },
   };
 }
@@ -1427,6 +1499,8 @@ export type ChevronStop =
   | "chevron-unresolved"
   /** The chevron resolved OUTSIDE the visible band — refused rather than clicked. */
   | "chevron-off-band"
+  /** The pre-gesture pointer guard refused: not frontmost, occluded, or a stale frame (PTRGD1). */
+  | "ptrgd1-refused"
   /** The dispatch itself failed (osascript non-zero, unparsable verdict). */
   | "chevron-click-dispatch-failed"
   /** The dispatch ran past its scaled budget and was stopped (#676's field shape). */
@@ -1448,6 +1522,7 @@ const CHEVRON_SCRIPT_REASONS: Readonly<Record<string, ChevronStop>> = {
   "chevron-row-unresolved": "chevron-row-unresolved",
   "chevron-unresolved": "chevron-unresolved",
   "chevron-off-band": "chevron-off-band",
+  "ptrgd1-refused": "ptrgd1-refused",
 };
 
 /** One internal step of the disclosure rung, as the trace records it. */
@@ -2274,11 +2349,45 @@ function planDrop(
   };
 }
 
-/** One drag gesture from the source row to the corrected boundary. */
-async function performDrag(ctx: DriveCtx, drop: PlannedDrop): Promise<boolean> {
+/**
+ * One drag gesture from the source row to the corrected boundary.
+ *
+ * Three outcomes, not two (PTRGD1): the gesture landed; the pre-gesture guard
+ * REFUSED and nothing was posted; or the drop-time re-check aborted the held
+ * button with Escape. The last two carry the guard's own sentence, and the
+ * caller reports it verbatim rather than the generic "did not complete" — a
+ * refusal that names the application covering the sidebar is the whole point.
+ */
+async function performDrag(
+  ctx: DriveCtx,
+  drop: PlannedDrop,
+): Promise<{ ok: boolean; why?: string }> {
   const grab = grabPoint(drop.source);
-  const res = await runCmd(ctx, dragCommand(grab.x, grab.y, grab.x, drop.dropY));
-  return res.ok && res.stdout.includes("DONE");
+  const res = await runCmd(ctx, dragCommand(grab.x, grab.y, grab.x, drop.dropY, drop.source));
+  if (res.ok && res.stdout.includes("DONE")) return { ok: true };
+  const why = pointerGuardWhy(res);
+  return { ok: false, ...(why !== null && { why }) };
+}
+
+/**
+ * The guard's sentence out of a pointer primitive's result — from the
+ * `REFUSED`/`ABORTED` records the guarded scripts print, or from the stderr of
+ * one that throws it. Null when the failure was something else entirely.
+ */
+function pointerGuardWhy(res: UiRunResult): string | null {
+  const out = res.stdout.trim();
+  const tag = out.startsWith("REFUSED ") ? 8 : out.startsWith("ABORTED ") ? 8 : -1;
+  if (tag > 0) {
+    try {
+      const parsed = JSON.parse(out.slice(tag)) as { why?: unknown };
+      if (typeof parsed.why === "string" && parsed.why !== "") return parsed.why;
+    } catch {
+      /* fall through to stderr */
+    }
+  }
+  const err = res.stderr.trim().replace(/\s*\(-?\d+\)\s*$/, "");
+  const at = err.indexOf("refused to ");
+  return at >= 0 ? err.slice(at) : null;
 }
 
 /**
@@ -2309,13 +2418,32 @@ export function rung2AnchorTitle(
   }
 }
 
-function parseHeldDragResult(res: UiRunResult): { dropped: boolean; ticks?: number } {
+function parseHeldDragResult(res: UiRunResult): {
+  dropped: boolean;
+  ticks?: number;
+  /** PTRGD1 refused before the grab, or the drop-time re-check aborted it. */
+  guardRefusal?: string;
+} {
   if (!res.ok) return { dropped: false };
   try {
-    const parsed = JSON.parse(res.stdout.trim()) as { dropped?: boolean; ticks?: number };
-    return parsed.dropped === true
-      ? { dropped: true, ...(typeof parsed.ticks === "number" && { ticks: parsed.ticks }) }
-      : { dropped: false };
+    const parsed = JSON.parse(res.stdout.trim()) as {
+      dropped?: boolean;
+      ticks?: number;
+      refused?: boolean;
+      aborted?: boolean;
+      why?: unknown;
+    };
+    if (parsed.dropped === true) {
+      return { dropped: true, ...(typeof parsed.ticks === "number" && { ticks: parsed.ticks }) };
+    }
+    // A guard refusal is a STANDING condition (a window is over the sidebar, or
+    // Things is not in front) — the remaining rungs would refuse identically, so
+    // the sentence is what the caller gets rather than three more gestures.
+    const refused = parsed.refused === true || parsed.aborted === true;
+    if (refused && typeof parsed.why === "string" && parsed.why.startsWith("refused to ")) {
+      return { dropped: false, guardRefusal: parsed.why };
+    }
+    return { dropped: false };
   } catch {
     return { dropped: false };
   }
@@ -2633,8 +2761,14 @@ async function runDragLadder(
           if (inBand(g.y, ready.viewport) && inBand(plan.dropY, ready.viewport)) {
             // the gesture must land before the DB assert
             const landed = await performDrag(ctx, plan);
-            if (!landed) {
-              return refuseOrRecover(ctx, pre, spec, hops, "the drag gesture did not complete");
+            if (!landed.ok) {
+              return refuseOrRecover(
+                ctx,
+                pre,
+                spec,
+                hops,
+                landed.why ?? "the drag gesture did not complete",
+              );
             }
             // the final assert gates success
             const finalState = await pollState(
@@ -2739,9 +2873,12 @@ async function runDragLadder(
           // the held gesture must complete before its DB assert
           const res = await runCmd(
             ctx,
-            heldScrollDragCommand(g.x, g.y, anchor, maxTicks, ctx.areaTitles),
+            heldScrollDragCommand(g.x, g.y, anchor, maxTicks, ctx.areaTitles, src),
           );
           const parsed = parseHeldDragResult(res);
+          if (parsed.guardRefusal !== undefined) {
+            return refuseOrRecover(ctx, pre, spec, hops, parsed.guardRefusal);
+          }
           if (parsed.dropped) {
             // the final assert gates success
             const finalState = await pollState(
@@ -2910,8 +3047,14 @@ async function runDragLadder(
       dropY: hopAnchor.dropY,
       anchor: hopAnchor.title,
     });
-    if (!landed) {
-      return refuseOrRecover(ctx, pre, spec, hops, "a hop drag gesture did not complete");
+    if (!landed.ok) {
+      return refuseOrRecover(
+        ctx,
+        pre,
+        spec,
+        hops,
+        landed.why ?? "a hop drag gesture did not complete",
+      );
     }
     // DB assert after EVERY hop: the source should now sit immediately above
     // the anchor, with the count + assignments invariant.
@@ -3000,6 +3143,14 @@ async function abortPartial(
   hops: number,
   why: string,
 ): Promise<DragDriveResult> {
+  // THE ESCAPE ALREADY CARRIES THE FRONTMOST LAW, and it is worth saying where
+  // (PTRGD1 re-derived this and found it covered). `key` is in
+  // `KEYSTROKE_CLASS`, so `guardedRun` folds `axFocusGuardPrelude` in front of
+  // this very script (DRVLAT1) — same hop, fail-closed, same sentence family as
+  // every other typed hop. A bare `key code 53` would go to whatever owns the
+  // screen, on the failure path, which is precisely where the user is most
+  // likely to have taken their machine back; keep the primitive `key` (never a
+  // hand-rolled JXA keyboard post) so it stays inside that law.
   await runCmd(ctx, {
     primitive: "key",
     label: "abort (Escape)",
@@ -3107,7 +3258,7 @@ async function refuseOrRecover(
       const g = grabPoint(plan.source);
       if (inBand(g.y, snap.viewport) && inBand(plan.dropY, snap.viewport)) {
         const landed = await performDrag(ctx, plan);
-        if (landed) {
+        if (landed.ok) {
           const state = await pollState(ctx, (s) => positionOf(s, displaced) === preIdx);
           recovered = state !== null;
         }

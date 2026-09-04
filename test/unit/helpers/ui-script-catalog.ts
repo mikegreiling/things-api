@@ -35,7 +35,16 @@ import {
   axVerifyPrefillDateAreasScript,
   axVerifyPrefillScript,
   commandForStep,
+  jxaClickScript,
 } from "../../../src/write/vectors/ui.ts";
+import {
+  jxaSidebarChevronClickScript,
+  jxaSidebarDragScript,
+  jxaSidebarHeldScrollDragScript,
+  jxaSidebarScrollScript,
+  jxaSidebarScrollToScript,
+  jxaSidebarSnapshotScript,
+} from "../../../src/write/vectors/ui-drag.ts";
 import {
   inertSettleInjector,
   type SettleInjector,
@@ -259,6 +268,48 @@ export function everyUiScript(
     if (seen.has(extra.script)) continue;
     seen.add(extra.script);
     out.push({ ...extra, lang: "applescript" });
+  }
+  // THE POINTER-GESTURE SCRIPTS (PTRGD1). JXA, driver-compiled, and every one of
+  // them posts synthesized mouse events behind the pre-gesture guard — so both
+  // suites that read this catalog must see them: `osacompile` proves the guard
+  // and the gesture parse together, and the broker-safety suite proves the guard
+  // reaches its verdicts without shelling out.
+  const SIDEBAR_TITLES = ["Errands", "Reading"] as const;
+  const SIDEBAR_ROW = { x: 12, y: 208, w: 240, h: 24 };
+  for (const gesture of [
+    {
+      label: "driver · sidebar-drag",
+      script: jxaSidebarDragScript(180, 220, 180, 420, SIDEBAR_ROW),
+    },
+    {
+      label: "driver · sidebar-held-drag",
+      script: jxaSidebarHeldScrollDragScript(180, 220, "Reading", 40, SIDEBAR_TITLES, SIDEBAR_ROW),
+    },
+    {
+      label: "driver · sidebar-held-drag (to last)",
+      script: jxaSidebarHeldScrollDragScript(180, 220, null, 40, SIDEBAR_TITLES, SIDEBAR_ROW),
+    },
+    {
+      label: "driver · sidebar-chevron",
+      script: jxaSidebarChevronClickScript("Errands", -1, SIDEBAR_TITLES),
+    },
+    {
+      label: "driver · sidebar-scroll (wheel)",
+      script: jxaSidebarScrollScript(-3, SIDEBAR_TITLES),
+    },
+    {
+      label: "driver · sidebar-scroll (scrollbar)",
+      script: jxaSidebarScrollToScript(0.5, SIDEBAR_TITLES),
+    },
+    { label: "driver · sidebar-snapshot", script: jxaSidebarSnapshotScript(SIDEBAR_TITLES) },
+    {
+      label: "driver · click-point",
+      script: jxaClickScript(412, 388, "click the open dialog's Cancel button"),
+    },
+  ]) {
+    if (seen.has(gesture.script)) continue;
+    seen.add(gesture.script);
+    out.push({ ...gesture, lang: "javascript" });
   }
   const jxa = {
     label: "driver · verify-prefill (date-area leg)",
