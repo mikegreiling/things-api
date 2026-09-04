@@ -2,7 +2,7 @@
 
 The single doc a release agent reads. Everything below is the drill **as practiced** (v0.20.7 / PR [#693](https://github.com/mikegreiling/things-api/pull/693) is the current precedent for the mechanical shape; v0.20.0 / #650 for the minor-bump precedent), plus the field-shaped gate ruled on 2026-09-03. Read this instead of reverse-engineering a prior release PR.
 
-**The gate, in one sentence.** No version is tagged until `npm run lab:regress` exits GREEN **and** every operation whose driver / vector / recipe / deputy-facing code changed in the batch has been run end-to-end at least once **through the deputy, using the normal CLI syntax** — with GUI-driven ops driven at least once on a **real display**. Authority: [AGENTS.md](../../AGENTS.md) § Conventions → *Release gate*; ruling recorded in [design/decisions.md](../design/decisions.md) (2026-09-03).
+**The gate, in one sentence.** No version is tagged until `npm run lab:regress` exits GREEN in **both arms** — direct and deputy-routed — **and** every operation whose driver / vector / recipe / deputy-facing code changed in the batch has been run end-to-end at least once **through the deputy, using the normal CLI syntax, inside the Tart guest**. Authority: [AGENTS.md](../../AGENTS.md) § Conventions → *Release gate*; ruling recorded in [design/decisions.md](../design/decisions.md) (2026-09-03).
 
 ## What counts as "changed"
 
@@ -56,7 +56,7 @@ Exit 0 or stop. Never grep piped output for this. Run `npm run fmt` before commi
 npm run lab:regress; echo "exit=$?"
 ```
 
-All eight suites plus the guest write-layer e2e, exit 0 (which also asserts zero alert beeps and clean teardown of every clone). A RED result **blocks the release** until reconciled per [lab/drift-runbook.md](../lab/drift-runbook.md) step 3 — the failure is as often suite drift as a real regression, and either way it is reconciled before the tag, never after. Record the run ids and the per-suite probe counts; they go in the PR body.
+All eight suites plus the guest write-layer e2e **in both arms** — `direct` on a golden-v4 clone, `routed` on a golden-v4h clone with the helpers installed, granted and enabled, plus the brokered GUI drive — exit 0 (which also asserts zero alert beeps and clean teardown of every clone). Each arm is reported by name; a green direct arm alone certifies nothing about the identity every field host runs under. A RED result **blocks the release** until reconciled per [lab/drift-runbook.md](../lab/drift-runbook.md) step 3 — the failure is as often suite drift as a real regression, and either way it is reconciled before the tag, never after. Record the run ids and the per-suite probe counts; they go in the PR body.
 
 Budget ~22 min wall. Requires the host GUI session, `tart` + `sshpass`, and the active golden under `TART_HOME`.
 
@@ -88,21 +88,19 @@ The RC is built from the merge commit that will carry the tag, not from a featur
 
 **The RC tarball carries the PREVIOUS version string** — the bump is Stage 7, so `main` at Stage 5 is still `v<prev>` and `npm pack` writes `things-api-<prev>.tgz`. That is correct and stays that way (the RC must come from the merge commit, which cannot already hold the new number). Identify the RC by its **sha256** and a content fingerprint of the fix under test (e.g. `grep -c unsettled dist/write/vectors/ui.js`), never by its filename, and say so in the Stage 5(v) record; `things --version` inside the temp prefix will print `<prev>`, which is expected and not a failed install.
 
-**(ii) Install it into a temp prefix on a helpers-enabled host.**
+**(ii) Take the RC into a routed guest.**
 
-Today that host is the maintainer's Mac (a lab guest with the helpers installed is the automatable replacement, queued in [up-next.md](../up-next.md) as *"Helpers IN THE GUEST"*; the real-display half of the gate stays human regardless).
+The host class is a clone of `things-lab-golden-v4h` — the golden that carries the signed helper pair with all four macOS grants already given (HELPGST1). Nothing in this stage runs on the maintainer's machine.
 
 ```sh
-PFX=$(mktemp -d)
-npm install -g --prefix "$PFX" /tmp/rc/things-api-<version>.tgz
-"$PFX/bin/things" --version                     # prints the PREVIOUS version — see the note above; identify the RC by sha256 + fingerprint
-"$PFX/bin/things" helpers status                # must show the deputy answering + onboarded
-"$PFX/bin/things" doctor                        # routing line must say the helpers carry traffic
+bash lab/scripts/e2e-write-smoke.sh --arm routed --dist <the RC's unpacked dist>
 ```
 
-Routing must be **asserted, not assumed**: the helper bundle installed and onboarded (`things helpers setup` is the ceremony; `things helpers status` reports it), `helpers-enabled` at `auto` (installed-and-healthy ⇒ routed) or `true`, and no missing requisite named in `status`. A run that silently degraded to direct execution proves nothing this gate is asking about — that is the whole failure mode being closed. Do not pass `--no-helpers` / `THINGS_API_HELPERS=false` anywhere in this stage.
+That orchestrator clones v4h, airgaps it, pins the clock, ships the RC's `dist` plus the freshly built helper bundle, runs the CLI's own `things helpers setup --gui` over it, sets `helpers-enabled true`, and then asserts the routing before any probe: mode, deputy liveness, both Automation standings, `axTrusted`, and the reader's grant (`lab/scripts/helpers-guest.sh` `guest_helpers_assert_routed`).
 
-Note the global `things` on the maintainer's host is npm-linked to the repo checkout and runs live TS source; the gate deliberately uses the packed tarball in its own prefix instead, so what is certified is what will publish.
+Routing must be **asserted, not assumed**, and the arm does assert it. `helpers-enabled` is `true` rather than `auto` on purpose: under `auto` a machine whose grant lapsed reverts silently to direct execution, which is the whole failure mode being closed. Do not pass `--no-helpers` / `THINGS_API_HELPERS=false` anywhere in this stage. The arm also ends with a NEGATIVE control — the deputy is stopped and one AppleScript-vector write is required to refuse — so a run that quietly degraded to direct execution goes red instead of passing.
+
+Certify the RC by its **sha256** and a content fingerprint of the fix under test, never by the version string the tarball carries (see the note above).
 
 **(iii) Run every changed operation end-to-end, through the deputy, with the normal CLI syntax.**
 
@@ -116,16 +114,18 @@ THINGS_API_TRACE=1 "$PFX/bin/things" <the ordinary command a caller would type> 
 - **Normal CLI syntax only.** No `osascript`, no hand-built `things:///` URL, no lab escape, no direct invocation of a driver module. The point of the stage is that the field-shaped path is exercised; reaching around the CLI reproduces the very gap that shipped 0.20.7.
 - **Synthetic content only.** Titles/notes/projects minted for this run, never anything from the maintainer's real data, and nothing that reads or writes the production database beyond the ordinary command's own target. This repo is public and a trace file may contain real titles and uuids: traces are LOCAL-ONLY and are never committed, pasted into a PR, or attached to an issue.
 - **Read the outcome, don't infer it.** The command's own result (or `things op-result <op-id>` when the environment kills a long GUI drive) plus the trace's per-hop account are the evidence. A drive that "seemed to work" is not a pass; the recorded status is. (`--op-id` is refused on a variadic move/reorder — a multi-leg compound — so those ops are read from their own result.)
-- **GUI-driven (ui-vector) ops are driven on a REAL DISPLAY** — the maintainer's host or the framebuffer/HID rig — with the app visible, unlocked, and not in a full-screen Space. Latency, rendering and focus behavior are the properties a headless clone cannot supply, and they are where both regressions lived.
+- **GUI-driven (ui-vector) ops are driven in the routed guest**, through the broker, with the drive's outcome read from the database AND from the deputy's own log (`rejected-script` is how a broker refusal becomes legible — the client only ever sees "the drive failed"). `lab/guest/routed-gui-smoke.sh` is the shipped example; extend it for the batch's ops rather than hand-driving.
+- **Certify every QUADRANT of a GUI drive's optional machinery** — {observer up/down} × {prefill on/off} (DEFAULTS3, § *Quadrant law* in [lab/harness.md](../lab/harness.md)). A switch's default is not neutral ground, and the corner nobody visits is the one that ships.
+- **Real-hardware latency is NOT part of this stage.** A headless clone renders and settles at a speed no Mac reproduces, so the numbers here are not field numbers and #629's class of regression stays invisible to them. That measurement is the maintainer's own, on his machine, at his discretion, AFTER a release — evidence for the 5 s bar, never a gate step an agent performs.
 - A deputy-facing change (`src/deputy/**`, `deputy/**`, `scripts/build-helpers.sh`) puts **one op of each vector class** on the list, not just the ops that changed: the broker sits under all of them.
 
-**(iv) Clean up the synthetic rows — official CLI only.**
+**(iv) Destroy the clone.**
 
-`things undo`, or the ordinary inverse / removal command the CLI already provides. Never direct SQLite, never a raw URL, never a hand-driven GUI fix-up. Leave the host as it was found; confirm the cleanup landed the same way the run itself was read.
+The guest is disposable, which is the point: cleanup is `tart delete`, not a careful inverse of every write, and the orchestrator's `trap cleanup EXIT` already does it. Confirm `tart list` is empty afterwards — an orphaned clone holds a 50 GB image and the VM slot.
 
 **(v) Record the run in the release PR body.**
 
-Versions (package RC, Things app build, macOS, helpers version), the host class (helpers-enabled real display / rig), the exact commands, and each outcome. This paragraph is the audit trail for the gate — a release PR without it has not passed the gate.
+Versions (package RC, Things app build, macOS, helpers version), the golden the routed arm cloned (`things-lab-golden-v4h`), the exact commands, and each outcome. This paragraph is the audit trail for the gate — a release PR without it has not passed the gate.
 
 ### Stage 6 — helpers version check
 

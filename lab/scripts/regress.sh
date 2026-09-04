@@ -34,7 +34,27 @@ for suite in u a x o r e p s; do
   npm run lab:run -- --suite "lab/suites/$suite-suite.json"
 done
 
-echo "[regress] === write-layer e2e smoke ==="
-bash lab/scripts/e2e-write-smoke.sh
+# THE WRITE LAYER RUNS TWICE, ONCE PER IDENTITY (HELPGST1). Which process
+# executes a script is a certification dimension, not an implementation detail:
+# a golden clone with no helpers runs everything under its own sshd-descended
+# identity, while every field host brokers the same primitives through the
+# deputy — and two releases shipped green-in-lab and broken-in-field on exactly
+# that difference (0.19.2's census, 0.20.7's `do shell script` sidecar). So both
+# arms run, and each is reported by name; the routed arm additionally drives one
+# real Repeat dialog through the broker.
+#
+# The routed arm needs `things-lab-golden-v4h` — the helpers-granted layer over
+# v4 (docs/lab/helpgst1-helpers-in-guest.md) — and the host-built helper bundle.
+# Both are preconditions, not optional extras: a regress that silently skipped
+# the routed arm would certify the wrong half of the surface.
+if [ ! -x "deputy/build/Things API Helper.app/Contents/MacOS/things-deputy" ]; then
+  echo "[regress] building the helper bundle for the routed arm"
+  bash scripts/build-helpers.sh >/dev/null
+fi
 
-echo "[regress] ALL GREEN — automation surface unchanged"
+for arm in direct routed; do
+  echo "[regress] === write-layer e2e smoke: $arm arm ==="
+  bash lab/scripts/e2e-write-smoke.sh --arm "$arm"
+done
+
+echo "[regress] ALL GREEN — automation surface unchanged, both arms (direct + routed)"
