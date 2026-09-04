@@ -69,6 +69,23 @@ lab_scp() {
   sshpass -p "$LAB_SSH_PASS" scp "${LAB_SSH_OPTS[@]}" "$@"
 }
 
+lab_commander_dir() {
+  # lab_commander_dir -> the absolute path of the `commander` package.
+  #
+  # NEVER ship `node_modules/commander` by relative path. An agent worktree under
+  # `.claude/worktrees/` has no `node_modules` of its own — node resolves the
+  # primary checkout's by walking UP — so the relative path is simply absent
+  # there, `scp` fails with `stat local "node_modules/commander"`, and the arm
+  # dies after the clone has already booted. Resolve it the way node does.
+  node -e "
+    const { dirname, join } = require('node:path'); const { existsSync } = require('node:fs');
+    let d = process.cwd();
+    for (;;) { const c = join(d, 'node_modules', 'commander');
+      if (existsSync(join(c, 'package.json'))) { console.log(c); break }
+      const up = dirname(d); if (up === d) break; d = up }
+  "
+}
+
 lab_mute_guest() {
   # lab_mute_guest <ip> — silence the guest's audio output.
   #

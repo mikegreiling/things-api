@@ -36,13 +36,7 @@ NODE_BIN=$(node -e 'console.log(process.execPath)')
 # under .claude/worktrees/ has no node_modules of its own — node resolves the
 # primary checkout's by walking UP — so the relative path is simply absent there
 # and the guest CLI dies on `Cannot find package 'commander'`.
-COMMANDER_DIR=$(node -e "
-  const { dirname, join } = require('node:path'); const { existsSync } = require('node:fs');
-  let d = process.cwd();
-  for (;;) { const c = join(d, 'node_modules', 'commander');
-    if (existsSync(join(c, 'package.json'))) { console.log(c); break }
-    const up = dirname(d); if (up === d) break; d = up }
-")
+COMMANDER_DIR=$(lab_commander_dir)
 [ -d "$COMMANDER_DIR" ] || { echo "[stage5] commander not resolvable from $PWD" >&2; exit 2; }
 
 # The signed helper bundle. `deputy/build/` is GITIGNORED, so a fresh checkout

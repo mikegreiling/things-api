@@ -105,7 +105,9 @@ echo "[e2e] shipping node + dist + commander"
 lab_ssh "$IP" 'mkdir -p ~/things-lab/bin ~/things-lab/things-api/node_modules'
 lab_scp "$NODE_BIN" "admin@$IP:things-lab/bin/node"
 lab_scp -r "$DIST" "admin@$IP:things-lab/things-api/dist"
-lab_scp -r node_modules/commander "admin@$IP:things-lab/things-api/node_modules/commander"
+COMMANDER_DIR=$(lab_commander_dir)
+[ -d "$COMMANDER_DIR" ] || { echo "[lab] commander not resolvable from $PWD" >&2; exit 2; }
+lab_scp -r "$COMMANDER_DIR" "admin@$IP:things-lab/things-api/node_modules/commander"
 lab_scp package.json "admin@$IP:things-lab/things-api/package.json"
 lab_scp lab/guest/e2e-write-smoke.sh "admin@$IP:things-lab/e2e-write-smoke.sh"
 # The beep sentinel ships beside the smoke (the smoke resolves it by $0's dir):

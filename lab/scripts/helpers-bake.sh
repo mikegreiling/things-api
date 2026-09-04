@@ -89,7 +89,9 @@ cmd_up() {
   lab_ssh "$IP" 'mkdir -p ~/things-lab/bin ~/things-lab/things-api/node_modules'
   lab_scp "$node_bin" "admin@$IP:things-lab/bin/node"
   lab_scp -r dist "admin@$IP:things-lab/things-api/dist"
-  lab_scp -r node_modules/commander "admin@$IP:things-lab/things-api/node_modules/commander"
+  COMMANDER_DIR=$(lab_commander_dir)
+  [ -d "$COMMANDER_DIR" ] || { echo "[lab] commander not resolvable from $PWD" >&2; exit 2; }
+  lab_scp -r "$COMMANDER_DIR" "admin@$IP:things-lab/things-api/node_modules/commander"
   lab_scp package.json "admin@$IP:things-lab/things-api/package.json"
   lab_scp lab/guest/ax-any.jxa "admin@$IP:things-lab/ax-any.jxa"
   lab_ssh "$IP" 'chmod +x ~/things-lab/bin/node'
