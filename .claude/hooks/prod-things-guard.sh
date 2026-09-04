@@ -51,7 +51,12 @@ if printf '%s' "$cmd" | grep -Eq '(^|[^A-Za-z0-9_-])(tart|ssh|scp)([[:space:]]|$
 fi
 
 # 2b. Signalling / unloading the installed helper (launchd job or process).
-if printf '%s' "$cmd" | grep -Eq '(launchctl[[:space:]]+(kickstart|bootout|unload|kill|stop|remove)|pkill|killall|kill[[:space:]]).*(things-deputy|Things API Helper|deputy)'; then
+#     The signalling tool must sit at COMMAND POSITION (start of the command or
+#     of a ; && || | ( segment, optionally after sudo), so prose inside a quoted
+#     commit message cannot trip it (a delegate's `git commit -m "... a kill
+#     timer the deputy owns"` was refused, 2026-09-03). Matched on the RAW
+#     command because the helper's name is usually quoted.
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|(`][[:space:]]*)(sudo[[:space:]]+)?(launchctl[[:space:]]+(kickstart|bootout|unload|kill|stop|remove)|pkill|killall|kill)[[:space:]][^;&|]*(things-deputy|Things API Helper|deputy)'; then
   deny "signalling or unloading the installed helper"
 fi
 
