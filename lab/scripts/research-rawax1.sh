@@ -85,19 +85,37 @@ else
   # guests contending for the same host CPU, which makes every timing cell a lie.
   RUNNING=$(tart list | awk 'NR>1 && $NF=="running" {print $2}' | tr '\n' ' ')
   [ -n "$RUNNING" ] && { note "FATAL: another VM is running ($RUNNING) — never a second concurrent clone"; exit 1; }
+  # A STALE `tart run` OF OUR OWN VM IS AN ORPHAN, AND IT HOLDS THE NAME.
+  # `tart run` is launched detached (the pattern every driver here uses), so a
+  # driver killed mid-run leaves it behind with PPID 1 — the clone then reads
+  # "stopped" while the name is still taken, the next `tart clone` produces a VM
+  # that never opens sshd, and the run dies at the 600 s SSH wait having burned
+  # ten minutes. Measured exactly that way, 2026-09-05: an orphan survived 50
+  # minutes and cost the next run its boot. Scoped to OUR OWN name by the full
+  # argv, so a concurrent campaign's clone is never touched.
+  pkill -f "tart run $VM --no-graphics" >/dev/null 2>&1 && {
+    note "cleared a stale detached 'tart run $VM' before cloning"
+    sleep 3
+  }
   tart delete "$VM" >/dev/null 2>&1 || true
   tart clone "$GOLDEN" "$VM"
   (tart run "$VM" --no-graphics >"$OUT/tart-run.log" 2>&1 &)
-  IP=$(lab_wait_for_ssh "$VM" 600) || { note "FATAL: no SSH"; exit 1; }
-  note "ssh up at $IP"
 fi
+# THE TRAP IS ARMED BEFORE THE SSH WAIT, not after it. Set afterwards, the
+# no-SSH path exits with the clone still allocated and its `tart run` detached —
+# which is the orphan the block above now has to clean up.
 cleanup() {
-  if [ "$KEEP" = "1" ]; then note "KEEP=1 — $VM left running at $IP"; return; fi
+  if [ "$KEEP" = "1" ]; then note "KEEP=1 — $VM left running at ${IP:-<no ip>}"; return; fi
   tart stop "$VM" >/dev/null 2>&1 || true
   tart delete "$VM" >/dev/null 2>&1 || true
+  pkill -f "tart run $VM --no-graphics" >/dev/null 2>&1 || true
   note "teardown done · remaining VMs: $(tart list | tail -n +2 | awk '{print $2}' | tr '\n' ' ')"
 }
 trap cleanup EXIT
+if [ "$REUSE" != "1" ]; then
+  IP=$(lab_wait_for_ssh "$VM" 600) || { note "FATAL: no SSH"; exit 1; }
+  note "ssh up at $IP"
+fi
 
 if [ "$REUSE" != "1" ]; then
   lab_ssh "$IP" 'sudo route -n delete default >/dev/null 2>&1 || true' </dev/null
