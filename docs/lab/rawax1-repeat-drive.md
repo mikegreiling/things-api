@@ -75,28 +75,30 @@ These are the fence. A port that quietly re-implements one of them has changed a
 
 ### 1.4 The hop map, before
 
-`todo make-repeating <uuid> --frequency weekly --interval 1 --when <date>` — the field's own shape, with a seed row so the pre-fill is live and a settle sidecar armed (the direct-execution quadrant).
+Rendered from the recipe itself rather than reconstructed — `makeRepeatingRecipe` compiled for three shapes, its steps printed in order.
 
-| # | hop | Apple events (RDLAT2 arithmetic) | why it is its own hop |
-| ---: | --- | ---: | --- |
-| 1 | census — the pipeline's pre-drive window/focus read | 4 | a separate concern, before the drive |
-| 2 | session-lock probe (LOCKSCR1) | 0 (JXA) | already raw |
-| 3 | session-reachability probe | 2 | a separate concern |
-| 4 | reveal (`things:///show?id=`) | 0 (`open`) | LaunchServices, never an Apple event |
-| 5 | activate | 1 | P21 |
-| 6 | census — the drive's open-dialog precondition | 4 | a DECISION node (MODALX1 refusal) |
-| 7 | observer spawn | 0 | the sidecar's own hop |
-| 8 | canary — `Items ▸ Repeat…` resolves | 2 | a DECISION node (preflight refusal) |
-| 9 | assert-eligible | 3 | a DECISION node, and P20 lives here |
-| 10 | press `Items ▸ Repeat…` | 1 | a SETTLE boundary (`AXSheetCreated`) |
-| 11 | dialog-open — wait + shell census | 4 | a DECISION node (shape-manifest refusal; banks `shellIndex`) |
-| 12 | select-popup — frequency | 9 | a SETTLE boundary (the cadence-group rebuild) |
-| 13 | probe-dialog-shape | 3 | a DECISION node (the `next-popup`/`legacy` fork) |
-| 14 | verify-prefill (+ a JXA leg when a reminder is asked for) | 4 | a DECISION node (which setters are skipped) |
-| 15 | the setters that survive the pre-fill | 0–39 each | a SETTLE boundary each |
-| 16 | audit-dialog + the folded OK press | 15 | the commit |
+**`--frequency weekly --interval 1 --when <date>`, with a seed** (the field's own shape; 14 recipe steps):
 
-**Totals for the `--after-completion` shape RDLAT2 measured end to end: 13 hops · 88 events · 3,335 ms on the clone · ≈ 7.6 s predicted / 6.9 s measured on the M1.**
+`reveal · activate · assert-eligible · press Items ▸ Repeat… · dialog-open · select-popup frequency · probe-dialog-shape · verify-prefill · set-group-number interval · settle-occurrences · set-datetime Next *(legacy only)* · select-next-occurrence Next *(next-popup only)* · audit-dialog · press OK`
+
+**`--frequency monthly --interval 1 --after-completion`** (the shape RDLAT2 measured end to end; 10 recipe steps):
+
+`reveal · activate · assert-eligible · press Items ▸ Repeat… · dialog-open · select-popup frequency · select-popup ac-unit · set-group-number interval · audit-dialog · press OK`
+
+Not every step is a HOP, and the difference is where the campaign's arithmetic lives:
+
+| step | dispatches an `osascript`? |
+| --- | --- |
+| `reveal` | **no** — `open` a `things:///` URL, LaunchServices, no Apple event at all |
+| `set-datetime Next` on 3.23 | **no** — `onlyShape: "legacy"`, and the shape probe says `next-popup` |
+| `settle-occurrences` with a sidecar | **no** — node awaits the ledger and dispatches nothing (`SETTLE_OCCURRENCE_RECOMPUTE`) |
+| `press OK` after an audit | **no** — the audit COMMITS in its own script (RDLAT2 §4d) |
+| a setter the verify hop confirmed | **no** — skipped, and still audited |
+| everything else | yes |
+
+And the drive adds hops the recipe does not name: the pipeline's pre-drive **census**, the **session-lock** probe (LOCKSCR1, JXA — already raw, 0 Apple events), the **session-reachability** probe, the drive's own open-dialog **census**, the **observer spawn**, and the **canary**. Every one is a separate concern with its own refusal, and every one is its own process.
+
+**So the after-completion shape RDLAT2 measured at 13 hops / 88 events is 15 hops today** — LOCKSCR1's lock probe and VOPAT2's observer spawn both landed after that table was written. The spawn term has grown since the campaign that fitted it, which sharpens §3.2's question rather than softening it.
 
 ---
 
@@ -255,7 +257,7 @@ wall  =  spawns × S  +  round-trips × C  +  in-script settles  +  the app's ow
 
 | term | today | after the port |
 | --- | --- | --- |
-| `spawns × S` | 13 × 124 ms = **1.61 s** | 13 × 124 ms = **1.61 s** (unchanged), or ~7 × 124 ms = **0.87 s** if the dialog entry merges (§3.2) |
+| `spawns × S` | 15 × 124 ms = **1.86 s** (13 when RDLAT2 fitted it; LOCKSCR1's lock probe and VOPAT2's observer spawn landed since — §1.4) | unchanged, or ~9 × 124 ms = **1.12 s** if the dialog entry merges (§3.2) |
 | `round-trips × C` | 88 × 47 ms = **4.14 s** | ~90 raw calls × 0.12 ms ≈ **0.01 s** |
 | the app's own time | ≈ 1.79 s (VOPAT1 §8: sheet 438 ms, two menu opens, two group rebuilds at 535 ms, focus 28 ms, type-and-confirm 79 ms, commit ~150 ms) | unchanged — it is the app |
 | in-script settles | ~0.5 s unconditional (RDLAT2 §E.5) | unchanged unless §2.4 removes the typing loop |
@@ -263,12 +265,12 @@ wall  =  spawns × S  +  round-trips × C  +  in-script settles  +  the app's ow
 | | predicted M1 |
 | --- | ---: |
 | v0.20.8, measured | **6.9 s** |
-| raw-AX, hop boundaries unchanged | **≈ 3.4 s** |
-| raw-AX + the dialog entry merged | **≈ 2.7 s** |
-| raw-AX + merged + `setvalue` fires the binding (§2.4) | **≈ 2.4 s** |
+| raw-AX, hop boundaries unchanged | **≈ 3.7 s** |
+| raw-AX + the dialog entry merged | **≈ 2.9 s** |
+| raw-AX + merged + `setvalue` fires the binding (§2.4) | **≈ 2.6 s** |
 | VOPAT1 §8's own prediction, for comparison | ≈ 2.2 s |
 
-**VOPAT1's 2.2 s understated the spawn term** — it priced the drive at ~77 raw calls ≈ 9 ms plus 1.79 s of app time and did not carry 13 process spawns. Put those back and the honest floor with today's hop count is ~3.4 s. **Reaching the brief's 2.0–2.5 s therefore REQUIRES the hop merge**, which is why §3.2 asks for a ruling on it rather than treating it as an optimization to take or leave. The `cost` cell measures the raw arm's call count so this table can be re-derived against a measured number rather than an arithmetic one.
+**VOPAT1's 2.2 s understated the spawn term** — it priced the drive at ~77 raw calls ≈ 9 ms plus 1.79 s of app time and carried no process spawns at all. Put them back, at the count the drive actually has today (§1.4), and the honest floor with today's hop boundaries is ~3.7 s. **Reaching the brief's 2.0–2.5 s therefore REQUIRES the hop merge, and may need more than it** — which is why §3.2 asks for a ruling rather than treating the merge as an optimization to take or leave, and why DEPOBS2's option (B) (in-process execution in the deputy, worth the whole spawn term) stops being the smaller of the two levers the moment this port lands. The `cost` cell measures the raw arm's call count so this table can be re-derived against a measured number rather than an arithmetic one.
 
 ---
 
