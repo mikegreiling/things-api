@@ -65,9 +65,16 @@ seed() {
   db "SELECT uuid FROM TMTask WHERE title='$title' AND trashed=0 ORDER BY creationDate DESC LIMIT 1"
 }
 
-# promote <name> <uuid> <expect-ts> <expect-icStart> <expect-deadlined> -- <extra args...>
+# promote <name> <title> <expect-ts> <expect-icStart> <expect-deadlined> -- <extra args...>
+#
+# The TARGET is named by title, not by uuid, and the landed template is found the
+# same way: a promote trashes the original and mints a new row, so the uuid the
+# caller seeded with is gone by the time there is anything to read back.
 promote() {
-  local name="$1" uuid="$2" wantTs="$3" wantIc="$4" wantDl="$5"; shift 5
+  local name="$1" title="$2" wantTs="$3" wantIc="$4" wantDl="$5"; shift 5
+  local uuid
+  uuid=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
+  if [ -z "$uuid" ]; then fail "[$STEP] $name — no seed row titled $title"; return 1; fi
   STEP=$((STEP + 1))
   local out code t0 t1
   t0=$(python3 -c 'import time;print(int(time.time()*1000))')
@@ -77,7 +84,7 @@ promote() {
   t1=$(python3 -c 'import time;print(int(time.time()*1000))')
   printf '%s\n' "$out" >"$OUT/$name.json"
   local tmpl
-  tmpl=$(db "SELECT uuid FROM TMTask WHERE uuid IN (SELECT uuid FROM TMTask WHERE rt1_recurrenceRule IS NOT NULL AND trashed=0) AND title=(SELECT title FROM TMTask WHERE uuid='$uuid') ORDER BY creationDate DESC LIMIT 1")
+  tmpl=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
   if [ "$code" -ne 0 ]; then
     fail "[$STEP] $name — exit $code (expected 0) wall=$((t1 - t0))ms"
     echo "     output: $(head -c 700 <<<"$out")"
@@ -108,7 +115,7 @@ echo ""
 echo "===== the ruling: a deadlined source promotes to a deadlined series ====="
 U=$(seed "$TAG-A" "$START" "$DEADLINE")
 [ -n "$U" ] && pass "seed $TAG-A ($U) start=$START deadline=$DEADLINE" || fail "no seed for $TAG-A"
-promote "10-inherited" "$U" "-3" "$START" "yes"
+promote "10-inherited" "$TAG-A" "-3" "$START" "yes"
 python3 -c "
 import json,sys
 d=json.load(open(sys.argv[1]))
@@ -121,17 +128,17 @@ raise SystemExit(0 if hit else 1)
 echo ""
 echo "===== the override: --deadline --start-days-earlier 7 ====="
 U=$(seed "$TAG-B" "$START" "$DEADLINE")
-promote "20-override" "$U" "-7" "$START" "yes" --deadline --start-days-earlier 7
+promote "20-override" "$TAG-B" "-7" "$START" "yes" --deadline --start-days-earlier 7
 
 echo ""
 echo "===== the zero override: due ON its start date ====="
 U=$(seed "$TAG-C" "$START" "$DEADLINE")
-promote "30-zero" "$U" "0" "$START" "yes" --deadline --start-days-earlier 0
+promote "30-zero" "$TAG-C" "0" "$START" "yes" --deadline --start-days-earlier 0
 
 echo ""
 echo "===== the control: a deadline-FREE source is unchanged ====="
 U=$(seed "$TAG-D" "$START" "")
-promote "40-control" "$U" "0" "$START" "no"
+promote "40-control" "$TAG-D" "0" "$START" "no"
 
 echo ""
 echo "############################################################"

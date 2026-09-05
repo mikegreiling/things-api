@@ -293,8 +293,10 @@ promote() {
   lab_ssh "$IP" "$LAB_DIRECT $CLI todo make-repeating $UUID --frequency weekly --interval 1 $* --dangerously-drive-gui --verify-timeout 90000 --json" \
     </dev/null >"$OUT/drive/$AID.log" 2>&1
   local rc=$?
-  note "    exit $rc"
-  head -c 700 "$OUT/drive/$AID.log" | sed 's/^/      /' | tee -a "$REPORT" >/dev/null
+  # notef, never note: this function's STDOUT is its exit code, and a `note`
+  # here would be captured by `rc=$(promote …)` along with it.
+  notef "    exit $rc"
+  head -c 700 "$OUT/drive/$AID.log" | sed 's/^/      /' >>"$REPORT"
   echo "$rc"
 }
 
