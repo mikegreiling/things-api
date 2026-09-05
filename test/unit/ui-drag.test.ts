@@ -219,6 +219,28 @@ describe("snapshot parsing", () => {
     expect(describeSnapshotFailure(out)).toContain(phrase);
   });
 
+  // LOCKSCR1 (#732). The empty window inventory is the SAME reading in both
+  // sessions; what may be concluded from it is not. With the session proven
+  // unlocked the Dock-icon remedy is right; with the session unestablished the
+  // sentence must name all three possibilities instead of picking one.
+  it("asserts a closed window only when the session was PROVEN unlocked", () => {
+    const out = { ok: false, why: "no-window" } as const;
+    const proven = describeSnapshotFailure(out, "unlocked");
+    expect(proven).toContain("no open window");
+    expect(proven).toContain("Dock icon");
+  });
+
+  it("states the uncertainty when the session could NOT be established", () => {
+    const out = { ok: false, why: "no-window" } as const;
+    const hedged = describeSnapshotFailure(out, "unknown");
+    expect(hedged).toContain("no Things window could be read");
+    expect(hedged).toContain("locked");
+    expect(hedged).toContain("another desktop");
+    // The categorical claim #732 reported must be gone from this branch.
+    expect(hedged).not.toContain("has no open window");
+    expect(hedged).not.toContain("Dock icon");
+  });
+
   it("names what the locator searched when nothing matched", () => {
     const out = parseSidebarSnapshot(
       JSON.stringify({

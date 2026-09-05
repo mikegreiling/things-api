@@ -33,6 +33,13 @@ import { noteInflightStep, trace, traceActive, tracePath } from "../../trace/tra
 import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
 import {
+  blocksGuiDrive,
+  lockRefusal,
+  probeSessionLock,
+  type SessionLockVerdict,
+  UNKNOWN_SESSION_LOCK,
+} from "./session-lock.ts";
+import {
   createReachabilityCache,
   H_UI_SESSION_UNREACHABLE,
   probeSessionReachability,
@@ -3650,6 +3657,16 @@ export function readLiveUiState(run: UiRunner = defaultRun): Promise<UiState | n
 }
 
 /**
+ * Is this Mac's screen locked? (LOCKSCR1, #732.) The production read behind
+ * `things doctor --ui-state`'s session row — prompt-free, ungated, and asked
+ * BEFORE the Accessibility-gated census, because it is the fact that says
+ * whether the census's silence means anything.
+ */
+export function readLiveSessionLock(run: UiRunner = defaultRun): Promise<SessionLockVerdict> {
+  return probeSessionLock(run, STEP_TIMEOUT_MS);
+}
+
+/**
  * The production dispatch seam itself, exported (issue #640).
  *
  * The drive owns its own runner and always will. But `things rescue` presses a
@@ -4614,6 +4631,30 @@ function recipeWantsObserver(recipe: UiRecipe): boolean {
 }
 
 /**
+ * Does this recipe need a session a human could be looking at (LOCKSCR1, #732)?
+ *
+ * TRUE for everything that must READ or CLICK the window: the dialog-class ops
+ * (which already declare `needsWindowReachability` because their sheet opens on
+ * the main window), the sidebar drag, and the heading chords. On a locked Mac
+ * none of them can work — the window inventory is empty and a synthesized
+ * gesture lands on the lock screen (NATIVE1 §lock, LOCK1 arm f).
+ *
+ * FALSE for the pure menu ops (pause / resume). An AX menu press addressed by
+ * element name works perfectly well under lock — measured, twice ([AXVM1-d],
+ * `docs/lab/axvm1-accessibility.md`) — so gating them would refuse operations
+ * that DO succeed. The gate is over-cautious about gestures, never about proven
+ * capability.
+ */
+function recipeNeedsUnlockedSession(recipe: UiRecipe): boolean {
+  return (
+    recipe.needsWindowReachability === true ||
+    recipe.steps.some(
+      (step) => step.primitive === "drag-reorder" || step.primitive === "chord-reorder",
+    )
+  );
+}
+
+/**
  * The drive, with the settle sidecar's LIFETIME wrapped around it (VOPAT2).
  *
  * The sidecar is an observing process, and the one thing an observing process
@@ -4775,6 +4816,29 @@ async function driveSteps(
       },
     };
   };
+
+  // 0⁻. THE SESSION-LOCK GATE (LOCKSCR1, #732) — FIRST, ahead of every read that
+  //      could be mistaken for evidence about the window. A locked Mac shows an
+  //      empty window inventory, and #732 read that emptiness as "Things has no
+  //      open window" and sent the operator to click a Dock icon behind a lock
+  //      screen. So the session is asked directly, before the preamble, and a
+  //      locked (or screen-savered) one is REFUSED — `blocked`, exit 4, nothing
+  //      posted, nothing changed. An unreadable session is `unknown`, which is
+  //      not a refusal: it makes the later window-inventory sentence hedge.
+  const lock = recipeNeedsUnlockedSession(recipe)
+    ? await probeSessionLock(rawRun, STEP_TIMEOUT_MS)
+    : UNKNOWN_SESSION_LOCK;
+  trace(() => ({
+    phase: "session-state",
+    gated: recipeNeedsUnlockedSession(recipe),
+    state: lock.state,
+    source: lock.source,
+    keys: lock.keys,
+    onConsole: lock.onConsole,
+    screenSaver: lock.screenSaver,
+    axOps: 0,
+  }));
+  if (blocksGuiDrive(lock)) return blockedReachability(lockRefusal(lock));
 
   // 0. Run the leading reveal/activate preamble BEFORE the canary. The Items
   //    menu is context-dependent — its Repeat submenu (and the plain "Repeat…"
@@ -5081,6 +5145,11 @@ async function driveSteps(
         aux,
         undefined,
         observer.session,
+        undefined,
+        // LOCKSCR1: the gate above proved this session is not locked, or could
+        // not establish it. The ladder's window-inventory copy needs to know
+        // which — an unestablished session may not assert a closed window.
+        lock.state,
       );
       // SBCOL1: a move that needed the collapse rung changed the sidebar's
       // disclosure state to get there. That state lives in Things' own

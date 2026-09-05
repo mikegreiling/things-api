@@ -56,6 +56,7 @@ import {
   settleInjectorFor,
 } from "../../../src/write/vectors/ui-observer.ts";
 import { axFocusGuardPrelude, axUiStateScript } from "../../../src/write/vectors/ui-state.ts";
+import { jxaSessionLockScript } from "../../../src/write/vectors/session-lock.ts";
 
 /** One rendered script, labeled by the recipe/shape/settle-shape that produced it. */
 export interface CatalogScript {
@@ -375,6 +376,18 @@ export function everyUiScript(
     if (seen.has(sparse.script)) continue;
     seen.add(sparse.script);
     out.push({ ...sparse, lang: "javascript" });
+  }
+  // THE SESSION-LOCK PROBE (LOCKSCR1, #732) — dispatched ahead of the preamble
+  // on every gated drive, and on a deputy-routed Mac it crosses the broker like
+  // every other script, so both suites must see it.
+  const lockProbe = {
+    label: "driver · session-lock probe",
+    script: jxaSessionLockScript(),
+    lang: "javascript",
+  };
+  if (!seen.has(lockProbe.script)) {
+    seen.add(lockProbe.script);
+    out.push(lockProbe);
   }
   const jxa = {
     label: "driver · verify-prefill (date-area leg)",

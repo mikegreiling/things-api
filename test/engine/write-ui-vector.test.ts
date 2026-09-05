@@ -2178,3 +2178,109 @@ describe("ui driver — the Repeat dialog's shape manifest (RDLAT2)", () => {
     expect(commands.some((c) => c.primitive === "select-popup")).toBe(false);
   });
 });
+
+// LOCKSCR1 (issue #732): the session-lock gate runs BEFORE the preamble and
+// before any inference from the window inventory. A locked Mac is refused with
+// the lock named; a session that cannot be established is NOT refused — it only
+// makes the later window-inventory copy hedge.
+const isLockProbe = (c: UiCommand): boolean =>
+  c.script?.includes("lockscr1-session-lock probe") === true;
+
+const lockJson = (over: Record<string, unknown> = {}): string =>
+  JSON.stringify({
+    keys: ["CGSSessionScreenIsLocked", "kCGSSessionOnConsoleKey"],
+    screenIsLocked: true,
+    onConsole: true,
+    screenSaver: false,
+    source: "session-dictionary",
+    ...over,
+  });
+
+describe("ui driver — session-lock gate (LOCKSCR1 #732)", () => {
+  it("REFUSES a locked session (blocked, exit 4) before the preamble, naming the lock", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isLockProbe(c)) return ok(lockJson());
+      if (c.primitive === "resolve") return ok("true");
+      return ok();
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)),
+    );
+    expect(res.exitCode).toBe(4);
+    expect(res.blocked?.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+    expect(res.blocked?.detail).toContain("the screen is locked");
+    expect(res.blocked?.remediation).toContain("Unlock the Mac");
+    // The sentence #732 got must not appear anywhere in the refusal.
+    expect(`${res.stderr}${res.blocked?.detail ?? ""}`).not.toContain("Dock icon");
+    // BEFORE everything: no activate, no reachability probe, no actuation.
+    expect(commands.some(isActuation)).toBe(false);
+    expect(commands.some(isReach)).toBe(false);
+    expect(commands.some((c) => c.primitive === "activate")).toBe(false);
+    // Exactly one hop was spent establishing it.
+    expect(commands.filter(isLockProbe)).toHaveLength(1);
+  });
+
+  it("REFUSES a running screen saver the same way, with its own remedy", async () => {
+    const { run } = mockRunner((c) => {
+      if (isLockProbe(c)) return ok(lockJson({ screenIsLocked: null, screenSaver: true }));
+      if (c.primitive === "resolve") return ok("true");
+      return ok();
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)),
+    );
+    expect(res.exitCode).toBe(4);
+    expect(res.blocked?.detail).toContain("screen saver is running");
+  });
+
+  it("does NOT refuse when the session cannot be established — an unread probe blocks nothing", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isLockProbe(c)) return { ok: false, stdout: "", stderr: "no session" };
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
+      if (c.primitive === "audit-dialog") return ok("OK");
+      return ok();
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(commands.filter(isLockProbe)).toHaveLength(1);
+  });
+
+  it("leaves an unlocked session's path exactly as it shipped", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isLockProbe(c)) return ok(lockJson({ keys: [], screenIsLocked: null }));
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
+      if (c.primitive === "audit-dialog") return ok("OK");
+      return ok();
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(commands.some(isActuation)).toBe(true);
+  });
+
+  it("never probes a menu-only op — pause-repeat works under lock (AXVM1) and stays ungated", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isLockProbe(c)) return ok(lockJson()); // would read LOCKED — must never be asked
+      if (c.primitive === "resolve") return ok("true");
+      return ok();
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(pauseRepeatRecipe("TODO-1")),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(commands.some(isLockProbe)).toBe(false);
+  });
+});

@@ -26,7 +26,12 @@ import {
   type UiProbe,
   type UiState,
 } from "./write/vectors/ui-state.ts";
-import { readLiveUiState } from "./write/vectors/ui.ts";
+import {
+  describeSessionLock,
+  type SessionLockVerdict,
+  UNKNOWN_SESSION_LOCK,
+} from "./write/vectors/session-lock.ts";
+import { readLiveSessionLock, readLiveUiState } from "./write/vectors/ui.ts";
 
 export type {
   UiFocusOwner,
@@ -37,6 +42,13 @@ export type {
 } from "./write/vectors/ui-state.ts";
 
 export interface UiStateReport {
+  /**
+   * Is this Mac's screen locked? (LOCKSCR1, #732.) Read FIRST and reported
+   * always — it needs no grant, and it is the fact that says whether an empty
+   * census below means "Things has no window" or "nothing on this screen is
+   * readable by anyone".
+   */
+  session: SessionLockVerdict;
   /** Could the screen be read at all on this machine? */
   available: boolean;
   /** One sentence: the summary when available, the reason when not. */
@@ -54,6 +66,8 @@ export interface UiStateDeps {
   capability?: () => UiCapability;
   /** Test seam: the live census read. */
   read?: () => Promise<UiState | null>;
+  /** Test seam: the prompt-free session-lock read. */
+  session?: () => Promise<SessionLockVerdict>;
 }
 
 /**
@@ -63,9 +77,14 @@ export interface UiStateDeps {
  * wrong with the screen.
  */
 export async function readUiStateReport(deps: UiStateDeps = {}): Promise<UiStateReport> {
+  // LOCKSCR1: read AHEAD of the capability gate on purpose. The session read is
+  // prompt-free and needs no grant, so a machine that has granted nothing is
+  // still told that its screen is locked (which is why its census is empty).
+  const session = await (deps.session ?? readLiveSessionLock)().catch(() => UNKNOWN_SESSION_LOCK);
   const capability = (deps.capability ?? (() => uiCapabilityDefault()))();
   if (!uiAllowed(capability)) {
     return {
+      session,
       available: false,
       detail: `the Things window cannot be read on this machine — ${capability.detail}`,
       remediation: capability.remediation,
@@ -76,6 +95,7 @@ export async function readUiStateReport(deps: UiStateDeps = {}): Promise<UiState
   const state = await (deps.read ?? readLiveUiState)();
   if (state === null) {
     return {
+      session,
       available: true,
       detail:
         "the window and focus state could not be read — Things may have stopped answering, or a " +
@@ -88,6 +108,7 @@ export async function readUiStateReport(deps: UiStateDeps = {}): Promise<UiState
   const unproven = state.stalledProbes.length > 0 || state.failedProbes.length > 0;
   if (!state.thingsRunning && !unproven) {
     return {
+      session,
       available: true,
       detail: "Things is not running, so it has no window and no dialog open",
       remediation: [],
@@ -96,6 +117,7 @@ export async function readUiStateReport(deps: UiStateDeps = {}): Promise<UiState
     };
   }
   return {
+    session,
     available: true,
     detail: describeUiState(state),
     // #629: a probe that did not answer is REPORTED, with what to do about it —
@@ -121,7 +143,14 @@ function probeLine(state: UiState): string[] {
 
 /** The human render of the window-state section, for `things doctor --ui-state`. */
 export function uiStateLines(report: UiStateReport): string[] {
-  const lines = ["── Window state ──", `summary:     ${report.detail}`];
+  const lines = [
+    "── Window state ──",
+    // LOCKSCR1 (#732): FIRST row, because it is the row that says how to read
+    // every row under it. A locked Mac shows an empty window inventory, and this
+    // section used to render that emptiness as if it were a fact about Things.
+    `session:     ${describeSessionLock(report.session)}`,
+    `summary:     ${report.detail}`,
+  ];
   const state = report.state;
   if (state !== null) {
     // #629: a row whose probe did not answer says so. Printing the field's
