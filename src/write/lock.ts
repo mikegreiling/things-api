@@ -24,13 +24,31 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { pidAlive } from "../process-instance.ts";
+import { currentInstance, instanceAlive, pidAlive } from "../process-instance.ts";
 
-/** Who holds the lock, and since when — the lockfile's whole payload. */
+/** Who holds the lock, since when, and doing what — the lockfile's whole payload. */
 export interface LockHolder {
   pid: number;
   /** ISO-8601 instant the holder took the lock. */
   ts: string;
+  /**
+   * The OPERATION the holder is running (`area.reorder`, `todo.move`, …), when
+   * the acquisition named one. A waiting writer's refusal reads far better for
+   * naming it — "another operation holds the mutation lock: area.reorder" tells
+   * the reader both why the wait is long and whether it is their own doing —
+   * and it costs one string in a file that already exists. Absent on a lock
+   * taken by a path that named nothing.
+   */
+  op?: string;
+  /**
+   * The holder's process START TIME (`ps -o lstart=`), which is what makes a
+   * stale lock decidable across a PID REUSE: a recycled pid passes `kill(pid,
+   * 0)` and would keep a dead writer's lock alive forever. Paired with the pid
+   * it is an identity only the original process satisfies (see
+   * {@link instanceAlive}). Null/absent when it could not be read — the pid
+   * alone then carries the answer, which is weaker but never fabricated.
+   */
+  start?: string | null;
 }
 
 /**
@@ -85,6 +103,28 @@ export interface LockHolderReport {
 const NO_HOLDER: LockHolderReport = { holder: null, alive: false, heldForMs: null, suspect: false };
 
 /**
+ * Is the recorded holder still running? PID PLUS START TIME, never the pid
+ * alone: the kernel recycles pids, so a dead writer's number can belong to an
+ * unrelated process and `kill(pid, 0)` would report a stale lock as live
+ * forever. `instanceAlive` is conservative in the safe direction — an
+ * unrecorded or unreadable start time resolves to "alive", so the only holder
+ * ever declared dead is one whose pid is gone or whose start time PROVES a
+ * different process is wearing the number.
+ */
+function holderAlive(
+  holder: LockHolder,
+  deps: Partial<Pick<LockDeps, "pidAlive" | "processStart">>,
+): boolean {
+  return instanceAlive(
+    { pid: holder.pid, start: holder.start ?? null },
+    {
+      ...(deps.pidAlive !== undefined && { pidAlive: deps.pidAlive }),
+      ...(deps.processStart !== undefined && { processStart: deps.processStart }),
+    },
+  );
+}
+
+/**
  * READ the lockfile without touching it — no steal, no wait, no acquisition.
  * This is the accessor `things rescue status` reports from, and it is
  * deliberately incapable of changing anything: a diagnostic that can release
@@ -95,10 +135,11 @@ const NO_HOLDER: LockHolderReport = { holder: null, alive: false, heldForMs: nul
  */
 export function readLockHolder(
   path: string,
-  deps: Partial<Pick<LockDeps, "readFileSync" | "pidAlive">> & { now?: () => number } = {},
+  deps: Partial<Pick<LockDeps, "readFileSync" | "pidAlive" | "processStart">> & {
+    now?: () => number;
+  } = {},
 ): LockHolderReport {
   const read = deps.readFileSync ?? readFileSync;
-  const alivep = deps.pidAlive ?? pidAlive;
   let raw: string;
   try {
     raw = read(path, "utf8") as string;
@@ -112,7 +153,7 @@ export function readLockHolder(
     return NO_HOLDER; // torn write — the next acquisition treats it as stale
   }
   if (typeof holder.pid !== "number" || typeof holder.ts !== "string") return NO_HOLDER;
-  const alive = alivep(holder.pid);
+  const alive = holderAlive(holder, deps);
   const takenAt = Date.parse(holder.ts);
   const heldForMs = Number.isFinite(takenAt)
     ? Math.max(0, (deps.now ?? Date.now)() - takenAt)
@@ -159,13 +200,17 @@ export function formatHeldFor(ms: number): string {
  */
 export function describeLockRefusal(
   err: MutationLockError,
-  deps: { pidAlive?: (pid: number) => boolean; now?: () => number } = {},
+  deps: {
+    pidAlive?: (pid: number) => boolean;
+    processStart?: (pid: number) => string | null;
+    now?: () => number;
+  } = {},
 ): { detail: string; remediation: string } {
   const holder = err.holder;
   const base = "wait for the concurrent mutation to finish and retry";
   if (holder === null) return { detail: err.message, remediation: base };
 
-  const alive = (deps.pidAlive ?? pidAlive)(holder.pid);
+  const alive = holderAlive(holder, deps);
   const takenAt = Date.parse(holder.ts);
   const heldForMs = Number.isFinite(takenAt)
     ? Math.max(0, (deps.now ?? Date.now)() - takenAt)
@@ -191,6 +236,73 @@ export function describeLockRefusal(
 
 export interface MutationLock {
   release(): void;
+}
+
+// ------------------------------------------------------- release on every exit
+//
+// A lock is released by the `finally` of whoever took it — except when the
+// process never reaches that `finally`. The CLI's interrupt guard answers a
+// SIGTERM/SIGINT mid-write by writing its honest "outcome uncertain" line and
+// calling `process.exit`, which runs NO pending `finally` blocks: the lockfile
+// outlived the writer, and the next writer paid a full 30s wait before the
+// stale-steal cleared it. (SIGKILL is uncatchable and always ends there; the
+// steal is what covers it, which is why holder liveness is an IDENTITY rather
+// than a bare pid.)
+//
+// So every live acquisition registers itself, and an `exit` listener — armed
+// lazily on the first acquisition, never at import — drops whatever is still
+// held. `process.exit` fires it, a normal return fires it, and the listener is
+// otherwise inert. It is a backstop, not the release path: ordinary code still
+// releases in its own `finally`, and a released lock is off the registry.
+
+interface HeldLock {
+  path: string;
+  payload: LockPayload;
+  deps: LockDeps;
+}
+
+const heldLocks = new Set<HeldLock>();
+let exitHookArmed = false;
+
+function registerHeld(entry: HeldLock): void {
+  heldLocks.add(entry);
+  if (exitHookArmed) return;
+  exitHookArmed = true;
+  // An `exit` listener never keeps the event loop alive, and it is the only
+  // hook that runs under `process.exit` as well as a normal return.
+  process.on("exit", () => {
+    // Deleting the CURRENT entry mid-iteration is well-defined for a Set, and
+    // releaseHeld deletes exactly that one — no copy needed.
+    for (const held of heldLocks) releaseHeld(held);
+  });
+}
+
+/**
+ * Drop one held lock, but ONLY if the file still carries our own payload.
+ *
+ * The check is not defensive tidiness. A release that removes the file
+ * unconditionally can take out a lock somebody ELSE has since created — our own
+ * hold having been stolen as stale, or a double release racing the next
+ * writer's acquisition — and the victim then runs unserialized while believing
+ * it is protected. Matching the payload first makes a mistaken release a no-op
+ * instead of a silent unlock.
+ */
+function releaseHeld(entry: HeldLock): void {
+  heldLocks.delete(entry);
+  const { deps, path } = entry;
+  try {
+    const raw = deps.readFileSync(path, "utf8") as string;
+    const current = JSON.parse(raw) as LockPayload;
+    if (current.pid !== entry.payload.pid || current.ts !== entry.payload.ts) return; // not ours
+  } catch {
+    // Absent or torn: nothing of ours to remove.
+    return;
+  }
+  try {
+    deps.unlinkSync(path);
+  } catch {
+    // already gone — fine
+  }
 }
 
 /**
@@ -251,6 +363,10 @@ export interface LockDeps {
   renameSync: typeof renameSync;
   unlinkSync: typeof unlinkSync;
   pidAlive: (pid: number) => boolean;
+  /** A pid's start time — the reuse-proof half of holder liveness. */
+  processStart?: (pid: number) => string | null;
+  /** THIS process's start time, stamped into the lockfile it writes. */
+  selfStart?: () => string | null;
   pid: number;
   now: () => string;
   uniqueSuffix: () => string;
@@ -269,6 +385,9 @@ function realDeps(): LockDeps {
     renameSync,
     unlinkSync,
     pidAlive,
+    // Memoized in process-instance.ts: our own start time cannot change, so
+    // every acquisition after the first costs nothing.
+    selfStart: () => currentInstance().start,
     pid: process.pid,
     now: () => new Date().toISOString(),
     uniqueSuffix: () =>
@@ -283,6 +402,12 @@ function errCode(err: unknown): string | undefined {
 export interface AcquireMutationLockOptions {
   waitMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * The operation this acquisition is for, recorded in the lockfile so a
+   * waiting writer's refusal can NAME what it is waiting on. Cosmetic to the
+   * holder, load-bearing to the reader of the refusal.
+   */
+  op?: string;
   /** @internal test seam — see {@link LockDeps}. */
   deps?: LockDeps;
 }
@@ -304,15 +429,18 @@ export async function acquireMutationLock(
 
   for (;;) {
     try {
-      const payload: LockPayload = { pid: deps.pid, ts: deps.now() };
+      const payload: LockPayload = {
+        pid: deps.pid,
+        ts: deps.now(),
+        ...(options.op !== undefined && { op: options.op }),
+        ...(deps.selfStart !== undefined && { start: deps.selfStart() }),
+      };
       deps.writeFileSync(path, JSON.stringify(payload), { flag: "wx" });
+      const entry: HeldLock = { path, payload, deps };
+      registerHeld(entry);
       return {
         release() {
-          try {
-            deps.unlinkSync(path);
-          } catch {
-            // already gone — fine
-          }
+          releaseHeld(entry);
         },
       };
     } catch (err) {
@@ -323,7 +451,7 @@ export async function acquireMutationLock(
       } catch {
         holder = null; // torn write — treat as stale
       }
-      if (holder === null || !deps.pidAlive(holder.pid)) {
+      if (holder === null || !holderAlive(holder, deps)) {
         await stealStale(path, deps);
         // Whatever the steal outcome, re-loop: an empty slot lets us create a
         // fresh lock via `wx`; a slot re-taken by another process sends us
@@ -332,8 +460,8 @@ export async function acquireMutationLock(
       }
       if (Date.now() >= deadline) {
         throw new MutationLockError(
-          `another mutation is in progress (pid ${holder.pid} since ${holder.ts}); ` +
-            `waited ${waitMs}ms for ${path}`,
+          `another operation holds the mutation lock: ${holder.op ?? "a change"} ` +
+            `(pid ${holder.pid}), since ${holder.ts}; waited ${waitMs}ms for ${path}`,
           holder,
         );
       }
@@ -367,7 +495,7 @@ async function stealStale(path: string, deps: LockDeps): Promise<void> {
   } catch {
     stolen = null; // torn write — genuinely stale
   }
-  if (stolen !== null && deps.pidAlive(stolen.pid)) {
+  if (stolen !== null && holderAlive(stolen, deps)) {
     // A live lock slipped in between our read and our rename: this file is not
     // stale after all. Put it back for its holder (only if the slot is free)
     // and back off.

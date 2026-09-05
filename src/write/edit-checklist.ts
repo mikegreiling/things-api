@@ -30,6 +30,7 @@ import type { ChecklistItemSpec } from "./operations.ts";
 import { loadTarget } from "./pre-state.ts";
 import {
   fingerprintLabel,
+  runComposite,
   runMutation,
   type MutationResult,
   type WriteDeps,
@@ -112,7 +113,26 @@ function captureEdit(items: ChecklistItemSpec[], edit: ChecklistEdit): EditCaptu
   }
 }
 
-export async function runEditChecklist(
+/**
+ * ONE composite mutation lock for the whole verb (ruling 2026-09-05, #676). A
+ * granular edit is a WHOLE-CHECKLIST read-modify-write — read the items, apply
+ * the intent, rewrite the list — so a checklist write that lands between the
+ * read and the rewrite is silently discarded (the classic lost update). A dry
+ * run never takes the lock; the rewrite leg inside sees a reentrant no-op.
+ */
+export function runEditChecklist(
+  deps: WriteDeps,
+  rawUuid: string,
+  edit: ChecklistEdit,
+  options: WriteOptions = {},
+): Promise<MutationResult> {
+  if (options.dryRun === true) return runEditChecklistUnlocked(deps, rawUuid, edit, options);
+  return runComposite(deps, "todo.edit-checklist-item", () =>
+    runEditChecklistUnlocked(deps, rawUuid, edit, options),
+  );
+}
+
+async function runEditChecklistUnlocked(
   deps: WriteDeps,
   rawUuid: string,
   edit: ChecklistEdit,

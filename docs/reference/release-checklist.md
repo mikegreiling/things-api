@@ -149,7 +149,7 @@ npm version <version> --no-git-tag-version   # package.json + package-lock.json
 - `README.md` — the status line's `v<version>`.
 - `CHANGELOG.md` — roll the accumulated `## Unreleased` content under `## <version> — <YYYY-MM-DD>` and leave a **fresh empty `## Unreleased`** above it. Content is not rewritten during the roll; it was written per-PR.
 
-The commit/PR body is the release's own record: `chore(release): <version>`, one paragraph per landed PR, the version reasoning, the Stage 3 gate result (run ids + probe counts + `npm run check` exit 0), the Stage 5 field-shaped run, the Stage 6 helpers line, and any packaging verification. Reference issues as `Refs #N` — **never** `Fixes`/`Closes`/`Resolves`, which would auto-close an issue the reporter has not yet confirmed.
+The commit/PR body is the release's own record: `chore(release): <version>`, one paragraph per landed PR, the version reasoning, the Stage 3 gate result (run ids + probe counts + `npm run check` exit 0), the Stage 5 field-shaped run, the Stage 6 helpers line, and any packaging verification. Reference issues as `Refs #N` — **never** `Fixes`/`Closes`/`Resolves`, which would auto-close an issue nothing has yet confirmed fixed.
 
 Push, open with `gh pr create`, let CI run.
 
@@ -210,7 +210,7 @@ spctl --assess --type exec -vv "$B"     # Gatekeeper accepts it offline, from th
 ### Stage 10 — close out
 
 - Delete the landed items from [up-next.md](../up-next.md); update [roadmap.md](../roadmap.md), [capability-matrix.md](../capability-matrix.md) and [suite-audit.md](suite-audit.md) if the batch moved anything they track (usually done per-PR; check, don't assume).
-- Leave GitHub issues OPEN unless the reporter has confirmed the fix. A merge is not confirmation; for a field bug the confirmation is the maintainer's own re-run on the machine that hit it.
+- Leave GitHub issues OPEN until the fix is CONFIRMED — either the reporter re-runs and says so, or the original defect was reproduced locally and the fix demonstrably removes it ("no longer reproducible", evidence named on the issue). A merge is never the confirmation; for a field bug whose conditions no lab arm can reproduce, only the maintainer's own re-run on the machine that hit it counts.
 - Leave the primary checkout on a clean, up-to-date `main` (the maintainer's live CLI is npm-linked to it).
 
 ## Version precedent

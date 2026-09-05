@@ -345,6 +345,8 @@ export interface RescueLockView {
   path: string;
   held: boolean;
   pid: number | null;
+  /** The operation the holder is running, when the lockfile names one. */
+  op: string | null;
   /** ISO instant the holder took it. */
   since: string | null;
   /** Human age ("4m 12s"), or null when it could not be computed. */
@@ -385,6 +387,7 @@ export async function rescueStatus(deps: RescueDeps = {}): Promise<RescueStatusR
     path,
     held: holder.holder !== null,
     pid: holder.holder?.pid ?? null,
+    op: holder.holder?.op ?? null,
     since: holder.holder?.ts ?? null,
     heldFor: holder.heldForMs === null ? null : formatHeldFor(holder.heldForMs),
     alive: holder.alive,
@@ -393,14 +396,15 @@ export async function rescueStatus(deps: RescueDeps = {}): Promise<RescueStatusR
       holder.holder === null
         ? "no change is holding the lock"
         : holder.alive
-          ? `pid ${holder.holder.pid} has held it${
+          ? `${holder.holder.op ?? "a change"} (pid ${holder.holder.pid}) has held it${
               holder.heldForMs === null ? "" : ` for ${formatHeldFor(holder.heldForMs)}`
             }${
               holder.suspect
                 ? " — far longer than any change takes; that process may be hung, and killing it releases the lock"
                 : ""
             }`
-          : `pid ${holder.holder.pid} holds it but is no longer running — the next change takes it`,
+          : `${holder.holder.op ?? "a change"} (pid ${holder.holder.pid}) holds it but is no longer ` +
+            "running — the next change takes it",
   };
 
   const capability = d.uiCapability();

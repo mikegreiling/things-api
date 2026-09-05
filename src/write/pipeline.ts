@@ -428,6 +428,13 @@ export interface WriteDeps {
   audit: AuditWriter;
   fingerprint(): FingerprintStatus;
   lockPath: string;
+  /**
+   * How long an acquisition waits for a live holder before refusing, in ms.
+   * Defaults to the lock's own 30s. A seam for tests (which must not sit out a
+   * real wait to observe a contended refusal) and the one knob a host would
+   * turn if a long GUI drive ever made 30s too short.
+   */
+  lockWaitMs?: number;
   /** Injectable for tests/lab: returns true when Things is up (launching if needed). */
   ensureRunning?: (alreadyRunning: boolean) => Promise<boolean>;
   isAppRunning?: () => boolean;
@@ -760,6 +767,11 @@ function truncationDetail(
   return undefined;
 }
 
+/** The configured lock wait, as the acquisition's option bag (absent = its default). */
+function waitOption(deps: WriteDeps): { waitMs?: number } {
+  return deps.lockWaitMs === undefined ? {} : { waitMs: deps.lockWaitMs };
+}
+
 /**
  * Run a COMPOSITE — a single verb the engine executes as several mutations —
  * under ONE mutation lock held end-to-end, so it serializes against other
@@ -832,12 +844,46 @@ export async function runComposite(
         closeSummaryIntent(deps, op, keyed, outcome);
         return outcome;
       },
-      lockOptions,
+      { op, ...waitOption(deps), ...lockOptions },
     );
   } catch (err) {
     if (err instanceof MutationLockError) {
       return { kind: "blocked", op, reason: "lock", ...describeLockRefusal(err) };
     }
+    throw err;
+  }
+}
+
+/**
+ * The composite lock for an orchestrator whose result type is NOT a
+ * {@link MutationResult} — the move/reorder verbs, which answer in their own
+ * `MoveResult` / `ReorderResult` vocabulary. Same hold, same reentrancy, same
+ * bounded wait; the caller supplies the refusal it wants a contended lock to
+ * become, because only it knows the shape its consumer parses.
+ *
+ * Why those verbs need it at all: each one is a READ-MODIFY-WRITE spread over
+ * several legs (a bounce parks a row and re-enters it; a variadic move walks a
+ * set; an area reorder plans a drag from a census and then lands it). Held per
+ * leg, another writer can interleave at any leg boundary and the verb's own
+ * mid-flight state — the parked row, the planned slot, the sidebar geometry —
+ * stops describing the database. Held end to end, it cannot.
+ */
+export async function runLockedComposite<T>(
+  deps: WriteDeps,
+  op: OperationKind,
+  body: () => Promise<T>,
+  onContention: (refusal: { detail: string; remediation: string }) => T,
+  /** @internal test seam — see {@link AcquireMutationLockOptions}. */
+  lockOptions: AcquireMutationLockOptions = {},
+): Promise<T> {
+  try {
+    return await withMutationLock(deps.lockPath, body, {
+      op,
+      ...waitOption(deps),
+      ...lockOptions,
+    });
+  } catch (err) {
+    if (err instanceof MutationLockError) return onContention(describeLockRefusal(err));
     throw err;
   }
 }
@@ -1050,9 +1096,17 @@ export async function runMutation<K extends OperationKind>(
   }
 
   // 2. Serialize mutations (create-probe verification must never race).
+  //
+  // A DRY RUN is exempt: it plans and returns without dispatching anything, so
+  // there is nothing to serialize — and making a preview queue behind a live
+  // drive (a GUI composite can hold the lock for a minute) would turn "what
+  // would this do?" into a wait and then a refusal.
   let lock: { release(): void };
   try {
-    lock = await acquireMutationLock(deps.lockPath);
+    lock =
+      options.dryRun === true
+        ? { release() {} }
+        : await acquireMutationLock(deps.lockPath, { op, ...waitOption(deps) });
   } catch (err) {
     if (err instanceof MutationLockError) {
       audit({ result: blockedCode({ reason: "lock" }) });

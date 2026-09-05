@@ -10,6 +10,7 @@
  * several mutations, reentrant for its own legs and for a nested composite,
  * while every writer OUTSIDE the hold still meets the ordinary pidfile.
  */
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -28,7 +29,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   acquireMutationLock,
   type LockDeps,
+  type LockHolder,
   MutationLockError,
+  readLockHolder,
   withMutationLock,
 } from "../../src/write/lock.ts";
 import { runComposite } from "../../src/write/pipeline.ts";
@@ -378,5 +381,155 @@ describe("withMutationLock — the composite scope", () => {
       ),
     ).rejects.toThrow("leg blew up");
     expect(existsSync(lockPath)).toBe(false);
+  });
+});
+
+// ============================================================ CROSS-PROCESS
+//
+// Everything above drives the lock in ONE process with an injected pid. That is
+// the right way to test the steal algebra, and it is NOT a test of the thing the
+// lock exists for: two `things` invocations, each with its own pid, its own
+// AsyncLocalStorage, and no shared memory at all. The only thing they share is
+// the file — so these cells run real child processes against a real lockfile
+// with the real deps, and cover the two exits a `finally` cannot: a caught
+// signal (the CLI's interrupt guard, which answers SIGTERM with `process.exit`)
+// and an uncatchable one.
+
+const LOCK_MODULE = new URL("../../src/write/lock.ts", import.meta.url).pathname;
+
+/**
+ * Spawn a child that takes the lock and holds it until it is killed, resolving
+ * once it reports the lock is HELD. `catchSignal` mimics the CLI's interrupt
+ * guard: a SIGTERM handler that ends the process through `process.exit`, which
+ * runs no pending `finally` — the exact shape that used to leak the lockfile.
+ */
+async function spawnHolder(path: string, op: string, catchSignal: boolean): Promise<ChildProcess> {
+  const script = `
+    import { acquireMutationLock } from ${JSON.stringify(LOCK_MODULE)};
+    const lock = await acquireMutationLock(${JSON.stringify(path)}, { op: ${JSON.stringify(op)} });
+    if (${String(catchSignal)}) process.on("SIGTERM", () => process.exit(0));
+    process.stdout.write("held\\n");
+    setInterval(() => {}, 1000);
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  await new Promise<void>((resolve, reject) => {
+    let out = "";
+    const timer = setTimeout(() => reject(new Error(`holder never reported: ${out}`)), 20_000);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+      if (out.includes("held")) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`holder exited early (${code}): ${out}`));
+    });
+  });
+  return child;
+}
+
+/** Wait for a child to be gone (it was signalled), or throw on timeout. */
+async function reaped(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("child never exited")), 20_000);
+    child.on("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+function payload(path: string): LockHolder {
+  return JSON.parse(readFileSync(path, "utf8")) as LockHolder;
+}
+
+describe("cross-process exclusion — two real processes, one lockfile", () => {
+  const holders: ChildProcess[] = [];
+
+  afterEach(() => {
+    for (const child of holders.splice(0)) {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  });
+
+  it("a second process WAITS and is then refused, with the holder's operation named", async () => {
+    const child = await spawnHolder(lockPath, "area.reorder", false);
+    holders.push(child);
+
+    // The lockfile is the whole channel: the pid is the child's, the op is what
+    // the refusal will name, and the start time is the reuse-proof half.
+    const held = payload(lockPath);
+    expect(held.pid).toBe(child.pid);
+    expect(held.op).toBe("area.reorder");
+    expect(typeof held.start === "string" || held.start === null).toBe(true);
+
+    // A second writer (this process, real deps) waits its bounded wait and is
+    // refused — never admitted, and never stealing a LIVE holder's lock.
+    const started = Date.now();
+    await expect(acquireMutationLock(lockPath, { waitMs: 300 })).rejects.toThrow(
+      /another operation holds the mutation lock: area\.reorder \(pid \d+\), since /,
+    );
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+    expect(payload(lockPath).pid).toBe(child.pid); // untouched
+
+    // And once the holder is gone, the very next attempt succeeds.
+    child.kill("SIGKILL");
+    await reaped(child);
+    const mine = await acquireMutationLock(lockPath, { waitMs: 2000 });
+    expect(payload(lockPath).pid).toBe(process.pid);
+    mine.release();
+    expect(existsSync(lockPath)).toBe(false);
+  }, 40_000);
+
+  it("a CAUGHT signal releases the lock on the way out (process.exit runs no finally)", async () => {
+    const child = await spawnHolder(lockPath, "todo.update", true);
+    holders.push(child);
+    expect(existsSync(lockPath)).toBe(true);
+
+    child.kill("SIGTERM");
+    await reaped(child);
+
+    // The exit hook is the backstop for exactly this: the holder's `finally`
+    // never ran, and the lockfile is gone anyway.
+    expect(existsSync(lockPath)).toBe(false);
+  }, 40_000);
+
+  it("an UNCATCHABLE kill leaks the lockfile, and the leak is detectable and stolen", async () => {
+    const child = await spawnHolder(lockPath, "todo.move", false);
+    holders.push(child);
+
+    child.kill("SIGKILL");
+    await reaped(child);
+
+    // SIGKILL runs no code at all, so the file survives its owner — and a
+    // diagnostic can SAY so (pid liveness), which is what makes the next
+    // acquisition's steal honest rather than a guess.
+    expect(existsSync(lockPath)).toBe(true);
+    const report = readLockHolder(lockPath);
+    expect(report.holder?.pid).toBe(child.pid);
+    expect(report.alive).toBe(false);
+
+    const mine = await acquireMutationLock(lockPath, { waitMs: 1000 });
+    expect(payload(lockPath).pid).toBe(process.pid);
+    mine.release();
+  }, 40_000);
+});
+
+describe("release is OWNERSHIP-CHECKED", () => {
+  it("a release that is no longer ours leaves the current holder's lock alone", async () => {
+    const mine = await acquireMutationLock(lockPath, { waitMs: 0, sleep: noSleep });
+    // Somebody else's lock now occupies the slot (ours was stolen as stale, or a
+    // double release raced the next writer). Releasing must be a NO-OP, not a
+    // silent unlock of a writer that believes it is protected.
+    unlinkSync(lockPath);
+    writeHolder(lockPath, OTHER);
+    mine.release();
+    expect(existsSync(lockPath)).toBe(true);
+    expect(holderPid(lockPath)).toBe(OTHER);
   });
 });

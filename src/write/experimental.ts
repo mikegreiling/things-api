@@ -108,18 +108,30 @@ export function urlReanchorSupported(installedVersion: string | null): boolean {
 }
 
 /**
- * `area.reorder`'s opt-in gate — the MAINTAINER RULING of 2026-09-02.
+ * `area.reorder`'s opt-in gate — the MAINTAINER RULINGS of 2026-09-02 and
+ * 2026-09-05.
  *
  * The sidebar-area order has exactly one transport: a synthesized drag through
  * the Accessibility API (P6/O13). Every other write in this package rides a
  * documented app surface; this one drives the window. #676 measured what that
  * costs on real hardware — a single 174-row sidebar read took 16–18s on the
  * maintainer's M1, against ~0.8s for the same shape in the lab — and one move
- * needs several of them. The ruling that follows from it: an AX-driven
- * operation that cannot finish in about five seconds on that machine is not
- * worth advertising as a feature. Until it MEASURES inside that bar there, the
- * operation is experimental — available to a caller who opts in, refused with
- * the reason to everyone else.
+ * needs several of them (VOPAT2 PR 2 cut the census to the rows a prediction
+ * names, which is where the current ~7.4s one-wall prediction comes from).
+ *
+ * THE 2026-09-05 REVISION. The first ruling ended "promoted inside five seconds
+ * or REMOVED"; the second replaces that fork: *"anything fragile or overly time
+ * consuming like this should be off by default, but not necessarily removed. In
+ * a completely headless system, with minimal possibility of a user moving the
+ * cursor around or re-focusing windows during the automation, this is perfectly
+ * workable as long as we have some sort of mutex preventing any parallel
+ * operations from occurring."* So the operation STAYS and this key stays default
+ * OFF as a standing statement about the operation's class, not as a countdown:
+ * it is for a host where nobody is using Things interactively. The mutex half is
+ * not optional and is not this gate's job — the drive holds the composite
+ * mutation lock end to end (see `withMutationLock`), so no other write from this
+ * package can add, remove or re-rank a sidebar row between the census that plans
+ * the drag and the gesture that lands it.
  *
  * This is deliberately NOT the `allow-experimental` key: that one gates the
  * app's private sdef reorder command, is documented as a private-vendor-surface
@@ -128,7 +140,12 @@ export function urlReanchorSupported(installedVersion: string | null): boolean {
  */
 export const AREA_REORDER_CONFIG_KEY = "experimental-area-reorder";
 
-/** The ~5s wall-time bar `area.reorder` must MEASURE inside to be promoted. */
+/**
+ * The ~5s wall-time bar of the 2026-09-02 ruling. Since 2026-09-05 it is a COST
+ * REFERENCE, not a promotion trigger: the operation stays opt-in whatever it
+ * measures, and the number is what the maintainer's own field measurement is
+ * compared against.
+ */
 export const AREA_REORDER_LATENCY_BAR_MS = 5_000;
 
 export interface ExperimentalOpBlock {
@@ -146,10 +163,13 @@ export function areaReorderBlock(experimentalAreaReorder: boolean): Experimental
     detail:
       "reordering sidebar areas drives the Things window through the Accessibility API — " +
       "it synthesizes a drag, reads the sidebar between gestures, and can collapse and " +
-      "re-expand areas to clear a path. On a large sidebar those reads have measured " +
-      "16–18s each on an M1, so a single move can take minutes and can leave an area " +
-      "collapsed if it stops part-way. It is off until it completes inside five seconds " +
-      "on real hardware",
-    remediation: `run \`things config set ${AREA_REORDER_CONFIG_KEY} true\` to use it anyway, or drag the area in Things`,
+      "re-expand areas to clear a path. On a large sidebar a move takes several seconds, " +
+      "or up to about a minute when the area travels far, and it can leave an area " +
+      "collapsed if it stops part-way. It is off by default because it needs the app to " +
+      "itself: it is meant for a host nobody is clicking in, and while it runs every other " +
+      "change from this package waits for it",
+    remediation:
+      `run \`things config set ${AREA_REORDER_CONFIG_KEY} true\` to use it anyway — best on a host ` +
+      "where nobody is working in Things at the same time — or drag the area in Things",
   };
 }

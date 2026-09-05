@@ -14,7 +14,13 @@
  */
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { attach, disclose, disclosuresOf } from "./disclosures.ts";
-import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
+import {
+  runLockedComposite,
+  runMutation,
+  type MutationResult,
+  type WriteDeps,
+  type WriteOptions,
+} from "./pipeline.ts";
 import type {
   ContainerRef,
   HeadingArchiveParams,
@@ -88,7 +94,37 @@ function headingProject(deps: WriteDeps, headingUuid: string): string | null {
   return row?.project ?? null;
 }
 
-export async function runHeadingArchive(
+/**
+ * ONE composite mutation lock for the whole verb (ruling 2026-09-05, #676): the
+ * reparent legs read the heading's open children and move them one at a time
+ * before the heading itself is archived, so a child created (or moved) mid-verb
+ * is archived by the app's cascade after this verb decided it was not there.
+ * A dry run never takes the lock; the legs inside see a reentrant no-op.
+ */
+export function runHeadingArchive(
+  deps: WriteDeps,
+  params: HeadingArchiveParams,
+  options: WriteOptions = {},
+): Promise<HeadingArchiveResult> {
+  if (options.dryRun === true) return runHeadingArchiveUnlocked(deps, params, options);
+  return runLockedComposite(
+    deps,
+    "project.archive-heading",
+    () => runHeadingArchiveUnlocked(deps, params, options),
+    (contention) => ({
+      heading: {
+        kind: "blocked",
+        op: "project.archive-heading",
+        reason: "lock",
+        detail: contention.detail,
+        remediation: contention.remediation,
+      },
+      reparented: [],
+    }),
+  );
+}
+
+async function runHeadingArchiveUnlocked(
   deps: WriteDeps,
   params: HeadingArchiveParams,
   options: WriteOptions = {},
@@ -139,7 +175,37 @@ export async function runHeadingArchive(
   return { heading, reparented };
 }
 
-export async function runHeadingUnarchive(
+/**
+ * ONE composite mutation lock for the whole verb (ruling 2026-09-05, #676): the
+ * child candidates are read BEFORE the unarchive clears the heading's stopDate
+ * (the cascade window is what identifies them), and each reopen is its own leg.
+ * A concurrent write to one of those rows between the census and its reopen is
+ * exactly the interleave the lock exists to exclude. A dry run never takes it.
+ */
+export function runHeadingUnarchive(
+  deps: WriteDeps,
+  params: HeadingUnarchiveParams,
+  options: WriteOptions = {},
+): Promise<HeadingUnarchiveResult> {
+  if (options.dryRun === true) return runHeadingUnarchiveUnlocked(deps, params, options);
+  return runLockedComposite(
+    deps,
+    "project.unarchive-heading",
+    () => runHeadingUnarchiveUnlocked(deps, params, options),
+    (contention) => ({
+      heading: {
+        kind: "blocked",
+        op: "project.unarchive-heading",
+        reason: "lock",
+        detail: contention.detail,
+        remediation: contention.remediation,
+      },
+      children: [],
+    }),
+  );
+}
+
+async function runHeadingUnarchiveUnlocked(
   deps: WriteDeps,
   params: HeadingUnarchiveParams,
   options: WriteOptions = {},

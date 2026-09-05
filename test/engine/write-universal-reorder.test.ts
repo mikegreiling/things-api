@@ -223,7 +223,11 @@ describe("universal reorder — refusals", () => {
     if (result.kind === "move-refused") {
       expect(result.refusal).toBe("blocked");
       expect(result.detail).toContain("Accessibility API");
-      expect(result.detail).toContain("16–18s");
+      // The 2026-09-05 revision: off by DEFAULT as a class statement (fragile +
+      // slow, and it needs the app to itself), not a countdown to a five-second
+      // promotion-or-removal.
+      expect(result.detail).toContain("off by default");
+      expect(result.detail).toContain("every other change from this package waits");
       expect(result.remediation).toContain("experimental-area-reorder");
     }
     // and nothing was driven

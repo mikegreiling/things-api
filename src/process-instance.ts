@@ -61,9 +61,20 @@ export function processStart(pid: number): string | null {
   }
 }
 
-/** This process, as the identity to record on a piece of work it is starting. */
+/**
+ * This process, as the identity to record on a piece of work it is starting.
+ *
+ * MEMOIZED, because neither half can change: our pid is our pid, and our start
+ * time is the moment the kernel started us. Every caller after the first is
+ * free, which matters where the identity is stamped per WRITE — the mutation
+ * lockfile takes it on every acquisition, and a batch is one acquisition per
+ * line, so an un-memoized `ps` would add a fork per row.
+ */
+let selfInstance: ProcessInstance | null = null;
+
 export function currentInstance(): ProcessInstance {
-  return { pid: process.pid, start: processStart(process.pid) };
+  selfInstance ??= { pid: process.pid, start: processStart(process.pid) };
+  return selfInstance;
 }
 
 /** Seams so tests never shell out. */
