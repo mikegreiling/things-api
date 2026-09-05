@@ -84,8 +84,18 @@ describe("interpretSessionLock — the four readings", () => {
     expect(v.state).toBe("screensaver");
   });
 
-  it("prefers the lock over the saver when both are true — the lock is the actionable fact", () => {
-    expect(interpretSessionLock(probeJson({ screenSaver: true })).state).toBe("locked");
+  // LOCKSCR2 REVERSED this. The window server sets `CGSSessionScreenIsLocked`
+  // for a bare screen saver exactly as it does for a real lock (LOCKSCR1 §1 law
+  // 2), so "both true" is the ORDINARY saver reading, not a rare overlap — and
+  // the saver has an answer the lock does not: one synthesized key dismisses it
+  // when no password is required (LOCKSCR2 §1). Reading it as `locked` sent that
+  // Mac's user to unlock a Mac that was not asking for anything.
+  it("prefers the SAVER when both are true — the saver is the reading with a remedy", () => {
+    expect(interpretSessionLock(probeJson({ screenSaver: true })).state).toBe("screensaver");
+  });
+
+  it("reads a lock with NO saver process as locked — that is the hard lock", () => {
+    expect(interpretSessionLock(probeJson({ screenSaver: false })).state).toBe("locked");
   });
 
   it("reads NO session dictionary as unknown, never as unlocked", () => {
@@ -136,8 +146,32 @@ describe("the refusal a locked session produces", () => {
 
   it("says SAVER when it is the saver, not the lock — the remedy differs", () => {
     const r = lockRefusal({ ...UNKNOWN_SESSION_LOCK, state: "screensaver" });
-    expect(r.detail).toContain("screen saver is running");
+    expect(r.detail).toContain("the screen saver is up");
     expect(r.remediation).toContain("Wake the Mac");
+  });
+
+  // LOCKSCR2: the in-drive gate NUDGES a saver before refusing, and a saver that
+  // survived the nudge is a different fact from one nobody touched — measured,
+  // the only thing that keeps it up is a Mac that wants a password. A pre-seed
+  // gate, which has no wake rung, must not borrow that sentence.
+  it("says the Mac wants a password when the nudge was tried and failed", () => {
+    const r = lockRefusal(
+      { ...UNKNOWN_SESSION_LOCK, state: "screensaver" },
+      "Nothing was changed.",
+      true,
+    );
+    expect(r.detail).toContain("did not clear when the Mac was nudged");
+    expect(r.detail).toContain("asking for a password");
+    expect(r.remediation).toContain("Unlock the Mac");
+  });
+
+  it("does NOT claim a nudge on a path that has none", () => {
+    const r = lockRefusal(
+      { ...UNKNOWN_SESSION_LOCK, state: "screensaver" },
+      "Nothing was created.",
+    );
+    expect(r.detail).not.toContain("nudged");
+    expect(r.detail).toContain("Nothing was created");
   });
 });
 

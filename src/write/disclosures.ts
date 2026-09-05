@@ -80,6 +80,14 @@ export const DISCLOSURES = {
     tier: "note",
     why: "how the move was made room for, and the state was put back — the caller has nothing to do unless the restore failed, and that case says so in its own words",
   },
+  "ui-screen-saver-dismissed": {
+    tier: "note",
+    why: "the drive dismissed a screen saver to reach the window and the screen is awake now — a durable change to the state the caller left their Mac in, but nothing follows for them (LOCKSCR2)",
+  },
+  "ui-window-reopened": {
+    tier: "note",
+    why: "the drive reopened a Things window the caller had closed and deliberately LEFT IT OPEN — the window is theirs to close again if they want it closed, which is a disclosure, not a task (LOCKSCR2)",
+  },
   "ui-recipe-uncertified": {
     tier: "note",
     why: "a lab-certification caveat about the recipe, not about this result — nothing to act on",

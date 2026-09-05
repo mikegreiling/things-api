@@ -2055,7 +2055,7 @@ export async function runMutation<K extends OperationKind>(
         // Durable side effects the drive had to make to get the job done — as
         // opposed to the play-by-play, which stays failure-only (SBCOL1).
         for (const notice of executeResult.notices ?? []) {
-          disclose(bag, "sidebar-auto-collapse", notice);
+          disclose(bag, notice.id, notice.message);
         }
         const cert = certificationOf(op);
         if (cert !== undefined && cert.status !== "certified") {

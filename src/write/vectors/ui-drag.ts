@@ -1237,6 +1237,26 @@ function sidebarVisibilityCommand(want: "show" | "hide"): UiCommand {
   };
 }
 
+/**
+ * `reopen` + `activate`, through Things' OWN scripting dictionary (LOCKSCR2).
+ *
+ * The same two commands the SESSGATE rescue maneuver already leans on
+ * (`axCloseReopenActivateScript` in ui.ts) — minus its `close window 1`, which
+ * exists there to take a stuck sheet down with the window and would be exactly
+ * wrong here, where the problem is that there is no window to close.
+ *
+ * It is app-level AppleScript, not Accessibility, so it works in the state that
+ * needs it: `reopen` restores the default window on the CURRENT Space whether or
+ * not the AX tree can see anything, and `activate` brings it forward.
+ */
+function axReopenActivateScript(): string {
+  return `tell application "Things3"
+  reopen
+  activate
+end tell
+return "OK"`;
+}
+
 function scrollCommand(
   clicks: number,
   areaTitles: readonly string[],
@@ -2269,6 +2289,11 @@ export interface DragDriveResult {
    * silent — even on an otherwise successful move.
    */
   restoreFailed?: string[];
+  /**
+   * The normalization rung reopened a Things window because there was none, and
+   * LEFT IT OPEN (LOCKSCR2). Present only when the rung actually ran.
+   */
+  reopenedWindow?: boolean;
 }
 
 /** One area the collapse rung folded away, with what it looked like beforehand. */
@@ -3910,7 +3935,7 @@ export async function driveSidebarAreaReorder(
   // The chrome ledger, same shape and for the same reason: a sidebar this drive
   // revealed is hidden again on EVERY exit path. The user's window chrome is
   // theirs; a move must not silently leave it changed (SBCOL1 precedent).
-  const chrome: ChromeLedger = { revealedSidebar: false };
+  const chrome: ChromeLedger = { revealedSidebar: false, reopenedWindow: false };
   const started = Date.now();
   /**
    * WHAT THE MOVE COST, in the units that transfer between hosts (VOPAT1 §0):
@@ -3936,7 +3961,10 @@ export async function driveSidebarAreaReorder(
     const restoreFailed = await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
     const chromeNote = await restoreChrome(ctx, chrome);
     report();
-    return withChromeOutcome(withCollapseOutcome(result, collapsed, restoreFailed), chromeNote);
+    return withWindowOutcome(
+      withChromeOutcome(withCollapseOutcome(result, collapsed, restoreFailed), chromeNote),
+      chrome,
+    );
   } catch (err) {
     // the sidebar is put back even when the ladder blew up
     await restoreDisclosure(ctx, areaTitlesForRestore, collapsed);
@@ -3950,6 +3978,11 @@ export async function driveSidebarAreaReorder(
 interface ChromeLedger {
   /** The drive ran View ▸ Show Sidebar; the epilogue must hide it again. */
   revealedSidebar: boolean;
+  /**
+   * The drive reopened a closed Things window (LOCKSCR2). Unlike the sidebar,
+   * this is NOT restored: see {@link reopenWindow}.
+   */
+  reopenedWindow: boolean;
 }
 
 /**
@@ -3985,6 +4018,49 @@ async function revealSidebar(
   return { ok: false, why: describeSnapshotFailure(after, ctx.lock) };
 }
 
+/**
+ * NORMALIZATION RUNG (LOCKSCR2): a CLOSED Things window is not a dead end either.
+ *
+ * The field incident behind #732 ended at "Things is running but has no open
+ * window — only the placeholder it keeps in the background. Open the Things
+ * window (click its Dock icon) and re-run." LOCKSCR1 made that sentence honest
+ * by proving the screen was unlocked before saying it. LOCKSCR2 asks the next
+ * question: with the session PROVEN unlocked, why are we asking the operator to
+ * click a Dock icon at all? Things' own scripting dictionary has `reopen` — the
+ * same command the SESSGATE rescue maneuver already relies on, which restores
+ * the default window on the CURRENT Space — and the drive is entitled to use it.
+ *
+ * CLOSED-LOOP, like every rung here: the reopen counts only once a fresh
+ * snapshot resolves against it. And the guard is the session verdict, not the
+ * inventory: the rung fires ONLY when `ctx.lock` is `unlocked`, because on an
+ * `unknown` session an empty inventory is not evidence of a closed window and
+ * reopening would be acting on a guess — exactly the mistake #732 was.
+ *
+ * THE WINDOW IS LEFT OPEN. The sidebar reveal is put back because the sidebar is
+ * chrome the drive borrowed; a window the operator closed and we reopened is
+ * different — it is what the move HAPPENED IN, it may be what they are looking
+ * at by the time the command returns, and closing it again would be a second
+ * unasked-for change on top of the first. So it stays, and the result says so.
+ */
+async function reopenWindow(
+  ctx: DriveCtx,
+  chrome: ChromeLedger,
+): Promise<{ ok: true; snapshot: SidebarSnapshot } | { ok: false; why: string }> {
+  const res = await runCmd(ctx, {
+    primitive: "resolve",
+    label: "reopen the Things window",
+    script: axReopenActivateScript(),
+  });
+  if (!res.ok) {
+    return { ok: false, why: res.stderr.trim() || "Things did not answer the reopen" };
+  }
+  chrome.reopenedWindow = true;
+  await ctx.sleep(1200);
+  const after = await takeSnapshot(ctx);
+  if (after.ok) return { ok: true, snapshot: after.snapshot };
+  return { ok: false, why: describeSnapshotFailure(after, ctx.lock) };
+}
+
 /** Put the window chrome back. Runs on every exit path. */
 async function restoreChrome(ctx: DriveCtx, chrome: ChromeLedger): Promise<string | null> {
   if (!chrome.revealedSidebar) return null;
@@ -4006,6 +4082,16 @@ async function restoreChrome(ctx: DriveCtx, chrome: ChromeLedger): Promise<strin
 
 function withChromeOutcome(result: DragDriveResult, note: string | null): DragDriveResult {
   return note === null ? result : { ...result, detail: `${result.detail} (${note})` };
+}
+
+/** Say a reopened window out loud — on the refusal path too, where it also stands. */
+function withWindowOutcome(result: DragDriveResult, chrome: ChromeLedger): DragDriveResult {
+  if (!chrome.reopenedWindow) return result;
+  return {
+    ...result,
+    detail: `${result.detail} (Things had no open window, so one was reopened and left open)`,
+    reopenedWindow: true,
+  };
 }
 
 /** The ladder proper. Its caller owns the collapse ledger and the restore. */
@@ -4114,6 +4200,19 @@ async function runDragLadder(
             why: "sidebar-hidden",
             ...({ stderr: revealed.why } as { stderr: string }),
           };
+    }
+    // A CLOSED WINDOW is normalized the same way (LOCKSCR2) — but only on a
+    // session PROVEN unlocked, and only once: a reopen that produced no window
+    // will not produce one on the next hop either, and the refusal below is then
+    // the honest end of it.
+    if (
+      !snapOutcome.ok &&
+      snapOutcome.why === "no-window" &&
+      ctx.lock === "unlocked" &&
+      !chrome.reopenedWindow
+    ) {
+      const reopened = await reopenWindow(ctx, chrome);
+      if (reopened.ok) snapOutcome = { ok: true, snapshot: reopened.snapshot };
     }
     if (!snapOutcome.ok) {
       const why =
