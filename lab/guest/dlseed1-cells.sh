@@ -159,14 +159,20 @@ U=$(seed "$TAG-E" "$START" "")
 promote "50-closedwin" "$TAG-E" "0" "$START" "no"
 WINS_AFTER=$(osascript -e 'tell application "System Events" to tell process "Things3" to return (count of (windows whose subrole is "AXStandardWindow")) as text' 2>/dev/null)
 [ "${WINS_AFTER:-0}" -ge 1 ] && pass "the window was reopened and LEFT OPEN (count=$WINS_AFTER)" || fail "no window after the promote (count=$WINS_AFTER)"
+# THE DISCLOSURE IS REPORTED, NOT REQUIRED — and the direct arm measured why
+# (DLSEED1 §closed-window). A ⌘W'd window leaves Things' AX tree holding its
+# background PLACEHOLDER, so the reachability gate reads `thingsAx = 1` and says
+# reachable: the pre-seed rung is not needed and does not fire, and the drive's
+# own `things:///show` reveal is what puts a real window back. The rung stands
+# for the two states that DO refuse — a session-scope verdict on a Mac proven
+# unlocked, and a `no-window` verdict — neither of which ⌘W can stage here.
 python3 -c "
 import json,sys
 d=json.load(open(sys.argv[1]))
 notes=(d.get('data') or {}).get('notes') or []
 hit=[n for n in notes if 'no open window' in n]
-print('     disclosure:', hit[0] if hit else '(MISSING)')
-raise SystemExit(0 if hit else 1)
-" "$OUT/50-closedwin.json" && pass "the reopened window is disclosed" || fail "no reopened-window disclosure"
+print('     reopen disclosure:', hit[0] if hit else '(not emitted — the reveal restored the window)')
+" "$OUT/50-closedwin.json"
 
 echo ""
 echo "############################################################"

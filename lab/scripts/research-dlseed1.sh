@@ -304,6 +304,25 @@ promote() {
   echo "$rc"
 }
 
+# The result's own notes, out of a log whose first lines are node's warnings.
+notes_of() {
+  python3 -c '
+import json, sys
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    print(" | ".join((d.get("data") or {}).get("notes") or []) or "(none)")
+    break
+else:
+    print("(no JSON in the log)")
+' "$1"
+}
+
 ORACLE_RULE_FILE="$OUT/oracle-rule.txt"
 
 ########################################################################
@@ -358,14 +377,7 @@ run_cli() {
     verdict="exit $rc (no oracle recorded in this run — run the oracle cell too)"
   fi
   note "  VERDICT: $verdict"
-  note "  disclosure: $(python3 -c '
-import json,sys
-try:
-    d=json.load(open(sys.argv[1]))
-    print(" | ".join((d.get("data") or {}).get("notes") or []) or "(none)")
-except Exception as e:
-    print("(unreadable: %s)" % e)
-' "$OUT/drive/cli.log")"
+  note "  disclosure: $(notes_of "$OUT/drive/cli.log")"
 }
 
 run_override() {
@@ -435,20 +447,44 @@ run_closedwin() {
   lab_ssh "$IP" 'sleep 2' </dev/null
   wins_before=$(axq 'tell application "System Events" to tell process "Things3" to return (count of (windows whose subrole is "AXStandardWindow")) as text')
   note "  standard windows after ⌘W: $wins_before (want 0)"
+  # THE COUNTS THE GATE ITSELF READS, printed beside them: `thingsAx` is EVERY
+  # AX window of the process, placeholder included, which is why a ⌘W'd window
+  # can leave the reachability verdict `reachable` while the sidebar census —
+  # which needs a window with LISTS in it — reports none (#732's own state).
+  note "  reachability counts (thingsAs thingsAx allAx): $(axq 'set thingsAs to -1
+set thingsAx to -1
+set allAx to -1
+tell application "Things3"
+	try
+		set thingsAs to count windows
+	end try
+end tell
+tell application "System Events"
+	try
+		set thingsAx to count (windows of process "Things3")
+	end try
+	set allAx to 0
+	try
+		repeat with proc in (application processes whose background only is false)
+			try
+				if (count (windows of proc)) > 0 then
+					set allAx to 1
+					exit repeat
+				end if
+			end try
+		end repeat
+	end try
+end tell
+return ((thingsAs as integer) as text) & " " & ((thingsAx as integer) as text) & " " & ((allAx as integer) as text)')"
   rc=$(promote "closedwin" "$u")
   wins_after=$(axq 'tell application "System Events" to tell process "Things3" to return (count of (windows whose subrole is "AXStandardWindow")) as text')
   t=$(tmplid "DLS1-WIN")
   note "  standard windows after the promote: $wins_after (want ≥1 — the window is LEFT OPEN)"
   [ -n "$t" ] && note "  rule: $(rsum "$t")" || note "  FAIL: no template minted"
-  note "  disclosure: $(python3 -c '
-import json,sys
-try:
-    d=json.load(open(sys.argv[1]))
-    print(" | ".join((d.get("data") or {}).get("notes") or []) or "(none)")
-except Exception as e:
-    print("(unreadable: %s)" % e)
-' "$OUT/drive/closedwin.log")"
-  note "  want: window count 0 -> exit 0 -> window count 1, with the reopened-window note"
+  note "  disclosure: $(notes_of "$OUT/drive/closedwin.log")"
+  note "  want: window count 0 -> exit 0 -> window count ≥1 (the window comes back and stays)."
+  note "        The reopened-window NOTE appears only when the pre-seed rung fired — which needs"
+  note "        thingsAx = 0. A ⌘W'd window leaves the background placeholder, so it usually does not."
 }
 
 for cell in $CELLS; do

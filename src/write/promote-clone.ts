@@ -268,11 +268,21 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<UiPrefli
       // been seeded at this point, so the rung costs one hop on a path that was
       // about to refuse anyway.
       //
+      // TWO STATES ARE REOPENABLE, and the third deliberately is not. A SESSION
+      // -scope verdict on a session proven unlocked is the one the refusal used
+      // to get wrong outright ("the screen is locked, or a full-screen app is
+      // covering the desktop" — of a Mac we had just proven unlocked). A
+      // `no-window` window-scope verdict is the same fact one app narrower:
+      // Things has no AX window at all. An `other-space` verdict is NOT reopened
+      // — the window exists, somewhere else, and `reopen` would not move it; the
+      // drive's own relocation maneuver owns that one.
+      //
       // CLOSED-LOOP: the reopen counts only if the RE-PROBE resolves. The window
       // is LEFT OPEN, exactly as the drive's rung leaves it — the verb ran in it,
       // the caller may be looking at it, and closing it again would be a second
       // unasked-for change — and the composite says so in its result.
-      if (session.state === "unlocked" && ui.reopenWindow !== undefined) {
+      const reopenable = verdict.scope === "session" || verdict.cause === "no-window";
+      if (session.state === "unlocked" && reopenable && ui.reopenWindow !== undefined) {
         const reopened = await ui.reopenWindow();
         if (reopened.ok) {
           verdict = await ui.probeReachability();

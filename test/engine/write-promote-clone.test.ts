@@ -30,6 +30,7 @@ import { composeRepeatRuleSpec, ruleXml } from "../../src/write/recurrence-rule-
 import { expectedRuleAssertions } from "../../src/write/repeat-asserts.ts";
 import { type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
+import type { ReachabilityVerdict } from "../../src/write/vectors/session-reachability.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -2277,7 +2278,12 @@ function lockedScreenUiVector(calls: { lock: number } = { lock: 0 }): WriteVecto
  */
 function closedWindowUiVector(
   calls: { reopens: number } = { reopens: 0 },
-  opts: { reopenWorks?: boolean; state?: "unlocked" | "unknown" } = {},
+  opts: {
+    reopenWorks?: boolean;
+    state?: "unlocked" | "unknown";
+    /** Override the not-reachable verdict (scope / cause), for the rung's two boundaries. */
+    verdict?: Extract<ReachabilityVerdict, { reachable: false }>;
+  } = {},
 ): WriteVector {
   const reopenWorks = opts.reopenWorks !== false;
   return {
@@ -2289,13 +2295,13 @@ function closedWindowUiVector(
     probeReachability: async () =>
       calls.reopens > 0 && reopenWorks
         ? { reachable: true }
-        : {
+        : (opts.verdict ?? {
             reachable: false,
             scope: "session",
             detail:
               "Things is running but has no open window — only the placeholder it keeps in the background.",
             remediation: "Open the Things window (click its Dock icon) and re-run.",
-          },
+          }),
     probeSessionLock: async () => ({
       state: opts.state ?? "unlocked",
       keys: ["kCGSSessionOnConsoleKey"],
@@ -2388,6 +2394,54 @@ describe("promote composites — pre-seed session-LOCK gate (LOCKSCR1 #732)", ()
       expect((res.notes ?? []).join(" ")).toContain("Things had no open window");
       expect((res.notes ?? []).join(" ")).toContain("left open");
     }
+  });
+
+  it("reopens for a `no-window` window-scope verdict too — the same fact, one app narrower", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR2 no-window scope", start: "active" });
+    const calls = { reopens: 0 };
+    const res = await runMakeRepeatingTodo(
+      depsUi([
+        vector,
+        closedWindowUiVector(calls, {
+          verdict: {
+            reachable: false,
+            scope: "window",
+            cause: "no-window",
+            detail: "Things has no open window.",
+            remediation: "Open a Things window and run this again.",
+          },
+        }),
+      ]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    expect(calls.reopens).toBe(1);
+  });
+
+  it("does NOT reopen for an OTHER-SPACE window — that window exists, and `reopen` would not move it", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR2 other space", start: "active" });
+    const calls = { reopens: 0 };
+    const res = await runMakeRepeatingTodo(
+      depsUi([
+        vector,
+        closedWindowUiVector(calls, {
+          verdict: {
+            reachable: false,
+            scope: "window",
+            cause: "other-space",
+            detail: "The Things window is on another desktop.",
+            remediation: "Switch to that desktop and run this again.",
+          },
+        }),
+      ]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    // The pre-seed gate has never refused a window-scope verdict (the reveal may
+    // still resolve it) — it simply must not have REOPENED anything here.
+    expect(calls.reopens).toBe(0);
+    expect(res.kind).not.toBe("blocked");
   });
 
   it("does NOT reopen on an unknown session — an empty window list is not evidence there", async () => {
