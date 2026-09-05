@@ -208,32 +208,69 @@ export interface AxOpRecord {
 }
 
 /**
- * Parse the executor's per-op report out of a hop's stderr, and REMOVE it.
+ * THE HOP'S WHOLE ANSWER, on stdout, as one JSON envelope.
  *
- * Same contract as `parseElemLog` and `parseSettleLog`: a refusal a caller reads
- * must never carry the machinery, and a line that does not parse is dropped
- * rather than guessed at.
+ * Not a stderr side-channel like `#AXELEMS` and the settle log: those exist
+ * because an AppleScript hop's stdout is its single verdict string and there was
+ * nowhere else to put a number. A raw-AX hop returns a structure, so the
+ * structure carries everything — which is the shape `ui-drag.ts`'s JXA builders
+ * already use, and it means a refusal SENTENCE comes back as a field rather than
+ * as a thrown error, which keeps "exactly one wording" easy to hold.
+ *
+ * A script that dies outright still fails the ordinary way: nonzero exit,
+ * interpreter text on stderr, `scriptErrorText` unchanged.
  */
-export function parseRawAxReport(
-  stderr: string,
-  prefix: string,
-): { records: AxOpRecord[]; stderr: string } {
-  const kept: string[] = [];
-  const records: AxOpRecord[] = [];
-  for (const line of stderr.split("\n")) {
-    if (!line.startsWith(prefix)) {
-      kept.push(line);
-      continue;
-    }
-    try {
-      const parsed: unknown = JSON.parse(line.slice(prefix.length));
-      if (parsed !== null && typeof parsed === "object") records.push(parsed as AxOpRecord);
-    } catch {
-      // A record that does not parse is machinery either way: it is not a
-      // caller-facing sentence, so it is dropped rather than surfaced.
-    }
+export interface AxEnvelope {
+  /** False when an op refused or failed; the drive then reads `detail`. */
+  readonly ok: boolean;
+  /** The refusal sentence, in the words the caller should read. */
+  readonly detail?: string;
+  /** The op that ended the run, when one did. */
+  readonly failedAt?: string;
+  /** Every op that ran, in order. */
+  readonly ops: readonly AxOpRecord[];
+  /** Raw AX calls the whole hop made — one of the two counts that transfer. */
+  readonly axCalls: number;
+  /** Controls whose CONTENT was read — the other one. */
+  readonly axElems: number;
+  /** probe-shape's verdict, when the program held one. */
+  readonly shape?: string;
+  /** verify-prefill's confirmed keys, when the program held one. */
+  readonly confirmed?: readonly string[];
+  /** True once the audit's folded commit has pressed OK. */
+  readonly committed?: boolean;
+}
+
+/**
+ * Parse the envelope, or null when stdout is not one.
+ *
+ * Null is not an error: it is what a caller gets from a hop that produced
+ * something else entirely, and the caller then falls back to its own generic
+ * wording rather than inventing a verdict out of a half-read structure.
+ */
+export function parseAxEnvelope(stdout: string): AxEnvelope | null {
+  const text = stdout.trim();
+  if (text === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
   }
-  return { records, stderr: kept.join("\n") };
+  if (parsed === null || typeof parsed !== "object") return null;
+  const env = parsed as Partial<AxEnvelope>;
+  if (typeof env.ok !== "boolean" || !Array.isArray(env.ops)) return null;
+  return {
+    ok: env.ok,
+    ops: env.ops,
+    axCalls: typeof env.axCalls === "number" ? env.axCalls : 0,
+    axElems: typeof env.axElems === "number" ? env.axElems : 0,
+    ...(typeof env.detail === "string" && { detail: env.detail }),
+    ...(typeof env.failedAt === "string" && { failedAt: env.failedAt }),
+    ...(typeof env.shape === "string" && { shape: env.shape }),
+    ...(Array.isArray(env.confirmed) && { confirmed: env.confirmed }),
+    ...(typeof env.committed === "boolean" && { committed: env.committed }),
+  };
 }
 
 /**

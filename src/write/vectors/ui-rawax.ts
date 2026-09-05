@@ -65,20 +65,6 @@ export const ROW_TOLERANCE_DEFAULT = 8;
 export const RAWAX_MARKER = "rawAxRun";
 
 /**
- * The stderr line prefix carrying the per-op report (§3.1) — one JSON object per
- * op, stripped by the dispatch seam exactly as `#AXELEMS` and the settle log
- * are. A refusal a caller reads must never carry the machinery.
- *
- * THIS IS WHAT MAKES THE HOP MERGE AFFORDABLE. RDLAT2 §10 declined to fold the
- * frequency/unit/interval hops together because folding costs the per-step trace
- * granularity and the per-step failure attribution that make field reports
- * readable. A per-OP record gives node strictly more of both than a hop boundary
- * did — label, duration, calls, elements, verdict — so the objection does not
- * survive the change of transport.
- */
-export const RAWAX_REPORT_PREFIX = "#RAWAXOP ";
-
-/**
  * What a refused op raises, so node can tell an op's own fail-closed refusal
  * from a script that died. The same discipline as `GUARD_REFUSED_TAG` and
  * `COMMIT_FAILED_TAG`: a machine tag in the script, the SENTENCE in TypeScript,
