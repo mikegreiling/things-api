@@ -286,24 +286,25 @@ The full inventory, `AXChildren` order, after each input. Only the cadence group
 | monthly | … + `Static=on the@286 · PopUp=day@283 · Button@284 · PopUp=5th@283` |
 | yearly | … + `Static=on the@286 · PopUp=July@283 · Static=in@286 · PopUp=day@283 · Button@284 · PopUp=5th@283` |
 
-**Every y-position CGRD1 §A measured through System Events reproduces EXACTLY through the raw API** — `Every`@286 against the interval field @283, `Ends:`@375, `Next:`@330, the after-completion field @328 — so the HXPC1/CGRD1 label-row discrimination and its 8 pt `ROW_TOLERANCE` port unchanged.
+**Every label-row RELATIONSHIP CGRD1 §A measured through System Events reproduces exactly through the raw API** — `Every`@286 against the interval field @283, `Ends:`@375 against the ends count @372, `Next:`@330, the after-completion field @328 — so the HXPC1/CGRD1 label-row discrimination and its 8 pt `ROW_TOLERANCE` port unchanged.
 
-**LAW (RAWAX1-1) — the role-filtered `AXChildren` ordinal IS System Events' `<class> N` index.** Filtering the cadence group's children to `AXPopUpButton` in `AXChildren` order gives, per state:
+**It is the DELTA that reproduces, not the absolute y, and that distinction is load-bearing.** The shell's start-offset field sits at **y=439 with its `days earlier` / `and start` labels at 443** here, where CGRD1 §B recorded **409 against 413** — the same 4 pt baseline offset, on a sheet the window manager put somewhere else. A port that pinned the absolute positions CGRD1 published would have been wrong on its first run; `cgOnRow`'s `|dy| ≤ tol` is right by construction, and the raw form must keep exactly that shape.
 
-| state | pop-ups, in order | the recipe's index | agrees |
+**LAW (RAWAX1-1) — the role-filtered `AXChildren` ordinal IS System Events' `<class> N` index.** Filtering the cadence group's children to `AXPopUpButton` in `AXChildren` order gives, per state (read back out of the run's own JSON, not from the summary line):
+
+| state | pop-ups, in `AXChildren` order | the recipe's index | agrees |
 | --- | --- | --- | :---: |
-| after completion | `week` | `DIALOG_AC_UNIT` = 1 | ✓ |
-| daily/weekly/monthly/yearly | `never` (Ends) | `DIALOG_ENDS` = 1 | ✓ |
-| " | `Today` (Next) | `DIALOG_NEXT_POPUP` = 2 | ✓ |
-| weekly | `Sunday` | `WEEKDAY_BASE["next-popup"]` = 3 | ✓ |
-| monthly | `day`, `5th` | `DIALOG_MONTH_MODE` = 3, `DIALOG_MONTH_ORDINAL` = 4 | ✓ |
-| yearly | `July`, `day`, `5th` | `DIALOG_YEAR_MONTH` = 3, `_MODE` = 4, `_ORDINAL` = 5 | ✓ |
+| after completion | `1=week@328` | `DIALOG_AC_UNIT` = 1 | ✓ |
+| daily | `1=never@372` · `2=Today@327` | `DIALOG_ENDS` = 1, `DIALOG_NEXT_POPUP` = 2 | ✓ |
+| weekly | " · `3=Sunday@283` | `WEEKDAY_BASE["next-popup"]` = 3 | ✓ |
+| monthly | " · `3=day@283` · `4=5th@283` | `DIALOG_MONTH_MODE` = 3, `_ORDINAL` = 4 | ✓ |
+| yearly | " · `3=July@283` · `4=day@283` · `5=5th@283` | `DIALOG_YEAR_MONTH` = 3, `_MODE` = 4, `_ORDINAL` = 5 | ✓ |
 
 This is the finding the port most needed. **Every measured positional index in `ui-recipes.ts` carries across the transport unchanged**, so the port is not re-deriving a single certified address — it is re-expressing the same ones. (They stay fenced, and they stay `positional-ok:`-justified, by the same census.)
 
-**The ends-after insertion reproduces too.** Selecting `Ends: after` makes the group's fields, in order, `Field=1@372` (the count) then `Field=1@283` (the interval) — HXPC1/#589's law, seen from the raw side.
+**The ends-after insertion reproduces too**, in all four fixed frequencies: the group's text fields become `1=1@372` (the count) then `2=1@283` (the interval) — HXPC1/#589's law, seen from the raw side.
 
-**The deadlines tick PREPENDS to the shell**, it does not append: the shell goes from `[CheckBox, CheckBox, Group, StaticText, PopUpButton, Button, Button, Image]` to `[TextField, StaticText, StaticText, CheckBox, …]`. The minted text field is `AXChildren[0]`. CGRD1 §B recorded the COUNT going 0 → 1; this records the POSITION, and it is a fresh argument for the label-row address the campaign already converted to — an appended field would have been index 1 either way, a prepended one shifts nothing the drive addresses but would have shifted a naive count-from-the-end.
+**The deadlines tick PREPENDS to the shell**, it does not append: `[CheckBox, CheckBox, Group, StaticText, PopUpButton, Button, Button, Image]` becomes `[TextField, StaticText, StaticText, CheckBox, …]`, and the minted field is `AXChildren[0]`. CGRD1 §B recorded the COUNT going 0 → 1; this records the POSITION. It is a fresh argument for the label-row address the campaign already converted to: an appended field would have been index 1 either way, so the old `text field 1` spelling was right for a reason nobody had checked.
 
 Two controls carry values the port must handle deliberately:
 
