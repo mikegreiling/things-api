@@ -548,27 +548,64 @@ function escapeDialog() {
  * one actually dismissed. A cell, not an anecdote: if Cancel works here the
  * run-1 observation was a one-off and says so.
  */
-function cellDismissProbe() {
+/**
+ * `how` decides HOW the menu is closed, and the distinction is the whole point
+ * of the second round of this cell:
+ *
+ *   "none"    no menu is opened at all — the control
+ *   "repress" open it, then press the pop-up again (what run 1 happened to do)
+ *   "pick"    open it, then press a MENU ITEM — which is what `select-popup`
+ *             does on every real drive, and therefore the only sequence a claim
+ *             about the shipped cleanup ladder may rest on
+ *
+ * Run 1 saw Cancel refuse after a "repress" and reported it as an observation
+ * precisely because the drive's own sequence is "pick". If the two differ, the
+ * finding is about the probe; if they agree, it is about the dialog.
+ */
+function cellDismissProbe(how) {
+  how = how || "repress";
   var sh = findShell();
   if (sh === null) return counted({ ok: false, why: "open the Repeat dialog first" });
   var freq = childrenByRole(sh.el, "AXPopUpButton")[0];
   var opened = false;
-  if (freq) {
+  var picked = null;
+  if (freq && how !== "none") {
     press(freq);
+    var menu = null;
     var dl = now() + 2000;
-    while (now() < dl && !opened) {
+    while (now() < dl && menu === null) {
       var ch = kids(freq);
-      for (var i = 0; i < ch.length; i++) if (sv(ch[i], "AXRole") === "AXMenu") opened = true;
-      if (!opened) sleep(10);
+      for (var i = 0; i < ch.length; i++) if (sv(ch[i], "AXRole") === "AXMenu") menu = ch[i];
+      if (menu === null) sleep(10);
     }
-    press(freq);
-    sleep(400);
+    opened = menu !== null;
+    if (how === "pick" && menu !== null) {
+      // Pick the value the pop-up ALREADY shows, so the cell changes no rule
+      // state — the menu closes exactly as a drive's does, and nothing is set.
+      var was = sv(freq, "AXValue");
+      var item = menuItemNamed(menu, was);
+      if (item === null) {
+        var items = kids(menu);
+        for (var k = 0; k < items.length && item === null; k++) {
+          if (sv(items[k], "AXTitle") !== "") item = items[k];
+        }
+      }
+      if (item !== null) {
+        picked = sv(item, "AXTitle");
+        press(item);
+      }
+    } else if (menu !== null) {
+      press(freq);
+    }
+    sleep(600);
   }
   var byCancel = cancelDialog(2000);
   var byEscape = byCancel.ok ? { skipped: true } : escapeDialog();
   return counted({
     ok: byCancel.ok || byEscape.ok === true,
+    how: how,
     menuWasOpened: opened,
+    pickedItem: picked,
     cancel: byCancel,
     escape: byEscape,
     stillOpen: findShell() !== null,
@@ -1045,8 +1082,19 @@ function parseAppleScript(s) {
     return "THREW " + e;
   }
 }
-/** Open a pop-up, harvest its item titles, close it again. */
+/**
+ * Open a pop-up, harvest its item titles, and close it THE WAY A DRIVE DOES —
+ * by pressing the item the control already shows.
+ *
+ * Not by pressing the pop-up a second time, which is what the first cut did:
+ * `dismissprobe` measured that sequence leaving the dialog unable to take an
+ * addressed Cancel press, 3 rounds out of 3. Picking the current value closes
+ * the menu, changes no rule state, and is the sequence `select-popup` itself
+ * performs — so a harvest can no longer leave the dialog in a state no drive
+ * would produce.
+ */
 function menuTitlesOf(pu) {
+  var was = sv(pu, "AXValue");
   press(pu);
   var deadline = now() + 2000;
   var menu = null;
@@ -1055,7 +1103,7 @@ function menuTitlesOf(pu) {
     for (var k = 0; k < ch.length; k++) if (sv(ch[k], "AXRole") === "AXMenu") menu = ch[k];
     if (menu === null) sleep(10);
   }
-  if (menu === null) return { titles: [], cascade: null };
+  if (menu === null) return { titles: [], cascade: null, closedBy: "never-opened" };
   var items = kids(menu);
   var titles = items.map(function (m) {
     return sv(m, "AXTitle");
@@ -1072,9 +1120,17 @@ function menuTitlesOf(pu) {
       actions: actionsOf(last).join(","),
     };
   }
-  press(pu);
-  sleep(300);
-  return { titles: titles, cascade: cascade };
+  var self = menuItemNamed(menu, was);
+  var closedBy;
+  if (self !== null) {
+    press(self);
+    closedBy = "picked-current-value";
+  } else {
+    press(pu);
+    closedBy = "re-pressed-the-popup";
+  }
+  sleep(500);
+  return { titles: titles, cascade: cascade, closedBy: closedBy };
 }
 function cellDates() {
   var sh = findShell();
@@ -1412,7 +1468,7 @@ function run(argv) {
       res = counted(dismissDialog());
       break;
     case "dismissprobe":
-      res = cellDismissProbe();
+      res = cellDismissProbe(argv.length > 1 ? String(argv[1]) : "repress");
       break;
     case "prims":
       res = cellPrims(argv.length > 1 ? Number(argv[1]) : 50);

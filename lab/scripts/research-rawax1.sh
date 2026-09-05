@@ -163,13 +163,22 @@ EOF
 lab_ssh "$IP" 'cat > ~/labh/tmo.sh && chmod +x ~/labh/tmo.sh' <<'TMOEOF'
 #!/bin/bash
 # usage: tmo.sh <seconds> <command...>   -> exit 124 on timeout, like timeout(1)
+#
+# THE WATCHDOG MUST NOT HOLD THE SSH SESSION OPEN. `ssh host 'cmd'` does not
+# return until every process holding the session's stdout/stderr has exited, so a
+# watchdog `sleep` that inherits them keeps the CALLER waiting out the whole
+# timeout even when the command finished in a second — measured exactly that way,
+# which turned a 150 s ceiling into a 150 s FLOOR on every probe call. So the
+# watchdog gets its own detached fds, and its `sleep` is reaped BEFORE the
+# subshell is, because killing the subshell first orphans the sleep it waits on.
 secs="$1"; shift
 "$@" &
 child=$!
-( sleep "$secs"; kill -9 "$child" 2>/dev/null ) &
+( sleep "$secs"; kill -9 "$child" 2>/dev/null ) >/dev/null 2>&1 </dev/null &
 killer=$!
 wait "$child" 2>/dev/null; code=$?
-kill -9 "$killer" 2>/dev/null
+pkill -P "$killer" >/dev/null 2>&1
+kill -9 "$killer" >/dev/null 2>&1
 wait "$killer" 2>/dev/null
 [ "$code" -ge 128 ] && code=124
 exit "$code"
@@ -493,7 +502,13 @@ run_dates() {
   note "=== dates — localized occurrence titles, JXA vs AppleScript's own parser"
   local u; u=$(anyid "RAWAX1-Shape"); [ -n "$u" ] || u=$(mkseed "RAWAX1-Dates" "$PINNED")
   select_item "$u" "$(gq "SELECT title FROM TMTask WHERE uuid='$u'")" || return 1
-  open_dialog_raw >/dev/null
+  local opened
+  opened=$(open_dialog_raw)
+  case "$opened" in
+    *'"ok": true'*) ;;
+    *) note "  !! the dialog did not open — the live-menu column would be empty for a rig reason"
+       note "     $(echo "$opened" | tr -d '\n' | cut -c1-200)" ;;
+  esac
   select_freq_se "weekly"
   probe dates >"$OUT/json/dates.json" 2>&1
   python3 - "$OUT/json/dates.json" <<'PY' | tee -a "$REPORT"
@@ -501,7 +516,12 @@ import json, sys
 j = json.load(open(sys.argv[1]))
 if not j.get("ok"):
     print("      FAILED: %s" % j.get("why")); raise SystemExit
-print("      live menu: %d item(s) — %s" % (j.get("liveMenuCount", 0), ", ".join(j.get("fromLiveMenu", [])[:8])))
+n = j.get("liveMenuCount", 0)
+print("      live menu: %d item(s)%s%s" % (
+    n, " — " if n else "", ", ".join(j.get("fromLiveMenu", [])[:8])))
+if not n:
+    print("      !! NO LIVE TITLES — the format bank below is checked against the synthetic")
+    print("         corpus only, which is a weaker claim and is recorded as one.")
 print("      cascade:   %s" % j.get("cascade"))
 print("      %-22s %-12s %-12s %-12s %-12s" % ("title", "applescript", "detectorA", "detectorB", "formatter"))
 bad = {"A": 0, "B": 0, "C": 0}
@@ -561,14 +581,15 @@ run_dismissprobe() {
     beep_reset
     beep_mark "dismiss-$i"
     open_dialog_raw >/dev/null
-    probe dismissprobe >"$OUT/json/dismissprobe-$i.json" 2>&1
-    note "  --- round $i"
-    python3 - "$OUT/json/dismissprobe-$i.json" <<'PY' | tee -a "$REPORT"
+    probe dismissprobe "${HOW:-repress}" >"$OUT/json/dismissprobe-${HOW:-repress}-$i.json" 2>&1
+    note "  --- round $i (menu closed by: ${HOW:-repress})"
+    python3 - "$OUT/json/dismissprobe-${HOW:-repress}-$i.json" <<'PY' | tee -a "$REPORT"
 import json, sys
 j = json.load(open(sys.argv[1]))
 c = j.get("cancel") or {}
 e = j.get("escape") or {}
-print("      menu opened first: %s" % j.get("menuWasOpened"))
+print("      how=%s  menu opened first: %s  picked: %s"
+      % (j.get("how"), j.get("menuWasOpened"), j.get("pickedItem")))
 print("      cancel: ok=%s err=%s%s" % (c.get("ok"), c.get("err"), (" why=" + str(c.get("why"))) if c.get("why") else ""))
 print("      escape: %s" % ("(not needed)" if e.get("skipped") else "ok=%s" % e.get("ok")))
 print("      still open at the end: %s" % j.get("stillOpen"))

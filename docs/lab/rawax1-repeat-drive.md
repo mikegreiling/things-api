@@ -1,10 +1,10 @@
 # RAWAX1 — the Repeat drive in raw Accessibility calls
 
-**Status: PHASE 0 (design memo + probe plan). The measured columns below are marked `pending` until the probe runs; nothing in `src/` has changed yet.**
+**Status: PHASE 0 COMPLETE — the memo, the probe, and every cell measured. Nothing in `src/` has changed. The port (Phase 1) waits on the ruling §3.2 asks for.**
 
 **Probed under:** `things-lab-golden-v4` · Things **3.23** (build 32300036) · macOS **15.7.7** · DB schema **v27** · guest clock pinned **2026-07-05 12:00** (trial wall 2026-07-18, never rolled). ONE disposable clone (`rawax1-lab`) of golden-v4 — the golden is never booted — airgapped, guest muted, beep sentinel on in report-only mode, destroyed at teardown. Fixtures fully synthetic (`RAWAX1-*`). Immutable snapshot per the [harness](harness.md) version-stamping policy.
 
-Driver: [`lab/scripts/research-rawax1.sh`](../../lab/scripts/research-rawax1.sh) — cells `shape` · `prims` · `menu` · `setvalue` · `dates` · `menubar` · `rowselect` · `cost` · `teardown`. Probe rig: [`lab/scripts/rawax1-probe.jxa.js`](../../lab/scripts/rawax1-probe.jxa.js). Artifacts (gitignored): `lab/artifacts/rawax1-lab/`.
+Driver: [`lab/scripts/research-rawax1.sh`](../../lab/scripts/research-rawax1.sh) — cells `shape` · `prims` · `menu` · `dismissprobe` · `setvalue` · `dates` · `menubar` · `rowselect` · `cost` · `teardown`. Probe rig: [`lab/scripts/rawax1-probe.jxa.js`](../../lab/scripts/rawax1-probe.jxa.js). Artifacts (gitignored): `lab/artifacts/rawax1-lab/`.
 
 Commissioned by the maintainer 2026-09-05 against the open item [RDLAT2](rdlat2-repeat-dialog-latency.md) / [VOPAT1 §8](vopat1-screen-reader-pattern.md) left on the table, and the ruling request in [#687](https://github.com/mikegreiling/things-api/issues/687) / [#695](https://github.com/mikegreiling/things-api/issues/695).
 
@@ -18,7 +18,7 @@ Commissioned by the maintainer 2026-09-05 against the open item [RDLAT2](rdlat2-
 | one `osascript` spawn, maintainer's M1 | **~124 ms** (fitted) | RDLAT2 §8 |
 | one raw AX attribute read through the JXA ObjC bridge, maintainer's M1 | **0.12 ms** | [VOPAT1 §field law](vopat1-screen-reader-pattern.md) |
 
-The shipped `make-repeating` is **13 hops · 88 Apple events**, so on that machine the transport alone is `13 × 124 + 88 × 47 ≈ 1.6 s + 4.1 s = 5.7 s` of a drive the maintainer clocked at **6.9 s** under v0.20.8. The Accessibility work inside those events is the same work either way — the dialog is 12 controls wide, 22 at its widest, and [RDLAT2 §E.2](rdlat2-repeat-dialog-latency.md) measured content reads on it costing what geometry reads cost, with no realize-and-discard signature. **The drive is not slow because it asks the tree too much. It is slow because of who it asks through.**
+The shipped `make-repeating` is **15 hops · 88 Apple events** (§1.4 — RDLAT2 counted 13 before LOCKSCR1's lock probe and VOPAT2's observer spawn existed), so on that machine the transport alone is `15 × 124 + 88 × 47 ≈ 1.9 s + 4.1 s = 6.0 s` of a drive the maintainer clocked at **6.9 s** under v0.20.8. The Accessibility work inside those events is the same work either way — the dialog is 12 controls wide, 22 at its widest, and [RDLAT2 §E.2](rdlat2-repeat-dialog-latency.md) measured content reads on it costing what geometry reads cost, with no realize-and-discard signature. **The drive is not slow because it asks the tree too much. It is slow because of who it asks through.**
 
 Replacing the asker — making the same AX calls in-process from JXA, inside the same `osascript` hops — takes the 4.1 s Apple-event term to `88 × 0.12 ms ≈ 11 ms` and leaves the spawn term and the app's own time. That is the campaign. VOPAT1 §8 predicted **≈ 2.2 s** for this drive on that basis; §4 below re-derives it with the spawn term put back, which VOPAT1's arithmetic understated.
 
@@ -28,36 +28,38 @@ Replacing the asker — making the same AX calls in-process from JXA, inside the
 
 ## 1. The primitive inventory
 
-Every distinct thing the Repeat drive asks of System Events, the generator it lives in, and the raw-AX call that would replace it. `#` is the primitive id used by the probe's equivalence matrix (`prims`, §2). "Verdict" is filled by the probe; `pending` means unmeasured, and an unmeasured primitive is not portable.
+Every distinct thing the Repeat drive asks of System Events, the generator it lives in, and the raw-AX call that would replace it. `#` is the primitive id used by the probe's equivalence matrix (`prims`, §2), and the VERDICT column carries what the probe measured — an unmeasured primitive would not be portable, and none is left.
+
+**Two of the twenty do not port, and both are the ones the campaign said up front it expected to fail.** That is the shape a good equivalence result has: the transport changes and the two places where AX is not a transport question stay exactly as they were.
 
 ### 1.1 Reads
 
 | # | System Events form | where it lives | raw AX equivalent | verdict |
 | --- | --- | --- | --- | ---: |
-| **P1** | `exists (<path>)` | `axResolveScript`, `axCandidatePrelude`, `axWaitAnyScript`, `axDialogOpenScript`, the canary | resolve the descriptor by walking `AXWindows`/`AXChildren` with role/subrole/title filters; a null resolution is "does not exist" | pending |
-| **P3** | `value of <el>` | every read-back, the pre-commit audit, `verify-prefill`, `settle-occurrences` | `AXUIElementCopyAttributeValue(el, kAXValueAttribute)` | pending |
-| **P4** | `value of static texts of <g>` + `position of static texts of <g>` + the same for `text fields` (4 plural events) | `AX_CADENCE_HANDLERS` `cgSnap` — the HXPC1/CGRD1 label-row discrimination's whole input | one `AXChildren` on the group, then one `AXUIElementCopyMultipleAttributeValues` per child (role+value+position+size in ONE call) | pending |
-| **P5** | `count of <class> of <container>` | `converge-weekdays`, the audit's weekday walk, the old census | `AXChildren` + an in-process role filter — **zero** extra calls once the children are in hand | pending |
-| **P6** | `position of` / `size of` | every frame resolution, the label-row discrimination | `AXPosition` / `AXSize`, or folded into the batched node read. Measured FREE on both hosts | pending |
-| **P15** | `enabled of <el>` | `assert-eligible` | `AXUIElementCopyAttributeValue(el, kAXEnabledAttribute)` | pending |
-| **P17** | `value of attribute "AXIdentifier" of <el>` | the Move… picker's identity check | `AXUIElementCopyAttributeValue(el, "AXIdentifier")` | pending |
-| **P18** | `role of UI elements of <shell>` | the `dialog-open` shell census, the window/focus census | `AXChildren` + `AXRole` per child | pending |
-| **P8** | `focused of <tf>` | `focusedAssertBlock` | `AXUIElementCopyAttributeValue(el, kAXFocusedAttribute)` | pending |
+| **P1** | `exists (<path>)` | `axResolveScript`, `axCandidatePrelude`, `axWaitAnyScript`, `axDialogOpenScript`, the canary | resolve the descriptor by walking `AXWindows`/`AXChildren` with role/subrole/title filters; a null resolution is "does not exist" | **AGREES** · 3.87 ms vs 4.67 — the ONE row raw barely wins, and §5.2 says why: bind the shell once per hop |
+| **P3** | `value of <el>` | every read-back, the pre-commit audit, `verify-prefill`, `settle-occurrences` | `AXUIElementCopyAttributeValue(el, kAXValueAttribute)` | **AGREES** · 0.082–0.106 ms vs 5.44–5.81 (**55–66×**) |
+| **P4** | `value of static texts of <g>` + `position of static texts of <g>` + the same for `text fields` (4 plural events) | `AX_CADENCE_HANDLERS` `cgSnap` — the HXPC1/CGRD1 label-row discrimination's whole input | one `AXChildren` on the group, then one `AXUIElementCopyMultipleAttributeValues` per child (role+value+position+size in ONE call) | **AGREES** · 1.42–4.43 ms vs 24.1–24.4 (**5.5–17×**) |
+| **P5** | `count of <class> of <container>` | `converge-weekdays`, the audit's weekday walk, the old census | `AXChildren` + an in-process role filter — **zero** extra calls once the children are in hand | **AGREES** · 0.44–1.55 ms vs 9.69–10.32 |
+| **P6** | `position of` / `size of` | every frame resolution, the label-row discrimination | `AXPosition` / `AXSize`, or folded into the batched node read | **AGREES** · 0.217–0.252 ms vs 5.36–6.30 |
+| **P15** | `enabled of <el>` | `assert-eligible` | `AXUIElementCopyAttributeValue(el, kAXEnabledAttribute)` | **AGREES** · 0.080–0.081 ms vs 5.20–5.60 (**65–69×**), and on a CLOSED menu bar too (§5.6) |
+| **P17** | `value of attribute "AXIdentifier" of <el>` | the Move… picker's identity check | `AXUIElementCopyAttributeValue(el, "AXIdentifier")` | **AGREES** on the verdict — both say absent on a shell that has none; raw returns null where AppleScript throws (§5.2) |
+| **P18** | `role of UI elements of <shell>` | the `dialog-open` shell census, the window/focus census | `AXChildren` + `AXRole` per child | **AGREES** · 0.98–1.12 ms vs 6.17–6.24; the whole census is **9 calls / 1.4 ms** |
+| **P8** | `focused of <tf>` | `focusedAssertBlock` | `AXUIElementCopyAttributeValue(el, kAXFocusedAttribute)` | **AGREES** · 0.083–0.089 ms vs 6.04–6.45 (**68–78×**) |
 | **P22** | `first window whose subrole is "AXStandardWindow"` · `sheet 1 of …` · `windows whose subrole is "AXUnknown" and size is not {40, 40}` | every dialog address, `AX_DIALOG_SHELL_SNIPPET` | already ported twice — `findShell()` in `AX_DATE_AREA_PRELUDE` and `mainWindow()` in `ui-drag.ts`'s JXA prelude | **shipped** |
 
 ### 1.2 Actuations
 
 | # | System Events form | where it lives | raw AX equivalent | verdict |
 | --- | --- | --- | --- | ---: |
-| **P2** | `click <el>` on a menu item / button / checkbox / pop-up | `axPressScript`, `select-popup`, `ensure-checkbox`, the audit's folded commit, `axCancelDialogScript` | `AXUIElementPerformAction(el, kAXPressAction)` — which is what System Events' `click` compiles to | pending |
-| **P7** | `set focused of <tf> to true` | `typeLoopBlock` | `AXUIElementSetAttributeValue(el, kAXFocusedAttribute, <true>)` — [VOPAT1-13](vopat1-screen-reader-pattern.md) measured AXError 0 and the notification at 27.6 ms. **The open question is the BOOLEAN ENCODING the JXA bridge marshals**, which the probe decides rather than guesses | pending |
-| **P9** | `keystroke "<v>"` | `typeLoopBlock`, `axTypeTextScript` | none. AX has no "type into this element" — the candidate is `AXUIElementSetAttributeValue(tf, AXValue, …)`, and UIC6 measured System Events' `set value` as a REPAINT that never fires the app's edit binding. **The `setvalue` cell decides it against the landed rule** (§2.4). If it is a repaint, keystrokes stay: `CGEventCreateKeyboardEvent` + `CGEventPost(kCGHIDEventTap)`, under the existing frontmost law | pending |
+| **P2** | `click <el>` on a menu item / button / checkbox / pop-up | `axPressScript`, `select-popup`, `ensure-checkbox`, the audit's folded commit, `axCancelDialogScript` | `AXUIElementPerformAction(el, kAXPressAction)` — which is what System Events' `click` compiles to | **PORTS** · opens a pop-up's menu in 12.4 ms, selects a menu item, presses OK/Cancel. One state where an enabled Cancel accepts and ignores it (§5.9) — reachable only by a sequence no drive performs |
+| **P7** | `set focused of <tf> to true` | `typeLoopBlock` | `AXUIElementSetAttributeValue(el, kAXFocusedAttribute, <true>)` — [VOPAT1-13](vopat1-screen-reader-pattern.md) measured AXError 0 and the notification at 27.6 ms. **`$.kCFBooleanTrue` marshals; `AXError 0` on the first encoding tried.** But it READS BACK FALSE 60 ms later, in every state — so the write is not a guarantee and FGRD1's ask-look-retry loop is kept, not replaced | **PORTS, loop intact** |
+| **P9** | `keystroke "<v>"` | `typeLoopBlock`, `axTypeTextScript` | none. AX has no "type into this element" — the candidate is `AXUIElementSetAttributeValue(tf, AXValue, …)`, and UIC6 measured System Events' `set value` as a REPAINT that never fires the app's edit binding. **MEASURED: it is a REPAINT** (§5.4). Settable `true`, write `AXError 0`, field shows `3`, preview never recomputes, committed rule `fa=1`. So keystrokes stay — `CGEventCreateKeyboardEvent` + `CGEventPost(kCGHIDEventTap)` under the frontmost law, and a `GUARDED_SITES` entry (§3.5) | **DOES NOT PORT** |
 | **P10** | `key code 48` (Tab) / `key code 53` (Escape) | the typing loop's commit, `axAbortScript` | `CGEventCreateKeyboardEvent` — already shipped as `postEscape()` in `ui-drag.ts`'s prelude | **shipped** |
-| **P11** | `exists menu 1 of <pu>` | the pop-up open poll | `AXChildren` of the pop-up, filtered to `AXMenu`. [VOPAT1-11](vopat1-screen-reader-pattern.md) measured `AXMenuOpened` 5.1 ms after an `AXPress`, so the open itself is known good; the probe establishes WHERE the menu lands in the raw tree | pending |
-| **P12** | `exists menu item <name> of menu 1 of <pu>` · `click menu item <name>` | `select-popup`, `converge-weekdays` | `AXChildren` of the `AXMenu`, `AXTitle` match, `AXPress`. [VOPAT1 §4.2 g](vopat1-screen-reader-pattern.md) drove exactly this and measured the group rebuild that followed | pending |
-| **P13** | `name of every menu item of <menu>` | `select-next-occurrence`'s cascade walk | `AXChildren` + `AXTitle` per item | pending |
-| **P14** | `menu 1 of menu item N of <menu>` (the `More…` cascade) | `select-next-occurrence` | `AXChildren` of the `AXMenuItem` filtered to `AXMenu` — the probe asks whether the submenu materializes WITHOUT a click, which is what the shipped script's `try`-then-click ladder exists to handle | pending |
-| **P16** | `select (row i of <table>)` then `selected of (row i)` | `axSelectRowScript`, `axSelectHeadingRowScript` (the PROJECT arm) | `AXUIElementSetAttributeValue(row, kAXSelectedAttribute, true)`, or an `AXPress`/`AXSelect` action if the row advertises one. UIC5 measured the TABLE's `AXSelectedRows` as a silent no-op *through System Events*; the raw API is a different door on the same attribute | pending |
+| **P11** | `exists menu 1 of <pu>` | the pop-up open poll | the `AXMenu` is a CHILD of the pop-up, which has **no children at all** while closed — so "is the menu open" is one `AXChildren` read and needs no title match | **PORTS**, and gets simpler |
+| **P12** | `exists menu item <name> of menu 1 of <pu>` · `click menu item <name>` | `select-popup`, `converge-weekdays` | `AXChildren` of the `AXMenu`, `AXTitle` match, `AXPress`. Items advertise `AXCancel,AXPress,AXPick`; the port uses `AXPress` because that is what `click` sends. The menu carries an empty-titled SEPARATOR, so a title match must be exact | **PORTS** |
+| **P13** | `name of every menu item of <menu>` | `select-next-occurrence`'s cascade walk | `AXChildren` + `AXTitle` per item | **PORTS** · 17 live occurrence titles harvested (§5.8) |
+| **P14** | `menu 1 of menu item N of <menu>` (the `More…` cascade) | `select-next-occurrence` | **the `More…` submenu is already there** — an `AXChildren` `AXMenu` with **102 items**, no click needed. Removes the shipped script's try-then-click-then-wait-0.5 s ladder outright | **PORTS, and removes a rung** |
+| **P16** | `select (row i of <table>)` then `selected of (row i)` | `axSelectRowScript`, `axSelectHeadingRowScript` (the PROJECT arm) | **the attribute write is refused** — settable reports `true`, the write returns `-25201` (`kAXErrorAttributeUnsupported`), the row does not select (§5.7). `select-row` keeps System Events' `select` ACTION, which UIC4-a certified and which is a different verb | **DOES NOT PORT** (attribute route) |
 | **P24** | `delay N` | every in-script settle and poll | `$.NSThread.sleepForTimeInterval` — already shipped as `sleep()` in the JXA prelude | **shipped** |
 | **P25** | `current date` deadline loops | every in-script poll | `Date.now()` / `NSDate` | **shipped** |
 | **P23** | `set value of <AXDateTimeArea>` | `set-datetime` | already JXA (`axSetDateTimeScript`) | **shipped** |
@@ -71,7 +73,7 @@ These are the fence. A port that quietly re-implements one of them has changed a
 | **P20** | `tell application "Things3" to (name \| id) of selected to dos` — `assert-eligible`, `select-row`, `select-heading-row` | An Apple event to **Things' own scripting dictionary**, not to System Events and not to the AX tree. It is the uuid-precise selection oracle ADR1 (#480) exists for; AX can say a row is selected but not that the selected row is the caller's uuid. **One Apple event per drive, and it stays.** |
 | **P21** | `tell application "Things3" to activate` | The preamble's foregrounding. `NSRunningApplication.activateWithOptions` is the in-process equivalent and would save one event — but activation behavior is [oddities §26](../things-app-oddities.md) territory (the detached-editor fork turns on it) and it is not this campaign's to re-time. **Out of scope; one event, and it stays.** |
 | **P19** | `name of first application process whose frontmost is true` — the keystroke frontmost law | Already has a prompt-free in-process replacement in `ui-pointer-guard.ts` (`NSWorkspace.frontmostApplication`, measured 0 Apple events), which the pointer class already uses. The KEYSTROKE class still uses the System Events form because its host script is AppleScript. It ports for free with the script. |
-| **P26/P27** | `date "<localized title>"` and `weekday of <date>` — the occurrence menu's title parsing (`parsedYMD`, `aqYMD`, `aqRelative`) | AppleScript's `date` operator is the SYSTEM parser and has no JXA operator. The candidate is `NSDataDetector`; the `dates` cell (§2.5) runs both against the live menu's own titles, and **a single disagreement disqualifies the replacement** — a first occurrence that parses differently is a series that starts on the wrong day (#625's error class). |
+| **P26/P27** | `date "<localized title>"` and `weekday of <date>` — the occurrence menu's title parsing (`parsedYMD`, `aqYMD`, `aqRelative`) | **MOVED OUT of this table by measurement.** `NSDateFormatter` with a four-format bank under `en_US_POSIX` agrees with AppleScript's `date` on **all 15 live menu titles** and the synthetic corpus, at 0.36 ms (§5.8) — so P26 PORTS. `NSDataDetector` matches nothing and is out; `NSAppleScript` in-process also agrees and stays the named fallback. |
 
 ### 1.4 The hop map, before
 
@@ -258,19 +260,26 @@ wall  =  spawns × S  +  round-trips × C  +  in-script settles  +  the app's ow
 | term | today | after the port |
 | --- | --- | --- |
 | `spawns × S` | 15 × 124 ms = **1.86 s** (13 when RDLAT2 fitted it; LOCKSCR1's lock probe and VOPAT2's observer spawn landed since — §1.4) | unchanged, or ~9 × 124 ms = **1.12 s** if the dialog entry merges (§3.2) |
-| `round-trips × C` | 88 × 47 ms = **4.14 s** | ~90 raw calls × 0.12 ms ≈ **0.01 s** |
+| `round-trips × C` | 88 × 47 ms = **4.14 s** | **measured: 413–419 raw calls** for the whole dialog entry (§5.5) × 0.12 ms ≈ **0.05 s** — five times the calls this memo guessed, and still 1/80th of one Apple event's worth of the old term |
 | the app's own time | ≈ 1.79 s (VOPAT1 §8: sheet 438 ms, two menu opens, two group rebuilds at 535 ms, focus 28 ms, type-and-confirm 79 ms, commit ~150 ms) | unchanged — it is the app |
-| in-script settles | ~0.5 s unconditional (RDLAT2 §E.5) | unchanged unless §2.4 removes the typing loop |
+| in-script settles | ~0.5 s unconditional (RDLAT2 §E.5) | **unchanged — §5.4 says the typing loop stays** |
 
-| | predicted M1 |
-| --- | ---: |
-| v0.20.8, measured | **6.9 s** |
-| raw-AX, hop boundaries unchanged | **≈ 3.7 s** |
-| raw-AX + the dialog entry merged | **≈ 2.9 s** |
-| raw-AX + merged + `setvalue` fires the binding (§2.4) | **≈ 2.6 s** |
-| VOPAT1 §8's own prediction, for comparison | ≈ 2.2 s |
+| | predicted M1 | of which is the app |
+| --- | ---: | ---: |
+| v0.20.8, measured | **6.9 s** | ~1.8 s |
+| raw-AX, hop boundaries unchanged | **≈ 3.7 s** | ~1.8 s |
+| raw-AX + the dialog entry merged (§3.2) | **≈ 2.9 s** | ~1.8 s |
+| VOPAT1 §8's own prediction, for comparison | ≈ 2.2 s | 1.79 s |
 
-**VOPAT1's 2.2 s understated the spawn term** — it priced the drive at ~77 raw calls ≈ 9 ms plus 1.79 s of app time and carried no process spawns at all. Put them back, at the count the drive actually has today (§1.4), and the honest floor with today's hop boundaries is ~3.7 s. **Reaching the brief's 2.0–2.5 s therefore REQUIRES the hop merge, and may need more than it** — which is why §3.2 asks for a ruling rather than treating the merge as an optimization to take or leave, and why DEPOBS2's option (B) (in-process execution in the deputy, worth the whole spawn term) stops being the smaller of the two levers the moment this port lands. The `cost` cell measures the raw arm's call count so this table can be re-derived against a measured number rather than an arithmetic one.
+**The third row is the honest target, and it is 2.9 s rather than 2.4 s** — because §5.4 measured the raw `AXValue` write to be a repaint, so the typing loop and its ~0.5 s of certified settles stay. The memo's earlier fourth row assumed that write might fire the binding; it does not, and the row is gone rather than hedged.
+
+**VOPAT1's 2.2 s understated the spawn term** — it priced the drive at ~77 raw calls ≈ 9 ms plus 1.79 s of app time and carried no process spawns at all. Put them back at the count the drive actually has (§1.4) and the floor with today's hop boundaries is ~3.7 s.
+
+Three things follow for the ruling §3.2 asks for.
+
+- **Reaching 2.0–2.5 s requires the hop merge and probably more than it.** The merge is worth ~0.75 s; the remaining gap is the app's own 1.8 s plus the certified settles, and neither is a transport problem.
+- **After this port the SPAWN term is the drive's largest controllable cost** — 1.86 s of ~3.7 s, against an Apple-event term of ~0.05 s. That inverts the standing order of the two remaining levers: [DEPOBS2](depobs2-deputy-steps.md)'s option (B), in-process execution in the deputy, is worth the whole spawn term and becomes the larger one the moment this lands.
+- **And the drive becomes app-bound**, which is where VOPAT1 §8 said the right answer ends up. The `cost` cell measured 622 ms of a 993 ms dialog-entry segment as the cadence group's own rebuild; the lever there is the notification (VOPAT1-12, ~535 ms), not a cheaper read.
 
 ---
 
@@ -363,9 +372,100 @@ The two `false`s are UIC1's "setting `value` on a Things pop-up is a silent no-o
 
 `AXPick` is the canonical selection action and `AXPress` is what System Events' `click` sends; **the port uses `AXPress`, because equivalence with the certified drive is worth more than canonicality**. The empty-titled separator is why a title match must be exact and must not treat `""` as a wildcard.
 
-### 5.4 The dialog that would not take Cancel — and the sheet gate behind it
+### 5.4 `setvalue` — THE DECISIVE CELL, and the answer is no
 
-Run 1 lost its last four cells to this, and it is the most operationally important thing the campaign has found so far. The sequence, all of it measured:
+`AXUIElementSetAttributeValue(interval-field, AXValue, "3")` on a weekly rule at interval 1:
+
+| | |
+| --- | --- |
+| `AXUIElementIsAttributeSettable` | **true** |
+| the write | `AXError 0` |
+| the field afterwards | shows **`3`** |
+| the occurrence preview afterwards | `7/12/26, 7/19/26, 7/26/26, 8/2/26, …` — **still weekly at interval 1** |
+| the COMMITTED rule (guest SQLite, `rsum.py`) | `fa=1 fu=256 of=[{wd=0}]` — **interval 1** |
+
+**LAW (RAWAX1-2). The raw AX write to a Repeat-dialog numeric field is a REPAINT, not an edit.** The API reports the attribute settable and the write successful, the control displays the new number, and the app's binding never fires — so the rule that lands is the one the field held before. That is UIC6's finding for System Events' `set value`, confirmed to be a property of the AX write itself rather than of System Events' spelling of it, and confirmed against the only oracle that can tell them apart: the committed rule.
+
+**The typing loop therefore survives the port, entire** — focus, prove focus, keystroke, Tab-commit, read back, retry, and BEEP1's reason for sending no ⌘A. What changes is the transport of the reads around it and nothing else. It also means `P9` keeps a `CGEvent` keystroke under the frontmost law, which is what makes §3.5's `GUARDED_SITES` entry a Phase 1 obligation rather than a hypothetical.
+
+**And the in-dialog tell agreed with the database**, which is worth keeping: the occurrence preview is recomputed on a real edit and was not recomputed here, so a future cell can read the verdict without committing. It is corroboration, not the oracle — §2.4's rule stands.
+
+### 5.5 `cost` — the whole dialog entry, in raw calls
+
+Open → shell census → select a frequency → settle the rebuilt group → read every control the pre-commit audit reads → cancel. Nothing committed, **0 alert beeps**, both frequencies.
+
+| stage | weekly | monthly |
+| --- | ---: | ---: |
+| shell resolved | 34 calls · 15.2 ms | 34 · 14.9 ms |
+| + shell census (the `dialog-open` assertion) | 43 · 16.6 ms | 43 · 16.1 ms |
+| + menu opened | 56 · 25.9 ms | 56 · 25.8 ms |
+| + item pressed | 62 · 26.8 ms | 63 · 27.0 ms |
+| + **the group's rebuild settled** (8 polling rounds) | 262 · **622.4 ms** | 267 · **631.3 ms** |
+| + the audit's whole read, every control | 293 · 646.6 ms | 299 · 648.1 ms |
+| + cancelled | **413 · 993.0 ms** | **419 · 997.8 ms** |
+
+Three things fall out of that table.
+
+1. **The AX work has become invisible.** The shell census is **9 calls / 1.4 ms**. The pre-commit audit's ENTIRE read — every control in the group and every control on the shell, values, titles and positions — is **31 calls / ~24 ms**, against the shipped audit hop's 15 Apple events (≈ 705 ms on the M1 at RDLAT2's fitted rate).
+2. **The drive becomes app-bound, exactly where VOPAT1 §8 said it should.** 622 ms of a 993 ms segment is the cadence group's rebuild — the app's own time, unchanged by any transport — and the campaign's remaining lever there is not fewer reads but the notification VOPAT1-12 measured (`AXValueChanged` on the pop-up + the destroy burst, ~535 ms), which the observer already knows how to wait for.
+3. **The settle polled 8 rounds at 50 ms.** With cheap reads a poll is no longer expensive, but it is still a poll: this is the same "the gate was sized by the driver's own read cost" hazard RDLAT2 §7c names, arriving pre-emptively. The port's settle must stay a POSITIVE shape wait (the labels appearing), never an interval.
+
+The audit inventory the cell read back is the recipe's own control set, in full:
+
+```
+weekly:  preview@329 · never(Ends)@372 · "Ends:"@375 · "Next:"@330 · ""@314 · Today(Next)@327
+         · Button@284 · Sunday@283 · "weeks"@286 · Field=1@283 · "Every"@286 · "on"@286
+         · ☐"Add reminders"=0 · ☐"Add deadlines"=0 · "Repeat" · weekly · OK · Cancel · Image
+```
+
+### 5.6 `menubar` — the raw tree answers with the menu shut
+
+| read | items | `Repeat…` present | `AXEnabled` |
+| --- | ---: | :---: | :---: |
+| cold (menu never opened) | 20 | yes | **true** |
+| while the menu is open | 20 | yes | true |
+| cold again | 20 | yes | true |
+| System Events, same moment | — | — | `enabled=true` |
+
+**No AppKit menu update needs provoking.** The `Items` menu's items are populated in the raw tree with the menu closed, `AXEnabled` is answered, and it agrees with System Events. So the eligibility assert's MENU half (P15) ports; its SELECTION half does not, because that half is P20 — `id of selected to dos`, an Apple event to Things' own dictionary, which is what makes the check uuid-precise and which stays either way.
+
+### 5.7 `rowselect` — the raw attribute write does NOT select a row
+
+| | |
+| --- | --- |
+| rows in the content table | 15 |
+| the row's `AXActions` | **(empty)** |
+| `AXUIElementIsAttributeSettable(row, AXSelected)` | true |
+| `AXUIElementIsAttributeSettable(table, AXSelectedRows)` | true |
+| the write | **`-25201`** (`kAXErrorAttributeUnsupported`) |
+| the row afterwards | not selected; Things' own selection unchanged |
+
+**The API says settable and then refuses the write** — UIC5's "setting the table's `AXSelectedRows` is a silent no-op through System Events" seen from the raw side, and worse, because here it is not even silent. So **P16 does not port on this evidence**: `select-row` / `select-heading-row` keep System Events' `select` action, which is a different verb from an attribute write and is the one UIC4-a certified.
+
+**Stated as the limitation it is:** the cell sampled `AXRows[1]` without first proving that row is a selectable entity row rather than a header or a spacer, and the row it got advertised no actions at all — which is what a non-selectable row looks like. So this rules the ATTRIBUTE write out (a `-25201` is an answer about the attribute, not about the row) and leaves the ACTION route unmeasured. The project arm is not this campaign's target; the follow-up is one cell against a row whose identity is proven first.
+
+### 5.8 `dates` — the format bank agrees with AppleScript on every live title
+
+The `Next:` pop-up's OWN menu, harvested live: **17 items** — `Today`, then fifteen `Sun, Jul 12, 2026`-shaped dates, then `More…`. Each candidate parser against AppleScript's `date` operator as the reference:
+
+| candidate | disagreements over 21 titles (15 of them live) | ms/call |
+| --- | ---: | ---: |
+| `NSDataDetector`, range from the JS string length | **17** | 0.29 |
+| `NSDataDetector`, range from the NSString length | **17** | 0.29 |
+| **`NSDateFormatter`, format bank, `en_US_POSIX`** | **0** | **0.36** |
+| `NSAppleScript` in-process (the shipped parser itself) | 0 | 0.87 |
+
+**LAW (RAWAX1-4). `NSDataDetector` parses none of this dialog's dates** — not the app's own `Sun, Jul 12, 2026`, not a bare `Jan 1, 2027`, not `7/12/26` — in either spelling, in an airgapped guest. Run 1 called that a rig smell; two independent spellings and 17 live titles make it a finding. It is out.
+
+**The format bank wins outright.** `["EEE, MMM d, yyyy", "MMM d, yyyy", "MMMM d, yyyy", "M/d/yy"]` under `en_US_POSIX` agrees with AppleScript on **every** title the menu actually produced and on the synthetic corpus, including returning nothing for the relative words (`Today`, `Tomorrow`, `Wednesday`, `More…`) that the shipped code resolves separately through `aqRelative`. It is 2.4× faster than `NSAppleScript` — and, more to the point, **it removes the capability question §5.5 raised entirely**: no OSA execution enters a brokered script, so there is nothing for a reviewer to weigh.
+
+The reference column is worth keeping: `NSAppleScript` DOES work in-process and DOES agree, so if a future Things build renders a shape the bank misses, the fallback is the shipped parser itself rather than a guess. The port carries the bank and refuses on a title no format matches — never a best-effort parse, because a first occurrence that parses differently is a series that starts on the wrong day (#625).
+
+**And the `More…` cascade is reachable without a click.** The last item exposes its `AXMenu` as an `AXChildren` child with **102 items** in it, already populated, actions `AXCancel,AXPress,AXPick`. The shipped `axSelectNextOccurrenceScript` has a ladder for this — try `menu 1 of menu item N`, and if that is missing, CLICK the item, wait 0.5 s, and try again — because System Events could not always see it. Raw AX just reads it, which removes a click, a fixed 0.5 s delay and a failure mode from the deepest part of the occurrence walk.
+
+### 5.9 The dialog that would not take Cancel — measured, and it is about the PROBE
+
+Run 1 lost its last four cells to this, and chasing it down changed the conclusion completely. The sequence, all of it measured:
 
 1. The `menu` cell opened the frequency pop-up's menu with `AXPress` and closed it with a second `AXPress`; the pop-up's `AXChildren` reported the `AXMenu` gone.
 2. The cell's teardown pressed the dialog's own **Cancel**. `AXError 0`. **The sheet stayed.**
@@ -379,27 +479,53 @@ Two things follow, and they are different in kind.
 
 **(a) The sheet gate is real, and it is a rig law before it is a finding.** Things gates its own AppleScript port on an open Repeat sheet — the behavior the drive's own refusal copy already asserts ("while one is open the app … holds Things Cloud sync") — so **any rig step that sends an Apple event to Things while a dialog may be open hangs forever**, and an `ssh` with no deadline hangs the driver with it. That is what cost run 1 its tail. The rig now clears the dialog before it ever activates, and every guest `osascript` runs under a guest-side timeout (macOS ships no `timeout(1)`; `lab/scripts/research-rawax1.sh` installs one).
 
-**(b) `AXPress` on Cancel was inert, and Escape was not.** This is the #629 family — the detached editor that "resisted every dismissal this project has" ([oddities §26](../things-app-oddities.md)) — observed on an **attached sheet**, in a headless clone, after a pop-up menu had been opened and closed. It is direct, independent evidence for the shipped cleanup ladder's ORDER (its own Cancel, then Escape, then close-and-reopen), which until now rested on the field incident alone.
+**(b) `AXPress` on Cancel was inert, and Escape was not — but ONLY after a menu was closed the way the probe closed it.** The `dismissprobe` cell was built to settle exactly that, because run 1's sequence was not a drive's sequence: it closed the pop-up's menu by pressing the pop-up a SECOND time, where `select-popup` closes it by pressing a menu ITEM. Two variants, three rounds each, **0 alert beeps throughout**:
 
-It is recorded as an OBSERVATION and not yet as a law, because run 1 saw it after one particular sequence and a single sighting cannot separate "the sheet refuses Cancel in this state" from "the press was swallowed by a menu-tracking run loop that had not finished unwinding". The `dismissprobe` cell exists to settle that: it opens the dialog, opens and closes a pop-up menu, then tries the rungs in order and reports which one dismissed, three times.
+| how the menu was closed | Cancel | Escape needed |
+| --- | :---: | :---: |
+| **re-press the pop-up** (run 1's accident) | **refuses 3/3** — `AXError 0`, sheet stands | yes, 3/3 |
+| **pick an item** (what every drive does) | **works 3/3** | no |
 
-### 5.5 `dates` — INCONCLUSIVE in run 1, and re-armed
+**LAW (RAWAX1-3). A Repeat-dialog pop-up menu closed by re-pressing its pop-up leaves the sheet unable to take an addressed `Cancel` press; the same menu closed by picking an item does not.** The button reads `AXEnabled=true` with `AXActions=AXPress` in both cases, the press returns `AXError 0` in both cases, and only the sheet's behavior differs. A synthesized Escape clears it either way.
 
-Run 1 asked one candidate (`NSDataDetector`) and it matched **nothing** — not `Sun, Jul 12, 2026`, not `Jan 1, 2027`. A detector that cannot parse a well-formed date is a rig smell, not a finding, so nothing is concluded from it. What run 1 *did* establish is the reference column: AppleScript's own `date` operator, reached in-process through `NSAppleScript`, returned `2026-07-12` / `2026-08-03` / `2027-01-01` correctly and `NOPARSE` for the relative words — which is exactly the shipped `parsedYMD` behavior, relative words being resolved separately by `aqRelative`.
+**So the alarming reading is the wrong one, and this is why the cell exists.** Run 1's sighting would have supported a claim that the shipped cleanup ladder's first rung — press the dialog's own Cancel, the ONE rung that works with Things in the background — is useless in practice, because every drive opens a pop-up. It is not: every drive also CLOSES its pop-ups by selection, which is the case where Cancel works. The ladder's Cancel rung is sound for the drives that ship, and its Escape rung earns its place for the state something else can leave behind. **A single sighting could not tell those apart, and stopping to discriminate them turned a false alarm about production into a fact about a probe.**
 
-That points at the answer the re-armed cell will confirm or refute: **`NSAppleScript` is available in-process to a JXA script, sends no Apple event to System Events, and shells out to nothing.** If it holds, P26/P27 port not by finding a parser that agrees with AppleScript's but by keeping AppleScript's — the strongest equivalence claim available. The cell now runs four candidates (two `NSDataDetector` spellings, an `NSDateFormatter` bank, and `NSAppleScript`) against the live occurrence menu's own titles plus a synthetic corpus, and times each.
+It is still an app quirk worth recording — an enabled button whose own press is accepted and ignored, in a state reachable through nothing but Accessibility — and it belongs in [oddities](../things-app-oddities.md) with this sequence attached.
 
-**Said plainly, because it should be reviewed rather than slipped past: `$.NSAppleScript` carries neither of the deputy's two banned phrases.** The broker's lint is textual (`do shell script`, `do script` — `scriptGuard`, `deputy/src/server.swift`, verified against the source), and it accepts `lang: "javascript"` already, so a JXA script that calls `NSAppleScript` on a FIXED, generated source string brokers cleanly. That is within the guard's intent, not around it: the guard exists to keep "drive the Things GUI" from becoming "run arbitrary shell under the helper's grants", and a compiled OSA script whose text this repo generates is neither shell nor arbitrary. It is still a capability worth naming in a review, so it is named here; if the orchestrator would rather the port keep the date parsing in an AppleScript hop of its own, that costs one hop and no correctness.
+**(c) And the sheet gate is what made (b) fatal rather than annoying.** Because `activate` hangs while any sheet is open, a failed dismissal does not merely leave a dialog — it wedges every later cell that touches Things' dictionary, with no error, until the ssh is killed. The rig's timeout and its ladder-with-re-warm are the fix; both are §6.
 
-The occurrence menu's `More…` cascade was not reached in run 1 (the cell ran with no dialog open, because the wedge above had already eaten the selection step). The re-armed cell reports it.
+### 5.10 The candidate that was a rig smell, and then was not
+
+Run 1 asked one date-parsing candidate — `NSDataDetector` — and it matched **nothing**, including a well-formed `Jan 1, 2027`. That is a rig smell, so run 1 concluded nothing from it and the cell was re-armed with four candidates instead of one. Run 2 asked both `NSDataDetector` spellings against 15 of the app's OWN live menu titles and got the same answer: nothing, 17 times. **A second look turned a suspected rig bug into a finding** (§5.8), which is the opposite of what a first look would have been entitled to claim.
+
+The re-arming also settled the capability question run 1's reference column had raised. `NSAppleScript` in-process works and agrees — so it was a real option, and it carries neither of the deputy's banned phrases (the broker's lint is textual: `do shell script`, `do script`, read out of `scriptGuard` in `deputy/src/server.swift`, and it accepts `lang: "javascript"` already). It would have been within the guard's intent rather than around it, and it would still have been a capability worth a reviewer's attention. **The format bank makes the question moot**, agreeing on every live title at 2.4× the speed with no OSA execution anywhere near a brokered script — so the port takes it, and `NSAppleScript` stays a named fallback for a future build whose rendering the bank misses rather than a thing anyone has to approve.
 
 ## 6. Run log
 
-**Run 1 (2026-09-05, clone `rawax1-lab` on golden-v4).** Cells `shape` · `prims` · `menu` complete and reported in §5.1–5.3; `dates` degraded (no dialog, see §5.5); `menubar` · `rowselect` · `cost` · `setvalue` **not reached** — the driver hung on the sheet gate (§5.4). Clone destroyed. Four rig defects found and fixed before run 2, each of which is worth carrying to the next campaign that drives this dialog:
+Three runs on two clones of golden-v4, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
 
-1. **No Apple event to Things while a dialog may be open.** `tell application "Things3" to activate` hangs indefinitely on the sheet gate. Clear the dialog first, and verify.
-2. **Every guest `osascript` needs a deadline.** macOS has no `timeout(1)`; the rig installs one (`~/labh/tmo.sh`) and every `axq`/`probe` call runs under it, so a wedged guest costs one cell rather than the run.
-3. **Tear down through the LADDER, not through Cancel.** `probe dismiss` = Cancel, then Escape, then a verified re-warm of the app — never an unchecked press.
-4. **`beep_reset` alone measures nothing.** The sentinel needs a `mark` to bound its window; run 1 printed `ORACLE FAIL — no marks recorded` on every cell, so run 1 has **no beep evidence at all** and none is claimed.
+| run | cells | outcome |
+| --- | --- | --- |
+| **1** | `shape` · `prims` · `menu` | complete (§5.1–5.3). `dates` degraded, `menubar`/`rowselect`/`cost`/`setvalue` **not reached** — the driver wedged on the sheet gate. **No beep evidence**: `beep_reset` without a `mark` measures nothing, and every cell printed `ORACLE FAIL`. |
+| **2** | `dismissprobe` · `dates` · `menubar` · `rowselect` · `cost` · `setvalue` | complete (§5.4–5.9), on a fresh clone with the rig fixed |
+| **3** | `dismissprobe --how=pick` · `dates` | complete — the two follow-ups run 2 earned (§5.8, §5.9) |
 
-And one probe defect: a batched `AXUIElementCopyMultipleAttributeValues` returns an **error placeholder object** in the slot of every attribute the element lacks, which a naive `String()` renders `[object NSObject]`. Absent must read as `""` — the same mapping `cgTexts` makes for AppleScript's `missing value` — or the settle's shape signature is not byte-identical to the one BEEP1 certified. Fixed in the probe; **it is a porting requirement, not just a rig one**, and §3.1's primitive layer owes it a test.
+### 6.1 Rig defects found, and why each is worth carrying
+
+Five, four of them general to every driver in `lab/scripts/`.
+
+1. **Never send an Apple event to Things while a dialog may be open.** Things gates its own AppleScript port on an open sheet, so `tell application "Things3" to activate` hangs — indefinitely, then `-1712` — and an `ssh` with no deadline hangs the driver with it. That is what cost run 1 its tail. The rig clears the dialog first, and verifies.
+2. **Every guest `osascript` needs a deadline.** macOS ships no `timeout(1)`; the rig installs one. **And the watchdog must detach its own fds**: `ssh host 'cmd'` does not return until every process holding the session's stdout has exited, so the first cut's watchdog `sleep` turned a 150 s ceiling into a 150 s FLOOR on every call — measured, mid-run, and fixed by scp'ing the corrected helper into the live guest rather than restarting.
+3. **Tear down through the LADDER, not through Cancel** — Cancel, then Escape, then a verified re-warm, never an unchecked press.
+4. **`beep_reset` without a `mark` measures nothing.** Run 1 claims no beep evidence for exactly this reason.
+5. **A detached `tart run` is an orphan that holds the VM name.** One survived 50 minutes after its driver was stopped; `tart list` read "stopped" while the name was taken, and the next run's clone never opened sshd and died at the 600 s wait. The pre-clone guard now clears it (scoped to our own VM's argv, so a concurrent campaign is never touched), and the teardown trap is armed BEFORE the SSH wait rather than after — the one failure path that most needs a teardown had none.
+
+### 6.2 One probe defect that is a PORTING requirement
+
+A batched `AXUIElementCopyMultipleAttributeValues` returns an **error placeholder object** in the slot of every attribute the element lacks, and a naive `String()` renders it `[object NSObject]`. Absent must read as `""` — the mapping `cgTexts` makes for AppleScript's `missing value` — or the settle's shape signature is not byte-identical to the one BEEP1 certified. Fixed in the probe; §3.1's primitive layer owes it a test.
+
+### 6.3 What run 1 would have concluded, and did not
+
+Run 1 saw an addressed Cancel press refused and was one sentence away from a claim about production: that the shipped cleanup ladder's background-safe first rung is useless in practice, since every drive opens a pop-up. Run 3 measured the discriminator and the claim was false — the refusal needs a menu closed by re-pressing its pop-up, and every drive closes menus by SELECTING. Two disciplines did that work and both are cheap: **record a single sighting as an observation, never a law**, and **when a probe's own sequence differs from the drive's, the difference is the first hypothesis, not the last**.
+
+The same shape appears twice more in this campaign, which is why it is worth naming. `NSDataDetector` matching nothing looked like a rig bug in run 1 and was a finding in run 2 (two spellings, 17 live titles). The `AXFocused` write returning `AXError 0` looked like a success and reads back `false` — a one-shot `set focused; type` would have shipped, and FGRD1's loop is what catches it. **Neither a pass nor a failure is self-certifying on this surface.**
