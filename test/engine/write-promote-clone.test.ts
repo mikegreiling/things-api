@@ -2132,26 +2132,60 @@ describe("make-repeating — the pre-seed open-dialog gate (#620)", () => {
 
 /**
  * A ui vector whose SESSION-LOCK probe says the screen is locked (LOCKSCR1,
- * #732). Its reachability probe deliberately reports the session REACHABLE:
- * that is what proves the lock question is asked first and answered on its own
- * evidence, rather than riding on the SESSGATE verdict.
+ * #732).
+ *
+ * Its reachability probe reports the session UNREACHABLE, which is what a locked
+ * Mac actually produces: a locked session enumerates zero windows for every
+ * process (SESSGATE #480), measured again in LOCKSCR2 §1 where a password-gated
+ * saver returned a window count of 0 rather than an error. LOCKSCR2 leans on
+ * exactly that — the reachability probe runs anyway, so the lock question is
+ * asked only once its answer can matter, and the happy path pays no hop for it.
+ * What these cells prove is that the SENTENCE is still the lock's, not
+ * SESSGATE's hedged locked-or-full-screen one.
  */
-function lockedScreenUiVector(): WriteVector {
+function lockedScreenUiVector(calls: { lock: number } = { lock: 0 }): WriteVector {
   return {
     id: "ui",
     matrix: {},
     async execute() {
       throw new Error("execute must never run — the lock gate blocks before the seed");
     },
-    probeReachability: async () => ({ reachable: true }),
-    probeSessionLock: async () => ({
-      state: "locked",
-      keys: ["CGSSessionScreenIsLocked", "CGSSessionScreenLockedTime"],
-      screenIsLocked: true,
-      onConsole: true,
-      screenSaver: false,
-      source: "session-dictionary",
+    probeReachability: async () => ({
+      reachable: false,
+      scope: "session",
+      detail:
+        "Things has no window available on the screen you're viewing — the Mac's screen is locked, or a full-screen app is covering the desktop.",
+      remediation: "Unlock the Mac, or leave the full-screen app.",
     }),
+    probeSessionLock: async () => {
+      calls.lock += 1;
+      return {
+        state: "locked",
+        keys: ["CGSSessionScreenIsLocked", "CGSSessionScreenLockedTime"],
+        screenIsLocked: true,
+        onConsole: true,
+        screenSaver: false,
+        source: "session-dictionary",
+      };
+    },
+  };
+}
+
+/**
+ * The HAPPY path: a window is AX-visible, so nothing is wrong and the lock
+ * question is never asked. Its `probeSessionLock` throws to prove it.
+ */
+function healthyUiVector(): WriteVector {
+  return {
+    id: "ui",
+    matrix: {},
+    async execute() {
+      throw new Error("execute must never run in these cells");
+    },
+    probeReachability: async () => ({ reachable: true }),
+    probeSessionLock: async () => {
+      throw new Error("the lock question must not be asked on a reachable session (LOCKSCR2)");
+    },
   };
 }
 
@@ -2186,8 +2220,9 @@ describe("promote composites — pre-seed session-LOCK gate (LOCKSCR1 #732)", ()
 
   it("make-repeating refuses the same way, leaving the original untouched", async () => {
     const src = seedTodo(fixture.db, { title: "LOCKSCR1 original", start: "active" });
+    const calls = { lock: 0 };
     const res = await runMakeRepeatingTodo(
-      depsUi([vector, lockedScreenUiVector()]),
+      depsUi([vector, lockedScreenUiVector(calls)]),
       { uuid: src, frequency: "weekly", interval: 1 },
       GUI,
     );
@@ -2195,5 +2230,20 @@ describe("promote composites — pre-seed session-LOCK gate (LOCKSCR1 #732)", ()
     if (res.kind === "blocked") expect(res.detail).toContain("the screen is locked");
     expect(row(src)?.["trashed"]).toBe(0);
     expect(titleRows("LOCKSCR1 original")).toBe(1);
+    // One hop, spent only because something was already wrong (LOCKSCR2).
+    expect(calls.lock).toBe(1);
+  });
+
+  it("asks NOTHING about the lock when a Things window is AX-visible (LOCKSCR2)", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR2 healthy", start: "active" });
+    // `probeSessionLock` throws; reaching the drive at all proves it was not called.
+    const res = await runMakeRepeatingTodo(
+      depsUi([vector, healthyUiVector()]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    // The preflight passed; the composite then died in the fake drive, which is
+    // the point at which the gate has finished having opinions.
+    expect(res.kind).not.toBe("blocked");
   });
 });

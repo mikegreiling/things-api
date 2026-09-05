@@ -34,10 +34,14 @@ import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
 import {
   blocksGuiDrive,
+  interpretFusedSessionLock,
+  jxaActivateWithSessionLockScript,
   lockRefusal,
   probeSessionLock,
+  SAVER_DISMISSED_NOTE,
   type SessionLockVerdict,
   UNKNOWN_SESSION_LOCK,
+  wakeScreenSaver,
 } from "./session-lock.ts";
 import {
   createReachabilityCache,
@@ -95,6 +99,7 @@ import type {
   ExecuteResult,
   RepeatDialogShape,
   UiClearOutcome,
+  UiDriveNotice,
   UiPrimitive,
   UiRecipe,
   UiStep,
@@ -4084,7 +4089,14 @@ export function commandForStep(
     case "reveal":
       return { primitive: "reveal", label: step.label, url: revealUrl(step.value ?? targetUuid) };
     case "activate":
-      return { primitive: "activate", label: step.label, script: axActivateScript() };
+      // LOCKSCR2: one stable shape, and it carries the session read. The gate
+      // that used to cost its own spawn now rides the drive's FIRST script.
+      return {
+        primitive: "activate",
+        label: step.label,
+        script: jxaActivateWithSessionLockScript(),
+        lang: "javascript",
+      };
     case "press":
       return {
         primitive: "press",
@@ -4838,7 +4850,7 @@ async function driveSteps(
     clearDialog(rawRun, latch.sheet, latch.inspectionStalled);
   const done: string[] = [];
   /** Durable side effects a SUCCESSFUL drive owes the caller (see ExecuteResult.notices). */
-  const notices: string[] = [];
+  const notices: UiDriveNotice[] = [];
   // The overall-drive WATCHDOG (TRACE1 #487). A drive can outlast the caller's
   // own timeout on a slow production database (large + Things-Cloud syncing
   // commits the Repeat dialog several times slower than the lab golden), which
@@ -4950,39 +4962,69 @@ async function driveSteps(
     };
   };
 
-  // 0⁻. THE SESSION-LOCK GATE (LOCKSCR1, #732) — FIRST, ahead of every read that
-  //      could be mistaken for evidence about the window. A locked Mac shows an
-  //      empty window inventory, and #732 read that emptiness as "Things has no
-  //      open window" and sent the operator to click a Dock icon behind a lock
-  //      screen. So the session is asked directly, before the preamble, and a
-  //      locked (or screen-savered) one is REFUSED — `blocked`, exit 4, nothing
-  //      posted, nothing changed. An unreadable session is `unknown`, which is
-  //      not a refusal: it makes the later window-inventory sentence hedge.
-  const lock = recipeNeedsUnlockedSession(recipe)
-    ? await probeSessionLock(rawRun, STEP_TIMEOUT_MS)
-    : UNKNOWN_SESSION_LOCK;
-  trace(() => ({
-    phase: "session-state",
-    gated: recipeNeedsUnlockedSession(recipe),
-    state: lock.state,
-    source: lock.source,
-    keys: lock.keys,
-    onConsole: lock.onConsole,
-    screenSaver: lock.screenSaver,
-    axOps: 0,
-  }));
-  if (blocksGuiDrive(lock)) return blockedReachability(lockRefusal(lock));
+  // 0⁻. THE SESSION-LOCK GATE (LOCKSCR1, #732) — ahead of every read that could
+  //      be mistaken for evidence about the window. A locked Mac shows an empty
+  //      window inventory, and #732 read that emptiness as "Things has no open
+  //      window" and sent the operator to click a Dock icon behind a lock screen.
+  //      So the session is asked directly, and a locked one is REFUSED —
+  //      `blocked`, exit 4, nothing posted, nothing changed. An unreadable
+  //      session is `unknown`, which is not a refusal: it makes the later
+  //      window-inventory sentence hedge.
+  //
+  //      IT COSTS NO HOP (LOCKSCR2). The question rides the preamble's `activate`
+  //      — the drive's first SCRIPT — which every gated recipe already runs, so
+  //      the happy path pays microseconds inside a spawn it was paying for
+  //      anyway instead of the 221–289 ms a spawn of its own cost. A gated recipe
+  //      with no activate step in its preamble (there is none today; the fallback
+  //      is here so a future one cannot silently lose the gate) pays the hop.
+  //
+  //      WHAT NOW PRECEDES IT is the preamble's `reveal`, a `things:///show` URL
+  //      opened through LaunchServices. It reads no window inventory and changes
+  //      no data, so nothing it does can be mistaken for the evidence this gate
+  //      exists to supply, and the refusal's "Nothing was changed" still holds.
+  const gated = recipeNeedsUnlockedSession(recipe);
+  let idx = 0;
+  const preambleEnd = ((): number => {
+    let i = 0;
+    while (
+      i < recipe.steps.length &&
+      (recipe.steps[i]?.primitive === "reveal" || recipe.steps[i]?.primitive === "activate")
+    ) {
+      i += 1;
+    }
+    return i;
+  })();
+  const fusedGate = recipe.steps
+    .slice(0, preambleEnd)
+    .some((step) => step.primitive === "activate");
+  let lock: SessionLockVerdict = UNKNOWN_SESSION_LOCK;
+  let wakeAttempted = false;
+  const traceSession = (hop: "activate" | "wake" | "probe"): void => {
+    trace(() => ({
+      phase: "session-state",
+      gated,
+      hop,
+      state: lock.state,
+      source: lock.source,
+      keys: lock.keys,
+      onConsole: lock.onConsole,
+      screenSaver: lock.screenSaver,
+      axOps: 0,
+    }));
+  };
+  if (gated && !fusedGate) {
+    lock = await probeSessionLock(rawRun, STEP_TIMEOUT_MS);
+    traceSession("probe");
+    if (blocksGuiDrive(lock)) return blockedReachability(lockRefusal(lock));
+  }
 
   // 0. Run the leading reveal/activate preamble BEFORE the canary. The Items
   //    menu is context-dependent — its Repeat submenu (and the plain "Repeat…"
   //    item) only materialize once a matching item is SELECTED (UIC1). Resolving
   //    those menu paths in the canary is only meaningful after the reveal has
   //    selected the target, so the preamble must run first.
-  let idx = 0;
-  while (
-    idx < recipe.steps.length &&
-    (recipe.steps[idx]?.primitive === "reveal" || recipe.steps[idx]?.primitive === "activate")
-  ) {
+  let lockRead = false;
+  while (idx < preambleEnd) {
     const step = recipe.steps[idx] as UiStep;
     // the preamble steps are strictly sequential (select, then foreground) and each must land before the next
     const res = await run(commandForStep(step, recipe.targetUuid, obs()), STEP_TIMEOUT_MS);
@@ -4996,6 +5038,28 @@ async function driveSteps(
     }
     done.push(step.label);
     idx += 1;
+    if (step.primitive !== "activate" || lockRead) continue;
+    // THE FUSED READING. The activate's own stdout carries the session verdict.
+    lockRead = true;
+    lock = interpretFusedSessionLock(res.stdout).lock;
+    traceSession("activate");
+    // THE SAVER RUNG (LOCKSCR2). A screen saver is not a locked Mac: measured,
+    // one synthesized left-Shift dismisses a bare saver and clears the session's
+    // lock keys with it, while a saver whose Mac wants a password ignores the
+    // same key entirely. So the saver is NUDGED once and the answer is taken
+    // from a RE-READ — never from the fact that the key was posted.
+    if (gated && lock.state === "screensaver") {
+      wakeAttempted = true;
+      const woke = await wakeScreenSaver(run, STEP_TIMEOUT_MS, lock);
+      lock = woke.lock;
+      traceSession("wake");
+      if (!blocksGuiDrive(lock)) {
+        notices.push({ id: "ui-screen-saver-dismissed", message: SAVER_DISMISSED_NOTE });
+      }
+    }
+    if (gated && blocksGuiDrive(lock)) {
+      return blockedReachability(lockRefusal(lock, "Nothing was changed.", wakeAttempted));
+    }
   }
   // The menu bar repopulates around the new selection a beat after the preamble
   // (UIC1). That beat is WAITED OUT IN THE CANARY below, which polls each element
@@ -5298,14 +5362,25 @@ async function driveSteps(
       // most likely to have outlived it, and that is the last moment to go quiet.
       if (outcome.collapsed !== undefined && outcome.collapsed.length > 0) {
         const names = outcome.collapsed.map((t) => `"${t}"`).join(", ");
-        notices.push(
-          outcome.restoreFailed === undefined
-            ? `${names} in the sidebar was collapsed to clear the drag path and expanded again ` +
+        notices.push({
+          id: "sidebar-auto-collapse",
+          message:
+            outcome.restoreFailed === undefined
+              ? `${names} in the sidebar was collapsed to clear the drag path and expanded again ` +
                 "afterwards; the sidebar looks as it did"
-            : `${names} in the sidebar was collapsed to clear the drag path, and ` +
+              : `${names} in the sidebar was collapsed to clear the drag path, and ` +
                 `${outcome.restoreFailed.map((t) => `"${t}"`).join(", ")} could not be expanded ` +
                 "again — click the arrow on that row in Things to put it back",
-        );
+        });
+      }
+      // LOCKSCR2: the drive found no window and reopened one. It is LEFT OPEN —
+      // the move needed it, and re-closing a window the user may now be looking
+      // at is a second surprise on top of the first. Said out loud instead.
+      if (outcome.reopenedWindow === true) {
+        notices.push({
+          id: "ui-window-reopened",
+          message: "Things had no open window, so one was reopened to run this — it was left open",
+        });
       }
       if (!outcome.ok) return partial(step.label, outcome.detail);
       done.push(`${step.label} (${outcome.detail})`);

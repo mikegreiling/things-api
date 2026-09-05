@@ -4,10 +4,17 @@
  * the lab (url-scheme.matrix / applescript.matrix), never hardcoded logic.
  */
 import type { DisruptionTier } from "../../config.ts";
+import type { SuccessDisclosureId } from "../disclosures.ts";
 import type { HazardId } from "../guards.ts";
 import type { OperationKind } from "../operations.ts";
 
 export type VectorId = "url-scheme" | "applescript" | "shortcuts" | "ui";
+
+/** One durable side effect of a drive, tagged with its disclosure-registry id. */
+export interface UiDriveNotice {
+  id: SuccessDisclosureId;
+  message: string;
+}
 
 export interface CompiledInvocation {
   vector: VectorId;
@@ -698,13 +705,15 @@ export interface ExecuteResult {
   /**
    * Things a SUCCESSFUL drive has to say for itself that outlive the drive — a
    * side effect on the app's own state that the caller is entitled to know
-   * about, as opposed to the play-by-play in {@link steps}. Currently: the
-   * sidebar areas the collapse rung folded away and re-expanded (SBCOL1).
+   * about, as opposed to the play-by-play in {@link steps}. Today: the sidebar
+   * areas the collapse rung folded away and re-expanded (SBCOL1), a screen saver
+   * the drive dismissed, and a Things window it had to reopen (LOCKSCR2).
    *
-   * The pipeline routes these through the disclosure registry as `note`-tier
-   * lines, so they ride a success result rather than being failure-only.
+   * Each one names its own registry id, so the pipeline can route it at the tier
+   * the registry gives it rather than filing every drive side effect under one
+   * heading (which is what happened while `notices` was a bare string array).
    */
-  notices?: string[];
+  notices?: UiDriveNotice[];
   /** The transport was killed by its own deadline — the signature of an unanswered consent dialog. */
   timedOut?: boolean;
   /**

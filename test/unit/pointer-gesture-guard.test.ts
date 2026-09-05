@@ -18,9 +18,16 @@
  *     must carry the guard call ahead of the events. A guard that is imported
  *     but never invoked satisfies lock 1 and not this one.
  *
- * The keyboard tap is deliberately out of scope: `CGEventPostToPid` (ui-chord.ts)
- * addresses a PROCESS rather than the screen, it is not a pointer gesture, and
- * HARDEN1 left it unguarded by design.
+ * The keyboard tap is deliberately out of scope for the POINTER law:
+ * `CGEventPostToPid` (ui-chord.ts) addresses a PROCESS rather than the screen,
+ * it is not a pointer gesture, and HARDEN1 left it unguarded by design.
+ *
+ * It is NOT out of scope for a census, though. LOCKSCR2 added the first
+ * keyboard event this repo posts at the GLOBAL HID tap — the Shift that nudges a
+ * screen saver awake — and "not a pointer gesture" must not become a hole that
+ * the next one slips through unnoticed. So there is a third lock: every HID-tap
+ * post that is not a pointer post is pinned by name in {@link KEY_TAP_SITES},
+ * with the reason it is safe to post without a pointer guard.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -84,6 +91,26 @@ const GUARDED_SITES: Readonly<Record<string, string>> = {
   jxaSidebarSparseScrollScript: "guards the sidebar centre the wheel events go to",
 };
 
+/**
+ * What makes a HID-tap line a KEY post rather than a pointer post. A keyboard
+ * event carries no screen coordinate, so `ptrGuard` — whose whole job is to
+ * prove a POINT is over the right window — has nothing to check about it.
+ */
+const KEY_POST_MARKER = /CGEventCreateKeyboardEvent/;
+
+/**
+ * The declarations allowed to post a KEY at the global HID tap, and why each is
+ * safe without a pointer guard. Adding a member is a deliberate act.
+ */
+const KEY_TAP_SITES: Readonly<Record<string, string>> = {
+  // LOCKSCR2. A lone left-Shift down/up: it types nothing, presses nothing and
+  // cancels nothing, so it is inert wherever it lands — which is the property
+  // that makes it postable into a state (a screen saver) where nothing can be
+  // read to guard against. The script posts it ONLY when it has just read the
+  // saver as running, and believes only the re-read that follows.
+  jxaWakeScreenSaverScript: "a lone modifier press: no coordinate, and inert wherever it lands",
+};
+
 /** Strip comments so a JSDoc line naming `CGEventPost(kCGHIDEventTap)` is not a site. */
 function stripComments(source: string): string {
   return source
@@ -115,6 +142,16 @@ function enclosingDeclaration(lines: string[], index: number): string {
 
 /** Every (file, declaration) in the vector tree that posts a mouse event. */
 function mousePostSites(): { file: string; declaration: string; line: string }[] {
+  return hidPostSites().filter((s) => !KEY_POST_MARKER.test(s.line));
+}
+
+/** Every HID-tap post that is NOT a pointer gesture. */
+function keyPostSites(): { file: string; declaration: string; line: string }[] {
+  return hidPostSites().filter((s) => KEY_POST_MARKER.test(s.line));
+}
+
+/** Every (file, declaration) in the vector tree that posts a synthesized event. */
+function hidPostSites(): { file: string; declaration: string; line: string }[] {
   const found: { file: string; declaration: string; line: string }[] = [];
   for (const name of readdirSync(VECTORS_DIR).toSorted()) {
     if (!name.endsWith(".ts")) continue;
@@ -191,6 +228,28 @@ describe("the mouse-post census", () => {
   it("pins every declaration it names — a stale allowlist entry is a stale claim", () => {
     const live = new Set(mousePostSites().map((s) => s.declaration));
     expect(Object.keys(GUARDED_SITES).filter((d) => !live.has(d))).toEqual([]);
+  });
+});
+
+describe("the keyboard-at-the-HID-tap census (LOCKSCR2)", () => {
+  it("finds the saver nudge — a census that matches nothing proves nothing", () => {
+    expect(keyPostSites().map((s) => s.declaration)).toContain("jxaWakeScreenSaverScript");
+  });
+
+  it("holds no key post outside the declarations pinned as inert", () => {
+    const unknown = keyPostSites().filter((s) => KEY_TAP_SITES[s.declaration] === undefined);
+    expect(
+      unknown.map((s) => `${s.file} · ${s.declaration} · ${s.line}`),
+      "a synthesized KEY event was added at the global HID tap. It goes to whatever owns the " +
+        "screen, so it must be inert wherever it lands (a bare modifier) or be sent through the " +
+        "frontmost-guarded keystroke path instead — then pin the declaration in KEY_TAP_SITES " +
+        "with the reason.",
+    ).toEqual([]);
+  });
+
+  it("pins every declaration it names", () => {
+    const live = new Set(keyPostSites().map((s) => s.declaration));
+    expect(Object.keys(KEY_TAP_SITES).filter((d) => !live.has(d))).toEqual([]);
   });
 });
 

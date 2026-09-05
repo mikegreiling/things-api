@@ -199,29 +199,43 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
       };
     }
   }
-  // 1¾. IS THE SCREEN LOCKED? (LOCKSCR1, #732.) Asked BEFORE the reachability
-  // probe below, because the two read the same evidence — an empty window
-  // inventory — and only this one can tell why it is empty. Prompt-free, one
-  // hop, and a session that will not answer changes nothing: the reachability
-  // probe's own hedged sentence remains the fallback.
-  const locked = deps.vectors.find((v) => v.probeSessionLock !== undefined);
-  if (locked?.probeSessionLock !== undefined) {
-    const session = await locked.probeSessionLock();
-    if (blocksGuiDrive(session)) {
-      const refusal = lockRefusal(session, "Nothing was created.");
-      return {
-        kind: "blocked",
-        op,
-        reason: "hazard",
-        hazard: H_UI_SESSION_UNREACHABLE,
-        detail: refusal.detail,
-        remediation: refusal.remediation,
-      };
-    }
-  }
+  // 1¾. IS THE SCREEN LOCKED? (LOCKSCR1, #732; made zero-hop by LOCKSCR2.)
+  //
+  // The lock question and the reachability question read the SAME evidence — an
+  // empty window inventory — and only the lock question can say why it is empty.
+  // LOCKSCR1 therefore asked it first, and paid a whole osascript spawn to do so
+  // on every promote, including the overwhelming majority that run on an
+  // unlocked Mac with a window open.
+  //
+  // The order that costs nothing is the other one. A session that is locked
+  // cannot produce an AX-visible Things window — that is SESSGATE's own
+  // discriminator (#480) and it is measured, not assumed: under a password-gated
+  // saver the guest's `count (windows whose subrole is "AXStandardWindow")`
+  // returns 0, not an error (LOCKSCR2 §1). So the reachability probe, which runs
+  // anyway, already SEPARATES "a window is there" from "something is wrong", and
+  // the lock question only has to be asked in the second case. On the happy path
+  // it is not asked at all; on the unhappy path it costs the one hop it always
+  // did and buys the same precise sentence.
   const ui = deps.vectors.find((v) => v.probeReachability !== undefined);
   if (ui?.probeReachability === undefined) return null;
   const verdict = await ui.probeReachability();
+  if (!verdict.reachable) {
+    const locked = deps.vectors.find((v) => v.probeSessionLock !== undefined);
+    if (locked?.probeSessionLock !== undefined) {
+      const session = await locked.probeSessionLock();
+      if (blocksGuiDrive(session)) {
+        const refusal = lockRefusal(session, "Nothing was created.");
+        return {
+          kind: "blocked",
+          op,
+          reason: "hazard",
+          hazard: H_UI_SESSION_UNREACHABLE,
+          detail: refusal.detail,
+          remediation: refusal.remediation,
+        };
+      }
+    }
+  }
   if (verdict.reachable || verdict.scope !== "session") return null;
   return {
     kind: "blocked",

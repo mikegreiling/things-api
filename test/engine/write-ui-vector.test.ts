@@ -2179,12 +2179,23 @@ describe("ui driver — the Repeat dialog's shape manifest (RDLAT2)", () => {
   });
 });
 
-// LOCKSCR1 (issue #732): the session-lock gate runs BEFORE the preamble and
-// before any inference from the window inventory. A locked Mac is refused with
-// the lock named; a session that cannot be established is NOT refused — it only
-// makes the later window-inventory copy hedge.
+// LOCKSCR1 (issue #732): the session-lock gate runs ahead of any inference from
+// the window inventory. A locked Mac is refused with the lock named; a session
+// that cannot be established is NOT refused — it only makes the later
+// window-inventory copy hedge.
+//
+// LOCKSCR2 made it cost NOTHING on the happy path: the question rides the
+// preamble's `activate`, the drive's first script, instead of a spawn of its
+// own. So the assertions below are about the FUSED hop, and the standalone probe
+// is now the thing that must NOT appear.
+const LOCK_MARKER = "lockscr1-session-lock probe";
+/** A spawn of its own, spent only on the question — the cost LOCKSCR2 removed. */
 const isLockProbe = (c: UiCommand): boolean =>
-  c.script?.includes("lockscr1-session-lock probe") === true;
+  c.primitive === "resolve" && c.script?.includes(LOCK_MARKER) === true;
+/** The preamble's activate, carrying the reading. */
+const isFusedActivate = (c: UiCommand): boolean =>
+  c.primitive === "activate" && c.script?.includes(LOCK_MARKER) === true;
+const isSaverNudge = (c: UiCommand): boolean => c.label === "nudge the screen saver";
 
 const lockJson = (over: Record<string, unknown> = {}): string =>
   JSON.stringify({
@@ -2196,10 +2207,17 @@ const lockJson = (over: Record<string, unknown> = {}): string =>
     ...over,
   });
 
-describe("ui driver — session-lock gate (LOCKSCR1 #732)", () => {
-  it("REFUSES a locked session (blocked, exit 4) before the preamble, naming the lock", async () => {
+/** What the fused activate hands back. */
+const fusedJson = (over: Record<string, unknown> = {}): string =>
+  JSON.stringify({ lock: JSON.parse(lockJson(over)) as unknown, activated: true });
+
+const UNLOCKED = { keys: ["kCGSSessionOnConsoleKey"], screenIsLocked: null };
+const SAVER = { screenSaver: true };
+
+describe("ui driver — session-lock gate (LOCKSCR1 #732, zero-hop LOCKSCR2)", () => {
+  it("REFUSES a locked session (blocked, exit 4), naming the lock, with NO probe hop", async () => {
     const { run, commands } = mockRunner((c) => {
-      if (isLockProbe(c)) return ok(lockJson());
+      if (isFusedActivate(c)) return ok(fusedJson());
       if (c.primitive === "resolve") return ok("true");
       return ok();
     });
@@ -2212,17 +2230,21 @@ describe("ui driver — session-lock gate (LOCKSCR1 #732)", () => {
     expect(res.blocked?.remediation).toContain("Unlock the Mac");
     // The sentence #732 got must not appear anywhere in the refusal.
     expect(`${res.stderr}${res.blocked?.detail ?? ""}`).not.toContain("Dock icon");
-    // BEFORE everything: no activate, no reachability probe, no actuation.
+    // The refusal still lands before any actuation and before the reachability
+    // probe — only the activate that CARRIED the answer has run.
     expect(commands.some(isActuation)).toBe(false);
     expect(commands.some(isReach)).toBe(false);
-    expect(commands.some((c) => c.primitive === "activate")).toBe(false);
-    // Exactly one hop was spent establishing it.
-    expect(commands.filter(isLockProbe)).toHaveLength(1);
+    expect(commands.filter(isFusedActivate)).toHaveLength(1);
+    // THE LOCKSCR2 CLAIM: not one hop was spent on the question.
+    expect(commands.filter(isLockProbe)).toHaveLength(0);
+    // A hard lock is not nudged: there is no saver to dismiss.
+    expect(commands.some(isSaverNudge)).toBe(false);
   });
 
-  it("REFUSES a running screen saver the same way, with its own remedy", async () => {
-    const { run } = mockRunner((c) => {
-      if (isLockProbe(c)) return ok(lockJson({ screenIsLocked: null, screenSaver: true }));
+  it("NUDGES a screen saver and refuses only when the nudge does not clear it", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isSaverNudge(c)) return ok(fusedJson(SAVER)); // still up: the Mac wants a password
+      if (isFusedActivate(c)) return ok(fusedJson(SAVER));
       if (c.primitive === "resolve") return ok("true");
       return ok();
     });
@@ -2230,12 +2252,16 @@ describe("ui driver — session-lock gate (LOCKSCR1 #732)", () => {
       invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)),
     );
     expect(res.exitCode).toBe(4);
-    expect(res.blocked?.detail).toContain("screen saver is running");
+    expect(commands.filter(isSaverNudge)).toHaveLength(1);
+    expect(res.blocked?.detail).toContain("did not clear when the Mac was nudged");
+    expect(res.blocked?.detail).toContain("asking for a password");
+    expect(commands.some(isActuation)).toBe(false);
   });
 
-  it("does NOT refuse when the session cannot be established — an unread probe blocks nothing", async () => {
+  it("PROCEEDS when the nudge clears the saver, and says so on the result", async () => {
     const { run, commands } = mockRunner((c) => {
-      if (isLockProbe(c)) return { ok: false, stdout: "", stderr: "no session" };
+      if (isSaverNudge(c)) return ok(fusedJson(UNLOCKED)); // the saver went
+      if (isFusedActivate(c)) return ok(fusedJson(SAVER));
       if (isReach(c)) return ok("1 1 3");
       if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
       if (c.primitive === "resolve") return ok("true");
@@ -2249,12 +2275,33 @@ describe("ui driver — session-lock gate (LOCKSCR1 #732)", () => {
       invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)),
     );
     expect(res.exitCode).toBe(0);
-    expect(commands.filter(isLockProbe)).toHaveLength(1);
+    expect(commands.filter(isSaverNudge)).toHaveLength(1);
+    expect(res.notices?.map((n) => n.id)).toContain("ui-screen-saver-dismissed");
+    expect(res.notices?.map((n) => n.message).join(" ")).toContain("screen saver was up");
+  });
+
+  it("does NOT refuse when the session cannot be established — an unread probe blocks nothing", async () => {
+    const { run, commands } = mockRunner((c) => {
+      if (isFusedActivate(c)) return ok(""); // the fused read said nothing
+      if (isReach(c)) return ok("1 1 3");
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "assert-eligible") return ok("OK");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
+      if (c.primitive === "audit-dialog") return ok("OK");
+      return ok();
+    });
+    const res = await createUiVector(config(true), run).execute(
+      invocation(makeRepeatingRecipe("TODO-1", "weekly", 2)),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(commands.some(isSaverNudge)).toBe(false);
   });
 
   it("leaves an unlocked session's path exactly as it shipped", async () => {
     const { run, commands } = mockRunner((c) => {
-      if (isLockProbe(c)) return ok(lockJson({ keys: [], screenIsLocked: null }));
+      if (isFusedActivate(c)) return ok(fusedJson(UNLOCKED));
       if (isReach(c)) return ok("1 1 3");
       if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
       if (c.primitive === "resolve") return ok("true");
@@ -2269,11 +2316,12 @@ describe("ui driver — session-lock gate (LOCKSCR1 #732)", () => {
     );
     expect(res.exitCode).toBe(0);
     expect(commands.some(isActuation)).toBe(true);
+    expect(commands.filter(isLockProbe)).toHaveLength(0);
   });
 
-  it("never probes a menu-only op — pause-repeat works under lock (AXVM1) and stays ungated", async () => {
+  it("never GATES a menu-only op — pause-repeat works under lock (AXVM1) and stays ungated", async () => {
     const { run, commands } = mockRunner((c) => {
-      if (isLockProbe(c)) return ok(lockJson()); // would read LOCKED — must never be asked
+      if (isFusedActivate(c)) return ok(fusedJson()); // reads LOCKED — and must not stop this op
       if (c.primitive === "resolve") return ok("true");
       return ok();
     });
@@ -2282,5 +2330,6 @@ describe("ui driver — session-lock gate (LOCKSCR1 #732)", () => {
     );
     expect(res.exitCode).toBe(0);
     expect(commands.some(isLockProbe)).toBe(false);
+    expect(commands.some(isSaverNudge)).toBe(false);
   });
 });

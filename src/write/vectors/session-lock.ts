@@ -110,7 +110,18 @@ const SCREEN_SAVER_BUNDLES = ["com.apple.ScreenSaver.Engine", "com.apple.screens
  */
 export function jxaSessionLockScript(): string {
   return `/* ${SESSION_LOCK_MARKER} */
-ObjC.import('CoreGraphics');
+${SESSION_LOCK_JXA_BODY}
+JSON.stringify(sessionLock())`;
+}
+
+/**
+ * The body every session-reading script shares: `sessionLock()` returns the
+ * payload {@link interpretSessionLock} parses, and `blocksDrive()` is the same
+ * decision {@link blocksGuiDrive} takes in TypeScript — in-script, so a script
+ * that must ACT on the verdict (activate, or nudge the saver) does not need a
+ * round trip to be told what it just read.
+ */
+const SESSION_LOCK_JXA_BODY = `ObjC.import('CoreGraphics');
 ObjC.import('AppKit');
 function lockDict(){
   var d = null;
@@ -137,32 +148,161 @@ function screenSaverRunning(){
       for (var k = 0; k < want.length; k++) if (b.toLowerCase() === want[k].toLowerCase()) return true }
     return false;
   } catch(e){ return null } }
-var out = { keys: [], screenIsLocked: null, onConsole: null, screenSaver: screenSaverRunning(),
-            source: 'unavailable' };
-var dict = lockDict();
-if (dict !== null){
-  out.source = 'session-dictionary';
-  for (var k in dict) if (Object.prototype.hasOwnProperty.call(dict, k)) out.keys.push(k);
-  out.keys.sort();
-  if (out.keys.indexOf('CGSSessionScreenIsLocked') >= 0) out.screenIsLocked = !!dict['CGSSessionScreenIsLocked'];
-  if (out.keys.indexOf('kCGSSessionOnConsoleKey') >= 0) out.onConsole = !!dict['kCGSSessionOnConsoleKey'];
+function sessionLock(){
+  var out = { keys: [], screenIsLocked: null, onConsole: null, screenSaver: screenSaverRunning(),
+              source: 'unavailable' };
+  var dict = lockDict();
+  if (dict !== null){
+    out.source = 'session-dictionary';
+    for (var k in dict) if (Object.prototype.hasOwnProperty.call(dict, k)) out.keys.push(k);
+    out.keys.sort();
+    if (out.keys.indexOf('CGSSessionScreenIsLocked') >= 0) out.screenIsLocked = !!dict['CGSSessionScreenIsLocked'];
+    if (out.keys.indexOf('kCGSSessionOnConsoleKey') >= 0) out.onConsole = !!dict['kCGSSessionOnConsoleKey'];
+  }
+  return out }
+function blocksDrive(o){ return o.screenIsLocked === true || o.screenSaver === true }`;
+
+/**
+ * THE ZERO-HOP GATE (LOCKSCR2). The lock question used to cost its own osascript
+ * spawn — 221–289 ms of it, measured (LOCKSCR1 §2), essentially all transport:
+ * the dictionary read itself is microseconds. That spawn stood in front of every
+ * GUI-driven workflow, paid on the HAPPY path, to answer a question whose answer
+ * is almost always "unlocked".
+ *
+ * So it is not a hop any more. Every recipe this gate applies to runs an
+ * `activate` step in its preamble — the first SCRIPT the drive executes — and
+ * this is that step with the session read folded in ahead of it. The answer
+ * comes back on the stdout the activate was going to produce anyway, and the
+ * happy path pays microseconds inside a spawn it was already paying for.
+ *
+ * THE ACTIVATE IS UNCONDITIONAL, deliberately. Foregrounding Things behind a
+ * lock screen is a no-op that changes no data and posts no input, while making
+ * it conditional would silently change what an UNGATED recipe does on a locked
+ * Mac. The gate decision stays in TypeScript, where it can see whether this
+ * recipe asked for it.
+ */
+export function jxaActivateWithSessionLockScript(): string {
+  return `/* ${SESSION_LOCK_MARKER} */
+${SESSION_LOCK_JXA_BODY}
+var lock = sessionLock();
+Application('Things3').activate();
+JSON.stringify({ lock: lock, activated: true })`;
 }
-JSON.stringify(out)`;
+
+/** How long the saver nudge waits for the window server to drop the lock key. */
+const SAVER_WAKE_BUDGET_MS = 4000;
+
+/**
+ * NUDGE THE SCREEN SAVER (LOCKSCR2 — the maintainer's second question: "do we
+ * have any way to wake up a screensaver that doesn't have a password protected
+ * unlock enabled without requiring direct user input?").
+ *
+ * The answer is yes, and the mechanism is narrower than it looks. MEASURED on
+ * macOS 15.7.7 against a bare `open -a ScreenSaverEngine`
+ * (docs/lab/lockscr2-session-normalization.md §1):
+ *
+ *  - IOKit's `IOPMAssertionDeclareUserActivity` returns `kIOReturnSuccess` and
+ *    changes nothing — the saver stays up, the session stays locked;
+ *  - `caffeinate -u` (the same API through the shipped tool) likewise;
+ *  - a synthesized `CGEventMouseMoved` DOES reach the input path — the pointer
+ *    teleports while the saver is up, which is how we know synthetic input is
+ *    not being swallowed — and still does not dismiss the saver;
+ *  - killing `ScreenSaverEngine` removes the process and leaves
+ *    `CGSSessionScreenIsLocked` set for the rest of that login;
+ *  - a synthesized KEY event dismisses it. One left-Shift down/up pair clears
+ *    `CGSSessionScreenIsLocked`, `CGSSessionScreenLockedTime` and
+ *    `kCGSSessionSecureInputPID` together, and Things is AX-readable again.
+ *
+ * WHY SHIFT. It is the safest key there is: a lone modifier press types nothing,
+ * presses nothing and cancels nothing, so it is inert in the one case that
+ * matters — the saver having gone between the read and the post. (Escape works
+ * too and is not used: it would cancel a dialog if it ever landed on a desktop.)
+ *
+ * AND IT CANNOT DEFEAT A PASSWORD. With "require password immediately" on, the
+ * same Shift — and an Escape after it — leaves the saver running and the session
+ * locked, with nothing else changed. No reading tells the two apart in advance:
+ * `kCGSSessionSecureInputPID` is present under BOTH (it discriminates a saver
+ * from a hard lock, which is what LOCKSCR1 measured; it does not discriminate a
+ * password gate). So the nudge is CLOSED-LOOP by necessity rather than taste:
+ * post once, re-read the session, and believe only the re-read.
+ */
+export function jxaWakeScreenSaverScript(budgetMs: number = SAVER_WAKE_BUDGET_MS): string {
+  return `/* ${SESSION_LOCK_MARKER} wake */
+${SESSION_LOCK_JXA_BODY}
+function tapShift(){
+  try {
+    $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateKeyboardEvent($(), 56, true));
+    $.NSThread.sleepForTimeInterval(0.05);
+    $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateKeyboardEvent($(), 56, false));
+    return true } catch(e){ return false } }
+var before = sessionLock();
+var posted = false;
+if (before.screenSaver === true){
+  posted = tapShift();
+  var deadline = Date.now() + ${Math.max(0, Math.trunc(budgetMs))};
+  while (Date.now() < deadline){
+    $.NSThread.sleepForTimeInterval(0.2);
+    if (!blocksDrive(sessionLock())) break }
+}
+var after = sessionLock();
+var activated = false;
+if (!blocksDrive(after)) { Application('Things3').activate(); activated = true }
+JSON.stringify({ lock: after, activated: activated, posted: posted })`;
+}
+
+/** What a fused script (the activate, or the saver nudge) hands back. */
+export interface FusedSessionLock {
+  lock: SessionLockVerdict;
+  /** Things was foregrounded by this hop. */
+  activated: boolean;
+  /** The saver nudge posted its key (the wake script only). */
+  posted: boolean;
+}
+
+/**
+ * Read a fused script's JSON. A shape this cannot read degrades to `unknown` —
+ * never to `unlocked` — for the same reason {@link probeSessionLock} does: a
+ * confident wrong answer is the whole defect.
+ */
+export function interpretFusedSessionLock(raw: string): FusedSessionLock {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch {
+    return { lock: UNKNOWN_SESSION_LOCK, activated: false, posted: false };
+  }
+  if (parsed === null || typeof parsed !== "object") {
+    return { lock: UNKNOWN_SESSION_LOCK, activated: false, posted: false };
+  }
+  const rec = parsed as Record<string, unknown>;
+  const lock =
+    rec["lock"] === undefined
+      ? UNKNOWN_SESSION_LOCK
+      : interpretSessionLock(JSON.stringify(rec["lock"]));
+  return { lock, activated: rec["activated"] === true, posted: rec["posted"] === true };
 }
 
 /**
  * Read the probe's JSON into a verdict. The classification, in order:
  *
  *  1. no session dictionary at all              -> `unknown` (state the uncertainty);
- *  2. `CGSSessionScreenIsLocked` true           -> `locked`;
- *  3. the screen saver is running               -> `screensaver`;
+ *  2. `ScreenSaverEngine` is running            -> `screensaver`;
+ *  3. `CGSSessionScreenIsLocked` true           -> `locked`;
  *  4. otherwise                                 -> `unlocked`.
  *
- * Rung 3 is deliberate over-caution and it costs a re-run at worst: a screen
- * saver covers the display, so the first synthesized click dismisses the saver
- * instead of reaching Things, and on a Mac with "require password immediately"
- * the very next state is a locked one. The fail direction of every guard in this
- * vector is refuse-and-name (PTRGD1).
+ * THE SAVER OUTRANKS THE LOCK KEY, and that ordering is the LOCKSCR2 change. The
+ * window server sets `CGSSessionScreenIsLocked` for a bare screen saver as
+ * readily as for a real lock (LOCKSCR1 §1 law 2), so the two used to arrive as
+ * one verdict and one refusal — "unlock the Mac" — which told a user whose Mac
+ * was not asking for anything to do the wrong thing. They are separated here on
+ * the one signal that does separate them, `ScreenSaverEngine` being up, and the
+ * saver earns its own rung because it has its OWN ANSWER: it can be nudged awake
+ * ({@link jxaWakeScreenSaverScript}), and only when the nudge fails is the Mac
+ * actually asking for a password.
+ *
+ * Both verdicts still BLOCK a drive ({@link blocksGuiDrive}); what differs is
+ * what happens next, not whether it is safe to proceed. The fail direction of
+ * every guard in this vector is refuse-and-name (PTRGD1).
  *
  * Note that the ABSENCE of `CGSSessionScreenIsLocked` is the ordinary unlocked
  * reading: macOS adds the key when the screen locks and drops it when it
@@ -186,10 +326,10 @@ export function interpretSessionLock(raw: string): SessionLockVerdict {
   const state: SessionLockState =
     source === "unavailable"
       ? "unknown"
-      : screenIsLocked === true
-        ? "locked"
-        : screenSaver === true
-          ? "screensaver"
+      : screenSaver === true
+        ? "screensaver"
+        : screenIsLocked === true
+          ? "locked"
           : "unlocked";
   return { state, keys, screenIsLocked, onConsole, screenSaver, source };
 }
@@ -231,9 +371,18 @@ const LOCKED_CLAUSE =
   "Refused to drive the Things window: the screen is locked, so no window can be read or clicked.";
 const LOCKED_REMEDIATION = "Unlock the Mac and re-run.";
 const SAVER_CLAUSE =
-  "Refused to drive the Things window: the screen saver is running, so a click would dismiss it " +
-  "rather than reach Things.";
+  "Refused to drive the Things window: the screen saver is up, so no window can be read or " +
+  "clicked.";
 const SAVER_REMEDIATION = "Wake the Mac (unlock it if it asks) and re-run.";
+/**
+ * The saver sentence AFTER the nudge failed. It is a different fact and gets a
+ * different sentence: the saver was asked to clear, it did not, and the only
+ * thing measured to keep it up is a Mac that wants a password (LOCKSCR2 §1).
+ */
+const SAVER_STUCK_CLAUSE =
+  "Refused to drive the Things window: the screen saver is up and did not clear when the Mac was " +
+  "nudged, so the Mac is asking for a password.";
+const SAVER_STUCK_REMEDIATION = "Unlock the Mac and re-run.";
 
 /** The hazard a locked session is reported under — the same one SESSGATE uses. */
 export const H_UI_SESSION_LOCKED: HazardId = H_UI_SESSION_UNREACHABLE;
@@ -249,20 +398,66 @@ export function lockRefusal(
   /** What the caller can promise did not happen. The drive changed nothing; a
    * composite's pre-seed gate created nothing. */
   tail = "Nothing was changed.",
+  /**
+   * Was the saver nudge tried on this path? Only the in-drive gate has a wake
+   * rung; a pre-seed gate that merely ASKED must not claim the Mac was nudged.
+   */
+  wakeAttempted = false,
 ): Extract<ReachabilityVerdict, { reachable: false }> {
-  return verdict.state === "screensaver"
+  if (verdict.state !== "screensaver") {
+    return {
+      reachable: false,
+      scope: "session",
+      detail: `${LOCKED_CLAUSE} ${tail}`,
+      remediation: LOCKED_REMEDIATION,
+    };
+  }
+  return wakeAttempted
     ? {
         reachable: false,
         scope: "session",
-        detail: `${SAVER_CLAUSE} ${tail}`,
-        remediation: SAVER_REMEDIATION,
+        detail: `${SAVER_STUCK_CLAUSE} ${tail}`,
+        remediation: SAVER_STUCK_REMEDIATION,
       }
     : {
         reachable: false,
         scope: "session",
-        detail: `${LOCKED_CLAUSE} ${tail}`,
-        remediation: LOCKED_REMEDIATION,
+        detail: `${SAVER_CLAUSE} ${tail}`,
+        remediation: SAVER_REMEDIATION,
       };
+}
+
+/**
+ * The note a SUCCESSFUL wake owes the caller. The saver was up, we dismissed it,
+ * and the screen is now awake and will stay that way — a durable change to the
+ * state the user left the Mac in, which is exactly the disclosure bar.
+ */
+export const SAVER_DISMISSED_NOTE =
+  "the screen saver was up and was dismissed to run this — the Mac did not ask for a password, " +
+  "and the screen is awake now";
+
+/**
+ * Run the saver nudge through the injected runner. CLOSED-LOOP by construction:
+ * the verdict returned is a RE-READ of the session dictionary taken after the
+ * key was posted, never an assumption that posting it worked. A transport
+ * failure leaves the caller with the verdict it already had.
+ */
+export async function wakeScreenSaver(
+  run: (command: UiCommand, timeoutMs: number) => Promise<UiRunResult>,
+  timeoutMs: number,
+  before: SessionLockVerdict,
+): Promise<FusedSessionLock> {
+  const res = await run(
+    {
+      primitive: "resolve",
+      label: "nudge the screen saver",
+      script: jxaWakeScreenSaverScript(),
+      lang: "javascript",
+    },
+    timeoutMs,
+  );
+  if (!res.ok) return { lock: before, activated: false, posted: false };
+  return interpretFusedSessionLock(res.stdout);
 }
 
 /** The one-line render for `things doctor --ui-state`. */
@@ -271,7 +466,7 @@ export function describeSessionLock(verdict: SessionLockVerdict): string {
     case "locked":
       return "locked — the screen is locked, so nothing on it can be read or clicked";
     case "screensaver":
-      return "screen saver — the saver is covering the display; a click would dismiss it";
+      return "screen saver — the saver is covering the display; a drive nudges it awake first";
     case "unlocked":
       return "unlocked";
     case "unknown":
