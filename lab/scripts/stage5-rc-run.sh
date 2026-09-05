@@ -7,6 +7,7 @@
 #
 #   RC_DIST=/path/to/package/dist bash lab/scripts/stage5-rc-run.sh
 #   RC_DIST=… GUEST_CELLS=lab/guest/stage5-arprobe.sh bash lab/scripts/stage5-rc-run.sh
+#   RC_DIST=… RC_DIST_BASELINE=… bash lab/scripts/stage5-rc-run.sh   # paired A/B
 #
 # WHY THIS EXISTS SEPARATELY FROM e2e-write-smoke.sh. That orchestrator runs the
 # lab's own fixed suite; this one runs the cells a PARTICULAR release batch needs
@@ -83,13 +84,27 @@ lab_scp lab/guest/beep-sentinel.sh "admin@$IP:things-lab/beep-sentinel.sh"
 lab_scp "$GUEST_CELLS" "admin@$IP:things-lab/$CELLS_BASE"
 lab_ssh "$IP" "chmod +x ~/things-lab/bin/node ~/things-lab/beep-sentinel.sh ~/things-lab/$CELLS_BASE"
 
+# A SECOND DIST, FOR A PAIRED A/B (optional). A latency change is only legible
+# against the build it changed, and two clones are two different machines' worth
+# of noise — so a cell script that wants a before/after runs both in ONE guest,
+# over the same fixtures, on the same boot. The cells see it as $BASELINE_APP.
+BASELINE_APP=""
+if [ -n "${RC_DIST_BASELINE:-}" ]; then
+  [ -f "$RC_DIST_BASELINE/cli/main.js" ] || { echo "no $RC_DIST_BASELINE/cli/main.js" >&2; exit 2; }
+  echo "[stage5] shipping the BASELINE dist for a paired A/B: $RC_DIST_BASELINE"
+  lab_ssh "$IP" 'mkdir -p ~/things-lab/baseline/node_modules'
+  lab_scp -r "$RC_DIST_BASELINE" "admin@$IP:things-lab/baseline/dist"
+  lab_ssh "$IP" 'cp -R ~/things-lab/things-api/node_modules/commander ~/things-lab/baseline/node_modules/commander; cp ~/things-lab/things-api/package.json ~/things-lab/baseline/package.json'
+  BASELINE_APP='$HOME/things-lab/baseline'
+fi
+
 CLI="~/things-lab/bin/node ~/things-lab/things-api/dist/cli/main.js"
 echo "[stage5] provisioning the helper pair in the guest"
 guest_helpers_provision "$IP" "$CLI"
 
 echo "[stage5] running the Stage 5 cells…"
 set +e
-lab_ssh "$IP" "THINGS_LAB_BEEPS_OK='${THINGS_LAB_BEEPS_OK:-1}' bash ~/things-lab/$CELLS_BASE ~/things-lab/bin/node ~/things-lab/things-api" \
+lab_ssh "$IP" "THINGS_LAB_BEEPS_OK='${THINGS_LAB_BEEPS_OK:-1}' BASELINE_APP='$BASELINE_APP' bash ~/things-lab/$CELLS_BASE ~/things-lab/bin/node ~/things-lab/things-api" \
   | tee "$ARTIFACTS/stage5-transcript.log"
 RESULT=${PIPESTATUS[0]}
 set -e

@@ -51,6 +51,8 @@ import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
 import {
   AX_SETTLE_LOG_PREFIX,
   inertSettleInjector,
+  NO_NODE_SETTLES,
+  type NodeSettledObservable,
   observerAwait,
   observerCount,
   observerMark,
@@ -2180,7 +2182,25 @@ export function axProbeDialogShapeScript(
   // cannot reach it: it takes exactly one round, decides on a positive verdict
   // alone, and returns "unknown" otherwise — the same verdict, from the same
   // reads, at the same Apple-event cost as before.
-  const poll = !obs.live;
+  //
+  // ...AND A ROUTED HOST DROPS THE POLL WHEN NODE ALREADY WAITED (DEPOBS3).
+  //
+  // On a deputy-routed Mac the script above can never talk to a socket — the
+  // broker refuses the phrase (#695) — so `obs.live` is false and, until now,
+  // that meant the poll, unconditionally. But the routed drive's node side owns
+  // the same ledger: it marks before the frequency selection and can await the
+  // rebuild's own `AXValueChanged` on the pop-up it set, out of the deputy's
+  // observer, before this hop is even spawned. When it HAS (and only then), the
+  // precondition this poll exists to establish is already established, by the
+  // app's own announcement, and the poll is asking a question that has been
+  // answered. So the generator emits the single-round form — the SAME text the
+  // sidecar shape has always produced and the quadrants have always certified.
+  //
+  // A node await that MISSED (timed out, ledger silent, observer reaped) leaves
+  // the set empty and the poll stands, so the fallback is the certified polling
+  // gate rather than an optimistic read. That is #700's whole lesson: the probe
+  // polls for a reason when nothing waited.
+  const poll = !obs.live && !obs.nodeSettled.has("cadence-rebuild");
   const measure = `  set sv to {}
   set sp to {}
   try
@@ -4654,6 +4674,110 @@ function recipeNeedsUnlockedSession(recipe: UiRecipe): boolean {
   );
 }
 
+/** The one node-settled claim this build makes (DEPOBS3). */
+const CADENCE_REBUILT: ReadonlySet<NodeSettledObservable> = new Set(["cadence-rebuild"]);
+
+/**
+ * NODE ABSORBS A POP-UP SELECTION'S CROSS-HOP WAIT (DEPOBS3, #695).
+ *
+ * The two waits a routed drive was still paying for in a SCRIPT, taken here
+ * instead — where there is a ledger to take them from. Both are the same shape:
+ * the actuation happened in the hop that has just returned, the app announces it
+ * a few hundred milliseconds later, and the NEXT hop discovers that by asking
+ * the tree over and over at ~47 ms an Apple event (RDLAT2 §8's field constant).
+ * A deputy-hosted observer was already listening when the announcement came, so
+ * node can wait for the thing itself and spend one sub-millisecond socket
+ * round-trip doing it.
+ *
+ *  1. **THE REBUILD, which lets the next hop drop a poll.** Only when the recipe
+ *     TAGGED this step (`crossHopSettle`), i.e. only where the announcement is
+ *     proven to be coming — see `UiStep.crossHopSettle`. On success the caller
+ *     generates `probe-dialog-shape` in its already-certified single-round form;
+ *     on a miss the set comes back empty and the probe polls exactly as it does
+ *     today.
+ *  2. **THE MENU CLOSING, which stops the next hop's first click being eaten.**
+ *     Armed only when the next hop is itself a pop-up selection, because that is
+ *     the only place the hazard exists: VOPAT2 measured the swallowed click
+ *     directly — the following hop's menu-open settle timed out at 1515 ms and
+ *     the RETRY's click opened the menu in 4.1 ms — and RDLAT2's shipped trace
+ *     shows it as 17 AX round-trips against the 9 the same primitive costs when
+ *     nothing is in its way. Nothing is generated differently for this one; the
+ *     script's own `exists menu 1` retry is still the oracle and is still what
+ *     refuses. What changes is that it no longer has to run twice.
+ *
+ * A LIVENESS GATE COMES FIRST, and it is free: `observerCount` past the mark
+ * taken before the hop. A pop-up selection cannot have happened without the
+ * app announcing SOMETHING (`AXMenuOpened` lands 5.1 ms after the press,
+ * VOPAT1-11), so a ledger that is empty here is not a quiet app, it is an
+ * observer that is not seeing this process — and waiting on it would cost a
+ * budget per pop-up to learn that. Silence means: change nothing, poll as
+ * before.
+ */
+async function absorbPopupSelection(
+  session: ObserverSession | null,
+  since: number | null,
+  step: UiStep,
+  awaitMenuClose: boolean,
+): Promise<ReadonlySet<NodeSettledObservable>> {
+  // ROUTED HOSTS ONLY. A sidecar already waited for both of these inside the
+  // script it generated (`settleInjectorFor`'s live form), and a drive with no
+  // observer has no ledger to have waited against.
+  if (session === null || session.transport !== "deputy" || since === null) return NO_NODE_SETTLES;
+  const wantsRebuild = step.crossHopSettle === "cadence-rebuild" && step.settle !== undefined;
+  if (!wantsRebuild && !awaitMenuClose) return NO_NODE_SETTLES;
+  const seen = await observerCount(session, since);
+  if (seen === null || seen === 0) {
+    trace(() => ({
+      phase: "ui-crosshop",
+      label: step.label,
+      skipped: seen === null ? "no-answer" : "nothing-announced",
+    }));
+    return NO_NODE_SETTLES;
+  }
+  if (wantsRebuild) {
+    const outcome = await observerAwait(session, since, step.settle as SettleSpec);
+    trace(() => ({
+      phase: "ui-crosshop",
+      label: step.label,
+      observable: "cadence-rebuild",
+      absorbed: outcome.ok,
+    }));
+    // The rebuild's announcement arrives ~187 ms AFTER the menu closes
+    // (VOPAT1 §4.2 g: 348.3 ms then 535.1 ms), so a satisfied rebuild wait has
+    // already covered the swallowed-click hazard as well.
+    if (outcome.ok) return CADENCE_REBUILT;
+  }
+  if (awaitMenuClose) {
+    const outcome = await observerAwait(session, since, SETTLE_MENU_CLOSED);
+    trace(() => ({
+      phase: "ui-crosshop",
+      label: step.label,
+      observable: "menu-closed",
+      absorbed: outcome.ok,
+    }));
+  }
+  return NO_NODE_SETTLES;
+}
+
+/**
+ * Will the step after this one open a pop-up MENU with a click that the app is
+ * still able to swallow? Conservative in both directions a step can vanish at
+ * run time — a pre-filled setter (DEFAULTS2) and a shape-gated alternative
+ * (RDLG2) never dispatch, so neither is a reason to wait.
+ */
+export function nextHopClicksAPopup(
+  steps: UiStep[],
+  index: number,
+  prefilled: ReadonlySet<string>,
+  dialogShape: RepeatDialogShape | null,
+): boolean {
+  const next = steps[index + 1];
+  if (next === undefined || next.primitive !== "select-popup") return false;
+  if (next.unlessPrefilled !== undefined && prefilled.has(next.unlessPrefilled)) return false;
+  if (next.onlyShape !== undefined && next.onlyShape !== dialogShape) return false;
+  return true;
+}
+
 /**
  * The drive, with the settle sidecar's LIFETIME wrapped around it (VOPAT2).
  *
@@ -4688,11 +4812,20 @@ async function driveSteps(
   observer: { session: ObserverSession | null },
 ): Promise<ExecuteResult> {
   /**
+   * WHAT NODE WAITED OUT BETWEEN THE PREVIOUS HOP AND THE ONE BEING GENERATED
+   * (DEPOBS3). Set at the top of each step from `pendingSettled`, so a claim
+   * lives for exactly one hop and can never be carried past the step it was
+   * established for.
+   */
+  let awaited: ReadonlySet<NodeSettledObservable> = NO_NODE_SETTLES;
+  /** What the step that has just run established for the NEXT one. */
+  let pendingSettled: ReadonlySet<NodeSettledObservable> = NO_NODE_SETTLES;
+  /**
    * The settle injector, read FRESH at every use: the sidecar is armed part-way
    * through this function, so a captured value would be the inert one for the
    * whole drive.
    */
-  const obs = (): SettleInjector => settleInjectorFor(observer.session);
+  const obs = (): SettleInjector => settleInjectorFor(observer.session, awaited);
   // Every step below dispatches through the PER-STEP FOCUS GUARD (issue #620);
   // the latch records the dialog this drive is observed driving, so the cleanup
   // ladder can tell our own half-open dialog from one the user opened after us.
@@ -5011,6 +5144,12 @@ async function driveSteps(
   let setterSinceShape = false;
   for (let i = idx; i < recipe.steps.length; i += 1) {
     let step = recipe.steps[i] as UiStep;
+    // TAKE WHAT THE PREVIOUS HOP ESTABLISHED, AND TAKE IT ONCE (DEPOBS3). A
+    // node-side cross-hop wait licenses the very next generated script and
+    // nothing after it, so the claim is consumed here whatever this iteration
+    // then does with the step — including skipping it.
+    awaited = pendingSettled;
+    pendingSettled = NO_NODE_SETTLES;
     // ALREADY PRE-FILLED, AND READ BACK TO PROVE IT (DEFAULTS2). The step stays in
     // the recipe — it still contributes its control to the pre-commit audit — but
     // its actuation is unnecessary: the verify hop read this very control, through
@@ -5447,6 +5586,19 @@ async function driveSteps(
     // value typed nothing at all (issue #620 item 7) — disclosed, so the trail
     // says what the drive did rather than what it intended.
     done.push(res.stdout.trim() === OK_ALREADY ? `${step.label} (already set)` : step.label);
+    // THE CROSS-HOP WAIT, TAKEN IN NODE ON A ROUTED HOST (DEPOBS3). The pop-up
+    // has been clicked and the app is about to say so; a routed drive owns a
+    // ledger that is already listening, so it waits here instead of leaving the
+    // next osascript to poll for the same thing. Nothing happens on any other
+    // host class, and a wait that misses changes nothing at all.
+    if (step.primitive === "select-popup") {
+      pendingSettled = await absorbPopupSelection(
+        observer.session,
+        markBeforeStep,
+        step,
+        nextHopClicksAPopup(recipe.steps, i, prefilled, dialogShape),
+      );
+    }
   }
   return {
     exitCode: 0,

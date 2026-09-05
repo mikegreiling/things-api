@@ -42,8 +42,13 @@ import type {
 } from "../operations.ts";
 import type { HeadingChordSpec } from "./ui-chord.ts";
 import type { SidebarPlacement } from "./ui-drag.ts";
-import type { SettleSpec } from "./ui-observer.ts";
-import { type PrefillKey, provenPrefills, type SeedRowFacts } from "./ui-prefill.ts";
+import type { NodeSettledObservable, SettleSpec } from "./ui-observer.ts";
+import {
+  dialogDefaultsRelied,
+  type PrefillKey,
+  provenPrefills,
+  type SeedRowFacts,
+} from "./ui-prefill.ts";
 import { installedThingsVersion } from "./ui-shape.ts";
 import type { DialogAuditControl, UiRecipe, UiStep } from "./types.ts";
 
@@ -651,7 +656,13 @@ function ordinalTitle(ordinal: WeekdayOrdinal): string {
   return ordinal === "last" ? "last" : ORDINAL_TITLE[ordinal];
 }
 
-function selectPopup(label: string, pathCandidates: string[], value: string): UiStep {
+function selectPopup(
+  label: string,
+  pathCandidates: string[],
+  value: string,
+  /** DEPOBS3: what the NEXT hop may stop polling for once node has waited this out. */
+  crossHopSettle?: NodeSettledObservable,
+): UiStep {
   return {
     primitive: "select-popup",
     label,
@@ -659,6 +670,7 @@ function selectPopup(label: string, pathCandidates: string[], value: string): Ui
     value,
     dynamic: true,
     settle: SETTLE_POPUP_APPLIED,
+    ...(crossHopSettle !== undefined && { crossHopSettle }),
     addressing: "title",
   };
 }
@@ -898,14 +910,6 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
       : provenPrefills(rule, rule.seed, installedThingsVersion());
   const pf = (key: PrefillKey): PrefillKey | undefined => (proven.has(key) ? key : undefined);
 
-  if (rule.afterCompletion === true) {
-    // "after completion" is the first frequency-pop-up option; picking it reveals
-    // a secondary unit pop-up ("after completion, every N <unit>").
-    steps.push(selectPopup("frequency = after completion", DIALOG_FREQUENCY, "after completion"));
-  } else {
-    steps.push(selectPopup(`frequency = ${rule.frequency}`, DIALOG_FREQUENCY, rule.frequency));
-  }
-
   // MEASURE the dialog before touching any control the 3.23 redesign moved
   // (RDLG2). Emitted only when such a control is actually addressed, so the
   // certified two-control path (frequency + interval + OK) costs no extra hop —
@@ -924,6 +928,44 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
       rule.monthly !== undefined ||
       rule.yearly !== undefined ||
       rule.next !== undefined);
+
+  // WILL THIS SELECTION PROVABLY REBUILD THE CADENCE GROUP? (DEPOBS3)
+  //
+  // The probe hop that follows polls for the rebuild when it cannot be told
+  // about it; on a deputy-routed host node CAN be told, and then the probe drops
+  // that poll. But node's wait is only worth arming when the announcement is
+  // certain to come: `AXValueChanged` means the value CHANGED, and re-selecting
+  // the frequency a dialog already shows announces nothing at all — a wait armed
+  // there spends its whole budget and the poll still has to run.
+  //
+  // The proof is DEFAULTS1 §2, measured on all fourteen seed states: a Repeat
+  // dialog opened on a FRESHLY MINTED seed row shows `after completion, every 1
+  // week`, byte for byte, whatever the seed. So on the make/add path any other
+  // frequency is necessarily a change. A dialog opened on an EXISTING rule (both
+  // reschedule recipes — no seed) proves nothing and is left exactly as it was.
+  //
+  // The two switches that govern every other reliance on the dialog's own
+  // defaults govern this one too — `THINGS_API_PREFILL=0`, and an app build the
+  // shape manifest was never sat with — which is what `dialogDefaultsRelied`
+  // is: the same gates, asked without the anchor arithmetic.
+  const freqRebuilds =
+    needsShape && rule.seed !== undefined && dialogDefaultsRelied(installedThingsVersion());
+
+  if (rule.afterCompletion === true) {
+    // "after completion" is the first frequency-pop-up option; picking it reveals
+    // a secondary unit pop-up ("after completion, every N <unit>").
+    steps.push(selectPopup("frequency = after completion", DIALOG_FREQUENCY, "after completion"));
+  } else {
+    steps.push(
+      selectPopup(
+        `frequency = ${rule.frequency}`,
+        DIALOG_FREQUENCY,
+        rule.frequency,
+        freqRebuilds ? "cadence-rebuild" : undefined,
+      ),
+    );
+  }
+
   if (needsShape) {
     steps.push({
       primitive: "probe-dialog-shape",

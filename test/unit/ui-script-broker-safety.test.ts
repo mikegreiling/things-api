@@ -42,7 +42,12 @@ import {
   settleInjectorFor,
   startObserver,
 } from "../../src/write/vectors/ui-observer.ts";
-import { everyUiScript, OBSERVED_SHAPE, POLLING_SHAPE } from "./helpers/ui-script-catalog.ts";
+import {
+  everyUiScript,
+  OBSERVED_SHAPE,
+  POLLING_SHAPE,
+  ROUTED_SETTLED_SHAPE,
+} from "./helpers/ui-script-catalog.ts";
 
 /**
  * A host that routes its automation through the helpers. `helpers-enabled true`
@@ -112,7 +117,9 @@ describe("every acting script a routed host generates is brokerable", () => {
     // that shells out and the routed transport deliberately does not carry it.
     // Either way every script comes out byte-identical to the pre-VOPAT2
     // version (certified in ui-observer.test.ts).
-    const scripts = everyUiScript([POLLING_SHAPE]);
+    // ...and BOTH shapes a routed Mac produces (DEPOBS3): the polling one, and
+    // the one whose opening poll node's own cross-hop wait made redundant.
+    const scripts = everyUiScript([POLLING_SHAPE, ROUTED_SETTLED_SHAPE]);
     expect(scripts.length).toBeGreaterThan(30);
     const offenders = scripts
       .map((s) => ({ label: s.label, banned: bannedPhrasesIn(s.script) }))
@@ -131,9 +138,22 @@ describe("every acting script a routed host generates is brokerable", () => {
       pid: 4242,
     });
     expect(routed.live).toBe(false);
+    // ...and, with nothing waited out, it is the inert injector itself (DEPOBS3).
+    expect(routed.nodeSettled.size).toBe(0);
     const scripts = everyUiScript([{ tag: "deputy-hosted", obs: routed }]);
     expect(scripts.length).toBeGreaterThan(30);
     expect(scripts.filter((s) => bannedPhrasesIn(s.script).length > 0)).toEqual([]);
+  });
+
+  it("a node-side wait drops a poll without introducing a phrase (DEPOBS3)", () => {
+    // The third state's whole safety claim, at the catalog level: dropping the
+    // shape probe's poll changes which SCRIPT is dispatched on a routed Mac, and
+    // the broker lints whatever is dispatched. It must clear the lint AND it
+    // must actually be a different script, or this cell is testing nothing.
+    const settled = everyUiScript([ROUTED_SETTLED_SHAPE]);
+    expect(settled.filter((s) => bannedPhrasesIn(s.script).length > 0)).toEqual([]);
+    const polling = new Set(everyUiScript([POLLING_SHAPE]).map((s) => s.script));
+    expect(settled.filter((s) => !polling.has(s.script)).length).toBeGreaterThan(0);
   });
 
   it("has teeth: the observed shape IS what the broker refuses", () => {

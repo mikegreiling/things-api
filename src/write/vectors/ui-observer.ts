@@ -1379,6 +1379,35 @@ export function settleRefusal(spec: SettleSpec, outcome: SettleOutcome): string 
 /* ---------------------------------------------------- in-script settling */
 
 /**
+ * A CROSS-HOP OBSERVABLE NODE HAS ALREADY WAITED OUT (DEPOBS3).
+ *
+ * THE THIRD INJECTOR STATE. Two were not enough. `live` answers *may this script
+ * talk to a socket?*, and its absence has always been read as *this script must
+ * poll* — but on a deputy-routed host those are different questions. The script
+ * may NOT talk to a socket (the broker refuses the phrase, DEPOBS1 / #695), and
+ * yet the thing its opening poll exists to discover may have ALREADY BEEN
+ * REPORTED — to node, over the deputy-hosted ledger, before this hop was spawned.
+ *
+ * A member of this union names one such observable. When it is in
+ * {@link SettleInjector.nodeSettled} the generator emits the form that does not
+ * poll for it — which is the SAME form the sidecar shape has always generated,
+ * so nothing new is invented: the already-certified non-polling script gains a
+ * second, equally positive precondition. When node's own await MISSED (timed
+ * out, or the ledger did not answer) the set stays empty and the script keeps
+ * its poll, which is what holds #698's four quadrants and #700's lesson intact.
+ *
+ * - `cadence-rebuild` — the Repeat dialog's cadence group has finished being
+ *   torn down and rebuilt after a frequency selection: `AXValueChanged` on the
+ *   `AXPopUpButton` that was set, which VOPAT1-12 measured arriving in the same
+ *   millisecond as the `AXUIElementDestroyed` burst (535.1 / 535.2 ms). It is
+ *   exactly what `axProbeDialogShapeScript`'s polling rounds exist to discover.
+ */
+export type NodeSettledObservable = "cadence-rebuild";
+
+/** Nothing was waited out — the injector's default, and every non-routed host. */
+export const NO_NODE_SETTLES: ReadonlySet<NodeSettledObservable> = new Set();
+
+/**
  * The settle injector a script generator uses. With no sidecar every method
  * returns exactly the text that shipped before this campaign, so the polling
  * fallback is byte-identical rather than merely equivalent.
@@ -1386,6 +1415,14 @@ export function settleRefusal(spec: SettleSpec, outcome: SettleOutcome): string 
 export interface SettleInjector {
   /** True when a sidecar is live and the snippets below actually settle on a notification. */
   readonly live: boolean;
+  /**
+   * What NODE waited out between the previous hop and this one (DEPOBS3), so
+   * this script need not poll for it again. Empty unless the observer is
+   * DEPUTY-hosted: a sidecar settles in-script (and already generates the
+   * non-polling form off {@link live}), and a host with no observer has nothing
+   * that could have been waited for.
+   */
+  readonly nodeSettled: ReadonlySet<NodeSettledObservable>;
   /** The AppleScript handlers the snippets need, or "" when there is no sidecar. */
   handlers(): string;
   /** Record the ledger's sequence into `varName` before an actuation. */
@@ -1411,6 +1448,7 @@ const inertDelay = (spec: SettleSpec, indent: string): string =>
 
 const INERT: SettleInjector = {
   live: false,
+  nodeSettled: NO_NODE_SETTLES,
   handlers: () => "",
   mark: () => "",
   settle: (_v, spec, indent) => inertDelay(spec, indent),
@@ -1423,6 +1461,20 @@ export function inertSettleInjector(): SettleInjector {
 }
 
 /**
+ * THE THIRD STATE (DEPOBS3): no in-script transport — the broker would refuse it
+ * — but node has already been told the cross-hop things named in `settled`.
+ * Every snippet is the inert one, byte for byte; the ONLY thing that changes is
+ * which opening poll a generator decides it no longer needs.
+ *
+ * An empty set returns the shared inert singleton, so "nothing was waited out"
+ * and "there is no observer" remain the same object and the same scripts.
+ */
+export function nodeSettledInjector(settled: ReadonlySet<NodeSettledObservable>): SettleInjector {
+  if (settled.size === 0) return INERT;
+  return { ...INERT, nodeSettled: settled };
+}
+
+/**
  * The in-script client, as AppleScript. One `do shell script` per request,
  * `printf | nc -U` as the transport — the smallest thing on a stock macOS that
  * can hold a blocking connection open. `nc`'s idle timeout is set past the
@@ -1432,8 +1484,11 @@ export function inertSettleInjector(): SettleInjector {
  * a `tell application "System Events"` block it would become an Apple event to
  * System Events, i.e. exactly the round-trip this campaign is removing.
  */
-export function settleInjectorFor(session: ObserverSession | null): SettleInjector {
-  // A DEPUTY-HOSTED SESSION GETS THE INERT INJECTOR, and that is not an
+export function settleInjectorFor(
+  session: ObserverSession | null,
+  nodeSettled: ReadonlySet<NodeSettledObservable> = NO_NODE_SETTLES,
+): SettleInjector {
+  // A DEPUTY-HOSTED SESSION GETS NO IN-SCRIPT CLIENT, and that is not an
   // oversight (DEPOBS1). The in-script client below reaches its socket through
   // `do shell script`, which is the exact phrase the broker refuses — so on a
   // routed host every generated script must come out byte-identically to the
@@ -1444,11 +1499,23 @@ export function settleInjectorFor(session: ObserverSession | null): SettleInject
   // This is also what keeps the four certified quadrants intact (#698,
   // DEFAULTS3): {observer up/down} × {pre-fill on/off} are certified against
   // exactly two script shapes, and a routed drive produces the polling one.
-  if (session === null || session.transport === "deputy") return INERT;
+  //
+  // WHAT DEPOBS3 ADDS is not a third script shape but a third LICENCE for the
+  // existing non-polling one: where node has itself waited out the cross-hop
+  // observable a script's opening poll was going to look for, that poll — and
+  // nothing else in the script — is dropped. A routed session is the only one
+  // that can carry such a claim: a sidecar waits in-script already, and with no
+  // observer at all nobody waited for anything.
+  if (session === null) return INERT;
+  if (session.transport === "deputy") return nodeSettledInjector(nodeSettled);
   const sock = escapeAppleScript(session.socketPath);
   const token = escapeAppleScript(session.token);
   return {
     live: true,
+    // A sidecar settles IN-SCRIPT, so there is never a node-side wait for a
+    // generator to skip a poll on: `live` alone already selects the
+    // non-polling form everywhere DEPOBS3's claim would.
+    nodeSettled: NO_NODE_SETTLES,
     handlers: () => `on obsReq(payload, waitSecs)
 	-- ONE request/response over the settle sidecar's socket. No AX call, no Apple
 	-- event, no content read: the app has already said what happened and this
