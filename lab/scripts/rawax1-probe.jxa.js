@@ -36,19 +36,25 @@
 // every state the recipe reaches.
 //
 // NOTHING HERE COMMITS unless the cell says so in its name (`setvalue` does, and
-// says what it landed). Every other cell dismisses with the dialog's own Cancel.
+// says what it landed). Every other cell tears down through `dismiss`, which is
+// the shipped cleanup ladder — Cancel, then Escape — because run 1 found the
+// attached sheet refusing an addressed Cancel press and wedging everything after
+// it (see `escapeDialog`).
 //
 // usage: osascript -l JavaScript rawax1-probe.jxa.js <cell> [arg…]
 //   shape                 full shape dump of the open dialog (JSON)
 //   prims  [reps]         the primitive equivalence + per-call timing matrix
 //   menu                  pop-up menu: open, enumerate, cascade, press
 //   setvalue <n>          AXValue on the interval field — does the binding fire?
-//   dates                 localized menu-item titles parsed in JXA
+//   dates                 localized menu-item titles, four candidate parsers
 //   menubar               AXEnabled of Items ▸ Repeat… with the menu closed
-//   rowselect <title>     AXSelect / AXSelectedRows on a content-table row
+//   rowselect <title>     AXSelected on a content-table row
 //   drive  <freq>         the whole dialog entry, raw AX only, counted
 //   open                  open the Repeat dialog (raw AX) and report the shell
-//   cancel                press the open dialog's own Cancel
+//   cancel                press the open dialog's own Cancel (the first rung)
+//   escape                synthesize Escape (the second rung)
+//   dismiss               the ladder: Cancel, then Escape, verified
+//   dismissprobe          WHICH rung dismisses, after a pop-up menu was opened
 ObjC.import("Foundation");
 ObjC.import("AppKit");
 ObjC.import("ApplicationServices");
@@ -78,13 +84,32 @@ function attr(el, name) {
   if ($.AXUIElementCopyAttributeValue(el, $(name), out) !== 0) return null;
   return ObjC.castRefToObject(out[0]);
 }
-/** A string attribute, or "" — the shape every discriminator here compares. */
+/**
+ * A string attribute, or "" — the shape every discriminator here compares.
+ *
+ * AN ABSENT ATTRIBUTE IS "", NOT AN OBJECT (measured, run 1). A batched
+ * `AXUIElementCopyMultipleAttributeValues` returns an ERROR PLACEHOLDER object
+ * in the slot of every attribute the element does not have, and a naive
+ * `String(j)` renders that as `[object NSObject]` — which is exactly what the
+ * first run printed for the shell's absent `AXTitle`/`AXIdentifier` and for the
+ * weekday row-add button, whose `AXTitle` is genuinely not a string.
+ *
+ * `cgTexts` maps AppleScript's `missing value` to `""`, so the port must too or
+ * the settle's shape signature is not byte-identical to the one BEEP1 certified.
+ * Numbers and booleans DO stringify (a checkbox's value is 0/1); anything else
+ * is absent.
+ */
+function jsString(j) {
+  if (j === null || j === undefined) return "";
+  if (typeof j === "string") return j;
+  if (typeof j === "number" || typeof j === "boolean") return String(j);
+  return "";
+}
 function sv(el, name) {
   var v = attr(el, name);
   if (!v) return "";
   try {
-    var j = v.js;
-    return typeof j === "string" ? j : String(j);
+    return jsString(v.js);
   } catch (e) {
     return "";
   }
@@ -155,7 +180,7 @@ function node(el) {
     } catch (e) {
       return "";
     }
-    return j === null || j === undefined ? "" : typeof j === "string" ? j : String(j);
+    return jsString(j);
   }
   var f = null;
   try {
@@ -464,19 +489,104 @@ function cellOpen() {
   return counted(r);
 }
 
-// ========================================================== cell: cancel
-function cancelDialog() {
+// ================================================= cells: cancel · escape
+function cancelDialog(waitMs) {
   var sh = findShell();
   if (sh === null) return { ok: true, why: "no dialog open" };
   var buttons = childrenByRole(sh.el, "AXButton");
   for (var i = 0; i < buttons.length; i++) {
-    if (sv(buttons[i], "AXTitle") === "Cancel") {
-      var err = press(buttons[i]);
-      sleep(250);
-      return { ok: err === 0 && findShell() === null, err: err };
-    }
+    if (sv(buttons[i], "AXTitle") !== "Cancel") continue;
+    var err = press(buttons[i]);
+    // WAIT FOR THE DISMISSAL, do not snap (run 1 read the shell 250 ms after the
+    // press and called a slow close a failure). The verdict is still the shell.
+    var deadline = now() + (waitMs || 2000);
+    while (now() < deadline && findShell() !== null) sleep(50);
+    return { ok: err === 0 && findShell() === null, err: err, via: "cancel-button" };
   }
   return { ok: false, why: "the open dialog has no Cancel button" };
+}
+/**
+ * THE ESCAPE RUNG, and the rig's own reliable teardown.
+ *
+ * Run 1 found the attached Repeat sheet REFUSING an addressed Cancel press —
+ * `AXError 0`, dialog still standing — through BOTH raw AX and System Events,
+ * after a cell had opened and closed one of its pop-up menus; a synthesized
+ * Escape dismissed it instantly. That is the shipped cleanup ladder's own order
+ * (Cancel → Escape → close+reopen) arriving from a new direction, and it is why
+ * every cell here tears down with `dismiss` rather than with `cancel`.
+ *
+ * Escape is a KEYSTROKE and goes to whatever owns the screen, so it carries the
+ * same frontmost law the drive's own abort does — asserted here, in the same
+ * script, before the event is posted.
+ */
+function escapeDialog() {
+  var front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+  var bundle = "";
+  try {
+    bundle = String(ObjC.unwrap(front.bundleIdentifier));
+  } catch (e) {
+    bundle = "";
+  }
+  if (bundle !== "com.culturedcode.ThingsMac") {
+    return { ok: false, why: "refused to press Escape: " + bundle + " is frontmost, not Things" };
+  }
+  var before = findShell() !== null;
+  var kd = $.CGEventCreateKeyboardEvent($(), 53, true);
+  var ku = $.CGEventCreateKeyboardEvent($(), 53, false);
+  $.CGEventPost($.kCGHIDEventTap, kd);
+  sleep(20);
+  $.CGEventPost($.kCGHIDEventTap, ku);
+  var deadline = now() + 2000;
+  while (now() < deadline && findShell() !== null) sleep(50);
+  return { ok: findShell() === null, before: before, via: "escape" };
+}
+/**
+ * cell `dismissprobe` — MEASURE the run-1 observation instead of retelling it.
+ *
+ * Open the dialog, open a pop-up menu and close it again (the sequence that
+ * preceded the wedge), then try the ladder's rungs IN ORDER and report which
+ * one actually dismissed. A cell, not an anecdote: if Cancel works here the
+ * run-1 observation was a one-off and says so.
+ */
+function cellDismissProbe() {
+  var sh = findShell();
+  if (sh === null) return counted({ ok: false, why: "open the Repeat dialog first" });
+  var freq = childrenByRole(sh.el, "AXPopUpButton")[0];
+  var opened = false;
+  if (freq) {
+    press(freq);
+    var dl = now() + 2000;
+    while (now() < dl && !opened) {
+      var ch = kids(freq);
+      for (var i = 0; i < ch.length; i++) if (sv(ch[i], "AXRole") === "AXMenu") opened = true;
+      if (!opened) sleep(10);
+    }
+    press(freq);
+    sleep(400);
+  }
+  var byCancel = cancelDialog(2000);
+  var byEscape = byCancel.ok ? { skipped: true } : escapeDialog();
+  return counted({
+    ok: byCancel.ok || byEscape.ok === true,
+    menuWasOpened: opened,
+    cancel: byCancel,
+    escape: byEscape,
+    stillOpen: findShell() !== null,
+  });
+}
+
+/** Cancel first, Escape second — the ladder, and what the rig tears down with. */
+function dismissDialog() {
+  var byCancel = cancelDialog(1500);
+  if (byCancel.ok) return { ok: true, via: byCancel.via || "none", cancelWorked: true };
+  var byEscape = escapeDialog();
+  return {
+    ok: byEscape.ok,
+    via: byEscape.ok ? "escape" : "neither",
+    cancelWorked: false,
+    cancel: byCancel,
+    escape: byEscape,
+  };
 }
 
 // =========================================================== cell: prims
@@ -840,46 +950,86 @@ function cellSetValue(want) {
 
 // =========================================================== cell: dates
 //
-// The occurrence menu's item titles are LOCALIZED ("Sun, Jul 12, 2026") and, for
-// near dates, RELATIVE ("Today"). AppleScript resolves them with `date "<s>"`,
-// which is the system parser; JXA has no such operator, so the port needs a
-// spelling that agrees with it on every title the menu can produce. This cell
-// runs both against the live menu's own titles.
-function parseJXA(s) {
-  // Candidate A: NSDataDetector, the same CoreServices date parser the system
-  // uses for data detection — locale-aware, and needs no format string.
+// THE OCCURRENCE MENU'S TITLES. They are LOCALIZED ("Sun, Jul 12, 2026") and,
+// for near dates, RELATIVE ("Today"). AppleScript resolves them with the `date`
+// operator — the SYSTEM parser — and JXA has no such operator, so the port needs
+// a spelling that agrees with it on every title the menu can produce. A single
+// disagreement disqualifies a candidate: a first occurrence that parses
+// differently is a series that starts on the wrong day (#625's error class).
+//
+// FOUR CANDIDATES, because run 1's single one (NSDataDetector) matched NOTHING —
+// including a well-formed "Jan 1, 2027", which is a rig smell rather than a
+// finding, so it is re-asked two ways here:
+//
+//   A  NSDataDetector, range from the JS string's length
+//   B  NSDataDetector, range from the NSString's own length
+//   C  NSDateFormatter against the formats the menu can produce, en_US_POSIX
+//   D  AppleScript's OWN `date` operator, IN-PROCESS through NSAppleScript —
+//      no Apple event to System Events, no shell, and therefore nothing the
+//      deputy's broker refuses. This is the candidate with the strongest
+//      equivalence claim available: it is not a parser that agrees with the
+//      shipped one, it IS the shipped one.
+//
+// Run against the live menu's own titles wherever a dialog is open, plus a
+// synthetic corpus so the cell reports either way.
+function ymdOf(d) {
+  if (!d || d.isNil()) return null;
+  var c = $.NSCalendar.currentCalendar;
+  return (
+    c.componentFromDate($.NSCalendarUnitYear, d) +
+    "-" +
+    ("0" + c.componentFromDate($.NSCalendarUnitMonth, d)).slice(-2) +
+    "-" +
+    ("0" + c.componentFromDate($.NSCalendarUnitDay, d)).slice(-2)
+  );
+}
+/** NSTextCheckingTypeDate is `1 << 4`; the bridged constant is not dependable. */
+var K_DATE = 16;
+function parseDetectorA(s) {
   try {
-    // NSTextCheckingTypeDate is `1 << 4`; the bridged constant is not reliably
-    // exposed, so the literal is the fallback and the comment is the reference.
-    var kDate = 16;
-    try {
-      if (typeof $.NSTextCheckingTypeDate === "number") kDate = $.NSTextCheckingTypeDate;
-    } catch (e) {
-      kDate = 16;
-    }
-    var det = $.NSDataDetector.dataDetectorWithTypesError(kDate, $());
-    if (det && !det.isNil()) {
-      var str = $(s);
-      var m = det.firstMatchInStringOptionsRange(str, 0, $.NSMakeRange(0, str.length));
-      if (m && !m.isNil() && m.date && !m.date.isNil()) {
-        var cal = $.NSCalendar.currentCalendar;
-        return (
-          cal.componentFromDate($.NSCalendarUnitYear, m.date) +
-          "-" +
-          ("0" + cal.componentFromDate($.NSCalendarUnitMonth, m.date)).slice(-2) +
-          "-" +
-          ("0" + cal.componentFromDate($.NSCalendarUnitDay, m.date)).slice(-2)
-        );
-      }
-    }
+    var det = $.NSDataDetector.dataDetectorWithTypesError(K_DATE, null);
+    if (!det || det.isNil()) return "NO-DETECTOR";
+    var m = det.firstMatchInStringOptionsRange($(s), 0, $.NSMakeRange(0, s.length));
+    if (!m || m.isNil()) return null;
+    return ymdOf(m.date);
   } catch (e) {
     return "THREW " + e;
   }
-  return null;
 }
-function parseSE(s) {
-  // AppleScript's own `date "<s>"`, reached from JXA the only way there is: a
-  // scripting component. This is the arm the port must MATCH.
+function parseDetectorB(s) {
+  try {
+    var det = $.NSDataDetector.dataDetectorWithTypesError(K_DATE, null);
+    if (!det || det.isNil()) return "NO-DETECTOR";
+    var ns = $(s);
+    var m = det.firstMatchInStringOptionsRange(ns, 0, $.NSMakeRange(0, Number(ns.length)));
+    if (!m || m.isNil()) return null;
+    return ymdOf(m.date);
+  } catch (e) {
+    return "THREW " + e;
+  }
+}
+var MENU_DATE_FORMATS = ["EEE, MMM d, yyyy", "MMM d, yyyy", "MMMM d, yyyy", "M/d/yy"];
+function parseFormatter(s) {
+  try {
+    for (var i = 0; i < MENU_DATE_FORMATS.length; i++) {
+      var f = $.NSDateFormatter.alloc.init;
+      f.locale = $.NSLocale.alloc.initWithLocaleIdentifier("en_US_POSIX");
+      f.dateFormat = MENU_DATE_FORMATS[i];
+      var d = f.dateFromString($(s));
+      if (d && !d.isNil()) return ymdOf(d);
+    }
+    return null;
+  } catch (e) {
+    return "THREW " + e;
+  }
+}
+/**
+ * AppleScript's own `date` operator, in-process. `NSAppleScript` compiles and
+ * runs an OSA script inside THIS process — it sends no Apple event to System
+ * Events and shells out to nothing, so it is neither the round-trip this
+ * campaign is removing nor a phrase the broker's lint refuses.
+ */
+function parseAppleScript(s) {
   SEN++;
   try {
     var src =
@@ -889,40 +1039,59 @@ function parseSE(s) {
     var scr = $.NSAppleScript.alloc.initWithSource($(src));
     var errRef = Ref();
     var res = scr.executeAndReturnError(errRef);
-    if (!res || res.isNil()) return "ERR";
+    if (!res || res.isNil()) return "NOPARSE";
     return String(res.stringValue.js);
   } catch (e) {
     return "THREW " + e;
   }
 }
+/** Open a pop-up, harvest its item titles, close it again. */
+function menuTitlesOf(pu) {
+  press(pu);
+  var deadline = now() + 2000;
+  var menu = null;
+  while (now() < deadline && menu === null) {
+    var ch = kids(pu);
+    for (var k = 0; k < ch.length; k++) if (sv(ch[k], "AXRole") === "AXMenu") menu = ch[k];
+    if (menu === null) sleep(10);
+  }
+  if (menu === null) return { titles: [], cascade: null };
+  var items = kids(menu);
+  var titles = items.map(function (m) {
+    return sv(m, "AXTitle");
+  });
+  // THE `More…` CASCADE — is the submenu an AXChildren AXMenu without a click?
+  var cascade = null;
+  if (items.length > 0) {
+    var last = items[items.length - 1];
+    var sub = submenuOf(last);
+    cascade = {
+      title: sv(last, "AXTitle"),
+      hasSubmenuChild: sub !== null,
+      submenuItems: sub === null ? 0 : kids(sub).length,
+      actions: actionsOf(last).join(","),
+    };
+  }
+  press(pu);
+  sleep(300);
+  return { titles: titles, cascade: cascade };
+}
 function cellDates() {
   var sh = findShell();
   var titles = [];
+  var cascade = null;
   if (sh !== null) {
     var g = cadenceGroup(sh.el);
     var pus = g === null ? [] : childrenByRole(g, "AXPopUpButton");
-    // The `Next:` occurrence pop-up is the one whose items are dates; open each
-    // in turn and take the first menu that offers any.
+    // The `Next:` occurrence pop-up is the one whose items are dates.
     for (var i = 0; i < pus.length && titles.length === 0; i++) {
-      press(pus[i]);
-      var deadline = now() + 1500;
-      var menu = null;
-      while (now() < deadline && menu === null) {
-        var ch = kids(pus[i]);
-        for (var k = 0; k < ch.length; k++) if (sv(ch[k], "AXRole") === "AXMenu") menu = ch[k];
-        if (menu === null) sleep(5);
+      var got = menuTitlesOf(pus[i]);
+      if (got.titles.length > 1 && /\d{4}|\d\/\d/.test(got.titles.join(" "))) {
+        titles = got.titles;
+        cascade = got.cascade;
       }
-      if (menu !== null) {
-        var got = kids(menu).map(function (m) {
-          return sv(m, "AXTitle");
-        });
-        if (got.length > 1 && /\d{4}/.test(got.join(" "))) titles = got;
-      }
-      press(pus[i]);
-      sleep(120);
     }
   }
-  // Plus the synthetic corpus, so the cell reports even with no dialog open.
   var corpus = titles.concat([
     "Today",
     "Tomorrow",
@@ -930,23 +1099,59 @@ function cellDates() {
     "Mon, Aug 3, 2026",
     "Jan 1, 2027",
     "Wednesday",
+    "7/12/26",
   ]);
   var seen = {};
   var rows = [];
-  for (var t = 0; t < corpus.length; t++) {
+  for (var t = 0; t < corpus.length && rows.length < 24; t++) {
     var s = corpus[t];
     if (s === "" || seen[s]) continue;
     seen[s] = true;
-    var a = parseJXA(s);
-    var b = parseSE(s);
+    var applescript = String(parseAppleScript(s));
+    var a = String(parseDetectorA(s));
+    var b = String(parseDetectorB(s));
+    var c = String(parseFormatter(s));
     rows.push({
       title: s,
-      jxa: a === null ? "(no match)" : a,
-      applescript: b,
-      agree: String(a) === String(b),
+      applescript: applescript,
+      detectorA: a,
+      detectorB: b,
+      formatter: c,
+      // The comparison the port cares about: does the candidate say what the
+      // SHIPPED parser says? "null" and "NOPARSE" are the same verdict — the
+      // shipped code falls through to its relative-word resolver on both.
+      agreeA: sameVerdict(a, applescript),
+      agreeB: sameVerdict(b, applescript),
+      agreeC: sameVerdict(c, applescript),
     });
   }
-  return counted({ ok: true, fromLiveMenu: titles, rows: rows });
+  var timing = {
+    detectorMs: slope(30, function () {
+      return parseDetectorB("Sun, Jul 12, 2026");
+    }),
+    formatterMs: slope(30, function () {
+      return parseFormatter("Sun, Jul 12, 2026");
+    }),
+    appleScriptMs: slope(15, function () {
+      return parseAppleScript("Sun, Jul 12, 2026");
+    }),
+  };
+  return counted({
+    ok: true,
+    fromLiveMenu: titles.slice(0, 12),
+    liveMenuCount: titles.length,
+    cascade: cascade,
+    rows: rows,
+    timing: timing,
+  });
+}
+/** "no match" and AppleScript's "NOPARSE" are the same verdict, not a mismatch. */
+function sameVerdict(candidate, applescript) {
+  var none = function (v) {
+    return v === "null" || v === "NOPARSE" || v === "" || v === "undefined";
+  };
+  if (none(candidate) && none(applescript)) return true;
+  return candidate === applescript;
 }
 
 // ========================================================= cell: menubar
@@ -1168,7 +1373,7 @@ function cellDrive(freqLabel) {
   });
   stamp("audit read");
 
-  var cancelled = cancelDialog();
+  var cancelled = dismissDialog();
   stamp("cancelled");
 
   return counted({
@@ -1199,6 +1404,15 @@ function run(argv) {
       break;
     case "cancel":
       res = counted(cancelDialog());
+      break;
+    case "escape":
+      res = counted(escapeDialog());
+      break;
+    case "dismiss":
+      res = counted(dismissDialog());
+      break;
+    case "dismissprobe":
+      res = cellDismissProbe();
       break;
     case "prims":
       res = cellPrims(argv.length > 1 ? Number(argv[1]) : 50);

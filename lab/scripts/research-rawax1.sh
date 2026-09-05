@@ -137,17 +137,38 @@ print("tp=%s fu=%s fa=%s ts=%s rc=%s ed=%s of=[%s] next=%s icStart=%s icCount=%s
     dpk(row[1]),dpk(row[4]),row[2],row[5],tail))
 EOF
 
+# A GUEST-SIDE TIMEOUT (run 1's most expensive lesson). An `osascript` that
+# talks to Things HANGS INDEFINITELY while a Repeat sheet is open — the app gates
+# its own AppleScript port on the sheet — and an ssh with no deadline hangs the
+# whole driver with it. macOS ships no `timeout(1)`, so this is the smallest
+# thing that is one.
+lab_ssh "$IP" 'cat > ~/labh/tmo.sh && chmod +x ~/labh/tmo.sh' <<'TMOEOF'
+#!/bin/bash
+# usage: tmo.sh <seconds> <command...>   -> exit 124 on timeout, like timeout(1)
+secs="$1"; shift
+"$@" &
+child=$!
+( sleep "$secs"; kill -9 "$child" 2>/dev/null ) &
+killer=$!
+wait "$child" 2>/dev/null; code=$?
+kill -9 "$killer" 2>/dev/null
+wait "$killer" 2>/dev/null
+[ "$code" -ge 128 ] && code=124
+exit "$code"
+TMOEOF
+
 lab_scp lab/guest/beep-sentinel.sh "admin@$IP:/Users/admin/labh/beep-sentinel.sh" >/dev/null
 lab_ssh "$IP" 'chmod +x ~/labh/beep-sentinel.sh' </dev/null
 lab_scp lab/scripts/rawax1-probe.jxa.js "admin@$IP:/Users/admin/labh/rawax1-probe.jxa.js" >/dev/null
 
 beep_reset() { lab_ssh "$IP" '~/labh/beep-sentinel.sh reset' </dev/null >/dev/null 2>&1; }
+beep_mark()  { lab_ssh "$IP" "~/labh/beep-sentinel.sh mark $(printf '%q' "$1")" </dev/null >/dev/null 2>&1; }
 beep_assert() {
   lab_ssh "$IP" "THINGS_LAB_BEEPS_OK=1 ~/labh/beep-sentinel.sh assert --name $(printf '%q' "$1")" \
     </dev/null 2>&1 | sed 's/^/    /' | tee -a "$REPORT"
 }
 gq() { lab_ssh "$IP" "~/labh/gsql.sh $(printf '%q' "$1")" </dev/null; }
-axq() { lab_ssh "$IP" "osascript -e $(printf '%q' "$1")" </dev/null 2>&1; }
+axq() { lab_ssh "$IP" "~/labh/tmo.sh ${AXQ_TMO:-30} osascript -e $(printf '%q' "$1")" </dev/null 2>&1; }
 rsum() { lab_ssh "$IP" "python3 ~/labh/rsum.py '$1' 2>&1" </dev/null; }
 anyid() { gq "SELECT uuid FROM TMTask WHERE title='$1' AND trashed=0 ORDER BY creationDate DESC LIMIT 1"; }
 tmplid() { gq "SELECT uuid FROM TMTask WHERE title='$1' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1"; }
@@ -158,7 +179,7 @@ ips_count() { lab_ssh "$IP" 'ls ~/Library/Logs/DiagnosticReports/Things3*.ips 2>
 # artifact and pulls the fields the report needs out of it with python3, never by
 # eyeballing (a cell that is read by grep is a cell that can be misread).
 probe() {
-  lab_ssh "$IP" "osascript -l JavaScript ~/labh/rawax1-probe.jxa.js $*" </dev/null 2>&1
+  lab_ssh "$IP" "~/labh/tmo.sh ${PROBE_TMO:-150} osascript -l JavaScript ~/labh/rawax1-probe.jxa.js $*" </dev/null 2>&1
 }
 jget() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1], {"d":d}))' "$1" 2>/dev/null; }
 
@@ -233,6 +254,10 @@ end tell")
 select_item() {
   local uuid="$1" want="$2" i sel
   [ -n "$uuid" ] || { notef "  select_item REFUSED: empty uuid for '$want'"; return 1; }
+  # NEVER ACTIVATE INTO AN OPEN DIALOG (run 1). `tell application "Things3" to
+  # activate` is an Apple event to Things, and Things gates its AppleScript port
+  # on an open sheet, so it hangs until the sheet goes. Clear it first.
+  probe dismiss >/dev/null
   dismiss_alerts
   for i in 1 2 3 4 5; do
     lab_ssh "$IP" "open -g 'things:///show?id=$uuid'; sleep 3" </dev/null
@@ -250,7 +275,25 @@ open_dialog_raw() {
   dismiss_alerts
   probe open
 }
-cancel_dialog_raw() { probe cancel >/dev/null; }
+# TEAR DOWN THROUGH THE LADDER, AND VERIFY (run 1). An addressed Cancel press
+# returned AXError 0 and left the sheet standing — through raw AX AND through
+# System Events — after a cell had opened one of the dialog's pop-up menus; the
+# next cell's `tell application "Things3" to activate` then hung forever on the
+# sheet gate and the run was lost from there. So the rig dismisses through the
+# shipped ladder (Cancel, then Escape), CHECKS, and re-warms the app if neither
+# worked rather than carrying a wedged guest into the next cell.
+dismiss_dialog() {
+  local r
+  r=$(probe dismiss)
+  case "$r" in
+    *'"ok": true'*) return 0 ;;
+  esac
+  notef "  !! the dialog would not dismiss — re-warming Things"
+  notef "     $(echo "$r" | tr -d '\n' | cut -c1-300)"
+  warm
+  return 1
+}
+cancel_dialog_raw() { dismiss_dialog; }
 
 # Select a frequency through the raw path (used by the shape trace between inputs).
 select_freq_se() {
@@ -277,6 +320,7 @@ run_shape() {
   local state
   for state in "after completion" daily weekly monthly yearly; do
     beep_reset
+    beep_mark "$state"
     open_dialog_raw >"$OUT/json/open-$(echo "$state" | tr ' ' '-').json" 2>&1
     note "  --- state: $state"
     note "      opened: $(jget 'd.get("ok")' <"$OUT/json/open-$(echo "$state" | tr ' ' '-').json") form=$(jget 'd.get("form")' <"$OUT/json/open-$(echo "$state" | tr ' ' '-').json")"
@@ -375,6 +419,7 @@ run_menu() {
   local u; u=$(anyid "RAWAX1-Shape"); [ -n "$u" ] || u=$(mkseed "RAWAX1-Menu" "$PINNED")
   select_item "$u" "$(gq "SELECT title FROM TMTask WHERE uuid='$u'")" || return 1
   beep_reset
+  beep_mark menu
   open_dialog_raw >/dev/null
   probe menu >"$OUT/json/menu.json" 2>&1
   python3 - "$OUT/json/menu.json" <<'PY' | tee -a "$REPORT"
@@ -403,6 +448,7 @@ run_setvalue() {
   note "  before: $(rsum "$u")"
   select_item "$u" "RAWAX1-SetValue" || return 1
   beep_reset
+  beep_mark setvalue
   open_dialog_raw >/dev/null
   # A FIXED frequency, so the group holds exactly ONE numeric field and the
   # addressing question is not mixed into the answer.
@@ -435,14 +481,24 @@ run_dates() {
   python3 - "$OUT/json/dates.json" <<'PY' | tee -a "$REPORT"
 import json, sys
 j = json.load(open(sys.argv[1]))
-print("      live menu titles: %s" % ", ".join(j.get("fromLiveMenu", [])[:8]))
-bad = 0
+if not j.get("ok"):
+    print("      FAILED: %s" % j.get("why")); raise SystemExit
+print("      live menu: %d item(s) — %s" % (j.get("liveMenuCount", 0), ", ".join(j.get("fromLiveMenu", [])[:8])))
+print("      cascade:   %s" % j.get("cascade"))
+print("      %-22s %-12s %-12s %-12s %-12s" % ("title", "applescript", "detectorA", "detectorB", "formatter"))
+bad = {"A": 0, "B": 0, "C": 0}
 for r in j.get("rows", []):
-    flag = "" if r["agree"] else "   <-- DISAGREES"
-    if not r["agree"]:
-        bad += 1
-    print("      %-24s jxa=%-12s applescript=%-12s%s" % (r["title"][:24], r["jxa"], r["applescript"], flag))
-print("      disagreements: %d" % bad)
+    marks = "".join(k for k in ("A", "B", "C") if not r["agree" + k])
+    for k in ("A", "B", "C"):
+        if not r["agree" + k]:
+            bad[k] += 1
+    print("      %-22s %-12s %-12s %-12s %-12s %s" % (
+        r["title"][:22], r["applescript"], r["detectorA"], r["detectorB"], r["formatter"],
+        ("  <-- " + marks + " disagree") if marks else ""))
+print("      disagreements: detectorA=%(A)d detectorB=%(B)d formatter=%(C)d  (AppleScript is the reference)" % bad)
+t = j.get("timing", {})
+print("      per-call ms: detector=%s formatter=%s appleScript(NSAppleScript, in-process)=%s"
+      % (t.get("detectorMs"), t.get("formatterMs"), t.get("appleScriptMs")))
 PY
   cancel_dialog_raw
 }
@@ -477,6 +533,33 @@ for k, v in j.items():
 PY
 }
 
+run_dismissprobe() {
+  note "=== dismissprobe — which rung of the cleanup ladder actually dismisses"
+  note "    (run 1: an addressed Cancel press returned AXError 0 and left the sheet standing)"
+  local u; u=$(anyid "RAWAX1-Shape"); [ -n "$u" ] || u=$(mkseed "RAWAX1-Dismiss" "$PINNED")
+  select_item "$u" "$(gq "SELECT title FROM TMTask WHERE uuid='$u'")" || return 1
+  local i
+  for i in 1 2 3; do
+    beep_reset
+    beep_mark "dismiss-$i"
+    open_dialog_raw >/dev/null
+    probe dismissprobe >"$OUT/json/dismissprobe-$i.json" 2>&1
+    note "  --- round $i"
+    python3 - "$OUT/json/dismissprobe-$i.json" <<'PY' | tee -a "$REPORT"
+import json, sys
+j = json.load(open(sys.argv[1]))
+c = j.get("cancel") or {}
+e = j.get("escape") or {}
+print("      menu opened first: %s" % j.get("menuWasOpened"))
+print("      cancel: ok=%s err=%s%s" % (c.get("ok"), c.get("err"), (" why=" + str(c.get("why"))) if c.get("why") else ""))
+print("      escape: %s" % ("(not needed)" if e.get("skipped") else "ok=%s" % e.get("ok")))
+print("      still open at the end: %s" % j.get("stillOpen"))
+PY
+    beep_assert "dismissprobe/$i"
+    dismiss_dialog >/dev/null
+  done
+}
+
 run_cost() {
   note "=== cost — the whole dialog entry, raw AX only, counted"
   local u; u=$(anyid "RAWAX1-Shape"); [ -n "$u" ] || u=$(mkseed "RAWAX1-Cost" "$PINNED")
@@ -484,6 +567,7 @@ run_cost() {
   local f
   for f in weekly monthly; do
     beep_reset
+    beep_mark "cost-$f"
     open_dialog_raw >/dev/null
     probe drive "$f" >"$OUT/json/cost-$f.json" 2>&1
     note "  --- $f"
@@ -513,6 +597,7 @@ for cell in $CELLS; do
     dates) run_dates ;;
     menubar) run_menubar ;;
     rowselect) run_rowselect ;;
+    dismissprobe) run_dismissprobe ;;
     cost) run_cost ;;
     teardown) cleanup; trap - EXIT; exit 0 ;;
     *) note "unknown cell: $cell" ;;
