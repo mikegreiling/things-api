@@ -2640,9 +2640,10 @@ export function registerWriteCommands(program: Command): void {
             "Pass exactly one destination: --before/--after another area, or --first/--last. " +
             "This visibly drives the Things app (the window comes forward and the sidebar may " +
             "scroll); the area's projects and to-dos are untouched. It reads the sidebar " +
-            "through the Accessibility API between gestures, which on a large sidebar has " +
-            "measured 16-18s per read, so it is off until `things config set " +
-            "experimental-area-reorder true`.",
+            "through the Accessibility API between gestures and needs the app to itself while " +
+            "it runs — every other change from this package waits for it — so it is off until " +
+            "`things config set experimental-area-reorder true`, and is meant for a host nobody " +
+            "is working in.",
         )
         .option("--before <area>", "place it immediately above this area (uuid or unique name)")
         .option("--after <area>", "place it immediately below this area (uuid or unique name)")
@@ -3106,8 +3107,8 @@ export function registerWriteCommands(program: Command): void {
               "re-ranking drives the local Things app (keyboard shortcuts on the heading row) " +
               "and covers the open headings only — a completed or canceled heading is not shown " +
               "in the project view, so it is skipped over and cannot be moved. AREAS: this drives the " +
-              "local Things app (sidebar drag) and reads the sidebar between gestures, which on a " +
-              "large sidebar has measured 16-18s per read — it is off until `things config set " +
+              "local Things app (sidebar drag), reads the sidebar between gestures and needs the " +
+              "app to itself while it runs — it is off until `things config set " +
               "experimental-area-reorder true`. `things area reorder` and `things project " +
               "move-heading` remain as kind-specific spellings.",
           )

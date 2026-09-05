@@ -71,10 +71,13 @@ export interface ThingsApiConfig {
    * transport but the Accessibility API (P6/O13). MAINTAINER RULING 2026-09-02:
    * an AX-driven operation that cannot finish in ~5s on an M1 MacBook Pro is not
    * worth advertising, and the field evidence (#676) puts a single 174-row
-   * sidebar read at 16–18s on that host. Until the operation MEASURES inside that
-   * bar on real hardware it is experimental: off unless this key says otherwise,
-   * refusing with the reason rather than driving a gesture nobody can rely on.
-   * Default false — the only config key in this file that gates one operation.
+   * sidebar read at 16–18s on that host. REVISED 2026-09-05: an operation of that
+   * class is off by DEFAULT rather than removed — it is workable on a host where
+   * nobody is moving the cursor or refocusing windows, provided no parallel write
+   * can move a sidebar row under the drag (the composite mutation lock, held end
+   * to end by the drive). So this key is a standing default, not a countdown to
+   * promotion-or-deletion. Default false — the only config key in this file that
+   * gates one operation.
    */
   experimentalAreaReorder: boolean;
   /**

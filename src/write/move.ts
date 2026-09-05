@@ -62,7 +62,7 @@ import type {
 import type { HazardId } from "./guards.ts";
 import { type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import type { VectorId } from "./vectors/types.ts";
-import { runMutation } from "./pipeline.ts";
+import { runLockedComposite, runMutation } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
 
 // --------------------------------------------------------------- request shapes
@@ -1092,6 +1092,39 @@ function containerKey(target: ScopeTarget): string {
   return target.container !== undefined ? `${target.scope}:${target.container}` : target.scope;
 }
 
+/**
+ * ONE composite mutation lock around a whole move/reorder verb (ruling
+ * 2026-09-05, #676).
+ *
+ * Every verb below is a read-modify-write spread over several legs: a variadic
+ * move walks a set, a reposition parks a row through a bounce protocol and
+ * re-enters it, a sidebar drag plans its geometry from a census and only then
+ * lands the gesture. Held PER LEG — which is all the pipeline's own lock gives
+ * them — another writer interleaves at any leg boundary, and what the verb
+ * believes about the database between its legs (the parked row, the planned
+ * slot, the sidebar's row order) stops being true. The ruling names the sidebar
+ * case explicitly: "adding a new active project would change the items in the
+ * sidebar and throw off drag target calculations".
+ *
+ * Held end to end, a second writer WAITS (bounded, `waitMs`) and is then refused
+ * with the holder named. Legs inside the hold see a reentrant no-op, so nothing
+ * below needs to know it is under a lock.
+ *
+ * A DRY RUN never takes it: a preview mutates nothing, and making it queue
+ * behind a live drive would turn "what would this do?" into a 30-second wait.
+ */
+function lockedMove(
+  deps: WriteDeps,
+  op: MoveOp,
+  options: WriteOptions,
+  body: () => Promise<MoveResult>,
+): Promise<MoveResult> {
+  if (options.dryRun === true) return body();
+  return runLockedComposite(deps, op, body, (contention) =>
+    refused(op, "blocked", contention.detail, contention.remediation),
+  );
+}
+
 function refused(
   op: MoveOp,
   refusal: MoveRefused["refusal"],
@@ -1171,7 +1204,15 @@ function resolveMovee(deps: WriteDeps, ref: string): { uuid: string } | Referenc
 
 // --------------------------------------------------------------- todo move
 
-export async function runTodoMove(
+export function runTodoMove(
+  deps: WriteDeps,
+  request: TodoMoveRequest,
+  options: WriteOptions = {},
+): Promise<MoveResult> {
+  return lockedMove(deps, "todo.move", options, () => runTodoMoveUnlocked(deps, request, options));
+}
+
+async function runTodoMoveUnlocked(
   deps: WriteDeps,
   request: TodoMoveRequest,
   options: WriteOptions = {},
@@ -1527,7 +1568,17 @@ function headingProjectOf(db: DatabaseSync, headingUuid: string | null): string 
 
 // --------------------------------------------------------------- project move
 
-export async function runProjectMove(
+export function runProjectMove(
+  deps: WriteDeps,
+  request: ProjectMoveRequest,
+  options: WriteOptions = {},
+): Promise<MoveResult> {
+  return lockedMove(deps, "project.move", options, () =>
+    runProjectMoveUnlocked(deps, request, options),
+  );
+}
+
+async function runProjectMoveUnlocked(
   deps: WriteDeps,
   request: ProjectMoveRequest,
   options: WriteOptions = {},
@@ -1691,7 +1742,16 @@ function indexKindRefusal(op: MoveOp, rows: MoveeRow[]): MoveRefused {
   );
 }
 
-export async function runInPlaceReorder(
+export function runInPlaceReorder(
+  deps: WriteDeps,
+  op: MoveOp,
+  request: ReorderRequest,
+  options: WriteOptions = {},
+): Promise<MoveResult> {
+  return lockedMove(deps, op, options, () => runInPlaceReorderUnlocked(deps, op, request, options));
+}
+
+async function runInPlaceReorderUnlocked(
   deps: WriteDeps,
   op: MoveOp,
   request: ReorderRequest,
@@ -1938,7 +1998,18 @@ function currentHeadingOrder(deps: WriteDeps, projectUuid: string): string[] {
  * headings reorderable unguarded, with reopens disclosed). `project move-heading`
  * remains the placement verb (cross-project / demotion); THIS is pure re-rank.
  */
-async function runHeadingReorder(
+function runHeadingReorder(
+  deps: WriteDeps,
+  headings: TaskClassified[],
+  position: MovePosition | undefined,
+  options: WriteOptions,
+): Promise<MoveResult> {
+  return lockedMove(deps, "project.move-heading", options, () =>
+    runHeadingReorderUnlocked(deps, headings, position, options),
+  );
+}
+
+async function runHeadingReorderUnlocked(
   deps: WriteDeps,
   headings: TaskClassified[],
   position: MovePosition | undefined,
@@ -2098,7 +2169,18 @@ function planAreaLegs(
  * area is one drag; a set composes sequential drags (non-atomic, disclosed). The
  * discriminating `things area reorder` alias reaches the same path.
  */
-async function runAreaReorderUniversal(
+function runAreaReorderUniversal(
+  deps: WriteDeps,
+  areas: AreaClassified[],
+  position: MovePosition | undefined,
+  options: WriteOptions,
+): Promise<MoveResult> {
+  return lockedMove(deps, "area.reorder", options, () =>
+    runAreaReorderUniversalUnlocked(deps, areas, position, options),
+  );
+}
+
+async function runAreaReorderUniversalUnlocked(
   deps: WriteDeps,
   areas: AreaClassified[],
   position: MovePosition | undefined,

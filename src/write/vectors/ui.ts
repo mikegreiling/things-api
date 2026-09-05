@@ -33,6 +33,7 @@ import { noteInflightStep, trace, traceActive, tracePath } from "../../trace/tra
 import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
 import {
+  axReopenActivateScript,
   blocksGuiDrive,
   interpretFusedSessionLock,
   jxaActivateWithSessionLockScript,
@@ -5786,5 +5787,26 @@ export function createUiVector(
     // the lock established, "the screen is locked" — without it, the hedged
     // locked-or-full-screen sentence SESSGATE has always used.
     probeSessionLock: () => probeSessionLock(tracedRun, STEP_TIMEOUT_MS),
+    // Pre-seed NORMALIZATION seam (LOCKSCR2, #732): the same `reopen` + `activate`
+    // the sidebar drive's own rung runs, so a promote composite whose preflight
+    // found no window can open one instead of refusing. The memo is invalidated
+    // because the window inventory it summarizes is exactly what just changed.
+    reopenWindow: async () => {
+      const res = await tracedRun(
+        {
+          primitive: "resolve",
+          label: "reopen the Things window",
+          script: axReopenActivateScript(),
+        },
+        STEP_TIMEOUT_MS,
+      );
+      reachCache.invalidate();
+      return {
+        ok: res.ok,
+        detail: res.ok
+          ? "Things reopened its window"
+          : res.stderr.trim() || "Things did not answer the reopen",
+      };
+    },
   };
 }

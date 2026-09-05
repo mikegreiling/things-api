@@ -3410,9 +3410,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "anchor. AREAS: this drives the local Things app (sidebar drag) and " +
         "must be turned on with `things config set ui-enabled true` plus dangerously_drive_gui, " +
         "and additionally with `things config set experimental-area-reorder true` — it reads the " +
-        "sidebar through the Accessibility API between gestures, which on a large sidebar has " +
-        "measured 16-18s per read, so a move can take minutes; " +
-        "the areas' projects and to-dos are untouched. Ordering the Today, Inbox, or Someday " +
+        "sidebar through the Accessibility API between gestures and needs the app to itself while " +
+        "it runs, so a far move can take about a minute and every other change from this package " +
+        "waits for it; the areas' projects and to-dos are untouched. Ordering the Today, Inbox, or Someday " +
         "lists, or a project's to-dos, must first be enabled once via `things config set " +
         "allow-experimental true`.",
       inputSchema: {

@@ -45,6 +45,10 @@ Worked example — intent "appears October 16, due October 30" (a 14-day lead):
 
 If you instead write an explicit anchor on the APPEAR date (`--on-day 16` with the same `--when` and lead), you are asking for an off-schedule first occurrence relative to the due-date anchor — for weekly/yearly this is honored and disclosed (the first occurrence appears/dues on your `--when`, the ongoing series dues on the anchor); a monthly combination of this shape is refused as above. When you want the two to agree, either drop the anchor flags (derived) or set the anchor to the due date (`when + N`).
 
+### `make-repeating` on a to-do that ALREADY has a deadline
+
+Its deadline comes with it: the series is deadlined, every occurrence is due the same number of days after its start as the to-do was after its own, and the first occurrence appears on the date the to-do was scheduled for. This is what the app itself does when you open the Repeat dialog on a deadlined to-do, so it is the default here too, and the result says so. To change it, name the geometry: `--deadline --start-days-earlier N` (or `--start-days-earlier 0` for "due on its start date"). A deadline that falls BEFORE the item's start date is not carried over — the app discards that combination.
+
 ### Repeating deadlines on `add-repeating`: two spellings for one geometry
 
 A concrete `--deadline <date>` on `todo add-repeating` sets each occurrence's due date relative to its own start, and the RULE owns it: every occurrence is deadlined, the FIRST one due on the date you name. You state that geometry in ONE of two equivalent ways — the tool does the arithmetic:

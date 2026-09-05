@@ -70,6 +70,7 @@ import {
 import {
   fingerprintLabel,
   readAuthToken,
+  runLockedComposite,
   runMutation,
   type MutationResult,
   type WriteDeps,
@@ -347,7 +348,34 @@ export type ReorderResult =
       cause: MutationResult | null;
     };
 
-export async function runReorder(
+/**
+ * ONE composite mutation lock for the whole verb (ruling 2026-09-05, #676): it
+ * is a read-modify-write across several legs, and a writer interleaving at a leg
+ * boundary is a lost update. The lock is reentrant for the legs inside it, and a
+ * dry run never takes it (a preview mutates nothing and must not queue behind a
+ * live drive).
+ */
+export function runReorder(
+  deps: WriteDeps,
+  params: ReorderParams,
+  options: WriteOptions = {},
+): Promise<ReorderResult> {
+  if (options.dryRun === true) return runReorderUnlocked(deps, params, options);
+  return runLockedComposite(
+    deps,
+    "reorder",
+    () => runReorderUnlocked(deps, params, options),
+    (contention) => ({
+      kind: "blocked",
+      op: "reorder",
+      reason: "lock",
+      detail: contention.detail,
+      remediation: contention.remediation,
+    }),
+  );
+}
+
+async function runReorderUnlocked(
   deps: WriteDeps,
   params: ReorderParams,
   options: WriteOptions = {},

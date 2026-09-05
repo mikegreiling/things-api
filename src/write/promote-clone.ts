@@ -71,7 +71,7 @@ import {
   type PreModDates,
   type RepeatingDiscovery,
 } from "./verify/delta.ts";
-import { seedScheduleFor } from "./vectors/ui-prefill.ts";
+import { prefillAnchorDate, seedScheduleFor } from "./vectors/ui-prefill.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
 import { blocksGuiDrive, lockRefusal } from "./vectors/session-lock.ts";
 
@@ -159,21 +159,40 @@ function blockedUiDrive(op: PromoteOp): MutationResult {
  * Running the standing check FIRST also keeps the probe itself doctrine-clean: no
  * System Events call is attempted on a host that has not granted one.
  */
-async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<MutationResult | null> {
+/**
+ * What the pre-seed preflight decided: a refusal to return, or permission to
+ * proceed plus anything the caller must SAY about how the window got there.
+ */
+interface UiPreflight {
+  /** The refusal to return, or null when the composite may proceed. */
+  block: MutationResult | null;
+  /** The preflight reopened a closed Things window and left it open (LOCKSCR2). */
+  reopenedWindow: boolean;
+}
+
+const PREFLIGHT_OK: UiPreflight = { block: null, reopenedWindow: false };
+const REOPENED_NOTE =
+  "Things had no open window, so one was reopened to run this — it was left open";
+
+function preflightBlock(block: MutationResult): UiPreflight {
+  return { block, reopenedWindow: false };
+}
+
+async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<UiPreflight> {
   const gui = deps.vectors.find((v) => v.drivesGui === true && v.simulates !== true);
   if (gui !== undefined) {
     const capability = (deps.uiCapability ?? (() => uiCapabilityDefault()))();
     if (!uiAllowed(capability)) {
-      return {
+      return preflightBlock({
         kind: "blocked",
         op,
         reason: "environment",
         detail: `this operation drives the Things window, and ${capability.detail} — nothing was created`,
         remediation: capability.remediation.join("; "),
-      };
+      });
     }
   }
-  if (!deps.config.ui.enabled) return null;
+  if (!deps.config.ui.enabled) return PREFLIGHT_OK;
   // 1½. AN OPEN DIALOG, before the seed (MODALX1, issue #620). This is the gap
   // the field incident fell into twice over: the clone leg rides the URL scheme,
   // which an open dialog does not touch, so it LANDS — and then the trash leg,
@@ -186,7 +205,7 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
   if (dialogVector?.probeUiState !== undefined) {
     const state = await dialogVector.probeUiState();
     if (state !== null && state.inspectable && state.sheetOpen) {
-      return {
+      return preflightBlock({
         kind: "blocked",
         op,
         reason: "environment",
@@ -196,7 +215,7 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
         remediation:
           "dismiss the dialog in Things (click Cancel, or press Escape with Things in front), " +
           "then run the same command again; `things rescue status` shows what is open",
-      };
+      });
     }
   }
   // 1¾. IS THE SCREEN LOCKED? (LOCKSCR1, #732; made zero-hop by LOCKSCR2.)
@@ -217,34 +236,70 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
   // it is not asked at all; on the unhappy path it costs the one hop it always
   // did and buys the same precise sentence.
   const ui = deps.vectors.find((v) => v.probeReachability !== undefined);
-  if (ui?.probeReachability === undefined) return null;
-  const verdict = await ui.probeReachability();
+  if (ui?.probeReachability === undefined) return PREFLIGHT_OK;
+  let verdict = await ui.probeReachability();
+  let reopenedWindow = false;
   if (!verdict.reachable) {
     const locked = deps.vectors.find((v) => v.probeSessionLock !== undefined);
     if (locked?.probeSessionLock !== undefined) {
       const session = await locked.probeSessionLock();
       if (blocksGuiDrive(session)) {
         const refusal = lockRefusal(session, "Nothing was created.");
-        return {
+        return preflightBlock({
           kind: "blocked",
           op,
           reason: "hazard",
           hazard: H_UI_SESSION_UNREACHABLE,
           detail: refusal.detail,
           remediation: refusal.remediation,
-        };
+        });
+      }
+      // THE NORMALIZATION RUNG, on this side of the fence too (LOCKSCR2 + the
+      // 2026-09-05 ruling). The sidebar drive already answers a closed window by
+      // REOPENING it; the dialog-class verbs (make-repeating / add-repeating /
+      // the project repeat-bar) refused here with SESSGATE's *"Things is running
+      // but has no open window"* and sent the operator to click a Dock icon. Same
+      // evidence, same remedy: with the session PROVEN unlocked, run Things' own
+      // `reopen` + `activate`, re-ask the reachability question, and carry on.
+      //
+      // The guard is the session verdict, never the inventory: on an `unknown`
+      // session an empty window list is not evidence of a closed window, and
+      // reopening would be acting on a guess — the mistake #732 was. Nothing has
+      // been seeded at this point, so the rung costs one hop on a path that was
+      // about to refuse anyway.
+      //
+      // TWO STATES ARE REOPENABLE, and the third deliberately is not. A SESSION
+      // -scope verdict on a session proven unlocked is the one the refusal used
+      // to get wrong outright ("the screen is locked, or a full-screen app is
+      // covering the desktop" — of a Mac we had just proven unlocked). A
+      // `no-window` window-scope verdict is the same fact one app narrower:
+      // Things has no AX window at all. An `other-space` verdict is NOT reopened
+      // — the window exists, somewhere else, and `reopen` would not move it; the
+      // drive's own relocation maneuver owns that one.
+      //
+      // CLOSED-LOOP: the reopen counts only if the RE-PROBE resolves. The window
+      // is LEFT OPEN, exactly as the drive's rung leaves it — the verb ran in it,
+      // the caller may be looking at it, and closing it again would be a second
+      // unasked-for change — and the composite says so in its result.
+      const reopenable = verdict.scope === "session" || verdict.cause === "no-window";
+      if (session.state === "unlocked" && reopenable && ui.reopenWindow !== undefined) {
+        const reopened = await ui.reopenWindow();
+        if (reopened.ok) {
+          verdict = await ui.probeReachability();
+          reopenedWindow = verdict.reachable;
+        }
       }
     }
   }
-  if (verdict.reachable || verdict.scope !== "session") return null;
-  return {
+  if (verdict.reachable || verdict.scope !== "session") return { block: null, reopenedWindow };
+  return preflightBlock({
     kind: "blocked",
     op,
     reason: "hazard",
     hazard: H_UI_SESSION_UNREACHABLE,
     detail: verdict.detail,
     remediation: verdict.remediation,
-  };
+  });
 }
 
 /**
@@ -487,19 +542,78 @@ function seedShapeDate(
   return seedScheduleFor(startIso, startDaysEarlier, localToday(now, zone));
 }
 
+/**
+ * THE SEED'S OWN DEADLINE IS THE SERIES' DEADLINE, unless `--deadline` says
+ * otherwise (maintainer ruling 2026-09-02, implemented 2026-09-05).
+ *
+ * `make-repeating` does not mint its seed, it CLONES the item — so a to-do that
+ * already carries a deadline hands the Repeat dialog a deadlined row, and the
+ * dialog does what it does for a person: it ticks "Add deadlines", pre-fills the
+ * offset with (deadline − start), and anchors the whole cadence row on the DUE
+ * date (DEFAULTS1 §4 cell S11). Commit that and the series is deadlined with the
+ * seed's own geometry: each occurrence starts where the seed started and is due
+ * the same number of days later.
+ *
+ * That is the GUI's default, and the ruling is to match it: *"We should do
+ * whatever the GUI does by default. If promoting a todo to a recurring todo
+ * pre-fills the deadline value, that should act as our default as well, unless
+ * we override it with our own --deadline."* What was wrong before was not the
+ * write — the write already landed exactly this — but the EXPECTATION: the rule
+ * we asked for said nothing about a deadline, so the drive left the pre-filled
+ * offset alone, the app back-shifted the first occurrence by it, and our own
+ * post-drive check called the result a mismatch (exit 3, DEFAULTS2 §6). Folding
+ * the inherited offset into the rule makes the request describe the landing:
+ * "Next:" is driven with the due date, the app back-shifts the start to the
+ * requested `--when`, and the verify passes because it is asking for what the
+ * app does.
+ *
+ * Returns the offset in days, or null when nothing is inherited:
+ *
+ *  - the request names the OFFSET (`--start-days-earlier N`, any N) or says the
+ *    series must not be deadlined (`deadline: false`) — the caller's geometry
+ *    overrides the seed's, which is the other half of the ruling. A bare
+ *    `--deadline` is NOT an override: it asks for a deadlined series without
+ *    naming an offset, and the offset the GUI would use is the seed's own;
+ *  - the source carries no deadline, or no scheduled date. A deadline with NO
+ *    start proves nothing: that seed state pre-fills an anchor and an offset that
+ *    agree with neither date and the campaign could not explain the arithmetic
+ *    (DEFAULTS1 §10.3), so no prediction is made and none is claimed;
+ *  - the deadline PRECEDES the start, which the dialog discards outright (S12,
+ *    oddities §31) — there is no offset to inherit.
+ */
+function inheritedDeadlineOffset(
+  src: { startDate: IsoDate | null; deadline: IsoDate | null },
+  params: RepeatRuleParams,
+): number | null {
+  if (params.deadline === false || params.startDaysEarlier !== undefined) return null;
+  const { startDate, deadline } = src;
+  if (!isIsoDate(startDate) || !isIsoDate(deadline)) return null;
+  const days = daysBetweenIso(startDate, deadline);
+  return days >= 0 ? days : null;
+}
+
 /** The seed row's schedule + reminder as the shaping leg needs them (raw bytes). */
 function seedScheduleRow(
   db: WriteDeps["db"],
   uuid: string,
-): { startDate: IsoDate | null; evening: boolean; reminder: ReminderTime | null } | null {
+): {
+  startDate: IsoDate | null;
+  deadline: IsoDate | null;
+  evening: boolean;
+  reminder: ReminderTime | null;
+} | null {
   const row = db
     .prepare(
-      "SELECT startDate AS sd, startBucket AS sb, reminderTime AS rt FROM TMTask WHERE uuid = ?",
+      "SELECT startDate AS sd, startBucket AS sb, reminderTime AS rt, deadline AS dl " +
+        "FROM TMTask WHERE uuid = ?",
     )
-    .get(uuid) as { sd: number | null; sb: number | null; rt: number | null } | undefined;
+    .get(uuid) as
+    | { sd: number | null; sb: number | null; rt: number | null; dl: number | null }
+    | undefined;
   if (row === undefined) return null;
   return {
     startDate: decodePackedDate(row.sd),
+    deadline: decodePackedDate(row.dl),
     evening: row.sb === 1,
     reminder: decodeReminderTime(row.rt),
   };
@@ -1038,10 +1152,30 @@ async function makeRepeatingViaClone(
   // anchor pop-ups + "Next:" field must carry is when + startDaysEarlier (the
   // deadline); the app then back-shifts the start to `when`. For a non-deadlined
   // rule the shift is 0 and the drive date equals `--when` (unchanged).
-  const whenIso = isIsoDate(params.next) ? params.next : src.startDate;
+  // THE SEED'S OWN DEADLINE RIDES INTO THE RULE (ruling 2026-09-02 / 2026-09-05 —
+  // see inheritedDeadlineOffset). The clone carries the source's deadline, so the
+  // dialog is already deadlined and already offset; folding that into the rule is
+  // what makes the request describe the landing instead of contradicting it. An
+  // explicit --deadline / --start-days-earlier OVERRIDES it (the helper returns
+  // null there), and an AFTER-COMPLETION rule takes the deadline WITHOUT an
+  // asserted offset: the app clamps that field to the period − 1 and the clamp is
+  // silent (DEFAULTS2 §clamp, oddities §32), so the pre-fill is honored and left
+  // unasserted rather than predicted wrongly — or refused for a shape the GUI
+  // accepts.
+  const inheritedOffset = inheritedDeadlineOffset(src, params);
+  const effRule: RepeatRuleParams =
+    inheritedOffset === null
+      ? params
+      : {
+          ...params,
+          deadline: true,
+          ...(inheritedOffset > 0 &&
+            params.afterCompletion !== true && { startDaysEarlier: inheritedOffset }),
+        };
+  const whenIso = isIsoDate(effRule.next) ? effRule.next : src.startDate;
   const deadlineShift =
-    params.deadline === true || (params.startDaysEarlier ?? 0) > 0
-      ? (params.startDaysEarlier ?? 0)
+    effRule.deadline === true || (effRule.startDaysEarlier ?? 0) > 0
+      ? (effRule.startDaysEarlier ?? 0)
       : 0;
   const driveIso = isIsoDate(whenIso) ? addDaysIso(whenIso, deadlineShift) : undefined;
   // The ANCHOR is derived from the deadline-adjusted date (the anchor names the
@@ -1052,7 +1186,7 @@ async function makeRepeatingViaClone(
   // below expects the START to land on the requested `--when` either way.
   const nextIso = isIsoDate(whenIso) ? whenIso : undefined;
   const expectedStartIso = nextIso;
-  const effParams: RepeatRuleParams = { ...params, ...deriveFixedAnchor(params, driveIso) };
+  const effParams: RepeatRuleParams = { ...effRule, ...deriveFixedAnchor(effRule, driveIso) };
 
   // The promote leg drives the GUI — block before minting a clone if the ack is missing.
   if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
@@ -1085,7 +1219,7 @@ async function makeRepeatingViaClone(
   // promote's dialog never opens and the whole compound fails, stranding a
   // disposable clone. Zero mutation on refusal.
   const gate = await gateUiPreflight(deps, op);
-  if (gate !== null) return gate;
+  if (gate.block !== null) return gate.block;
 
   const startedAt = now;
   const txnId = newTxnId(startedAt);
@@ -1197,10 +1331,25 @@ async function makeRepeatingViaClone(
     // seed's date reaches its rule not at all.
     if (isIsoDate(driveIso) && effParams.afterCompletion !== true) {
       const seedRow = seedScheduleRow(deps.db, cloneUuid);
+      // "Already anchored there" is the dialog's OWN arithmetic, not just an
+      // equal start date: the anchor is the latest of the row's start, its
+      // deadline and today (prefillAnchorDate). A clone that inherited a deadline
+      // is therefore usually anchored correctly ALREADY, and re-scheduling it
+      // onto the due date would only flatten the offset the dialog is about to
+      // pre-fill — a mutation of our own copy that buys nothing and costs a leg.
+      const seedAnchor =
+        seedRow === null
+          ? null
+          : prefillAnchorDate({
+              scheduled: seedRow.startDate,
+              deadline: seedRow.deadline,
+              today: localToday(now, deps.zone),
+              reminder: null,
+            });
       if (
         seedRow !== null &&
         !seedRow.evening &&
-        seedRow.startDate !== driveIso &&
+        seedAnchor !== driveIso &&
         daysBetweenIso(localToday(now, deps.zone), driveIso) >= 0
       ) {
         await runMutation(
@@ -1295,6 +1444,10 @@ async function makeRepeatingViaClone(
     }
 
     const bag = newDisclosures();
+    // LOCKSCR2 + the 2026-09-05 ruling: the preflight found no Things window,
+    // reopened one on a session it had PROVEN unlocked, and left it open. The
+    // caller closed that window; they are told it is back.
+    if (gate.reopenedWindow) disclose(bag, "ui-window-reopened", REOPENED_NOTE);
     disclose(
       bag,
       "landed-rule",
@@ -1322,6 +1475,21 @@ async function makeRepeatingViaClone(
     if (dbl !== null) {
       disclose(bag, dbl.id, dbl.text);
       if (instanceUuid === dbl.trashedUuid) instanceUuid = null;
+    }
+    if (inheritedOffset !== null) {
+      // The caller asked for a cadence and got a DEADLINED cadence, because the
+      // item they promoted carried a deadline. That is the app's own default and
+      // it is what they would have got by hand — but it is a property of the
+      // series they did not name, so it is stated, with the way to change it.
+      disclose(
+        bag,
+        "promote-deadline-inherited",
+        `the ${expectedType}'s own deadline came with it: every occurrence is due ` +
+          (inheritedOffset === 0
+            ? "on its start date"
+            : `${inheritedOffset} day${inheritedOffset === 1 ? "" : "s"} after its start`) +
+          " — pass --deadline (or --start-days-earlier) to set a different one",
+      );
     }
     const offRule = offRuleFirstNote(effParams);
     if (offRule !== null) disclose(bag, "promote-off-rule-first", offRule);
@@ -1489,7 +1657,7 @@ async function addRepeatingViaCreate(
   // atomic — a doomed promote would strand the seed). Zero mutation on refusal; a
   // window merely on another Space is relocated in-drive.
   const gate = await gateUiPreflight(deps, op);
-  if (gate !== null) return gate;
+  if (gate.block !== null) return gate.block;
 
   const startedAt = deps.now?.() ?? new Date();
   const txnId = newTxnId(startedAt);
@@ -1601,6 +1769,10 @@ async function addRepeatingViaCreate(
     }
 
     const bag = newDisclosures();
+    // LOCKSCR2 + the 2026-09-05 ruling: the preflight found no Things window,
+    // reopened one on a session it had PROVEN unlocked, and left it open. The
+    // caller closed that window; they are told it is back.
+    if (gate.reopenedWindow) disclose(bag, "ui-window-reopened", REOPENED_NOTE);
     disclose(
       bag,
       "landed-rule",
@@ -1953,7 +2125,7 @@ export async function cloneTemplateViaRepromote(
   // or a locked / full-screen session, BEFORE minting the plain clone (a doomed
   // promote would strand it). Zero mutation on refusal.
   const gate = await gateUiPreflight(deps, op);
-  if (gate !== null) return gate;
+  if (gate.block !== null) return gate.block;
 
   // COMPOSITE LOCK: clone-as-plain → promote-with-the-source's-rule is one verb;
   // hold one lock across both legs. Both the txn id and the start instant are
@@ -2032,6 +2204,8 @@ export async function cloneTemplateViaRepromote(
       const { templateUuid, instanceUuid } = discoveryOf(promote);
 
       const bag = newDisclosures();
+      // See the make/add composites: a window the preflight reopened is named.
+      if (gate.reopenedWindow) disclose(bag, "ui-window-reopened", REOPENED_NOTE);
       disclose(bag, "template-clone-new-series", NEW_SERIES_NOTE);
       disclose(bag, "promote-placement", PLACEMENT_NOTE);
       if (params.preserveCreated === true) {

@@ -58,6 +58,16 @@ export type ReachabilityVerdict =
        * positive).
        */
       scope: "session" | "window";
+      /**
+       * WHICH window-scope state this is, for a caller that can ACT on the
+       * difference (LOCKSCR2's normalization rung, extended to the promote
+       * preflight 2026-09-05). `other-space` — Things has windows, none on this
+       * Space, so the remedy is the relocation maneuver. `no-window` — Things has
+       * no AX window at all, so the remedy is to REOPEN one. Absent on a
+       * session-scope verdict, where the session itself is the problem and the
+       * window question is not yet askable.
+       */
+      cause?: "other-space" | "no-window";
       detail: string;
       remediation: string;
     };
@@ -173,6 +183,7 @@ export function interpretReachability(counts: ReachabilityCounts | null): Reacha
     return {
       reachable: false,
       scope: "window",
+      cause: "other-space",
       detail: OTHER_SPACE_DETAIL,
       remediation: OTHER_SPACE_REMEDIATION,
     };
@@ -180,6 +191,7 @@ export function interpretReachability(counts: ReachabilityCounts | null): Reacha
   return {
     reachable: false,
     scope: "window",
+    cause: "no-window",
     detail: NO_WINDOW_DETAIL,
     remediation: NO_WINDOW_REMEDIATION,
   };

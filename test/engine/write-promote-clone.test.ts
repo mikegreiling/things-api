@@ -30,6 +30,7 @@ import { composeRepeatRuleSpec, ruleXml } from "../../src/write/recurrence-rule-
 import { expectedRuleAssertions } from "../../src/write/repeat-asserts.ts";
 import { type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
+import type { ReachabilityVerdict } from "../../src/write/vectors/session-reachability.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -593,6 +594,100 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     expect(
       decodePackedDate(row(templateUuid as string)?.["rt1_instanceCreationStartDate"] as number),
     ).toBe("2026-07-15");
+  });
+
+  it("make-repeating: a deadlined SOURCE promotes to a deadlined series (the GUI default)", async () => {
+    // DEFAULTS2 §6 + the 2026-09-02/09-05 ruling. The clone carries the source's
+    // deadline, so the dialog opens with "Add deadlines" ticked and the offset
+    // pre-filled — the app's own default for this shape. Before the fix the rule
+    // we asked for said nothing about a deadline, the pre-fill rode into the
+    // committed rule anyway, the app back-shifted the first occurrence by the
+    // offset, and our own oracle called that landing a mismatch (exit 3). Now the
+    // request describes the landing: deadlined, offset 3, first occurrence still
+    // on the source's own start date.
+    const src = seedTodo(fixture.db, {
+      title: "Deadlined source",
+      start: "active",
+      startDate: "2026-07-09",
+      deadline: "2026-07-12",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 } satisfies RepeatRuleParams,
+      GUI,
+    );
+
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
+    const templateUuid = res.repeating?.templateUuid as string;
+    const rule = decodeRecurrenceRule(row(templateUuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    // The series is deadlined with the SEED's own geometry: due 3 days after each
+    // occurrence's start…
+    expect(rule?.startOffsetDays).toBe(-3);
+    // …and the first occurrence is where the source was scheduled, not 3 days
+    // before it.
+    expect(decodePackedDate(row(templateUuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-09",
+    );
+    // The caller never asked for a deadline, so the result says they have one.
+    expect((res.notes ?? []).join(" ")).toContain("own deadline came with it");
+    expect((res.notes ?? []).join(" ")).toContain("3 days after its start");
+  });
+
+  it("make-repeating: an explicit --deadline OVERRIDES the source's own", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Deadlined source, overridden",
+      start: "active",
+      startDate: "2026-07-09",
+      deadline: "2026-07-12",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      {
+        uuid: src,
+        frequency: "weekly",
+        interval: 1,
+        next: "2026-07-09",
+        deadline: true,
+        startDaysEarlier: 5,
+      } satisfies RepeatRuleParams,
+      GUI,
+    );
+
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
+    const templateUuid = res.repeating?.templateUuid as string;
+    const rule = decodeRecurrenceRule(row(templateUuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(-5); // the caller's geometry, not the seed's
+    expect(decodePackedDate(row(templateUuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-09",
+    );
+    // Nothing was inherited, so nothing is disclosed about inheriting.
+    expect((res.notes ?? []).join(" ")).not.toContain("own deadline came with it");
+  });
+
+  it("make-repeating: a deadline BEFORE the start is not inherited (the dialog discards it)", async () => {
+    // S12 / oddities §31: a deadline preceding the start is discarded by the
+    // dialog, which anchors on the start instead — so there is no offset to
+    // inherit and the series is an ordinary undeadlined weekly.
+    const src = seedTodo(fixture.db, {
+      title: "Backwards deadline",
+      start: "active",
+      startDate: "2026-07-12",
+      deadline: "2026-07-09",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 } satisfies RepeatRuleParams,
+      GUI,
+    );
+
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
+    const templateUuid = res.repeating?.templateUuid as string;
+    const rule = decodeRecurrenceRule(row(templateUuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(0);
+    expect((res.notes ?? []).join(" ")).not.toContain("own deadline came with it");
   });
 
   it("add-repeating: --deadline AND --start-days-earlier that DISAGREE are refused (zero mutation)", async () => {
@@ -2172,6 +2267,57 @@ function lockedScreenUiVector(calls: { lock: number } = { lock: 0 }): WriteVecto
 }
 
 /**
+ * A closed WINDOW on an UNLOCKED Mac: the state the 2026-09-05 ruling is about.
+ *
+ * The reachability probe sees the same empty window inventory a locked session
+ * produces, the lock question then proves the session unlocked, and the only
+ * honest reading left is "the window is closed" — which the sidebar drive
+ * already answers by reopening one (LOCKSCR2) while the dialog-class verbs
+ * still sent the operator to click a Dock icon. `reopens` counts the rung, and
+ * the reachability probe answers TRUE once it has run.
+ */
+function closedWindowUiVector(
+  calls: { reopens: number } = { reopens: 0 },
+  opts: {
+    reopenWorks?: boolean;
+    state?: "unlocked" | "unknown";
+    /** Override the not-reachable verdict (scope / cause), for the rung's two boundaries. */
+    verdict?: Extract<ReachabilityVerdict, { reachable: false }>;
+  } = {},
+): WriteVector {
+  const reopenWorks = opts.reopenWorks !== false;
+  return {
+    id: "ui",
+    matrix: {},
+    async execute() {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    probeReachability: async () =>
+      calls.reopens > 0 && reopenWorks
+        ? { reachable: true }
+        : (opts.verdict ?? {
+            reachable: false,
+            scope: "session",
+            detail:
+              "Things is running but has no open window — only the placeholder it keeps in the background.",
+            remediation: "Open the Things window (click its Dock icon) and re-run.",
+          }),
+    probeSessionLock: async () => ({
+      state: opts.state ?? "unlocked",
+      keys: ["kCGSSessionOnConsoleKey"],
+      screenIsLocked: false,
+      onConsole: true,
+      screenSaver: false,
+      source: "session-dictionary",
+    }),
+    reopenWindow: async () => {
+      calls.reopens += 1;
+      return { ok: reopenWorks, detail: reopenWorks ? "reopened" : "Things did not answer" };
+    },
+  };
+}
+
+/**
  * The HAPPY path: a window is AX-visible, so nothing is wrong and the lock
  * question is never asked. Its `probeSessionLock` throws to prove it.
  */
@@ -2232,6 +2378,99 @@ describe("promote composites — pre-seed session-LOCK gate (LOCKSCR1 #732)", ()
     expect(titleRows("LOCKSCR1 original")).toBe(1);
     // One hop, spent only because something was already wrong (LOCKSCR2).
     expect(calls.lock).toBe(1);
+  });
+
+  it("REOPENS a closed window on an unlocked Mac, proceeds, and says the window was left open", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR2 promote reopen", start: "active" });
+    const calls = { reopens: 0 };
+    const res = await runMakeRepeatingTodo(
+      depsUi([vector, closedWindowUiVector(calls)]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    expect(calls.reopens).toBe(1); // once, never in a loop
+    if (res.kind === "ok") {
+      expect((res.notes ?? []).join(" ")).toContain("Things had no open window");
+      expect((res.notes ?? []).join(" ")).toContain("left open");
+    }
+  });
+
+  it("reopens for a `no-window` window-scope verdict too — the same fact, one app narrower", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR2 no-window scope", start: "active" });
+    const calls = { reopens: 0 };
+    const res = await runMakeRepeatingTodo(
+      depsUi([
+        vector,
+        closedWindowUiVector(calls, {
+          verdict: {
+            reachable: false,
+            scope: "window",
+            cause: "no-window",
+            detail: "Things has no open window.",
+            remediation: "Open a Things window and run this again.",
+          },
+        }),
+      ]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    expect(calls.reopens).toBe(1);
+  });
+
+  it("does NOT reopen for an OTHER-SPACE window — that window exists, and `reopen` would not move it", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR2 other space", start: "active" });
+    const calls = { reopens: 0 };
+    const res = await runMakeRepeatingTodo(
+      depsUi([
+        vector,
+        closedWindowUiVector(calls, {
+          verdict: {
+            reachable: false,
+            scope: "window",
+            cause: "other-space",
+            detail: "The Things window is on another desktop.",
+            remediation: "Switch to that desktop and run this again.",
+          },
+        }),
+      ]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    // The pre-seed gate has never refused a window-scope verdict (the reveal may
+    // still resolve it) — it simply must not have REOPENED anything here.
+    expect(calls.reopens).toBe(0);
+    expect(res.kind).not.toBe("blocked");
+  });
+
+  it("does NOT reopen on an unknown session — an empty window list is not evidence there", async () => {
+    const calls = { reopens: 0 };
+    const res = await runAddRepeatingTodo(
+      depsUi([vector, closedWindowUiVector(calls, { state: "unknown" })]),
+      { title: "LOCKSCR2 unknown session", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") expect(res.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+    expect(calls.reopens).toBe(0);
+    expect(titleRows("LOCKSCR2 unknown session")).toBe(0); // and nothing was seeded
+  });
+
+  it("refuses when the reopen yields no window — the rung is closed-loop, not a hope", async () => {
+    const calls = { reopens: 0 };
+    const res = await runAddRepeatingTodo(
+      depsUi([vector, closedWindowUiVector(calls, { reopenWorks: false })]),
+      { title: "LOCKSCR2 reopen failed", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") {
+      expect(res.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+      expect(res.detail).toContain("no open window");
+    }
+    expect(calls.reopens).toBe(1);
+    expect(titleRows("LOCKSCR2 reopen failed")).toBe(0);
   });
 
   it("asks NOTHING about the lock when a Things window is AX-visible (LOCKSCR2)", async () => {

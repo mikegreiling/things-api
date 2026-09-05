@@ -370,6 +370,32 @@ export async function probeSessionLock(
   return interpretSessionLock(res.stdout);
 }
 
+/**
+ * `reopen` + `activate`, through Things' OWN scripting dictionary (LOCKSCR2).
+ *
+ * The same two commands the SESSGATE rescue maneuver leans on
+ * (`axCloseReopenActivateScript` in ui.ts) — minus its `close window 1`, which
+ * exists there to take a stuck sheet down with the window and would be exactly
+ * wrong here, where the problem is that there is no window to close.
+ *
+ * It is app-level AppleScript, not Accessibility, so it works in the state that
+ * needs it: `reopen` restores the default window on the CURRENT Space whether or
+ * not the AX tree can see anything, and `activate` brings it forward.
+ *
+ * It lives beside the session verdict because that verdict is its ONLY licence:
+ * an empty window inventory means "closed window" only once the session is
+ * PROVEN unlocked, and reopening on an `unknown` session would be acting on a
+ * guess — the mistake #732 was. Both callers (the sidebar drive's normalization
+ * rung and the promote composites' pre-seed preflight) apply that guard.
+ */
+export function axReopenActivateScript(): string {
+  return `tell application "Things3"
+  reopen
+  activate
+end tell
+return "OK"`;
+}
+
 /** Does this verdict forbid driving the GUI at all? */
 export function blocksGuiDrive(verdict: SessionLockVerdict): boolean {
   return verdict.state === "locked" || verdict.state === "screensaver";

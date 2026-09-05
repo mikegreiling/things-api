@@ -32,6 +32,7 @@ import { evaluateGuards } from "./guards.ts";
 import { emptyPreState, isRepeatingTemplate, loadTarget } from "./pre-state.ts";
 import {
   fingerprintLabel,
+  runComposite,
   runMutation,
   type MutationResult,
   type WriteDeps,
@@ -40,7 +41,26 @@ import {
 
 const SET_DETAIL_PROXY = "things-proxy-set-detail";
 
-export async function runClearReminder(
+/**
+ * ONE composite mutation lock for the whole verb (ruling 2026-09-05, #676). The
+ * URL-bounce path READS the row's own date, clears it, and writes the date back:
+ * a writer that reschedules the same row between those legs has its date
+ * overwritten by the value this verb captured before it ran. A dry run never
+ * takes the lock (it mutates nothing), and the legs inside see a reentrant
+ * no-op.
+ */
+export function runClearReminder(
+  deps: WriteDeps,
+  params: UuidParams,
+  options: WriteOptions = {},
+): Promise<MutationResult> {
+  if (options.dryRun === true) return runClearReminderUnlocked(deps, params, options);
+  return runComposite(deps, "todo.clear-dated-reminder", () =>
+    runClearReminderUnlocked(deps, params, options),
+  );
+}
+
+async function runClearReminderUnlocked(
   deps: WriteDeps,
   params: UuidParams,
   options: WriteOptions = {},
