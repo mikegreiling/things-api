@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fixed — a GUI command run while the Mac was locked said Things had no open window and told you to click its Dock icon.** It could not know that. A locked screen hides every window from every application, so "no window" is what the command sees whether the window is closed, the screen is locked, or the window is on another desktop — and it picked the first of the three and said it as a fact, behind a lock screen, after five and a half seconds of looking. It also reported the result as a failed change, though it had not touched anything.
+
+  Every command that has to read or click the Things window now asks the Mac whether the screen is locked before it looks at anything else. Locked, it stops immediately — in about a fifth of a second, with nothing sent and nothing changed — and says so: *"Refused to drive the Things window: the screen is locked, so no window can be read or clicked. Nothing was changed. Unlock the Mac and re-run."* A running screen saver gets the same treatment. Commands that only press a menu item are unaffected: those work with the screen locked, and always have.
+
+  If the Mac will not say whether it is locked, nothing is refused — but the older message stops claiming to know, and reads *"no Things window could be read — the window may be closed, or the Mac's screen may be locked, or the window may be on another desktop"* instead. With the screen confirmed unlocked, the original wording stands, because then it is true.
+
+  `things doctor --ui-state` gains a `session:` row — locked, screen saver, unlocked, or unknown — printed above everything else it reports about the screen. Refs #732.
+
 ## 0.20.11 — 2026-09-05
 
 - **Fixed — moving an area to the bottom of the sidebar could put it second-to-last instead, and then report that it had failed.** The command worked out where to let go of the area before it picked it up, using an arithmetic model of what the list looks like mid-drag: Things closes the gap where the dragged area used to be, so everything below it moves up by the height of what you lifted.

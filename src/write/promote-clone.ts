@@ -73,6 +73,7 @@ import {
 } from "./verify/delta.ts";
 import { seedScheduleFor } from "./vectors/ui-prefill.ts";
 import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
+import { blocksGuiDrive, lockRefusal } from "./vectors/session-lock.ts";
 
 type PromoteOp =
   | "todo.make-repeating"
@@ -195,6 +196,26 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
         remediation:
           "dismiss the dialog in Things (click Cancel, or press Escape with Things in front), " +
           "then run the same command again; `things rescue status` shows what is open",
+      };
+    }
+  }
+  // 1¾. IS THE SCREEN LOCKED? (LOCKSCR1, #732.) Asked BEFORE the reachability
+  // probe below, because the two read the same evidence — an empty window
+  // inventory — and only this one can tell why it is empty. Prompt-free, one
+  // hop, and a session that will not answer changes nothing: the reachability
+  // probe's own hedged sentence remains the fallback.
+  const locked = deps.vectors.find((v) => v.probeSessionLock !== undefined);
+  if (locked?.probeSessionLock !== undefined) {
+    const session = await locked.probeSessionLock();
+    if (blocksGuiDrive(session)) {
+      const refusal = lockRefusal(session, "Nothing was created.");
+      return {
+        kind: "blocked",
+        op,
+        reason: "hazard",
+        hazard: H_UI_SESSION_UNREACHABLE,
+        detail: refusal.detail,
+        remediation: refusal.remediation,
       };
     }
   }

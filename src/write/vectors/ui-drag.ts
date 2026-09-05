@@ -73,6 +73,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { trace } from "../../trace/tracer.ts";
 import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
+import type { SessionLockState } from "./session-lock.ts";
 import {
   observerAwait,
   observerMark,
@@ -2470,6 +2471,8 @@ interface DriveCtx {
   paneIndex: number | null;
   /** May a census read sparsely at all? */
   sparse: boolean;
+  /** What the session-lock gate established before this drive (LOCKSCR1, #732). */
+  lock: SessionLockState;
   tally: MoveTally;
 }
 
@@ -2766,7 +2769,17 @@ async function snapshotOrNull(ctx: DriveCtx): Promise<SidebarSnapshot | null> {
  * remediation matters as much as the diagnosis: the old copy told a user with a
  * plainly-open sidebar to check whether the sidebar was open.
  */
-export function describeSnapshotFailure(refusal: SnapshotRefusal): string {
+export function describeSnapshotFailure(
+  refusal: SnapshotRefusal,
+  /**
+   * What the session-lock gate established before the drive started (LOCKSCR1,
+   * #732). A locked session never reaches here — it is refused before the
+   * preamble — so the only two readings that matter are `unlocked` (assert
+   * freely) and `unknown` (say what could not be established). #732 shipped the
+   * categorical sentence in a session nobody had asked about.
+   */
+  lock: SessionLockState = "unlocked",
+): string {
   switch (refusal.why) {
     case "timeout":
       return (
@@ -2779,10 +2792,17 @@ export function describeSnapshotFailure(refusal: SnapshotRefusal): string {
     case "unparsable":
       return "the sidebar read returned output this version cannot read";
     case "no-window":
-      return (
-        "Things is running but has no open window — only the placeholder it keeps in the " +
-        "background. Open the Things window (click its Dock icon) and re-run"
-      );
+      // The inventory is the SAME in both readings; what differs is what may be
+      // concluded from it. With the session proven unlocked, an empty inventory
+      // means the window is closed and the Dock-icon remedy is right. With the
+      // session unestablished it means only that nothing was readable, and the
+      // sentence must not pick one of the three causes and assert it (#732).
+      return lock === "unlocked"
+        ? "Things is running but has no open window — only the placeholder it keeps in the " +
+            "background. Open the Things window (click its Dock icon) and re-run"
+        : "no Things window could be read — the window may be closed, or the Mac's screen may be " +
+            "locked, or the window may be on another desktop. Unlock the Mac if it is locked, " +
+            "make sure a Things window is showing on the desktop you're viewing, and re-run";
     case "no-list-candidates":
       return (
         "the Things window exposes no list at all — it may still be opening. Wait for it to " +
@@ -3321,7 +3341,7 @@ async function toggleDisclosure(
     return refuse(
       after.why === "timeout" ? "chevron-census-timeout" : "chevron-census-failed",
       true,
-      describeSnapshotFailure(after),
+      describeSnapshotFailure(after, ctx.lock),
     );
   }
   const rowsAfter = await timed(
@@ -3855,6 +3875,12 @@ export async function driveSidebarAreaReorder(
    */
   observer: ObserverSession | null = null,
   env: NodeJS.ProcessEnv = process.env,
+  /**
+   * What the drive-level session-lock gate established (LOCKSCR1, #732). A
+   * locked session never gets here; `unknown` makes the window-inventory copy
+   * hedge instead of asserting a closed window.
+   */
+  lock: SessionLockState = "unlocked",
 ): Promise<DragDriveResult> {
   if (aux.areaState === undefined) {
     return {
@@ -3875,6 +3901,7 @@ export async function driveSidebarAreaReorder(
     map: null,
     paneIndex: null,
     sparse: env[SPARSE_ENV] !== "0",
+    lock,
     tally: newTally(),
   };
   // The collapse rung's ledger, owned OUT HERE so the restore epilogue covers
@@ -3955,7 +3982,7 @@ async function revealSidebar(
   await ctx.sleep(600);
   const after = await takeSnapshot(ctx);
   if (after.ok) return { ok: true, snapshot: after.snapshot };
-  return { ok: false, why: describeSnapshotFailure(after) };
+  return { ok: false, why: describeSnapshotFailure(after, ctx.lock) };
 }
 
 /** Put the window chrome back. Runs on every exit path. */
@@ -4092,7 +4119,7 @@ async function runDragLadder(
       const why =
         snapOutcome.why === "sidebar-hidden" && snapOutcome.stderr !== undefined
           ? `the sidebar is hidden in this Things window and showing it did not work (${snapOutcome.stderr})`
-          : describeSnapshotFailure(snapOutcome);
+          : describeSnapshotFailure(snapOutcome, ctx.lock);
       return refuseOrRecover(ctx, pre, spec, hops, why);
     }
     const snap = snapOutcome.snapshot;
