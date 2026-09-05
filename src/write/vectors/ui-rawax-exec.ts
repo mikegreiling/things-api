@@ -151,6 +151,33 @@ function rawResolve(ref){
     throw new Error('the Repeat dialog offers ' + pool.length + ' ' + ref.role + '(s), so #' + ref.ordinal + ' does not exist (' + ref.because + ')');
   return pool[ref.ordinal - 1] }
 
+/*
+ * THE SHAPE FORK, APPLIED IN-SCRIPT.
+ *
+ * A shaped op carries BOTH addresses and the interpreter picks with the verdict
+ * \`probe-shape\` just produced. That is what keeps the probe inside the merged
+ * hop: the decision is made from a read the executor itself took, so node is
+ * not needed BETWEEN the two operations — and node still learns everything,
+ * because the verdict rides the envelope and every skipped op reports itself.
+ *
+ * An op that needs a shape and finds none fails closed with the driver's own
+ * sentence, never a guessed index: the two shapes address DIFFERENT controls at
+ * the same ordinal, which is the whole reason the probe exists.
+ */
+var RAWAX_SHAPE_UNPROBED = "the Repeat dialog's shape was never measured, so this control's address is unknown (recipe bug)";
+function rawOpRef(o){
+  if (o.shapedRef === undefined) return o.ref;
+  if (RAWAX_SHAPE === null) throw new Error(RAWAX_SHAPE_UNPROBED);
+  var picked = o.shapedRef[RAWAX_SHAPE];
+  if (picked === undefined) throw new Error('this step has no drive for the "' + RAWAX_SHAPE + '" Repeat dialog (recipe bug)');
+  return picked }
+function rawOpBase(o){
+  if (o.shapedBase === undefined) return o.base;
+  if (RAWAX_SHAPE === null) throw new Error(RAWAX_SHAPE_UNPROBED);
+  var picked = o.shapedBase[RAWAX_SHAPE];
+  if (picked === undefined) throw new Error('this step has no drive for the "' + RAWAX_SHAPE + '" Repeat dialog (recipe bug)');
+  return picked }
+
 /* --------------------------------------------------------------- the ops */
 
 var RAWAX_ELEMS = 0;
@@ -225,7 +252,7 @@ function opProbeShape(o){
  * a menu that is already opening.
  */
 function opSelectPopup(o){
-  var pu = rawResolve(o.ref), menu = null, i;
+  var pu = rawResolve(rawOpRef(o)), menu = null, i;
   for (i=0;i<20 && menu === null;i++){
     menu = rawMenuOf(pu);
     if (menu !== null) break;
@@ -246,7 +273,7 @@ function opSelectPopup(o){
 
 /* ensure-checkbox (RRD1): read, press ONLY on a mismatch, re-read to confirm. */
 function opEnsureCheckbox(o){
-  var cb = rawResolve(o.ref), want = o.target ? '1' : '0', cur;
+  var cb = rawResolve(rawOpRef(o)), want = o.target ? '1' : '0', cur;
   for (var i=0;i<o.attempts;i++){
     cur = rawSv(cb, 'AXValue'); RAWAX_ELEMS += 1;
     if (cur === want) return { verdict: i === 0 ? 'skipped' : 'ok', detail: i === 0 ? 'already ' + (o.target ? 'checked' : 'unchecked') : undefined };
@@ -275,7 +302,7 @@ function opEnsureCheckbox(o){
  * FALSE moments later, so a one-shot ask-and-type would have shipped.
  */
 function opTypeInto(o){
-  var tf = rawResolve(o.ref), v = o.value;
+  var tf = rawResolve(rawOpRef(o)), v = o.value;
   var v0 = rawSv(tf, 'AXValue'); RAWAX_ELEMS += 1;
   if (v0 === v){
     sleep(300);
@@ -305,9 +332,9 @@ function opTypeInto(o){
  * row back and require exact set equality.
  */
 function opConvergeWeekdays(o){
-  var g = rawGroupEl(), k = o.titles.length, i, n;
+  var g = rawGroupEl(), k = o.titles.length, base = rawOpBase(o), i, n;
   for (i=0;i<14;i++){
-    n = rawKidsByRole(g,'AXPopUpButton').length - o.base + 1;
+    n = rawKidsByRole(g,'AXPopUpButton').length - base + 1;
     if (n >= k) break;
     var buttons = rawKidsByRole(g,'AXButton');
     if (buttons.length === 0) throw new Error('converge-weekdays: the dialog exposes no weekday row button, so a second weekday cannot be added');
@@ -322,11 +349,11 @@ function opConvergeWeekdays(o){
     if (best === null) throw new Error('converge-weekdays: no weekday row button resolved a frame');
     rawPress(best);
     sleep(500) }
-  n = rawKidsByRole(g,'AXPopUpButton').length - o.base + 1;
+  n = rawKidsByRole(g,'AXPopUpButton').length - base + 1;
   if (n < k) throw new Error('converge-weekdays: the dialog would not grow to ' + k + ' weekday row(s) — it stopped at ' + n);
   for (i=0;i<n;i++){
     var want = o.titles[i % k];
-    var pu = rawKidsByRole(g,'AXPopUpButton')[o.base + i - 1];
+    var pu = rawKidsByRole(g,'AXPopUpButton')[base + i - 1];
     var cur = rawSv(pu,'AXValue'); RAWAX_ELEMS += 1;
     if (cur === want) continue;
     var menu = null;
@@ -348,7 +375,7 @@ function opConvergeWeekdays(o){
     sleep(400) }
   var absent = '', strays = '', got = [];
   for (i=0;i<n;i++){
-    got.push(rawSv(rawKidsByRole(g,'AXPopUpButton')[o.base + i - 1],'AXValue'));
+    got.push(rawSv(rawKidsByRole(g,'AXPopUpButton')[base + i - 1],'AXValue'));
     RAWAX_ELEMS += 1 }
   for (i=0;i<k;i++) if (got.indexOf(o.titles[i]) < 0) absent += o.titles[i] + ' ';
   for (i=0;i<got.length;i++) if (o.titles.indexOf(got[i]) < 0) strays += got[i] + ' ';
@@ -398,7 +425,7 @@ function opSetDateTime(o){
  * script's try-then-click-then-wait-0.5 s ladder entirely (RAWAX1 §5.8).
  */
 function opSelectOccurrence(o){
-  var pu = rawResolve(o.ref);
+  var pu = rawResolve(rawOpRef(o));
   var already = rawSv(pu,'AXValue'); RAWAX_ELEMS += 1;
   if (rawTitleYmd(already) === o.iso) return { verdict:'skipped', detail:'the Next: pop-up already showed ' + o.iso };
   var menu = null, i;
@@ -434,12 +461,13 @@ function opSelectOccurrence(o){
 function readControl(c){
   if (c.kind === 'weekdays'){
     var g = rawGroupEl(), pops = rawKidsByRole(g,'AXPopUpButton'), got = [];
-    for (var i=(c.weekdayBase - 1); i<pops.length; i++){ got.push(rawSv(pops[i],'AXValue')); RAWAX_ELEMS += 1 }
+    var wbase = c.shapedBase === undefined ? c.weekdayBase : rawOpBase(c);
+    for (var i=(wbase - 1); i<pops.length; i++){ got.push(rawSv(pops[i],'AXValue')); RAWAX_ELEMS += 1 }
     return got.join(',') }
   if (c.kind === 'date-area'){
     var dt = rawResolve(c.ref); RAWAX_ELEMS += 1;
     return c.spec.indexOf('date:') === 0 ? rawYmd(dt) : rawHm(dt) }
-  var el = rawResolve(c.ref); RAWAX_ELEMS += 1;
+  var el = rawResolve(rawOpRef(c)); RAWAX_ELEMS += 1;
   var v = rawSv(el,'AXValue');
   if (c.kind === 'occurrence') return rawTitleYmd(v);
   return v }
@@ -533,6 +561,19 @@ function ${RAWAX_MARKER}(){
       records.push({ label:o.label, op:o.op, durationMs:0, axCalls:0, axElems:0,
                      verdict:'skipped', detail:'pre-filled' });
       continue }
+    /* SHAPE-GATED (RDLG2): the recipe emits BOTH the legacy and the 3.23 drive
+     * for a control whose CLASS changed, and only the matching one runs. With
+     * the probe inside this hop the verdict is already in hand. */
+    if (o.onlyShape !== undefined){
+      if (RAWAX_SHAPE === null){
+        records.push({ label:o.label, op:o.op, durationMs:0, axCalls:0, axElems:0,
+                       verdict:'refused', detail:RAWAX_SHAPE_UNPROBED });
+        return { ok:false, failedAt:o.label, detail:RAWAX_SHAPE_UNPROBED, ops:records,
+                 axCalls:AXN, axElems:RAWAX_ELEMS, shape:RAWAX_SHAPE, committed:RAWAX_COMMITTED } }
+      if (o.onlyShape !== RAWAX_SHAPE){
+        records.push({ label:o.label, op:o.op, durationMs:0, axCalls:0, axElems:0,
+                       verdict:'skipped', detail:'not this dialog shape' });
+        continue } }
     var t0 = Date.now(), c0 = AXN, e0 = RAWAX_ELEMS, res;
     try { res = runOp(o) }
     catch (err) {

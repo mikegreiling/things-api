@@ -98,7 +98,32 @@ export interface AxControlCheck {
  * silently shrink the audit, which is how this optimization would become the
  * #589 class wearing a new hat.
  */
-export type AxOp = { readonly label: string; readonly unlessPrefilled?: string } &
+export type AxOp = {
+  readonly label: string;
+  readonly unlessPrefilled?: string;
+  /**
+   * Run this op ONLY under the named dialog shape — the recipe's `onlyShape`,
+   * carried into the program rather than resolved by node.
+   *
+   * THIS IS WHAT LETS THE SHAPE PROBE STAY INSIDE THE MERGED HOP. Today node
+   * reads the probe's verdict and then picks which steps to dispatch; in a
+   * merged hop the probe is an op, so the verdict exists in-script and the
+   * interpreter applies it — which is the coordinator's own fold test ("a hop
+   * boundary survives only where node must DECIDE between operations") answered
+   * honestly rather than dodged. Node still learns the verdict: it comes back on
+   * the envelope, and every skipped op reports itself.
+   */
+  readonly onlyShape?: RepeatDialogShape;
+  /**
+   * A shape-SELECTED element address — the recipe's `shaped` override, as data.
+   * The interpreter picks against the probe's own verdict; an op that carries
+   * this and reaches a program with no measured shape fails closed, exactly as
+   * the driver does today.
+   */
+  readonly shapedRef?: Readonly<Record<RepeatDialogShape, ElementRef>>;
+  /** A shape-selected weekday base — the same fork, for `converge-weekdays`. */
+  readonly shapedBase?: Readonly<Record<RepeatDialogShape, number>>;
+} &
   /** Assert the shell's direct-child role census — the shape manifest's gate. */
   (
     | { readonly op: "census-shell"; readonly expectRoles: true }
