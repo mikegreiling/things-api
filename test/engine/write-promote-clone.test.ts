@@ -2129,3 +2129,71 @@ describe("make-repeating — the pre-seed open-dialog gate (#620)", () => {
     expect(res.kind).not.toBe("blocked");
   });
 });
+
+/**
+ * A ui vector whose SESSION-LOCK probe says the screen is locked (LOCKSCR1,
+ * #732). Its reachability probe deliberately reports the session REACHABLE:
+ * that is what proves the lock question is asked first and answered on its own
+ * evidence, rather than riding on the SESSGATE verdict.
+ */
+function lockedScreenUiVector(): WriteVector {
+  return {
+    id: "ui",
+    matrix: {},
+    async execute() {
+      throw new Error("execute must never run — the lock gate blocks before the seed");
+    },
+    probeReachability: async () => ({ reachable: true }),
+    probeSessionLock: async () => ({
+      state: "locked",
+      keys: ["CGSSessionScreenIsLocked", "CGSSessionScreenLockedTime"],
+      screenIsLocked: true,
+      onConsole: true,
+      screenSaver: false,
+      source: "session-dictionary",
+    }),
+  };
+}
+
+describe("promote composites — pre-seed session-LOCK gate (LOCKSCR1 #732)", () => {
+  function depsUi(vectors: WriteVector[]): WriteDeps {
+    return { ...deps(vectors), config: { ...CONFIG, ui: { enabled: true } } };
+  }
+  const titleRows = (title: string): number =>
+    (
+      fixture.db.prepare("SELECT COUNT(*) AS n FROM TMTask WHERE title = ?").get(title) as {
+        n: number;
+      }
+    ).n;
+
+  it("names the LOCK — not the hedged locked-or-full-screen sentence — and seeds nothing", async () => {
+    const res = await runAddRepeatingTodo(
+      depsUi([vector, lockedScreenUiVector()]),
+      { title: "LOCKSCR1 doomed seed", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") {
+      expect(res.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+      expect(res.detail).toContain("the screen is locked");
+      // The composite's own promise, not the drive's.
+      expect(res.detail).toContain("Nothing was created");
+      expect(res.detail).not.toContain("full-screen app");
+      expect(res.remediation).toContain("Unlock the Mac");
+    }
+    expect(titleRows("LOCKSCR1 doomed seed")).toBe(0);
+  });
+
+  it("make-repeating refuses the same way, leaving the original untouched", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR1 original", start: "active" });
+    const res = await runMakeRepeatingTodo(
+      depsUi([vector, lockedScreenUiVector()]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") expect(res.detail).toContain("the screen is locked");
+    expect(row(src)?.["trashed"]).toBe(0);
+    expect(titleRows("LOCKSCR1 original")).toBe(1);
+  });
+});

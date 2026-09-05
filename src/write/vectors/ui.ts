@@ -5553,5 +5553,11 @@ export function createUiVector(
     // already cleared the H-UI-DRIVE ack by the time it consults this). Populates
     // the memo the in-drive gate reuses (PERF1).
     probeReachability: () => reachCache.probe(tracedRun, STEP_TIMEOUT_MS),
+    // Pre-seed LOCK seam (LOCKSCR1, #732), asked ahead of the reachability probe
+    // above. The two questions have the same empty-window-inventory evidence
+    // behind them, so order decides what the composite's refusal may claim: with
+    // the lock established, "the screen is locked" — without it, the hedged
+    // locked-or-full-screen sentence SESSGATE has always used.
+    probeSessionLock: () => probeSessionLock(tracedRun, STEP_TIMEOUT_MS),
   };
 }

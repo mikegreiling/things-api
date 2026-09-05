@@ -38,7 +38,7 @@ Follow the setup.md hardening / TCC ladder ([setup.md](../setup.md) "Hardening a
 - SSH-driven: the grantee is `sshd-keygen-wrapper`; approve via Screen Sharing in a GUI session (Accessibility prompts cannot render headless).
 - Confirm with `things doctor --probe-accessibility` — the opt-in probe that actively tests the grant (and will summon the consent dialog on an ungranted machine, which is its onboarding use, mirroring `--probe-automation`).
 
-Keep the session **unlocked** for the whole sitting (LOCK1): a locked session presents only the lock screen.
+Keep the session **unlocked** for the whole sitting (LOCK1): a locked session presents only the lock screen. Since LOCKSCR1 ([#732](https://github.com/mikegreiling/things-api/issues/732)) the drive no longer merely fails on a locked screen — it **refuses before its first hop**, `blocked` / exit 4, in about a fifth of a second, naming the lock: *"Refused to drive the Things window: the screen is locked, so no window can be read or clicked."* A **running screen saver counts as locked** (measured: macOS sets `CGSSessionScreenIsLocked` for a bare saver with no password gate, and killing the saver does not clear it), so disable the saver for the sitting rather than dismissing it mid-run. `things doctor --ui-state` prints the reading as its `session:` row — check it first when a whole batch of drives refuses at once. Menu-only ops (pause / resume) are deliberately ungated and still work under lock (AXVM1-d).
 
 ### Screen preconditions for the POINTER-driven ops (PTRGD1)
 

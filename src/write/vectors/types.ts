@@ -758,6 +758,16 @@ export interface WriteVector {
    */
   probeReachability?: () => Promise<import("./session-reachability.ts").ReachabilityVerdict>;
   /**
+   * ui vector ONLY: is the Mac's screen LOCKED? (LOCKSCR1, #732.) Prompt-free,
+   * ungated, one hop, and asked by a composite ORCHESTRATOR ahead of the
+   * reachability probe for the same reason the drive asks it ahead of the window
+   * census: a locked session and an off-Space window produce the SAME empty
+   * window inventory, so whichever question is asked first decides what the
+   * refusal is allowed to claim. Absent on the real transport vectors and the
+   * simulator, so a caller with no ui vector simply skips the check.
+   */
+  probeSessionLock?: () => Promise<import("./session-lock.ts").SessionLockVerdict>;
+  /**
    * ui vector ONLY: read the window/focus census (read-only — no click, no
    * keystroke, no activation), so a composite ORCHESTRATOR can refuse BEFORE it
    * seeds a row when a dialog is already standing in Things (MODALX1, issue

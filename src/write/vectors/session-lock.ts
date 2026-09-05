@@ -33,14 +33,28 @@
  *
  * COST: one osascript hop, no Apple events, no AX round-trips (`axOps` 0).
  *
- * WHERE THE DICTIONARY IS EMPTY. `CGSessionCopyCurrentDictionary` answers for
- * the calling process's SESSION, so a process with no window-server session —
- * an `ssh` login, a `launchd` daemon — gets nothing back and this probe reports
- * `unknown` rather than guessing. Every shape that can drive the GUI at all is
- * inside the Aqua session (a terminal the user is sitting at, or the deputy,
- * which is a LaunchAgent), so `unknown` in the field means the read genuinely
- * failed. In the lab it also means "this cell was launched over ssh", which is
- * why the LOCKSCR1 cells run the CLI through `launchctl asuser`.
+ * WHAT THE DICTIONARY ACTUALLY SAYS (LOCKSCR1 §2, measured on macOS 15.7.7):
+ *
+ * | screen state | `CGSSessionScreenIsLocked` | `CGSSessionScreenLockedTime` |
+ * |---|---|---|
+ * | unlocked | **absent** | absent |
+ * | screen saver, no password gate | **true** | present |
+ * | locked (`sysadminctl -screenLock` + `SACLockScreenImmediate`) | **true** | present |
+ *
+ * Two laws follow, and both are load-bearing here. First, ABSENCE IS THE
+ * UNLOCKED READING — the key is added when the screen locks and dropped when it
+ * unlocks, so `screenIsLocked: null` beside a dictionary that DID resolve is
+ * evidence, not a gap. Second, the window server counts a bare screen saver as
+ * locked whether or not a password is required, so the saver takes the lock
+ * refusal and the distinct `screensaver` verdict below is only a fallback for a
+ * session that reports no lock while the saver process is up.
+ *
+ * AND IT ANSWERS AN `ssh` LOGIN TOO. The probe was built expecting a process
+ * with no window-server session of its own to get nothing back; measured, an
+ * ssh-launched read returns the CONSOLE session's dictionary, byte-identical to
+ * one taken inside the Aqua session, in every screen state (LOCKSCR1 cell P).
+ * So `unknown` is a genuinely rare reading — but it is still the one this module
+ * refuses to guess past, because the whole defect was a confident wrong answer.
  */
 import type { HazardId } from "../guards.ts";
 import { H_UI_SESSION_UNREACHABLE, type ReachabilityVerdict } from "./session-reachability.ts";
@@ -207,13 +221,18 @@ export function blocksGuiDrive(verdict: SessionLockVerdict): boolean {
   return verdict.state === "locked" || verdict.state === "screensaver";
 }
 
-const LOCKED_DETAIL =
-  "Refused to drive the Things window: the screen is locked, so no window can be read or clicked. " +
-  "Nothing was changed.";
+/**
+ * The refusal, minus its tail. Both callers say the same thing about the screen
+ * and differ only in what they promise was NOT done — the drive changed nothing,
+ * the composite created nothing — so the clause is single-sourced and the tail
+ * is the caller's.
+ */
+const LOCKED_CLAUSE =
+  "Refused to drive the Things window: the screen is locked, so no window can be read or clicked.";
 const LOCKED_REMEDIATION = "Unlock the Mac and re-run.";
-const SAVER_DETAIL =
+const SAVER_CLAUSE =
   "Refused to drive the Things window: the screen saver is running, so a click would dismiss it " +
-  "rather than reach Things. Nothing was changed.";
+  "rather than reach Things.";
 const SAVER_REMEDIATION = "Wake the Mac (unlock it if it asks) and re-run.";
 
 /** The hazard a locked session is reported under — the same one SESSGATE uses. */
@@ -227,13 +246,21 @@ export const H_UI_SESSION_LOCKED: HazardId = H_UI_SESSION_UNREACHABLE;
  */
 export function lockRefusal(
   verdict: SessionLockVerdict,
+  /** What the caller can promise did not happen. The drive changed nothing; a
+   * composite's pre-seed gate created nothing. */
+  tail = "Nothing was changed.",
 ): Extract<ReachabilityVerdict, { reachable: false }> {
   return verdict.state === "screensaver"
-    ? { reachable: false, scope: "session", detail: SAVER_DETAIL, remediation: SAVER_REMEDIATION }
+    ? {
+        reachable: false,
+        scope: "session",
+        detail: `${SAVER_CLAUSE} ${tail}`,
+        remediation: SAVER_REMEDIATION,
+      }
     : {
         reachable: false,
         scope: "session",
-        detail: LOCKED_DETAIL,
+        detail: `${LOCKED_CLAUSE} ${tail}`,
         remediation: LOCKED_REMEDIATION,
       };
 }
