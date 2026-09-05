@@ -225,6 +225,19 @@ const SAVER_WAKE_BUDGET_MS = 4000;
  * from a hard lock, which is what LOCKSCR1 measured; it does not discriminate a
  * password gate). So the nudge is CLOSED-LOOP by necessity rather than taste:
  * post once, re-read the session, and believe only the re-read.
+ *
+ * THE LOOP WATCHES THE DICTIONARY, NOT THE PROCESS LIST, and that distinction
+ * cost a certification run to find (LOCKSCR2 §2, cell c). `NSWorkspace`'s
+ * `runningApplications` is a KVO-backed CACHE that refreshes when the process
+ * returns to its run loop — which an osascript that sits in a polling loop never
+ * does. So `screenSaverRunning()` answers `true` for the whole life of THIS
+ * script no matter what happens on screen, and a loop that waited for it to go
+ * false waited out its entire budget while the saver was already gone. The
+ * session dictionary has no such problem: `CGSessionCopyCurrentDictionary` is a
+ * fresh window-server read every call. It is also the authoritative signal —
+ * macOS keeps `CGSSessionScreenIsLocked` set for exactly as long as the saver
+ * covers the screen (measured in every state of every LOCKSCR2 round) — so once
+ * it clears, the stale `screenSaver` bit is corrected rather than believed.
  */
 export function jxaWakeScreenSaverScript(budgetMs: number = SAVER_WAKE_BUDGET_MS): string {
   return `/* ${SESSION_LOCK_MARKER} wake */
@@ -242,9 +255,10 @@ if (before.screenSaver === true){
   var deadline = Date.now() + ${Math.max(0, Math.trunc(budgetMs))};
   while (Date.now() < deadline){
     $.NSThread.sleepForTimeInterval(0.2);
-    if (!blocksDrive(sessionLock())) break }
+    if (sessionLock().screenIsLocked !== true) break }
 }
 var after = sessionLock();
+if (posted && after.screenIsLocked !== true) after.screenSaver = false;
 var activated = false;
 if (!blocksDrive(after)) { Application('Things3').activate(); activated = true }
 JSON.stringify({ lock: after, activated: activated, posted: posted })`;

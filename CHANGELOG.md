@@ -16,6 +16,16 @@
 
   `things doctor --ui-state` gains a `session:` row — locked, screen saver, unlocked, or unknown — printed above everything else it reports about the screen. Refs #732.
 
+- **Improved — that check no longer costs anything.** Asking the Mac whether its screen is locked took a fifth of a second, every time, before every GUI-driven command — almost all of it the cost of starting a helper process rather than of the question, which takes microseconds. The question now travels with the first thing the command was already going to do (bringing Things to the front), so a command on an unlocked Mac pays nothing for it at all. `todo make-repeating` was asking twice, once before it copies anything and once during the drive; both are gone. Measured in a clean VM against the previous build: `area reorder` 7 round trips to 6, `make-repeating` 16 to 14. Refs #732.
+
+- **New — a screen saver is now woken up instead of refused, when the Mac is not asking for a password.** A running screen saver counts as a locked screen as far as the window server is concerned, so a GUI command met one with "unlock the Mac" — on a Mac that would have let anyone in with a keypress. The command now presses a single Shift key, waits for the screen to report itself awake, and carries on if it does. If the Mac *is* asking for a password nothing happens, and the command says so and stops: *"Refused to drive the Things window: the screen saver is up and did not clear when the Mac was nudged, so the Mac is asking for a password. Nothing was changed."* Nothing here can get past a password — there is no way to tell the two situations apart until the key has been tried, which is why it is tried and then re-checked rather than assumed either way.
+
+  A woken screen stays awake, so a command that had to do this says so: *"the screen saver was up and was dismissed to run this — the Mac did not ask for a password, and the screen is awake now."* Refs #732.
+
+- **New — reordering an area with no Things window open now opens one, instead of telling you to click the Dock icon.** With the screen confirmed unlocked, a missing window is a thing the command can fix for itself: it asks Things to reopen its window — the app's own command, which puts the window back on the desktop you are looking at — reads the sidebar again, and does the move. If reopening does not produce a window, the old refusal stands.
+
+  **The window is left open.** It is where the move happened, it may be what you are looking at by the time the command finishes, and closing it again would be a second surprise on top of the first — so the result tells you instead: *"Things had no open window, so one was reopened to run this — it was left open."* Refs #732.
+
 ## 0.20.11 — 2026-09-05
 
 - **Fixed — moving an area to the bottom of the sidebar could put it second-to-last instead, and then report that it had failed.** The command worked out where to let go of the area before it picked it up, using an arithmetic model of what the list looks like mid-drag: Things closes the gap where the dragged area used to be, so everything below it moves up by the height of what you lifted.
