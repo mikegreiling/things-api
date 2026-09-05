@@ -516,6 +516,28 @@ export interface UiStep {
    */
   settle?: import("./ui-observer.ts").SettleSpec;
   /**
+   * WHAT THE NEXT HOP MAY STOP POLLING FOR once NODE has waited this step's
+   * announcement out on a deputy-routed host (DEPOBS3).
+   *
+   * `settle` says what this step announces; this says that the announcement is
+   * ALSO the precondition the FOLLOWING hop's opening poll exists to establish,
+   * so a routed drive may wait for it in node — where it has a ledger — and
+   * generate that hop without the poll (`NodeSettledObservable`,
+   * `src/write/vectors/ui-observer.ts`).
+   *
+   * IT IS EMITTED ONLY WHERE THE RECIPE CAN PROVE THE ANNOUNCEMENT WILL COME,
+   * because a node-side wait for a notification that never arrives costs its
+   * whole budget and buys nothing. For the frequency pop-up the proof is
+   * DEFAULTS1 §2: a Repeat dialog opened on a FRESHLY MINTED seed row shows
+   * `after completion` on all 14 measured seed states, so any other frequency is
+   * a change, and a change is what `AXValueChanged` means. A dialog opened on an
+   * existing rule (reschedule) proves nothing and carries no tag.
+   *
+   * Inert on every host that is not deputy-routed: a sidecar waits in-script,
+   * and with no observer nobody waited at all.
+   */
+  crossHopSettle?: import("./ui-observer.ts").NodeSettledObservable;
+  /**
    * SKIP THIS SETTER WHEN THE DIALOG ALREADY HOLDS ITS VALUE (DEFAULTS2) — the
    * pre-fillable control this step drives, named by `PrefillKey`
    * (`src/write/vectors/ui-prefill.ts`).

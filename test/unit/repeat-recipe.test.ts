@@ -19,6 +19,7 @@ import {
   resumeRepeatRecipe,
   type RepeatRuleExtras,
 } from "../../src/write/vectors/ui-recipes.ts";
+import { setInstalledThingsVersion } from "../../src/write/vectors/ui-shape.ts";
 import type { RepeatDialogShape, UiRecipe, UiStep } from "../../src/write/vectors/types.ts";
 
 /**
@@ -309,6 +310,87 @@ describe("repeat dialog recipe — shared by reschedule + project", () => {
     const anchor = recipe.steps.find((s) => s.primitive === "resolve");
     expect(anchor?.path).toContain('menu item "Repeat"');
     expect(anchor?.dynamic).not.toBe(true);
+  });
+});
+
+/**
+ * THE CROSS-HOP TAG (DEPOBS3) — which selection may node wait out for the hop
+ * that follows it?
+ *
+ * The tag licenses a routed drive to await the cadence rebuild in NODE and then
+ * generate `probe-dialog-shape` without its opening poll. A node-side wait for a
+ * notification that never comes costs its whole budget and buys nothing, so the
+ * tag is emitted only where the announcement is PROVEN to be coming — and the
+ * proof is DEFAULTS1 §2, measured on all fourteen seed states: a dialog opened on
+ * a freshly minted seed row shows `after completion`, so any other frequency is
+ * necessarily a change.
+ */
+const freq = (recipe: UiRecipe): UiStep | undefined =>
+  recipe.steps.find((s) => s.primitive === "select-popup" && s.label.startsWith("frequency = "));
+
+describe("repeat dialog recipe — the cross-hop settle tag (DEPOBS3)", () => {
+  const SEED = { scheduled: "2026-07-09", today: "2026-07-05", deadline: null, reminder: null };
+
+  it("tags the frequency pop-up on the SEEDED make path, where the probe follows it", () => {
+    const recipe = makeRepeatingRecipe("T-1", "weekly", 1, {
+      weekdays: ["thursday"],
+      seed: SEED,
+    });
+    expect(freq(recipe)?.crossHopSettle).toBe("cadence-rebuild");
+    // ...and the hop it licenses really is the very next one.
+    const at = recipe.steps.findIndex((s) => s === freq(recipe));
+    expect(recipe.steps[at + 1]?.primitive).toBe("probe-dialog-shape");
+  });
+
+  it("does NOT tag a reschedule — that dialog opens on the rule the item already has", () => {
+    const recipe = rescheduleRepeatRecipe("T-1", "weekly", 1, { weekdays: ["thursday"] });
+    expect(recipe.steps.some((s) => s.primitive === "probe-dialog-shape")).toBe(true);
+    expect(freq(recipe)?.crossHopSettle).toBeUndefined();
+  });
+
+  it("does NOT tag a make without a seed — nothing proves what the dialog will show", () => {
+    const recipe = makeRepeatingRecipe("T-1", "weekly", 1, { weekdays: ["thursday"] });
+    expect(freq(recipe)?.crossHopSettle).toBeUndefined();
+  });
+
+  it("does NOT tag when no probe follows — there is no poll to drop", () => {
+    // The certified two-control path: frequency → interval → OK, no shape probe.
+    const recipe = makeRepeatingRecipe("T-1", "daily", 3, { seed: SEED });
+    expect(recipe.steps.some((s) => s.primitive === "probe-dialog-shape")).toBe(false);
+    expect(freq(recipe)?.crossHopSettle).toBeUndefined();
+  });
+
+  it("does NOT tag an after-completion rule — that selection is the dialog's own default", () => {
+    const recipe = makeRepeatingRecipe("T-1", "weekly", 1, { afterCompletion: true, seed: SEED });
+    expect(freq(recipe)?.crossHopSettle).toBeUndefined();
+  });
+
+  it("goes away with the defaults switch, like every other reliance on them", () => {
+    const prior = process.env["THINGS_API_PREFILL"];
+    process.env["THINGS_API_PREFILL"] = "0";
+    try {
+      const recipe = makeRepeatingRecipe("T-1", "weekly", 1, {
+        weekdays: ["thursday"],
+        seed: SEED,
+      });
+      expect(freq(recipe)?.crossHopSettle).toBeUndefined();
+    } finally {
+      if (prior === undefined) delete process.env["THINGS_API_PREFILL"];
+      else process.env["THINGS_API_PREFILL"] = prior;
+    }
+  });
+
+  it("goes away on an app build the shape manifest was never sat with", () => {
+    setInstalledThingsVersion("3.24");
+    try {
+      const recipe = makeRepeatingRecipe("T-1", "weekly", 1, {
+        weekdays: ["thursday"],
+        seed: SEED,
+      });
+      expect(freq(recipe)?.crossHopSettle).toBeUndefined();
+    } finally {
+      setInstalledThingsVersion("3.23");
+    }
   });
 });
 

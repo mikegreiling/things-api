@@ -26,7 +26,9 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  type DeputySession,
   inertSettleInjector,
+  type NodeSettledObservable,
   observerCount,
   OBSERVER_ENV,
   OBSERVER_PY,
@@ -46,6 +48,7 @@ import {
   stopObserver,
 } from "../../src/write/vectors/ui-observer.ts";
 import {
+  axProbeDialogShapeScript,
   axSelectNextOccurrenceScript,
   axSelectPopupCandidatesScript,
   axSetGroupNumberScript,
@@ -54,8 +57,10 @@ import {
   axSettleOccurrencesScript,
   axPressScript,
   commandForStep,
+  nextHopClicksAPopup,
   OK_ALREADY,
 } from "../../src/write/vectors/ui.ts";
+import type { UiStep } from "../../src/write/vectors/types.ts";
 import { makeRepeatingRecipe, rescheduleRepeatRecipe } from "../../src/write/vectors/ui-recipes.ts";
 import { resetDeputyRoutingForTests } from "../../src/deputy/routing.ts";
 
@@ -302,6 +307,160 @@ describe("with a sidecar the scripts wait to be told", () => {
     expect(popup).toContain("if (exists menu 1 of pu) then exit repeat");
     expect(popup.match(/click pu/g)).toHaveLength(1);
     expect(popup).not.toContain("repeat 6 times");
+  });
+});
+
+/**
+ * THE THIRD INJECTOR STATE (DEPOBS3) — "node already waited".
+ *
+ * Two states could not describe a deputy-routed host. `live` means *this script
+ * may talk to a socket*, which on a routed Mac is false forever (the broker
+ * refuses the phrase, #695) — but the thing a script's opening poll exists to
+ * discover may already have been reported to NODE, over the deputy-hosted
+ * ledger, before the hop was spawned. These cells pin the whole state machine:
+ * who may carry a claim, what a claim changes, and what it must never change.
+ */
+describe("the third injector state — node already waited (DEPOBS3)", () => {
+  const REBUILT: ReadonlySet<NodeSettledObservable> = new Set(["cadence-rebuild"]);
+  const DEPUTY: DeputySession = {
+    transport: "deputy",
+    token: "0123456789abcdef0123456789abcdef",
+    registered: "16/16",
+    pid: 4242,
+  };
+
+  it("carries a claim ONLY for a deputy-hosted session", () => {
+    // No observer: nobody waited for anything, whatever a caller passes.
+    expect(settleInjectorFor(null, REBUILT).nodeSettled.size).toBe(0);
+    // A sidecar waits IN-SCRIPT and already generates the non-polling form off
+    // `live`; a node-side claim there would be a second way to say the same
+    // thing, and two ways to say it is how the shapes drift apart.
+    expect(settleInjectorFor(SESSION, REBUILT).nodeSettled.size).toBe(0);
+    expect(settleInjectorFor(SESSION, REBUILT).live).toBe(true);
+    // Routed: the one host class that can carry one.
+    const routed = settleInjectorFor(DEPUTY, REBUILT);
+    expect(routed.live).toBe(false);
+    expect(routed.nodeSettled.has("cadence-rebuild")).toBe(true);
+  });
+
+  it("with an EMPTY claim is the inert injector itself, not a copy of it", () => {
+    // "nothing was waited out" and "there is no observer" must be the same
+    // object, so they can never be the same intent with different scripts.
+    expect(settleInjectorFor(DEPUTY)).toBe(inertSettleInjector());
+    expect(settleInjectorFor(DEPUTY, new Set())).toBe(inertSettleInjector());
+  });
+
+  it("changes NOTHING a snippet emits — every one stays the inert text", () => {
+    const inert = inertSettleInjector();
+    const routed = settleInjectorFor(DEPUTY, REBUILT);
+    const spec: SettleSpec = {
+      what: "x",
+      want: ["AXValueChanged"],
+      timeoutMs: 1000,
+      fallbackDelayS: 0.15,
+    };
+    expect(routed.handlers()).toBe(inert.handlers());
+    expect(routed.mark("obsSeq", "  ")).toBe(inert.mark("obsSeq", "  "));
+    expect(routed.settle("obsSeq", spec, "  ")).toBe(inert.settle("obsSeq", spec, "  "));
+    expect(routed.soft("obsSeq", spec, "  ")).toBe(inert.soft("obsSeq", spec, "  "));
+    // ...so every script that does not READ `nodeSettled` is byte-identical.
+    expect(axSetValueScript("text field 1", "3", 3, routed)).toBe(
+      axSetValueScript("text field 1", "3"),
+    );
+    expect(axSelectPopupCandidatesScript("pop up button 1", ["monthly"], routed, spec)).toBe(
+      axSelectPopupCandidatesScript("pop up button 1", ["monthly"]),
+    );
+  });
+
+  it("drops the shape probe's poll — and ONLY the poll", () => {
+    const polling = axProbeDialogShapeScript("group 1 of sheet 1");
+    const settled = axProbeDialogShapeScript(
+      "group 1 of sheet 1",
+      8,
+      settleInjectorFor(DEPUTY, REBUILT),
+    );
+    // The claim's whole effect: the certified single-round form, which is the
+    // very text a live sidecar has always produced.
+    expect(settled).toBe(
+      axProbeDialogShapeScript("group 1 of sheet 1", 8, settleInjectorFor(SESSION)),
+    );
+    expect(settled).not.toBe(polling);
+    // THE ONLY DIFFERENCE IS THE POLL BLOCK. Every line the settled form emits
+    // is a line the polling form emits too (modulo the poll's extra indent), and
+    // the lines it drops are exactly the four that make the loop.
+    const dropped = polling
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => !settled.split("\n").some((s) => s.trim() === l));
+    expect(dropped).toEqual([
+      'set prevSig to "<none>"',
+      "repeat 40 times",
+      'if (verdict is not "unknown") and (sig is prevSig) then return verdict',
+      "set prevSig to sig",
+      "delay 0.1",
+    ]);
+    // ...and nothing is ADDED but the single-round verdict the sidecar form has
+    // always carried.
+    const added = settled
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => !polling.split("\n").some((s) => s.trim() === l));
+    expect(added).toEqual(['if verdict is not "unknown" then return verdict']);
+  });
+
+  it("keeps the poll for every OTHER claim, and for none at all", () => {
+    const polling = axProbeDialogShapeScript("group 1 of sheet 1");
+    expect(axProbeDialogShapeScript("group 1 of sheet 1", 8, settleInjectorFor(DEPUTY))).toBe(
+      polling,
+    );
+    // A routed session whose node-side await MISSED carries nothing, so the
+    // certified polling gate stands — #700's lesson, kept.
+    expect(
+      axProbeDialogShapeScript("group 1 of sheet 1", 8, settleInjectorFor(DEPUTY, new Set())),
+    ).toBe(polling);
+  });
+});
+
+/**
+ * WHERE THE SWALLOWED-CLICK WAIT IS ARMED (DEPOBS3, lever 2).
+ *
+ * A pop-up selection's menu takes 348 ms to close (VOPAT1 §4.2 g) and the next
+ * hop's first click into it is EATEN — VOPAT2 watched that hop's menu-open
+ * settle time out at 1515 ms and the retry open the menu in 4.1 ms. On a routed
+ * host node can wait for `AXMenuClosed` instead. It is armed only where the
+ * hazard is: the very next hop being another pop-up selection. A step that will
+ * not dispatch at run time is not that hop, in either of the two ways a step can
+ * vanish.
+ */
+const popup = (over: Partial<UiStep> = {}): UiStep => ({
+  primitive: "select-popup",
+  label: "a pop-up",
+  path: "pop up button 1",
+  value: "x",
+  ...over,
+});
+
+describe("the swallowed-click wait is armed only where the hazard is", () => {
+  const none: ReadonlySet<string> = new Set();
+
+  it("arms before another pop-up selection, and only then", () => {
+    expect(nextHopClicksAPopup([popup(), popup()], 0, none, "next-popup")).toBe(true);
+    expect(
+      nextHopClicksAPopup([popup(), { primitive: "press", label: "OK" }], 0, none, "next-popup"),
+    ).toBe(false);
+    // The last step of a recipe has no next hop to protect.
+    expect(nextHopClicksAPopup([popup()], 0, none, "next-popup")).toBe(false);
+  });
+
+  it("does not arm for a step that will not dispatch", () => {
+    // Pre-filled (DEFAULTS2): the setter is skipped, so nothing clicks.
+    const skipped = [popup(), popup({ unlessPrefilled: "monthly-mode" })];
+    expect(nextHopClicksAPopup(skipped, 0, new Set(["monthly-mode"]), "next-popup")).toBe(false);
+    expect(nextHopClicksAPopup(skipped, 0, none, "next-popup")).toBe(true);
+    // Shape-gated (RDLG2): the other shape's alternative never runs.
+    const shaped = [popup(), popup({ onlyShape: "legacy" })];
+    expect(nextHopClicksAPopup(shaped, 0, none, "next-popup")).toBe(false);
+    expect(nextHopClicksAPopup(shaped, 0, none, "legacy")).toBe(true);
   });
 });
 

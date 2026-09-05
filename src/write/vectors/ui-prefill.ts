@@ -192,6 +192,23 @@ export function prefillAnchorDate(seed: SeedRowFacts): IsoDate {
  *    its reminder do (which is not the exception the campaign was briefed with:
  *    CNCAC2 had already removed that belief from the shipped mapping).
  */
+/**
+ * MAY A DRIVE RELY ON THE DIALOG'S OWN OPENING DEFAULTS AT ALL?
+ *
+ * The two gates every claim in this module passes through, split out so a
+ * reliance that is NOT about a pre-filled control can honour the same switches.
+ * DEPOBS3 is the other caller: the frequency pop-up's opening value (`after
+ * completion`, DEFAULTS1 §2) is a default of exactly this kind, relied on to
+ * prove that selecting any other frequency WILL announce a value change.
+ *
+ * The anchor-arithmetic gates in {@link provenPrefills} are deliberately not
+ * here — a deadline with no scheduled date defeats the derived DATES, not the
+ * dialog's frequency default, which was the same on all fourteen seed states.
+ */
+export function dialogDefaultsRelied(appVersion: string | null): boolean {
+  return !prefillDisabled() && shapeManifestCoversVersion(appVersion);
+}
+
 export function provenPrefills(
   rule: PrefillRule,
   seed: SeedRowFacts,

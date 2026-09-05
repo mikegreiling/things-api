@@ -87,6 +87,27 @@ export const OBSERVED_SHAPE: CatalogInjector = {
   }),
 };
 
+/**
+ * THE ROUTED-AND-ALREADY-WAITED shape (DEPOBS3): a deputy-hosted observer, with
+ * node's own cross-hop wait having landed. No in-script client — the broker
+ * would refuse it — but the hop that follows a settled wait is generated without
+ * its opening poll, and that variant is a script this host class really
+ * dispatches. Both suites must see it: `osacompile` proves it parses, and
+ * broker-safety proves the shape a ROUTED Mac produces still clears the lint.
+ */
+export const ROUTED_SETTLED_SHAPE: CatalogInjector = {
+  tag: "routed-settled",
+  obs: settleInjectorFor(
+    {
+      transport: "deputy",
+      token: "0123456789abcdef0123456789abcdef",
+      registered: "16/16",
+      pid: 4242,
+    },
+    new Set(["cadence-rebuild"]),
+  ),
+};
+
 /** Resolve a recipe's steps for one dialog shape, exactly as `drive()` does. */
 function forShape(steps: UiStep[], shape: RepeatDialogShape): UiStep[] {
   return steps
@@ -110,7 +131,7 @@ const FULL: RepeatRuleExtras = {
 };
 
 export function everyUiScript(
-  injectors: CatalogInjector[] = [POLLING_SHAPE, OBSERVED_SHAPE],
+  injectors: CatalogInjector[] = [POLLING_SHAPE, OBSERVED_SHAPE, ROUTED_SETTLED_SHAPE],
 ): CatalogScript[] {
   const recipes = [
     makeRepeatingRecipe("T-1", "yearly", 2, FULL),
