@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.20.11 — 2026-09-05
+
 - **Fixed — moving an area to the bottom of the sidebar could put it second-to-last instead, and then report that it had failed.** The command worked out where to let go of the area before it picked it up, using an arithmetic model of what the list looks like mid-drag: Things closes the gap where the dragged area used to be, so everything below it moves up by the height of what you lifted.
 
   That is not what Things does. It takes the area and its projects out of the list and leaves a landing gap in their place — a gap that follows the pointer as you move — so rows below the insertion point sit lower than the model expected, by about the height of two rows. Every placement except "to the bottom" aims between two rows, where being off by a little does not change the answer. "To the bottom" was the one that aimed just past the end of the list, where it does. On the reporting Mac it landed one slot short, twice, and the command exited reporting the mismatch it had verified for itself.
