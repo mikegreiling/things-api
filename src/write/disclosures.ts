@@ -186,6 +186,10 @@ export const DISCLOSURES = {
     tier: "warning",
     why: "`things undo` will refuse this one; the only way back is another move or the app's own undo",
   },
+  "promote-deadline-inherited": {
+    tier: "note",
+    why: "the app's own default for a deadlined source, stated because the caller did not name it; nothing is wrong and the override is named",
+  },
   "promote-off-rule-first": {
     tier: "warning",
     why: "the series landed two-phase (a first occurrence off its own rule) — the caller may want to correct it",

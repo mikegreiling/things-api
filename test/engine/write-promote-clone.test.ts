@@ -595,6 +595,100 @@ describe("DBLSPAWN1 — deadlined add-repeating maps to the rule (no preserved d
     ).toBe("2026-07-15");
   });
 
+  it("make-repeating: a deadlined SOURCE promotes to a deadlined series (the GUI default)", async () => {
+    // DEFAULTS2 §6 + the 2026-09-02/09-05 ruling. The clone carries the source's
+    // deadline, so the dialog opens with "Add deadlines" ticked and the offset
+    // pre-filled — the app's own default for this shape. Before the fix the rule
+    // we asked for said nothing about a deadline, the pre-fill rode into the
+    // committed rule anyway, the app back-shifted the first occurrence by the
+    // offset, and our own oracle called that landing a mismatch (exit 3). Now the
+    // request describes the landing: deadlined, offset 3, first occurrence still
+    // on the source's own start date.
+    const src = seedTodo(fixture.db, {
+      title: "Deadlined source",
+      start: "active",
+      startDate: "2026-07-09",
+      deadline: "2026-07-12",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 } satisfies RepeatRuleParams,
+      GUI,
+    );
+
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
+    const templateUuid = res.repeating?.templateUuid as string;
+    const rule = decodeRecurrenceRule(row(templateUuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    // The series is deadlined with the SEED's own geometry: due 3 days after each
+    // occurrence's start…
+    expect(rule?.startOffsetDays).toBe(-3);
+    // …and the first occurrence is where the source was scheduled, not 3 days
+    // before it.
+    expect(decodePackedDate(row(templateUuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-09",
+    );
+    // The caller never asked for a deadline, so the result says they have one.
+    expect((res.notes ?? []).join(" ")).toContain("own deadline came with it");
+    expect((res.notes ?? []).join(" ")).toContain("3 days after its start");
+  });
+
+  it("make-repeating: an explicit --deadline OVERRIDES the source's own", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Deadlined source, overridden",
+      start: "active",
+      startDate: "2026-07-09",
+      deadline: "2026-07-12",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      {
+        uuid: src,
+        frequency: "weekly",
+        interval: 1,
+        next: "2026-07-09",
+        deadline: true,
+        startDaysEarlier: 5,
+      } satisfies RepeatRuleParams,
+      GUI,
+    );
+
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
+    const templateUuid = res.repeating?.templateUuid as string;
+    const rule = decodeRecurrenceRule(row(templateUuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(-5); // the caller's geometry, not the seed's
+    expect(decodePackedDate(row(templateUuid)?.["rt1_instanceCreationStartDate"] as number)).toBe(
+      "2026-07-09",
+    );
+    // Nothing was inherited, so nothing is disclosed about inheriting.
+    expect((res.notes ?? []).join(" ")).not.toContain("own deadline came with it");
+  });
+
+  it("make-repeating: a deadline BEFORE the start is not inherited (the dialog discards it)", async () => {
+    // S12 / oddities §31: a deadline preceding the start is discarded by the
+    // dialog, which anchors on the start instead — so there is no offset to
+    // inherit and the series is an ordinary undeadlined weekly.
+    const src = seedTodo(fixture.db, {
+      title: "Backwards deadline",
+      start: "active",
+      startDate: "2026-07-12",
+      deadline: "2026-07-09",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1 } satisfies RepeatRuleParams,
+      GUI,
+    );
+
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
+    const templateUuid = res.repeating?.templateUuid as string;
+    const rule = decodeRecurrenceRule(row(templateUuid)?.["rt1_recurrenceRule"] as Uint8Array);
+    expect(rule?.startOffsetDays).toBe(0);
+    expect((res.notes ?? []).join(" ")).not.toContain("own deadline came with it");
+  });
+
   it("add-repeating: --deadline AND --start-days-earlier that DISAGREE are refused (zero mutation)", async () => {
     await expect(
       runAddRepeatingTodo(

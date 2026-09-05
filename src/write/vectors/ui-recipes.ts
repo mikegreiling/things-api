@@ -1152,8 +1152,11 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
       ),
     );
     // startDaysEarlier is requested-fields-only too: drive the offset field only
-    // when it was given (>0), else leave it at its pre-populated value.
-    if (deadlineTarget && (rule.startDaysEarlier ?? 0) > 0) {
+    // when the rule NAMES it, else leave it at its pre-populated value. Zero is
+    // a named value like any other — and it is the one that MATTERS on a seed
+    // that carries a deadline of its own, because there the pre-fill is the
+    // seed's own gap and "due on its start date" has to be typed to be true.
+    if (deadlineTarget && rule.startDaysEarlier !== undefined) {
       steps.push(
         tagPrefill(
           setRowField(

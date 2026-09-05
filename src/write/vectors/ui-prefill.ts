@@ -284,7 +284,7 @@ export function provenPrefills(
     const offset = rule.startDaysEarlier ?? 0;
     if (
       deadlineTarget &&
-      offset > 0 &&
+      rule.startDaysEarlier !== undefined &&
       seed.deadline !== null &&
       seed.scheduled !== null &&
       // THE OFFSET PRE-FILL IS FREQUENCY-DEPENDENT, AND UNDER AFTER-COMPLETION IT
