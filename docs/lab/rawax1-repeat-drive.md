@@ -199,6 +199,34 @@ This is what unlocks the hop merge, and it is worth saying why. [RDLAT2 §10](rd
 
 ### 3.2 What keeps its hop, and what could stop having one
 
+> **RULED 2026-09-05: merge, and apply the test to every boundary — a hop boundary survives only where node must DECIDE or SETTLE between operations.** §3.2a below is that test applied to the recipe as it actually stands, which turned out to protect two boundaries this memo had listed as merge candidates. One of them was created by [DEPOBS3](depobs3-skip-poll-and-inprocess.md) (#736) the commit before this campaign started.
+
+### 3.2a The test, applied
+
+| boundary | verdict | why |
+| --- | --- | --- |
+| census ×2 · session lock · reachability · reveal · activate · canary · assert-eligible | **keep** | separate concerns, each with its own refusal; `assert-eligible` also holds P20, the Things-dictionary oracle |
+| → press `Items ▸ Repeat…` | **keep** | SETTLE: `AXSheetCreated` |
+| → `dialog-open` | **keep** | DECIDE: the shape-manifest refusal, and it banks `shellIndex` for every later address |
+| → `select-popup` frequency | **keep** | DECIDE, from the census just banked |
+| **frequency → `probe-dialog-shape`** | **KEEP — and this is the one the memo had wrong** | SETTLE, and a brand-new one: the step carries `crossHopSettle: "cadence-rebuild"`, which on a ROUTED host is node absorbing the group's rebuild over the deputy-hosted ledger so the probe's script can drop its polling rounds (DEPOBS3, #736). **Folding the frequency selection into the probe would put that wait back inside the script**, where a routed host cannot settle on a socket — regressing #736 one commit after it landed. The boundary is load-bearing on exactly the host class the campaign exists for. |
+| shape probe → verify-prefill → every setter up to the occurrence settle | **FOLD** | every decision here is made from a read the executor has just taken: the shape verdict picks the shaped addresses, the verify verdict picks which setters run. Node decides nothing it is not told afterwards, and the per-op report tells it more than the hop boundary did. |
+| **→ `settle-occurrences`** | **KEEP** | SETTLE, and node-side by construction: with any observer this step dispatches NOTHING — node awaits the ledger — and its two skips (`seen === 0`, and `setterSinceShape`) are facts about the drive that only node holds. |
+| the remaining setters → audit → commit | **FOLD** | no decision, no settle; the audit already commits in its own script, and in a raw-AX executor its JXA date-area leg stops being a separate hop because everything is one language |
+
+**What that is worth, measured against the rendered recipes rather than estimated.** The full vocabulary (yearly · weekdays · anchors · deadline · offset · ends-after · reminder · Next) dispatches **16 hops** today between the frequency selection and the commit; merged it dispatches **3**. The field's own weekly-with-seed shape dispatches 5–6 and merges to 3.
+
+| shape | dispatched hops today | merged | spawns saved | M1 at ~124 ms |
+| --- | ---: | ---: | ---: | ---: |
+| full vocabulary | 16 | **3** | 13 | **≈ 1.6 s** |
+| weekly + `--when` + seed (the field's) | 5–6 | **3** | 2–3 | ≈ 0.25–0.37 s |
+
+**So §4's single ~0.75 s figure was too coarse in both directions**, and the honest statement is that the merge is worth little on the narrow shape and a great deal on the wide one. The narrow shape is the one the maintainer runs.
+
+**The hop structure is FIXED across every quadrant, deliberately.** It would be possible to fold the frequency selection in on a host with no observer (its settle is in-script there anyway) and keep the boundary only when routed — and that would make the drive's hop structure a function of its transport, which is precisely the shape the [quadrant law](harness.md) exists to forbid. One structure, certified once per quadrant.
+
+### 3.2b The original boundary list, kept for the record
+
 A hop boundary exists today only where a settle or a decision needed node (the brief's own rule). Sorted:
 
 | boundary | keep? | why |
