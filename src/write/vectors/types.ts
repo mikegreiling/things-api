@@ -799,6 +799,20 @@ export interface WriteVector {
    */
   probeSessionLock?: () => Promise<import("./session-lock.ts").SessionLockVerdict>;
   /**
+   * ui vector ONLY: REOPEN the Things window and bring it forward — the
+   * normalization rung the sidebar drive runs, offered to a composite
+   * ORCHESTRATOR so its pre-seed preflight can take the same step instead of
+   * sending the operator to click a Dock icon (LOCKSCR2, #732).
+   *
+   * The caller owns the LICENCE, not this hook: an empty window inventory means
+   * "closed window" only once the session is PROVEN unlocked, so the preflight
+   * asks the lock question first and reopens only on `unlocked`. The hook
+   * invalidates the reachability memo, because the thing that memo describes has
+   * just changed. `ok` says Things answered; whether a window actually resulted
+   * is settled by re-probing, never by this return.
+   */
+  reopenWindow?: () => Promise<{ ok: boolean; detail: string }>;
+  /**
    * ui vector ONLY: read the window/focus census (read-only — no click, no
    * keystroke, no activation), so a composite ORCHESTRATOR can refuse BEFORE it
    * seeds a row when a dialog is already standing in Things (MODALX1, issue

@@ -141,6 +141,34 @@ U=$(seed "$TAG-D" "$START" "")
 promote "40-control" "$TAG-D" "0" "$START" "no"
 
 echo ""
+echo "===== the reopen rung: a CLOSED window is reopened, not refused ====="
+# ⌘W the window the way the operator did in #732. This is the one place these
+# cells touch the keyboard, and it is the FIXTURE, not the drive: the point is
+# to reach the state the promote must normalize.
+osascript -e 'tell application "Things3" to activate' >/dev/null 2>&1
+sleep 1
+osascript -e 'tell application "System Events" to keystroke "w" using command down' >/dev/null 2>&1
+sleep 2
+WINS_BEFORE=$(osascript -e 'tell application "System Events" to tell process "Things3" to return (count of (windows whose subrole is "AXStandardWindow")) as text' 2>/dev/null)
+if [ "$WINS_BEFORE" = "0" ]; then
+  pass "the Things window is closed (0 standard windows)"
+else
+  fail "could not close the window (count=$WINS_BEFORE) — the cell below proves nothing"
+fi
+U=$(seed "$TAG-E" "$START" "")
+promote "50-closedwin" "$TAG-E" "0" "$START" "no"
+WINS_AFTER=$(osascript -e 'tell application "System Events" to tell process "Things3" to return (count of (windows whose subrole is "AXStandardWindow")) as text' 2>/dev/null)
+[ "${WINS_AFTER:-0}" -ge 1 ] && pass "the window was reopened and LEFT OPEN (count=$WINS_AFTER)" || fail "no window after the promote (count=$WINS_AFTER)"
+python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+notes=(d.get('data') or {}).get('notes') or []
+hit=[n for n in notes if 'no open window' in n]
+print('     disclosure:', hit[0] if hit else '(MISSING)')
+raise SystemExit(0 if hit else 1)
+" "$OUT/50-closedwin.json" && pass "the reopened window is disclosed" || fail "no reopened-window disclosure"
+
+echo ""
 echo "############################################################"
 if [ "$FAILURES" -eq 0 ]; then
   echo "# DLSEED1 routed arm: GREEN ($STEP cells)"

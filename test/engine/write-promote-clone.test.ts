@@ -2266,6 +2266,52 @@ function lockedScreenUiVector(calls: { lock: number } = { lock: 0 }): WriteVecto
 }
 
 /**
+ * A closed WINDOW on an UNLOCKED Mac: the state the 2026-09-05 ruling is about.
+ *
+ * The reachability probe sees the same empty window inventory a locked session
+ * produces, the lock question then proves the session unlocked, and the only
+ * honest reading left is "the window is closed" — which the sidebar drive
+ * already answers by reopening one (LOCKSCR2) while the dialog-class verbs
+ * still sent the operator to click a Dock icon. `reopens` counts the rung, and
+ * the reachability probe answers TRUE once it has run.
+ */
+function closedWindowUiVector(
+  calls: { reopens: number } = { reopens: 0 },
+  opts: { reopenWorks?: boolean; state?: "unlocked" | "unknown" } = {},
+): WriteVector {
+  const reopenWorks = opts.reopenWorks !== false;
+  return {
+    id: "ui",
+    matrix: {},
+    async execute() {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    probeReachability: async () =>
+      calls.reopens > 0 && reopenWorks
+        ? { reachable: true }
+        : {
+            reachable: false,
+            scope: "session",
+            detail:
+              "Things is running but has no open window — only the placeholder it keeps in the background.",
+            remediation: "Open the Things window (click its Dock icon) and re-run.",
+          },
+    probeSessionLock: async () => ({
+      state: opts.state ?? "unlocked",
+      keys: ["kCGSSessionOnConsoleKey"],
+      screenIsLocked: false,
+      onConsole: true,
+      screenSaver: false,
+      source: "session-dictionary",
+    }),
+    reopenWindow: async () => {
+      calls.reopens += 1;
+      return { ok: reopenWorks, detail: reopenWorks ? "reopened" : "Things did not answer" };
+    },
+  };
+}
+
+/**
  * The HAPPY path: a window is AX-visible, so nothing is wrong and the lock
  * question is never asked. Its `probeSessionLock` throws to prove it.
  */
@@ -2326,6 +2372,51 @@ describe("promote composites — pre-seed session-LOCK gate (LOCKSCR1 #732)", ()
     expect(titleRows("LOCKSCR1 original")).toBe(1);
     // One hop, spent only because something was already wrong (LOCKSCR2).
     expect(calls.lock).toBe(1);
+  });
+
+  it("REOPENS a closed window on an unlocked Mac, proceeds, and says the window was left open", async () => {
+    const src = seedTodo(fixture.db, { title: "LOCKSCR2 promote reopen", start: "active" });
+    const calls = { reopens: 0 };
+    const res = await runMakeRepeatingTodo(
+      depsUi([vector, closedWindowUiVector(calls)]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    expect(calls.reopens).toBe(1); // once, never in a loop
+    if (res.kind === "ok") {
+      expect((res.notes ?? []).join(" ")).toContain("Things had no open window");
+      expect((res.notes ?? []).join(" ")).toContain("left open");
+    }
+  });
+
+  it("does NOT reopen on an unknown session — an empty window list is not evidence there", async () => {
+    const calls = { reopens: 0 };
+    const res = await runAddRepeatingTodo(
+      depsUi([vector, closedWindowUiVector(calls, { state: "unknown" })]),
+      { title: "LOCKSCR2 unknown session", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") expect(res.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+    expect(calls.reopens).toBe(0);
+    expect(titleRows("LOCKSCR2 unknown session")).toBe(0); // and nothing was seeded
+  });
+
+  it("refuses when the reopen yields no window — the rung is closed-loop, not a hope", async () => {
+    const calls = { reopens: 0 };
+    const res = await runAddRepeatingTodo(
+      depsUi([vector, closedWindowUiVector(calls, { reopenWorks: false })]),
+      { title: "LOCKSCR2 reopen failed", frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("blocked");
+    if (res.kind === "blocked") {
+      expect(res.hazard).toBe("H-UI-SESSION-UNREACHABLE");
+      expect(res.detail).toContain("no open window");
+    }
+    expect(calls.reopens).toBe(1);
+    expect(titleRows("LOCKSCR2 reopen failed")).toBe(0);
   });
 
   it("asks NOTHING about the lock when a Things window is AX-visible (LOCKSCR2)", async () => {

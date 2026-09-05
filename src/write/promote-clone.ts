@@ -159,21 +159,40 @@ function blockedUiDrive(op: PromoteOp): MutationResult {
  * Running the standing check FIRST also keeps the probe itself doctrine-clean: no
  * System Events call is attempted on a host that has not granted one.
  */
-async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<MutationResult | null> {
+/**
+ * What the pre-seed preflight decided: a refusal to return, or permission to
+ * proceed plus anything the caller must SAY about how the window got there.
+ */
+interface UiPreflight {
+  /** The refusal to return, or null when the composite may proceed. */
+  block: MutationResult | null;
+  /** The preflight reopened a closed Things window and left it open (LOCKSCR2). */
+  reopenedWindow: boolean;
+}
+
+const PREFLIGHT_OK: UiPreflight = { block: null, reopenedWindow: false };
+const REOPENED_NOTE =
+  "Things had no open window, so one was reopened to run this — it was left open";
+
+function preflightBlock(block: MutationResult): UiPreflight {
+  return { block, reopenedWindow: false };
+}
+
+async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<UiPreflight> {
   const gui = deps.vectors.find((v) => v.drivesGui === true && v.simulates !== true);
   if (gui !== undefined) {
     const capability = (deps.uiCapability ?? (() => uiCapabilityDefault()))();
     if (!uiAllowed(capability)) {
-      return {
+      return preflightBlock({
         kind: "blocked",
         op,
         reason: "environment",
         detail: `this operation drives the Things window, and ${capability.detail} — nothing was created`,
         remediation: capability.remediation.join("; "),
-      };
+      });
     }
   }
-  if (!deps.config.ui.enabled) return null;
+  if (!deps.config.ui.enabled) return PREFLIGHT_OK;
   // 1½. AN OPEN DIALOG, before the seed (MODALX1, issue #620). This is the gap
   // the field incident fell into twice over: the clone leg rides the URL scheme,
   // which an open dialog does not touch, so it LANDS — and then the trash leg,
@@ -186,7 +205,7 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
   if (dialogVector?.probeUiState !== undefined) {
     const state = await dialogVector.probeUiState();
     if (state !== null && state.inspectable && state.sheetOpen) {
-      return {
+      return preflightBlock({
         kind: "blocked",
         op,
         reason: "environment",
@@ -196,7 +215,7 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
         remediation:
           "dismiss the dialog in Things (click Cancel, or press Escape with Things in front), " +
           "then run the same command again; `things rescue status` shows what is open",
-      };
+      });
     }
   }
   // 1¾. IS THE SCREEN LOCKED? (LOCKSCR1, #732; made zero-hop by LOCKSCR2.)
@@ -217,34 +236,60 @@ async function gateUiPreflight(deps: WriteDeps, op: PromoteOp): Promise<Mutation
   // it is not asked at all; on the unhappy path it costs the one hop it always
   // did and buys the same precise sentence.
   const ui = deps.vectors.find((v) => v.probeReachability !== undefined);
-  if (ui?.probeReachability === undefined) return null;
-  const verdict = await ui.probeReachability();
+  if (ui?.probeReachability === undefined) return PREFLIGHT_OK;
+  let verdict = await ui.probeReachability();
+  let reopenedWindow = false;
   if (!verdict.reachable) {
     const locked = deps.vectors.find((v) => v.probeSessionLock !== undefined);
     if (locked?.probeSessionLock !== undefined) {
       const session = await locked.probeSessionLock();
       if (blocksGuiDrive(session)) {
         const refusal = lockRefusal(session, "Nothing was created.");
-        return {
+        return preflightBlock({
           kind: "blocked",
           op,
           reason: "hazard",
           hazard: H_UI_SESSION_UNREACHABLE,
           detail: refusal.detail,
           remediation: refusal.remediation,
-        };
+        });
+      }
+      // THE NORMALIZATION RUNG, on this side of the fence too (LOCKSCR2 + the
+      // 2026-09-05 ruling). The sidebar drive already answers a closed window by
+      // REOPENING it; the dialog-class verbs (make-repeating / add-repeating /
+      // the project repeat-bar) refused here with SESSGATE's *"Things is running
+      // but has no open window"* and sent the operator to click a Dock icon. Same
+      // evidence, same remedy: with the session PROVEN unlocked, run Things' own
+      // `reopen` + `activate`, re-ask the reachability question, and carry on.
+      //
+      // The guard is the session verdict, never the inventory: on an `unknown`
+      // session an empty window list is not evidence of a closed window, and
+      // reopening would be acting on a guess — the mistake #732 was. Nothing has
+      // been seeded at this point, so the rung costs one hop on a path that was
+      // about to refuse anyway.
+      //
+      // CLOSED-LOOP: the reopen counts only if the RE-PROBE resolves. The window
+      // is LEFT OPEN, exactly as the drive's rung leaves it — the verb ran in it,
+      // the caller may be looking at it, and closing it again would be a second
+      // unasked-for change — and the composite says so in its result.
+      if (session.state === "unlocked" && ui.reopenWindow !== undefined) {
+        const reopened = await ui.reopenWindow();
+        if (reopened.ok) {
+          verdict = await ui.probeReachability();
+          reopenedWindow = verdict.reachable;
+        }
       }
     }
   }
-  if (verdict.reachable || verdict.scope !== "session") return null;
-  return {
+  if (verdict.reachable || verdict.scope !== "session") return { block: null, reopenedWindow };
+  return preflightBlock({
     kind: "blocked",
     op,
     reason: "hazard",
     hazard: H_UI_SESSION_UNREACHABLE,
     detail: verdict.detail,
     remediation: verdict.remediation,
-  };
+  });
 }
 
 /**
@@ -1164,7 +1209,7 @@ async function makeRepeatingViaClone(
   // promote's dialog never opens and the whole compound fails, stranding a
   // disposable clone. Zero mutation on refusal.
   const gate = await gateUiPreflight(deps, op);
-  if (gate !== null) return gate;
+  if (gate.block !== null) return gate.block;
 
   const startedAt = now;
   const txnId = newTxnId(startedAt);
@@ -1389,6 +1434,10 @@ async function makeRepeatingViaClone(
     }
 
     const bag = newDisclosures();
+    // LOCKSCR2 + the 2026-09-05 ruling: the preflight found no Things window,
+    // reopened one on a session it had PROVEN unlocked, and left it open. The
+    // caller closed that window; they are told it is back.
+    if (gate.reopenedWindow) disclose(bag, "ui-window-reopened", REOPENED_NOTE);
     disclose(
       bag,
       "landed-rule",
@@ -1598,7 +1647,7 @@ async function addRepeatingViaCreate(
   // atomic — a doomed promote would strand the seed). Zero mutation on refusal; a
   // window merely on another Space is relocated in-drive.
   const gate = await gateUiPreflight(deps, op);
-  if (gate !== null) return gate;
+  if (gate.block !== null) return gate.block;
 
   const startedAt = deps.now?.() ?? new Date();
   const txnId = newTxnId(startedAt);
@@ -1710,6 +1759,10 @@ async function addRepeatingViaCreate(
     }
 
     const bag = newDisclosures();
+    // LOCKSCR2 + the 2026-09-05 ruling: the preflight found no Things window,
+    // reopened one on a session it had PROVEN unlocked, and left it open. The
+    // caller closed that window; they are told it is back.
+    if (gate.reopenedWindow) disclose(bag, "ui-window-reopened", REOPENED_NOTE);
     disclose(
       bag,
       "landed-rule",
@@ -2062,7 +2115,7 @@ export async function cloneTemplateViaRepromote(
   // or a locked / full-screen session, BEFORE minting the plain clone (a doomed
   // promote would strand it). Zero mutation on refusal.
   const gate = await gateUiPreflight(deps, op);
-  if (gate !== null) return gate;
+  if (gate.block !== null) return gate.block;
 
   // COMPOSITE LOCK: clone-as-plain → promote-with-the-source's-rule is one verb;
   // hold one lock across both legs. Both the txn id and the start instant are
@@ -2141,6 +2194,8 @@ export async function cloneTemplateViaRepromote(
       const { templateUuid, instanceUuid } = discoveryOf(promote);
 
       const bag = newDisclosures();
+      // See the make/add composites: a window the preflight reopened is named.
+      if (gate.reopenedWindow) disclose(bag, "ui-window-reopened", REOPENED_NOTE);
       disclose(bag, "template-clone-new-series", NEW_SERIES_NOTE);
       disclose(bag, "promote-placement", PLACEMENT_NOTE);
       if (params.preserveCreated === true) {

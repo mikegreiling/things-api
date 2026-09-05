@@ -73,7 +73,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { trace } from "../../trace/tracer.ts";
 import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
-import type { SessionLockState } from "./session-lock.ts";
+import { axReopenActivateScript, type SessionLockState } from "./session-lock.ts";
 import {
   observerAwait,
   observerMark,
@@ -1235,26 +1235,6 @@ function sidebarVisibilityCommand(want: "show" | "hide"): UiCommand {
     lang: "javascript",
     script: jxaSidebarVisibilityScript(want),
   };
-}
-
-/**
- * `reopen` + `activate`, through Things' OWN scripting dictionary (LOCKSCR2).
- *
- * The same two commands the SESSGATE rescue maneuver already leans on
- * (`axCloseReopenActivateScript` in ui.ts) — minus its `close window 1`, which
- * exists there to take a stuck sheet down with the window and would be exactly
- * wrong here, where the problem is that there is no window to close.
- *
- * It is app-level AppleScript, not Accessibility, so it works in the state that
- * needs it: `reopen` restores the default window on the CURRENT Space whether or
- * not the AX tree can see anything, and `activate` brings it forward.
- */
-function axReopenActivateScript(): string {
-  return `tell application "Things3"
-  reopen
-  activate
-end tell
-return "OK"`;
 }
 
 function scrollCommand(

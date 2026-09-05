@@ -38,6 +38,10 @@
 #   backwards a deadline BEFORE the start: the dialog discards it, so nothing is
 #             inherited (S12 / oddities §31)
 #   control   a deadline-FREE seed: unchanged behavior, the regression guard
+#   closedwin THE REOPEN RUNG on the dialog-class side (the 2026-09-05 ruling
+#             extending LOCKSCR2): ⌘W the Things window on an UNLOCKED guest,
+#             then promote — the verb must reopen the window, land, and SAY the
+#             window was left open
 #   teardown  stop + delete the clone (the EXIT trap does this anyway unless KEEP=1)
 #
 # METHOD: ONE disposable clone of things-lab-golden-v4 (the golden is NEVER
@@ -57,7 +61,7 @@ source lab/scripts/env.sh
 
 VM="dlseed1-lab"
 GOLDEN="${GOLDEN:-things-lab-golden-v4}"
-CELLS="${*:-oracle cli override zero backwards control}"
+CELLS="${*:-oracle cli override zero backwards control closedwin}"
 OUT="lab/artifacts/$VM"; mkdir -p "$OUT/drive"
 REPORT="$OUT/report.txt"
 REUSE="${REUSE:-0}"
@@ -417,6 +421,36 @@ run_control() {
   note "  want: exit 0 · ts=0 · no deadline · icStart=$SEED_START"
 }
 
+run_closedwin() {
+  note ""
+  note "===== closedwin — a CLOSED window is reopened, not refused (LOCKSCR2 rung) ====="
+  ship_cli >/dev/null || return 1
+  local u rc t wins_before wins_after
+  u=$(mkseed "DLS1-WIN" "$SEED_START" "") || { note "  FATAL: no seed"; return 1; }
+  # ⌘W the window the way the operator did in #732 — the app stays running with
+  # only the background placeholder, on a session that is plainly unlocked.
+  axq 'tell application "Things3" to activate' >/dev/null
+  lab_ssh "$IP" 'sleep 1' </dev/null
+  axq 'tell application "System Events" to keystroke "w" using command down' >/dev/null
+  lab_ssh "$IP" 'sleep 2' </dev/null
+  wins_before=$(axq 'tell application "System Events" to tell process "Things3" to return (count of (windows whose subrole is "AXStandardWindow")) as text')
+  note "  standard windows after ⌘W: $wins_before (want 0)"
+  rc=$(promote "closedwin" "$u")
+  wins_after=$(axq 'tell application "System Events" to tell process "Things3" to return (count of (windows whose subrole is "AXStandardWindow")) as text')
+  t=$(tmplid "DLS1-WIN")
+  note "  standard windows after the promote: $wins_after (want ≥1 — the window is LEFT OPEN)"
+  [ -n "$t" ] && note "  rule: $(rsum "$t")" || note "  FAIL: no template minted"
+  note "  disclosure: $(python3 -c '
+import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+    print(" | ".join((d.get("data") or {}).get("notes") or []) or "(none)")
+except Exception as e:
+    print("(unreadable: %s)" % e)
+' "$OUT/drive/closedwin.log")"
+  note "  want: window count 0 -> exit 0 -> window count 1, with the reopened-window note"
+}
+
 for cell in $CELLS; do
   case "$cell" in
     oracle) run_oracle ;;
@@ -425,6 +459,7 @@ for cell in $CELLS; do
     zero) run_zero ;;
     backwards) run_backwards ;;
     control) run_control ;;
+    closedwin) run_closedwin ;;
     teardown) : ;;
     *) note "unknown cell: $cell" ;;
   esac
