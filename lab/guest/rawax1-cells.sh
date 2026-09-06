@@ -300,29 +300,44 @@ esac
 
 echo ""
 echo "===== the hop count, from the drive's own trace ====="
-# The number the cost table is built on, read out of the trace rather than
-# asserted: `ui-rawax` hop records on the raw path, `ui-dispatch` on both.
+# The number the cost table is built on, READ OUT of the trace rather than
+# asserted. `THINGS_API_TRACE=1` appends a step-level timeline to ONE JSONL file
+# under the state dir, so the counts come from the drives that just ran — the
+# `tracePath` in a JSON result is only present on a failure, which is why run 3
+# printed "(no trace)" for two perfectly good drives.
 python3 -c "
-import glob, json, os, sys
-outs = sorted(glob.glob(os.path.expanduser('~/things-lab/out/*.json')))
-for name in ('weekly-raw', 'weekly-old'):
-    path = os.path.expanduser('~/things-lab/out/%s.json' % name)
-    if not os.path.exists(path): continue
-    try: d = json.load(open(path))
-    except Exception: continue
-    tp = (d.get('data') or {}).get('tracePath')
-    if not tp or not os.path.exists(tp):
-        print('     %-12s (no trace)' % name); continue
-    hops = rawhops = ops = elems = calls = 0
-    for line in open(tp):
+import glob, json, os
+tdir = os.path.expanduser('~/.local/state/things-api/trace')
+files = sorted(glob.glob(os.path.join(tdir, '*.jsonl')))
+if not files:
+    print('     (no trace files under %s)' % tdir); raise SystemExit
+hops = rawhops = ops = calls = elems = 0
+merged = {}
+for path in files:
+    for line in open(path, errors='ignore'):
         try: r = json.loads(line)
         except Exception: continue
-        if r.get('phase') == 'ui-dispatch' and r.get('event') == 'end': hops += 1
-        if r.get('phase') == 'ui-rawax' and r.get('event') == 'hop':
-            rawhops += 1; calls += r.get('axCalls') or 0; elems += r.get('axElems') or 0
-        if r.get('phase') == 'ui-rawax' and r.get('event') == 'op': ops += 1
-    print('     %-12s osascript hops=%d  merged hops=%d  ops=%d  rawAxCalls=%d  elems=%d'
-          % (name, hops, rawhops, ops, calls, elems))
+        ph, ev = r.get('phase'), r.get('event')
+        if ph == 'ui-dispatch' and ev == 'end': hops += 1
+        elif ph == 'ui-rawax' and ev == 'hop':
+            rawhops += 1
+            calls += r.get('axCalls') or 0
+            elems += r.get('axElems') or 0
+        elif ph == 'ui-rawax' and ev == 'op':
+            ops += 1
+            merged[r.get(\"op\")] = merged.get(r.get(\"op\"), 0) + 1
+        elif ph == 'ui-rawax' and ev == 'compiled':
+            pass
+print('     osascript hops (all drives): %d' % hops)
+print('     merged raw-AX hops:         %d' % rawhops)
+print('     ops executed:               %d' % ops)
+print('     raw AX calls:               %d' % calls)
+print('     elements realized:          %d' % elems)
+if rawhops:
+    print('     ops per merged hop:         %.1f' % (ops / rawhops))
+    print('     calls per merged hop:       %.1f' % (calls / rawhops))
+for k in sorted(merged):
+    print('       %-20s %d' % (k, merged[k]))
 " 2>/dev/null || echo "     (trace summary unavailable)"
 
 echo ""
