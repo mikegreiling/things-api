@@ -52,7 +52,7 @@ Every distinct thing the Repeat drive asks of System Events, the generator it li
 | # | System Events form | where it lives | raw AX equivalent | verdict |
 | --- | --- | --- | --- | ---: |
 | **P2** | `click <el>` on a menu item / button / checkbox / pop-up | `axPressScript`, `select-popup`, `ensure-checkbox`, the audit's folded commit, `axCancelDialogScript` | `AXUIElementPerformAction(el, kAXPressAction)` — which is what System Events' `click` compiles to | **PORTS** · opens a pop-up's menu in 12.4 ms, selects a menu item, presses OK/Cancel. One state where an enabled Cancel accepts and ignores it (§5.9) — reachable only by a sequence no drive performs |
-| **P7** | `set focused of <tf> to true` | `typeLoopBlock` | `AXUIElementSetAttributeValue(el, kAXFocusedAttribute, <true>)` — [VOPAT1-13](vopat1-screen-reader-pattern.md) measured AXError 0 and the notification at 27.6 ms. **`$.kCFBooleanTrue` marshals; `AXError 0` on the first encoding tried.** But it READS BACK FALSE 60 ms later, in every state — so the write is not a guarantee and FGRD1's ask-look-retry loop is kept, not replaced | **PORTS, loop intact** |
+| **P7** | `set focused of <tf> to true` | `typeLoopBlock` | `AXUIElementSetAttributeValue(el, kAXFocusedAttribute, <true>)` — [VOPAT1-13](vopat1-screen-reader-pattern.md) measured AXError 0 and the notification at 27.6 ms. **CORRECTED in phase 2 — see §5.2.** Phase 0 read `AXError 0` as proof the encoding marshalled; it was not. The write ports via `$(true)`, and focus is proven through the APPLICATION's `kAXFocusedUIElement` as well as the element's flag | **PORTS, loop intact** |
 | **P9** | `keystroke "<v>"` | `typeLoopBlock`, `axTypeTextScript` | none. AX has no "type into this element" — the candidate is `AXUIElementSetAttributeValue(tf, AXValue, …)`, and UIC6 measured System Events' `set value` as a REPAINT that never fires the app's edit binding. **MEASURED: it is a REPAINT** (§5.4). Settable `true`, write `AXError 0`, field shows `3`, preview never recomputes, committed rule `fa=1`. So keystrokes stay — `CGEventCreateKeyboardEvent` + `CGEventPost(kCGHIDEventTap)` under the frontmost law, and a `GUARDED_SITES` entry (§3.5) | **DOES NOT PORT** |
 | **P10** | `key code 48` (Tab) / `key code 53` (Escape) | the typing loop's commit, `axAbortScript` | `CGEventCreateKeyboardEvent` — already shipped as `postEscape()` in `ui-drag.ts`'s prelude | **shipped** |
 | **P11** | `exists menu 1 of <pu>` | the pop-up open poll | the `AXMenu` is a CHILD of the pop-up, which has **no children at all** while closed — so "is the menu open" is one `AXChildren` read and needs no title match | **PORTS**, and gets simpler |
@@ -385,7 +385,17 @@ Three rows deserve their own note.
 
 The two `false`s are UIC1's "setting `value` on a Things pop-up is a silent no-op" and the checkbox's equivalent, **stated by the API rather than inferred from a failed drive** — the port may not even try, and the menu-open/`AXPress` route is the only one.
 
-**P7, asking for focus: `AXError 0`, on the FIRST encoding tried — `$.kCFBooleanTrue`.** `NSNumber.numberWithBool` and a bare JS boolean were never reached. **But the read-back 60 ms later was `false` in every state.** That is not a contradiction of VOPAT1-13 (which measured the notification, not a read-back) and it is not a reason to distrust the write; it is the exact condition FGRD1's closed loop exists for — *ask for focus, look, and if the field has not taken it, ask again on the next attempt* — and it says plainly that **the port must keep that loop.** A one-shot `set focused; type` would have been wrong here, measurably, in the lab, before it ever reached a real machine.
+**P7, asking for focus — AND THIS ENTRY WAS WRONG, which is the most useful thing in the campaign.**
+
+Phase 0 tried three encodings, took `AXError 0` from the first (`$.kCFBooleanTrue`) as proof it marshalled, and reported the read-back coming back `false` 60 ms later as *"the exact condition FGRD1's closed loop exists for"* — a reading that was tidy, consistent with VOPAT1-13, and false.
+
+**`$.kCFBooleanTrue` is exposed by the JXA bridge as a FUNCTION, not a value** (`typeof` is `'function'`; `String()` gives `[object Ref]`). Passing it to `AXUIElementSetAttributeValue` marshals a function object, the call returns **`AXError 0`**, and the app does nothing. So the write never happened, the flag was never going to read back true, and the retry loop could never succeed — every raw drive refused with FGRD1's sentence, on every dialog state, which is precisely what phase 2's first routed run found (§5c).
+
+`$(true)` and `NSNumber.numberWithBool(true)` both produce a real `__NSCFBoolean`, which is what a `CFBooleanRef` attribute wants.
+
+**LAW (RAWAX1-5). On this bridge, a zero return code proves the CALL was made and never that the VALUE arrived.** An attribute write is believed only once something reads it back — and where the element's own flag is not how the app reports the state, the read-back has to ask the app instead (§5c: focus is proven through `kAXFocusedUIElement` as well as `AXFocused`).
+
+The read-back was saying all of this in phase 0. What went wrong was not the measurement but the interpretation: a result that contradicted the success code was explained away instead of being treated as the finding. **A probe that reports both an error code and a read-back has already told you which one to believe.**
 
 ### 5.3 `menu` — the pop-up
 
@@ -527,6 +537,58 @@ It is still an app quirk worth recording — an enabled button whose own press i
 Run 1 asked one date-parsing candidate — `NSDataDetector` — and it matched **nothing**, including a well-formed `Jan 1, 2027`. That is a rig smell, so run 1 concluded nothing from it and the cell was re-armed with four candidates instead of one. Run 2 asked both `NSDataDetector` spellings against 15 of the app's OWN live menu titles and got the same answer: nothing, 17 times. **A second look turned a suspected rig bug into a finding** (§5.8), which is the opposite of what a first look would have been entitled to claim.
 
 The re-arming also settled the capability question run 1's reference column had raised. `NSAppleScript` in-process works and agrees — so it was a real option, and it carries neither of the deputy's banned phrases (the broker's lint is textual: `do shell script`, `do script`, read out of `scriptGuard` in `deputy/src/server.swift`, and it accepts `lang: "javascript"` already). It would have been within the guard's intent rather than around it, and it would still have been a capability worth a reviewer's attention. **The format bank makes the question moot**, agreeing on every live title at 2.4× the speed with no OSA execution anywhere near a brokered script — so the port takes it, and `NSAppleScript` stays a named fallback for a future build whose rendering the bank misses rather than a thing anyone has to approve.
+
+## 5b. Phase 1 — what the port became, and what the merge is worth
+
+**Ruled 2026-09-05: merge, and apply the DECIDE-or-SETTLE test to every boundary.** §3.2a is that test applied; §5b.1 is what it produced.
+
+### 5b.1 The boundary that survives, and why it is conditional
+
+The frequency selection ends its merge group **when, and only when, the recipe arms `crossHopSettle: "cadence-rebuild"`** — which `ui-recipes.ts` does on the SEEDED make/add path alone, because that is the only path where the announcement node waits for is certain to come (DEFAULTS1 §2: a freshly minted seed's dialog opens on `after completion, every 1 week` byte for byte, so any other frequency is necessarily a change and `AXValueChanged` fires; a reschedule opens on an existing rule and proves nothing).
+
+Tracking that exactly is what keeps both directions right:
+
+| | boundary | why |
+| --- | --- | --- |
+| **with** the marker | **survives** | folding would put node's cross-hop wait back inside a script that cannot settle on a socket — the [#736](https://github.com/mikegreiling/things-api/pull/736) regression, one commit old |
+| **without** it | **folds** | `nodeSettled` could never carry the observable, so the probe was always going to poll in-script; folding costs nothing and saves a spawn |
+
+`settle-occurrences` survives unconditionally: with any observer it dispatches nothing at all, and its two skips are facts only node holds.
+
+**What that is worth**, counted off the rendered recipes rather than estimated:
+
+| shape | dispatched hops before | after | saved | M1 at ~124 ms |
+| --- | ---: | ---: | ---: | ---: |
+| full vocabulary (reschedule, no seed) | 16 | **2** | 14 | **≈ 1.7 s** |
+| the field's weekly + `--when` + seed | 5–6 | **3** | 2–3 | ≈ 0.25–0.37 s |
+
+So §4's single ~0.75 s figure was too coarse in both directions: the merge is worth a great deal on the wide shape and little on the narrow one, and **the narrow one is what the maintainer runs**.
+
+### 5b.2 The shape fork moved in-script, and had to
+
+The probe runs INSIDE the merged hop, so at compile time there is no verdict to resolve a shaped address against. Ops and audit CONTROLS therefore both carry every shape's address as data and the interpreter picks with the verdict it produced a few ops earlier. The first cut resolved controls at compile time against a null shape and silently dropped every `onlyShape` one — caught by a unit cell, before the guest ever saw it.
+
+## 5c. Phase 2 — the field-shaped arm, and the three defects it found
+
+Run 1 on a routed golden-v4h guest (helpers 1.4.0, `helpers-enabled true`, the deputy carrying every script) came back **RED: 21 of 25 cells**. Everything upstream of the typing step worked — the merged hop opened the dialog, selected the frequency, probed the shape, ran the verify-by-read, and reported every op into the trail — which is what made the three defects underneath it legible.
+
+**None of the three was visible to any unit suite**, and the reason is the same each time: a unit test renders ONE program and reads its text; a drive runs a SEQUENCE of them against a live app.
+
+| # | defect | what it looked like |
+| --- | --- | --- |
+| **1** | **focus was never proven, so nothing was ever typed** | every drive: `refused to type "3": the field did not take keyboard focus` |
+| **2** | **a hop with no probe never learned the shape** | the committing tail: `the Repeat dialog's shape was never measured … (recipe bug)` |
+| **3** | **the weekday titles compiled empty** | `converge-weekdays: the weekday pop-up offers no item "undefined"` |
+
+**(1) is the one worth reading twice.** Writing the ELEMENT's own `AXFocused` returns `AXError 0` and reads back **false** — every attempt, every dialog state. Phase 0 §5.2 had already measured that read-back coming back false and drew the right conclusion from it (keep FGRD1's retry loop); what it could not see is that the loop can never SUCCEED, because that flag is not how this app reports focus. The fix asks the APPLICATION's `kAXFocusedUIElement` — the canonical Accessibility spelling — and proves focus by either answer: the element saying it is focused, or the app naming it as its focused one. The second is the stronger claim, not a weaker one, and nothing is typed without one of them.
+
+**(2)** `RAWAX_SHAPE` is per-SCRIPT. The committing tail holds the occurrence pick and the audit — both shape-forked — and no probe, so it started at null and refused with a sentence that was true about that script and false about the drive: node had measured the shape one hop earlier and passed it in. The program's own field now seeds it.
+
+**(3) exposed something worse than itself.** The compiler read the top-level `value` where the recipe carries the weekday titles in a SHAPE-SELECTED one — but the reason it survived unit testing is that the test called `forShape` before compiling, which copies `shaped[shape].value` onto the step and hands the compiler a value **the driver never gives it**. The harness was kinder than the caller, so it certified a function nobody calls. It now compiles raw recipe steps, and a new cell rejects any op that compiles with nothing in the field it acts on — verified for teeth by reverting the fix and watching it fire.
+
+### 5c.1 One operational rule, paid for
+
+**`npm run check` must not run while a Tart guest is up.** A concurrent run took **3,255 s** and produced five spurious failures — `osacompile` and `osascript` suites timing out at their 5 s budgets under starvation. The same suites take **6.7 s** with the slot empty. A red suite under contention looks exactly like a red suite from a defect, and this campaign spent an hour on the difference.
 
 ## 6. Run log
 

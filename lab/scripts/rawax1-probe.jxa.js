@@ -234,8 +234,19 @@ function settable(el, name) {
  * The port needs exactly one of these to work (`AXFocused := true` is what the
  * typing loop asks for, VOPAT1-13 measured it landing in 27.6 ms) and the ObjC
  * bridge offers three plausible spellings with no documentation saying which
- * marshals to a `CFBooleanRef`. So the probe TRIES them and reports the first
- * that returns AXError 0 — a finding the port hard-codes rather than guesses.
+ * marshals to a `CFBooleanRef`.
+ *
+ * READ THE ANSWER OFF THE READ-BACK, NOT OFF THE ERROR CODE (RAWAX1-5, learned
+ * the expensive way). The first cut of this helper reported "the first encoding
+ * that returns AXError 0", and the first one it tried — `$.kCFBooleanTrue` — is
+ * exposed by the bridge as a FUNCTION rather than a value, so it marshals a
+ * function object, returns 0, and does nothing. The probe duly reported it as
+ * working while its own `readBack` field said `false`, and the port shipped a
+ * typing loop that could never type; phase 2's routed arm is what caught it.
+ *
+ * So the loop below keeps trying until an encoding both returns 0 AND reads
+ * back, and reports every attempt either way. A zero return code proves the CALL
+ * was made and never that the VALUE arrived.
  */
 function boolEncodings(want) {
   var out = [];
@@ -272,10 +283,13 @@ function trySetBool(el, name, want) {
       tried.push(enc.how + "=THREW:" + e);
       continue;
     }
-    tried.push(enc.how + "=err" + err);
-    if (err === 0) {
-      sleep(60);
-      return { ok: true, how: enc.how, tried: tried, readBack: String(bv(el, name)) };
+    sleep(60);
+    var back = bv(el, name);
+    tried.push(enc.how + "=err" + err + ",readBack=" + String(back));
+    // BOTH, or it is not the encoding: a 0 with a false read-back is exactly
+    // what an unmarshalled constant looks like.
+    if (err === 0 && back === want) {
+      return { ok: true, how: enc.how, tried: tried, readBack: String(back) };
     }
   }
   return { ok: false, tried: tried, readBack: String(bv(el, name)) };

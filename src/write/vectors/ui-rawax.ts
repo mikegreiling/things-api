@@ -153,10 +153,25 @@ function rawPress(el, action){ AXN++;
   return $.AXUIElementPerformAction(el, $(action || 'AXPress')) }
 function rawSet(el, name, value){ AXN++;
   return $.AXUIElementSetAttributeValue(el, $(name), value) }
-/* $.kCFBooleanTrue is the encoding the bridge marshals — measured (RAWAX1 §5.2),
- * on the first of three spellings tried. */
+/*
+ * A BOOLEAN, ENCODED AS ONE — and AXError 0 does not prove that it was.
+ *
+ * \`$.kCFBooleanTrue\` is exposed by the JXA bridge as a FUNCTION, not a value
+ * (measured: \`typeof $.kCFBooleanTrue === 'function'\`, String() gives
+ * '[object Ref]'). Passing it to AXUIElementSetAttributeValue marshals a
+ * function object, the call returns **AXError 0**, and the app does nothing —
+ * which is how RAWAX1 phase 0 recorded it as the working encoding and phase 2's
+ * routed arm found that no drive could ever type. The read-back was saying so
+ * the whole time; a zero return code was believed over it.
+ *
+ * \`$(true)\` and NSNumber.numberWithBool both give a real __NSCFBoolean, which
+ * is what a CFBooleanRef attribute wants. The lesson is worth more than the
+ * line: on this bridge a success code proves the CALL was made, never that the
+ * VALUE arrived, so an attribute write is only believed once something reads it
+ * back.
+ */
 function rawSetBool(el, name, want){
-  return rawSet(el, name, want ? $.kCFBooleanTrue : $.kCFBooleanFalse) }
+  return rawSet(el, name, $(want ? true : false)) }
 
 function rawKidsByRole(el, role){ var out = [], ch = kids(el);
   for (var i=0;i<ch.length;i++) if (rawSv(ch[i],'AXRole') === role) out.push(ch[i]);
