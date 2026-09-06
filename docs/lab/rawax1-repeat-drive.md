@@ -703,7 +703,7 @@ Every cell that PROBES the dialog shape refused on the raw arm; `aftercomp`, the
 
 ## 6. Run log
 
-Four runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
+Eleven runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
 
 | run | cells | outcome |
 | --- | --- | --- |
@@ -711,6 +711,13 @@ Four runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 meas
 | **2** | `dismissprobe` · `dates` · `menubar` · `rowselect` · `cost` · `setvalue` | complete (§5.4–5.9), on a fresh clone with the rig fixed |
 | **3** | `dismissprobe --how=pick` · `dates` | complete — the two follow-ups run 2 earned (§5.8, §5.9) |
 | **4** (routed, golden-v4h) | the full Phase 2 cell script, 43 cells | **RED — 2**, and both were findings rather than port failures: `weekly-old` reproduced §5c.2's shipped-path refusal, and `endsafter-old` hit §6.4's promote-composite race. Every A/B blob that landed was byte-identical across transports; all eight quadrants agreed on one blob; both DLSEED1 promote cells passed. Harvested from the live guest before teardown (the driver outlived its author), so the traces §5c.2/§5c.3 are argued from are run 4's own. |
+| **5** (routed) | the same, with `RC_DIST_BASELINE` = origin/main | **RED — 6**, and `weekly` now GREEN on both transports: §5c.2's fix works in the field. The three `BASELINE_APP` cells answered the shipped-path question (§5c.4). Four of the six were the new cells' own assertions being wrong (§5c.7) and one was §5c.6. |
+| **6** (routed) | the same | **RED — 3**. `endson`, `monthday`, `yearmonth` green after §5c.6's settle. One flake: the BASELINE's own AppleScript shape probe threw `-1700` (queued, one sighting). |
+| **7** (routed) | the same | **RED — 2**, both the `--ends-after` pair. `base-endsafter` established that origin/main refuses the same shape. |
+| **8** (direct, golden-v4) | the same 70 cells, no helpers, ssh session | **RED — 32**, every shape-probing cell's raw arm (§5c.8). |
+| **9** (direct) | the same, with the `AXEnhancedUserInterface` write | **RED — 34**. The hypothesis is refuted, not confirmed; the code was reverted. |
+| **10** (direct, CONTROL) | the same 70 cells against **origin/main's dist** | **RED — 6**, and **zero** shape-probe refusals — which is what makes §5c.8 a statement about the raw client rather than about the guest. Two of the six are §5c.2 reproducing on main a third time; four are the quadrant proof correctly reporting that main has no raw transport. |
+| **11** (routed, FINAL) | the full cell script, 74 cells | **GREEN.** |
 
 ### 6.1 Rig defects found, and why each is worth carrying
 
@@ -760,6 +767,8 @@ The trace pair says where to look. The drive itself SUCCEEDS on both transports 
 
 ### 7.1 What is certified
 
+**Run 11, the final routed run, is GREEN at 74 of 74.**
+
 **The ROUTED arm — the release gate's own arm (b) — at 74 cells.** Every A/B pair lands a byte-identical blob on both transports (daily, weekly incl. multi-weekday, monthly, yearly, after-completion, ends-on-date, deadline offset incl. a named zero, reminders, a named `--when`, an off-anchor monthly and yearly). All eight `{rawax} x {observer} x {prefill}` quadrants land one blob and each is PROVEN from its own trace file rather than from the switch the cell set. Both no-commit refusals hold on both transports; all four pre-dispatch fences (three off-anchor monthly shapes and the DEFAULTS1 clamp) refuse with the same sentence on both. Both DLSEED1 promote cells pass. The three `BASELINE_APP` cells run origin/main's own CLI in the same guest and localize §5c.2 to the shipped build.
 
 The one pair that does not agree is `endsafter`, and §6.4 is why: it reproduces with both arms AppleScript on origin/main, so it is a sequencing defect in the promote composite rather than anything this port touches.
@@ -782,16 +791,16 @@ Three options, and they are genuinely different contracts:
 
 ### 7.4 The measured cost, so far
 
-From run 7's trace summary across all its drives — the numbers §4's model wanted, though the multiplier to the maintainer's M1 is his own trace and not this one:
+From run 11's trace summary across all its drives — the numbers §4's model wanted, though the multiplier to the maintainer's M1 is his own trace and not this one:
 
-| | run 7 (routed, 74 cells) |
+| | run 11 (routed, 74 cells, GREEN) |
 | --- | ---: |
-| dispatched `osascript` hops, all drives | 481 |
-| merged raw-AX hops | 50 |
-| ops executed inside them | 173 |
-| raw AX calls | 11,259 |
-| elements realized | 1,912 |
+| dispatched `osascript` hops, all drives | 540 |
+| merged raw-AX hops | 53 |
+| ops executed inside them | 185 |
+| raw AX calls | 11,835 |
+| elements realized | 1,466 |
 | ops per merged hop | 3.5 |
-| raw calls per merged hop | 225.2 |
+| raw calls per merged hop | 223.3 |
 
-Per-op wall times are in each drive's `out/<cell>.trace.jsonl`, kept beside its JSON since run 5. On the routed guest the raw arm is faster than the AppleScript one on every A/B pair but two (`yearly`, where they tie, and the first cell of a run, which pays the warm-up): typically 3.2–4.9 s against 3.2–6.1 s. That is a clone's arithmetic, not the field's.
+Per-op wall times are in each drive's `out/<cell>.trace.jsonl`, kept beside its JSON since run 5. On the routed guest the raw arm is faster than the AppleScript one on every A/B pair but two (`yearly`, where they tie, and the first cell of a run, which pays the warm-up): on run 11, 2.8–4.9 s against 3.2–6.1 s — `daily` 3.75 vs 5.21, `weekly` 4.89 vs 6.10, `monthly` 3.56 vs 5.31, `aftercomp` 2.77 vs 3.27. That is a clone's arithmetic, not the field's.
