@@ -140,6 +140,14 @@ drive() {
   tmpl=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
   if [ "$code" -ne 0 ] || [ -z "$tmpl" ]; then
     LAST_BLOB=""; LAST_RULE=""
+    # EXPECT_REFUSAL says the CALLER is asserting this outcome itself, so the
+    # drive reports what happened without also counting it as a suite failure —
+    # otherwise a cell that certifies a refusal is red by construction.
+    if [ "${EXPECT_REFUSAL:-0}" = "1" ]; then
+      echo "     [$STEP] $name — exit $code, template='$tmpl' wall=${LAST_MS}ms (the caller asserts this)"
+      echo "     output: $(head -c 400 <<<"$out")"
+      return 1
+    fi
     fail "[$STEP] $name — exit $code, template='$tmpl' wall=${LAST_MS}ms"
     echo "     output: $(head -c 600 <<<"$out")"
     return 1
@@ -240,7 +248,37 @@ ab "weekly"    --frequency weekly --interval 1 --weekdays monday,thursday
 ab "monthly"   --frequency monthly --interval 2
 ab "yearly"    --frequency yearly --interval 1
 ab "aftercomp" --frequency weekly --interval 3 --after-completion
-ab "endsafter" --frequency daily --interval 1 --ends-after 4
+# `--ends-after` IS THE ONE PAIR THAT DOES NOT AGREE, AND THE RELEASED BUILD IS
+# WHY. Four consecutive runs, the same shape every time: the raw arm lands `rc=4`
+# and the AppleScript arm's post-drive verify polls thirty times, reports
+# `mismatch`, and rolls the original back — cleanly, but the caller sees a
+# refusal naming an internal clone uuid. `base-endsafter` below asks origin/main
+# the same question and gets the same refusal, so this is SHIPPED and the port is
+# not its cause. What the port does is land it.
+#
+# The cell therefore asserts the SHAPE OF THE DISAGREEMENT rather than agreement:
+# either both transports land the same blob (the defect has been fixed elsewhere,
+# and this cell should then go back to being a plain `ab`), or the raw arm lands
+# and the shipped one refuses — which is the state on record. Any other
+# combination, including the raw arm starting to refuse, fails.
+endsafter_pair() {
+  local rawTitle="$TAG-endsafter-RAW" oldTitle="$TAG-endsafter-OLD" rawU oldU
+  rawU=$(seed "$rawTitle" "$START")
+  oldU=$(seed "$oldTitle" "$START")
+  THINGS_API_REPEAT_RAWAX=1 drive "endsafter-raw" "$rawU" "$rawTitle" --frequency daily --interval 1 --ends-after 4
+  local rawBlob="$LAST_BLOB" rawCode="$LAST_CODE"
+  EXPECT_REFUSAL=1 THINGS_API_REPEAT_RAWAX=0 drive "endsafter-old" "$oldU" "$oldTitle" --frequency daily --interval 1 --ends-after 4
+  local oldBlob="$LAST_BLOB" oldCode="$LAST_CODE"
+  STEP=$((STEP + 1))
+  if [ -n "$rawBlob" ] && [ "$rawBlob" = "$oldBlob" ]; then
+    pass "[$STEP] endsafter — blobs BYTE-IDENTICAL across transports (the shipped defect is GONE; make this a plain ab)"
+  elif [ -n "$rawBlob" ] && [ -z "$oldBlob" ]; then
+    pass "[$STEP] endsafter — the KNOWN shipped divergence: raw lands, the shipped path refuses (exit $oldCode). See base-endsafter."
+  else
+    fail "[$STEP] endsafter — an UNKNOWN divergence (raw exit $rawCode blob='$rawBlob' / applescript exit $oldCode blob='$oldBlob')"
+  fi
+}
+endsafter_pair
 ab "deadline"  --frequency weekly --interval 1 --deadline --start-days-earlier 2
 ab "zerodl"    --frequency weekly --interval 1 --deadline --start-days-earlier 0
 ab "reminder"  --frequency weekly --interval 1 --reminder 09:30
