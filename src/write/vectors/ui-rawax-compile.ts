@@ -339,13 +339,22 @@ function opsForStep(step: UiStep, probePolls: boolean): AxOp[] | null {
 
     case "converge-weekdays": {
       const shapedBase = shapedBaseFor(step);
-      const value = step.value ?? "";
+      // THE VALUE IS SHAPE-SELECTED, and reading only the top-level one shipped
+      // an op with NO weekday titles — which reached the guest as
+      // `the weekday pop-up offers no item "undefined"` (RAWAX1 phase 2, run 1).
+      // The recipe encodes `<base>|<Weekday>,…` per shape because the BASE forks
+      // (3 under `next-popup`, 2 under `legacy`) while the titles do not, so the
+      // titles come from whichever shape is present and the base keeps its fork.
+      const value =
+        step.value ?? step.shaped?.["next-popup"]?.value ?? step.shaped?.legacy?.value ?? "";
+      const titles = weekdayTitlesOf(value);
+      if (titles.length === 0) return null;
       return [
         {
           ...common,
           op: "converge-weekdays",
           base: weekdayBaseOf(value),
-          titles: weekdayTitlesOf(value),
+          titles,
           ...(shapedBase === null ? {} : { shapedBase }),
         },
       ];

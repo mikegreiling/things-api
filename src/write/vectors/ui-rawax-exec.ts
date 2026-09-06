@@ -100,6 +100,57 @@ function rawType(value, what){
   rawAssertFront(what);
   for (i=0;i<value.length;i++) rawKey(RAWAX_DIGITS[value.charAt(i)]) }
 
+/*
+ * ASKING A FIELD FOR FOCUS, AND PROVING IT TOOK.
+ *
+ * MEASURED, and it is the defect the routed arm caught (RAWAX1 phase 2, first
+ * run): writing the ELEMENT's own AXFocused returns AXError 0 and then reads
+ * back FALSE — every attempt, every dialog state — so a loop that proves focus
+ * by that flag alone never types and the drive refuses with FGRD1's sentence.
+ * Phase 0 §5.2 had already seen the read-back come back false and recorded it as
+ * the reason to keep the retry loop; what the field-shaped arm added is that the
+ * loop can never succeed, because the flag is not how this app reports focus.
+ *
+ * System Events' set-focused-of-field does work, so the difference
+ * is in HOW the request is made rather than in whether the app accepts one. The
+ * canonical Accessibility spelling is the APPLICATION's kAXFocusedUIElement, so
+ * that is asked first and the element flag second — belt and braces, both of
+ * them genuine requests.
+ *
+ * And focus is PROVEN the way the app is willing to report it: either the
+ * element says it is focused, or the application says this element is its
+ * focused one. The second is not a weaker check — it is the stronger one, since
+ * it is the app naming the element rather than the element naming itself. They
+ * are compared by ROLE and FRAME, which is the same disambiguation the drag
+ * driver and the pointer guard use, because comparing AXUIElementRefs for
+ * identity is not reachable from this bridge.
+ *
+ * Nothing is typed without one of those two answering yes; that property is
+ * unchanged, and it is what makes the retry safe.
+ */
+function rawSameElement(a, b){
+  if (!a || !b) return false;
+  if (rawSv(a,'AXRole') !== rawSv(b,'AXRole')) return false;
+  var fa = rawGeom(a), fb = rawGeom(b);
+  if (fa === null || fb === null) return false;
+  var T = 1;
+  return Math.abs(fa.x-fb.x) <= T && Math.abs(fa.y-fb.y) <= T &&
+         Math.abs(fa.w-fb.w) <= T && Math.abs(fa.h-fb.h) <= T }
+
+function rawAskFocus(el){
+  /* The canonical request: the APPLICATION's focused element. */
+  var err = rawSet(RAWAX_APP, 'AXFocusedUIElement', el);
+  /* And the element's own flag, which some controls honour and this one does
+   * not — asked anyway, because it costs one call and it is what the certified
+   * AppleScript loop asks for. */
+  rawSetBool(el, 'AXFocused', true);
+  return err }
+
+function rawFocusProven(el){
+  if (rawBool(el, 'AXFocused') === true) return true;
+  var focused = attr(RAWAX_APP, 'AXFocusedUIElement');
+  return rawSameElement(focused, el) }
+
 /* ------------------------------------------------------------- addressing */
 
 var RAWAX_APP = null, RAWAX_SHELL = null, RAWAX_SHELL_FORM = '';
@@ -311,9 +362,9 @@ function opTypeInto(o){
   var gotFocus = false;
   for (var i=0;i<o.attempts;i++){
     rawAssertFront(o.what);
-    rawSetBool(tf, 'AXFocused', true);
+    rawAskFocus(tf);
     sleep(150);
-    gotFocus = rawBool(tf, 'AXFocused') === true;
+    gotFocus = rawFocusProven(tf);
     if (gotFocus){
       rawType(v, o.what);
       sleep(100);
@@ -561,6 +612,22 @@ function runOp(o){
 function ${RAWAX_MARKER}(){
   RAWAX_APP = rawAppEl();
   if (RAWAX_APP === null) return { ok:false, detail:'Things is not running', ops:[], axCalls:0, axElems:0 };
+  /*
+   * THE SHAPE NODE ALREADY MEASURED (RAWAX1 phase 2, second defect).
+   *
+   * A merged hop that contains no probe still ADDRESSES shape-forked controls —
+   * the committing tail holds the occurrence pick and the audit — and the fork
+   * is resolved against RAWAX_SHAPE. That variable is per-SCRIPT, so a tail hop
+   * started it at null and every onlyShape op refused with the recipe-bug
+   * sentence, which is a true statement about this script and a false one about
+   * the drive: node measured the shape one hop earlier and passed it in.
+   *
+   * So the program's own field seeds it. A hop that probes overwrites it with
+   * what it measured; a hop that does not inherits what node knew. Null still
+   * means genuinely unmeasured, and still refuses.
+   */
+  if (RAWAX_PROGRAM.shape === 'next-popup' || RAWAX_PROGRAM.shape === 'legacy') {
+    RAWAX_SHAPE = RAWAX_PROGRAM.shape }
   var records = [], i;
   for (i=0;i<RAWAX_PROGRAM.ops.length;i++){
     var o = RAWAX_PROGRAM.ops[i];

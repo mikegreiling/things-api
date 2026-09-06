@@ -318,3 +318,54 @@ describe("the envelope parser", () => {
     expect(env?.failedAt).toBe("audit");
   });
 });
+
+/**
+ * THE TWO DEFECTS THE FIELD-SHAPED ARM FOUND (RAWAX1 phase 2, run 1).
+ *
+ * Both were invisible to every suite that existed when they shipped, and the
+ * reason is the same in each case: a unit test renders ONE program and reads its
+ * text, while a drive runs a SEQUENCE of them against a live app. These two cells
+ * are the cheapest available stand-ins for that — they assert the properties the
+ * chained hops depend on, which is as close as a mock can get to the thing the
+ * guest measured.
+ */
+describe("the defects the routed arm caught", () => {
+  it("seeds the shape from the PROGRAM, so a hop with no probe inherits it", () => {
+    // Defect 2: RAWAX_SHAPE is per-SCRIPT, so the committing tail — which holds
+    // the occurrence pick and the audit, both shape-forked, and no probe —
+    // started at null and refused every onlyShape op with the recipe-bug
+    // sentence. True of that script, false of the drive: node measured the shape
+    // one hop earlier and passed it in.
+    const script = renderRawAxScript({
+      shellIndex: 0,
+      shape: "next-popup",
+      ops: [{ label: "audit", op: "audit", controls: [], expect: null, commit: null }],
+    });
+    // The program carries it…
+    expect(script).toContain('"shape":"next-popup"');
+    // …and the interpreter SEEDS from it rather than starting at null.
+    expect(script).toContain("RAWAX_PROGRAM.shape === 'next-popup'");
+    expect(script).toMatch(/RAWAX_SHAPE = RAWAX_PROGRAM\.shape/);
+  });
+
+  it("asks for focus the canonical way, and proves it the way the app answers", () => {
+    // Defect 1: writing the ELEMENT's AXFocused returns AXError 0 and reads back
+    // FALSE, every time — so a loop that proves focus by that flag alone can
+    // never type, and every raw drive refused with FGRD1's sentence. The fix
+    // asks the APPLICATION's kAXFocusedUIElement (the canonical spelling) and
+    // accepts either answer as proof.
+    const script = renderRawAxScript(everyOpProgram());
+    expect(script).toContain("rawSet(RAWAX_APP, 'AXFocusedUIElement', el)");
+    // Both proofs, and the element flag is still asked for.
+    expect(script).toContain("function rawFocusProven(el)");
+    expect(script).toContain("rawSetBool(el, 'AXFocused', true)");
+    // Nothing is typed without one of them answering — the property that makes
+    // the retry safe, and the one the fix must not have widened away.
+    const loop = script.slice(script.indexOf("function opTypeInto"));
+    const proveAt = loop.indexOf("gotFocus = rawFocusProven(tf)");
+    const typeAt = loop.indexOf("rawType(v, o.what)");
+    expect(proveAt).toBeGreaterThanOrEqual(0);
+    expect(typeAt).toBeGreaterThan(proveAt);
+    expect(loop).toContain("if (gotFocus){");
+  });
+});

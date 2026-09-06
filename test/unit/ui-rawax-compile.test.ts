@@ -101,6 +101,39 @@ describe("the raw-AX compiler expresses every recipe (RAWAX1)", () => {
     }
   }
 
+  it("never emits an op with an empty REQUIRED field (RAWAX1 phase 2, run 1)", () => {
+    // THE CLASS, not the instance. `converge-weekdays` shipped with NO titles
+    // because the recipe carries them in a SHAPE-SELECTED `value` and the
+    // compiler read only the top-level one — which reached the guest as
+    // `the weekday pop-up offers no item "undefined"`. A compile that produces a
+    // structurally valid op with nothing in it is the failure mode a type system
+    // cannot see and a text diff will not notice, so it is checked directly.
+    const empty: string[] = [];
+    for (const recipe of everyRecipe()) {
+      // COMPILED THE WAY THE DRIVER COMPILES: the RAW recipe steps, with no
+      // shape merged in. That distinction is the whole cell — the first cut ran
+      // `forShape` first, which copies `shaped[shape].value` onto the step and
+      // so handed the compiler a value the driver never gives it. The defect was
+      // invisible for exactly that reason, and a harness that is kinder than the
+      // caller is a harness that certifies the wrong function.
+      for (const steps of [recipe.steps]) {
+        const compiled = compileRawAxGroups(steps, true);
+        for (const op of compiled?.groups.flatMap((g) => g.ops) ?? []) {
+          const where = `${recipe.op} · ${op.op} · ${op.label}`;
+          if (op.op === "converge-weekdays" && op.titles.length === 0) empty.push(where);
+          if (op.op === "select-popup" && op.titles.filter((t) => t !== "").length === 0) {
+            empty.push(where);
+          }
+          if (op.op === "type-into" && op.value === "") empty.push(where);
+          if (op.op === "select-occurrence" && op.iso === "") empty.push(where);
+          if (op.op === "set-datetime" && op.spec === "") empty.push(where);
+          if (op.op === "audit" && op.controls.length === 0) empty.push(where);
+        }
+      }
+    }
+    expect(empty, "an op compiled with nothing in the field it acts on").toEqual([]);
+  });
+
   it("refuses the WHOLE recipe when one address is unregistered", () => {
     // Fail closed, and fail wholesale: a half-ported drive is worse than either.
     const recipe = makeRepeatingRecipe("T-1", "daily", 3);
