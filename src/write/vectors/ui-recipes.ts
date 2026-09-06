@@ -50,6 +50,8 @@ import {
   type SeedRowFacts,
 } from "./ui-prefill.ts";
 import { installedThingsVersion } from "./ui-shape.ts";
+import { ROW_TOLERANCE_DEFAULT } from "./ui-rawax.ts";
+import { ORDINAL_JUSTIFICATIONS, type ElementRef } from "./ui-rawax-ops.ts";
 import type { DialogAuditControl, UiRecipe, UiStep } from "./types.ts";
 
 /**
@@ -602,6 +604,100 @@ const DIALOG_ADD_DEADLINES = dualForm(`checkbox "Add deadlines"`);
  * anything but one match on it fails closed with the shell's field inventory.
  */
 const DIALOG_START_EARLIER_LABEL = "days earlier";
+
+// --------------------------------------------------- the STRUCTURED addresses
+//
+// THE SAME ADDRESSES, IN THE FORM THE RAW-AX TRANSPORT SPEAKS (RAWAX1, #695).
+//
+// Every constant above is an AppleScript path string, which is what System
+// Events takes. The raw-AX executor takes a structured descriptor instead — and
+// the two must name the SAME control, or the port has silently re-addressed the
+// dialog, which is the #589 error class with a new transport under it.
+//
+// So the descriptors live HERE, beside the paths they mirror, and the registry
+// is keyed by the path string itself. Two properties follow:
+//
+//  - they cannot drift, because a path with no registered descriptor makes the
+//    compiler REFUSE to build a raw-AX program (`dialogRefFor` returns null and
+//    the drive keeps the certified AppleScript transport). A new address is
+//    opt-in rather than silently unaddressed;
+//  - a unit cell walks every recipe this file can emit and asserts that every
+//    dialog path it produces is registered, so "opt-in" cannot quietly become
+//    "most of them".
+//
+// The ordinals are RAWAX1-1: the role-filtered `AXChildren` ordinal IS System
+// Events' `<class> N`, measured in all five dialog states, so these are the same
+// certified indices rather than new ones — and each carries the measured reason
+// it is safe, which travels into the program as data.
+function shellRef(role: string, ordinal: number, because: string): ElementRef {
+  return { in: "shell", role, ordinal, because };
+}
+function groupRef(role: string, ordinal: number, because: string): ElementRef {
+  return { in: "group", role, ordinal, because };
+}
+
+/**
+ * Path string -> structured descriptor, for every dialog address the recipes
+ * emit. Both members of a `dualForm` pair map to the SAME descriptor: the
+ * executor resolves the live shell itself, so the sheet/detached fork the path
+ * strings encode twice is encoded once here.
+ */
+const DIALOG_REFS = new Map<string, ElementRef>();
+function registerRefs(paths: readonly string[], ref: ElementRef): void {
+  for (const path of paths) DIALOG_REFS.set(path, ref);
+}
+registerRefs(DIALOG_FREQUENCY, shellRef("AXPopUpButton", 1, ORDINAL_JUSTIFICATIONS.frequency));
+registerRefs(DIALOG_OK, { in: "shell", role: "AXButton", title: "OK" });
+// DIALOG_AC_UNIT and DIALOG_ENDS are the SAME path in two mutually exclusive
+// dialog states (the recipe emits exactly one of them per drive), so the map
+// holds one entry. Their menu-item sets are disjoint, so a wrong-state drive
+// fails closed on the item name, and the pre-commit audit re-reads whichever ran.
+registerRefs(DIALOG_ENDS, groupRef("AXPopUpButton", 1, ORDINAL_JUSTIFICATIONS.ends));
+registerRefs(DIALOG_GROUP, { at: "group" });
+registerRefs(DIALOG_NEXT_POPUP, groupRef("AXPopUpButton", 2, ORDINAL_JUSTIFICATIONS.nextPopup));
+registerRefs(DIALOG_ADD_REMINDERS, { in: "shell", role: "AXCheckBox", title: "Add reminders" });
+registerRefs(DIALOG_ADD_DEADLINES, { in: "shell", role: "AXCheckBox", title: "Add deadlines" });
+registerRefs(DIALOG_SHELLS, { at: "shell" });
+// The shape-forked anchors: one entry per shape, because the path itself differs.
+for (const shaped of [
+  DIALOG_MONTH_MODE,
+  DIALOG_MONTH_ORDINAL,
+  DIALOG_YEAR_MONTH,
+  DIALOG_YEAR_MODE,
+  DIALOG_YEAR_ORDINAL,
+]) {
+  for (const shape of ["next-popup", "legacy"] as const) {
+    const paths = shaped[shape]?.pathCandidates ?? [];
+    const ordinal = Number(/pop up button (\d+)/.exec(paths[0] ?? "")?.[1] ?? 0);
+    if (ordinal > 0) {
+      registerRefs(paths, groupRef("AXPopUpButton", ordinal, ORDINAL_JUSTIFICATIONS.anchor));
+    }
+  }
+}
+
+/**
+ * The structured descriptor for a dialog path, or null when the path is not one
+ * this file registered — which makes the raw-AX compiler refuse the whole
+ * program and leaves the certified AppleScript transport in place. Fail closed:
+ * an unregistered address is never guessed at.
+ */
+export function dialogRefFor(path: string): ElementRef | null {
+  return DIALOG_REFS.get(path) ?? null;
+}
+
+/** The label-row descriptor for the start-offset field (CGRD1 §B). */
+export function startEarlierRef(): ElementRef {
+  return {
+    field: "shell",
+    rowLabel: DIALOG_START_EARLIER_LABEL,
+    tolerance: ROW_TOLERANCE_DEFAULT,
+  };
+}
+
+/** The label-row descriptor for a cadence numeric field (CGRD1 §A). */
+export function cadenceFieldRef(target: "interval" | "ends-count"): ElementRef {
+  return { field: "group", target, tolerance: ROW_TOLERANCE_DEFAULT };
+}
 
 /**
  * After-completion cadence-unit pop-up labels. The options are NOT the frequency

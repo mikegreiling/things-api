@@ -88,6 +88,19 @@ export interface AxControlCheck {
   readonly spec?: string;
   /** verify-by-read only: the pre-fill key this control answers for. */
   readonly prefillKey?: string;
+  /**
+   * Check this control ONLY under the named dialog shape (the +1-index fork).
+   *
+   * Carried as DATA for the same reason an op's `onlyShape` is: the probe that
+   * measures the shape runs INSIDE the merged hop, so at compile time there is
+   * no verdict to filter against. The interpreter skips a control whose shape
+   * does not match, using the verdict it produced a few ops earlier.
+   */
+  readonly onlyShape?: RepeatDialogShape;
+  /** A shape-SELECTED address for this control — the same fork, per shape. */
+  readonly shapedRef?: Readonly<Record<RepeatDialogShape, ElementRef>>;
+  /** A shape-SELECTED weekday base, for the weekday set check. */
+  readonly shapedBase?: Readonly<Record<RepeatDialogShape, number>>;
 }
 
 /**
@@ -328,3 +341,21 @@ export const ORDINAL_JUSTIFICATIONS = {
     "(daily 2 · weekly 3 · monthly 4 · yearly 5 group pop-ups); RAWAX1-1 " +
     "confirmed monthly mode/ordinal at 3/4 and yearly month/mode/ordinal at 3/4/5",
 } as const;
+
+/**
+ * THE SWITCH (RAWAX1). `THINGS_API_REPEAT_RAWAX=0` regenerates the certified
+ * AppleScript drive byte-identically; anything else leaves the raw-AX transport
+ * on, which is the default once Phase 2 certifies it.
+ *
+ * The polarity is deliberate and matches `THINGS_API_PREFILL`: machinery gets an
+ * OFF switch, and the fallback is the thing that already shipped rather than a
+ * second new path — a fallback that cannot be selected cannot be certified, and
+ * a fallback that is not byte-identical is a third code path nobody drives.
+ */
+export const RAWAX_ENV = "THINGS_API_REPEAT_RAWAX";
+
+/** Is the raw-AX transport switched off by environment? */
+export function rawAxDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = (env[RAWAX_ENV] ?? "").trim().toLowerCase();
+  return raw === "0" || raw === "false" || raw === "no" || raw === "off";
+}

@@ -492,10 +492,20 @@ function intendedText(c){
  * Every failure path confirms NOTHING, which is the safe direction: the setter
  * then runs exactly as it did before this op existed.
  */
+/*
+ * A control the measured shape excludes is not checked, and not counted — the
+ * driver's own onlyShape filter, applied where the verdict actually lives.
+ */
+function rawControlApplies(c){
+  if (c.onlyShape === undefined) return true;
+  if (RAWAX_SHAPE === null) throw new Error(RAWAX_SHAPE_UNPROBED);
+  return c.onlyShape === RAWAX_SHAPE }
+
 function opVerifyPrefill(o){
   var confirmed = [], missed = [];
   for (var i=0;i<o.controls.length;i++){
     var c = o.controls[i], observed = null;
+    if (!rawControlApplies(c)) continue;
     try { observed = readControl(c) } catch(e){ observed = null }
     if (observed !== null && controlAgrees(c, observed)){ confirmed.push(c.prefillKey); RAWAX_CONFIRMED[c.prefillKey] = true }
     else missed.push(c.prefillKey + '=' + (observed === null ? '(unreadable)' : observed)) }
@@ -513,6 +523,7 @@ function opAudit(o){
   var bad = [];
   for (var i=0;i<o.controls.length;i++){
     var c = o.controls[i], observed = null;
+    if (!rawControlApplies(c)) continue;
     try { observed = readControl(c) } catch(e){ observed = '(unreadable)' }
     if (observed === null) observed = '(unreadable)';
     if (!controlAgrees(c, observed))
