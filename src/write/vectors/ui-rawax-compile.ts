@@ -198,13 +198,24 @@ function controlFor(raw: DialogAuditControl): AxControlCheck | null {
       };
     case "row-field":
       return { ...base, kind: "number", ref: startEarlierRef() };
-    case "date-area":
+    case "date-area": {
+      // THE EXPECTATION COMES FROM THE SPEC, because a date-area control carries
+      // no `expected` — the AppleScript audit's date-area leg compares against
+      // `dtSpec` directly, and copying `expected` here produced an EMPTY list
+      // that could never match: the routed arm reported
+      // `reminder = 09:30 (intended , dialog shows "9:30")` (RAWAX1 phase 2,
+      // run 3). The rendering is the one that leg uses, character for character,
+      // because the two must agree about what the control SHOWS.
+      const spec = merged.dtSpec ?? "";
+      const expectedFromSpec = specExpectation(spec);
       return {
         ...base,
         kind: "date-area",
         ref: { dateArea: merged.dtTarget ?? "next" },
-        spec: merged.dtSpec ?? "",
+        spec,
+        ...(expectedFromSpec === null ? {} : { expected: expectedFromSpec }),
       };
+    }
     case "weekdays":
       return {
         ...base,
@@ -225,6 +236,26 @@ function controlFor(raw: DialogAuditControl): AxControlCheck | null {
       };
     }
   }
+}
+
+/**
+ * What a date area SHOWS for a given spec, in the executor's own reading.
+ *
+ * `axAuditDateAreasScript` renders a time as `(+h) + ':' + ('0'+(+m)).slice(-2)`
+ * — hour unpadded, minute padded — and a date as the ISO string it was given.
+ * `rawHm` and `rawYmd` produce exactly those, so the comparison is a string
+ * equality and the two transports agree about the same control.
+ */
+function specExpectation(spec: string): string[] | null {
+  if (spec.startsWith("date:")) return [spec.slice(5)];
+  if (spec.startsWith("time:")) {
+    const [h, m] = spec.slice(5).split(":");
+    const hour = Number(h);
+    const minute = Number(m);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return [`${hour}:${String(minute).padStart(2, "0")}`];
+  }
+  return null;
 }
 
 /** Both shapes' refs for a shaped audit control, or null when it has none. */

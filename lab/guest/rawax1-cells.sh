@@ -76,14 +76,30 @@ print('tp=%s fu=%s fa=%s ts=%s rc=%s of=[%s] next=%s deadlined=%s' % (
 fail() { echo "FAIL $*"; FAILURES=$((FAILURES + 1)); }
 pass() { echo "ok   $*"; }
 
+# THE ADD IS ASYNCHRONOUS, SO THE READ-BACK RETRIES (the mkseed shape every other
+# driver here uses). `todo add` goes through the URL scheme and returns before
+# Things has committed the row, so a single SELECT can come back empty — or,
+# worse, come back with a uuid that is not yet resolvable by the CLI, which then
+# refuses the drive with "no to-do matching uuid" and reads exactly like a
+# transport failure. Run 3 lost two cells to that.
 seed() {
-  local title="$1" when="$2" dl="${3:-}"
+  local title="$1" when="$2" dl="${3:-}" i u
   if [ -n "$dl" ]; then
     things todo add "$title" --when "$when" --deadline "$dl" --json >/dev/null 2>&1
   else
     things todo add "$title" --when "$when" --json >/dev/null 2>&1
   fi
-  db "SELECT uuid FROM TMTask WHERE title='$title' AND trashed=0 ORDER BY creationDate DESC LIMIT 1"
+  for i in 1 2 3 4 5; do
+    u=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND trashed=0 AND rt1_recurrenceRule IS NULL ORDER BY creationDate DESC LIMIT 1")
+    # Readable in the DB is not the same as resolvable by the CLI; ask the verb
+    # that will actually be handed the uuid.
+    if [ -n "$u" ] && things todo get "$u" --json >/dev/null 2>&1; then
+      printf '%s' "$u"
+      return 0
+    fi
+    sleep "$i"
+  done
+  printf '%s' "$u"
 }
 
 # drive <name> <title> -- <make-repeating args...>
@@ -160,6 +176,14 @@ export THINGS_API_TRACE=1
 echo ""
 echo "===== A/B: every dialog state lands the SAME rule on both transports ====="
 ab "daily"     --frequency daily --interval 3
+# KEPT AS IT IS, DELIBERATELY. This pair diverged on run 3 — the raw arm landed
+# and the APPLESCRIPT arm refused at its own audit with `Next (first occurrence)
+# … dialog shows "Mon, Jul 6, 2026"` — and the divergence is a finding about the
+# SHIPPED path rather than about the port (see the campaign doc §5c.2): a `next`
+# pre-fill confirmed by the verify hop can be invalidated by a weekday converge
+# that runs after it, and DEFAULTS2's skip then leaves an occurrence the audit
+# correctly rejects. The raw arm happens to re-select it because its own verify
+# did not confirm the key. Left in so the pair keeps reporting it.
 ab "weekly"    --frequency weekly --interval 1 --weekdays monday,thursday
 ab "monthly"   --frequency monthly --interval 2
 ab "yearly"    --frequency yearly --interval 1
@@ -213,38 +237,45 @@ fi
 echo ""
 echo "===== the REFUSAL keeps its sentence (the fold's debt) ====="
 # RDLAT2 §10 declined the hop merge because folding costs per-step failure
-# attribution, so a refusal has to survive it — on both transports, in the same
-# words, with nothing committed.
+# attribution, so a refusal has to survive it. This cell is NOT the off-rule
+# occurrence refusal it started as, and the reason is a finding of its own.
 #
-# It is provoked through a RESCHEDULE, not a promote. On make-repeating `--when`
-# sets the SEED's own date as well as the first occurrence, so the requested date
-# is on-rule by construction and no refusal is reachable — run 2 asked for one
-# and correctly got a landed rule instead. A reschedule opens on an EXISTING
-# rule, so a first occurrence the new rule cannot produce is expressible: a
-# Thursday-weekly series cannot start on a Monday.
+# NO DRIVE-LEVEL REFUSAL IS REACHABLE THROUGH NORMAL CLI SYNTAX on this build.
+# `select-next-occurrence` fails closed when the requested first occurrence is
+# not one the rule produces — but `--when` sets the ANCHOR as well as the
+# occurrence, on make-repeating (it dates the seed) and on reschedule-repeat (it
+# moves the rule), so every date a caller can ask for is on-rule by construction.
+# Run 2 asked for one through a promote and run 3 through a reschedule; both
+# landed a correct rule and the cell reported the code at fault.
+#
+# So the refusal is certified where it IS reachable — the unit matrix, which
+# hands the driver an envelope carrying a refused op and requires the sentence,
+# the failing op's name and the completed trail to survive
+# (test/engine/write-ui-rawax-drive.test.ts) — and what is asserted here is the
+# thing the guest can actually prove: that a drive which refuses commits NOTHING.
+# The audit's own mismatch path does that, and the A/B pairs above reach it.
 for RAWAX in 1 0; do
-  TITLE="$TAG-REFUSE-$RAWAX"
+  TITLE="$TAG-NOCOMMIT-$RAWAX"
   RU=$(seed "$TITLE" "$START")
-  THINGS_API_REPEAT_RAWAX="$RAWAX" drive "refuse-seed-$RAWAX" "$RU" "$TITLE" --frequency weekly --interval 1 >/dev/null 2>&1
-  TMPL=$(db "SELECT uuid FROM TMTask WHERE title='$TITLE' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
   STEP=$((STEP + 1))
-  if [ -z "$TMPL" ]; then fail "[$STEP] rawax=$RAWAX — could not seed a series to reschedule"; continue; fi
-  BEFORE=$(blob "$TMPL")
-  OUT_TXT=$(THINGS_API_REPEAT_RAWAX="$RAWAX" things todo reschedule-repeat "$TMPL" \
-    --frequency weekly --interval 1 --when 2026-07-13 \
-    --dangerously-drive-gui --verify-timeout 90000 --json 2>&1)
-  printf '%s\n' "$OUT_TXT" >"$OUT/refuse-$RAWAX.json"
-  AFTER=$(blob "$TMPL")
+  # An interval of 0 is refused by the operation's own validation, before any
+  # drive: nothing is pressed, nothing is minted. It is the cheapest proof that a
+  # refusing path leaves the database alone, on both transports.
+  OUT_TXT=$(THINGS_API_REPEAT_RAWAX="$RAWAX" things todo make-repeating "$RU" \
+    --frequency weekly --interval 0 \
+    --dangerously-drive-gui --verify-timeout 90000 --json 2>/dev/null)
+  LANDED=$(db "SELECT uuid FROM TMTask WHERE title='$TITLE' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 LIMIT 1")
+  STILL=$(db "SELECT uuid FROM TMTask WHERE uuid='$RU' AND trashed=0")
   case "$OUT_TXT" in
-    *"is not one of them"*)
-      if [ "$BEFORE" = "$AFTER" ]; then
-        pass "[$STEP] rawax=$RAWAX — refused naming the occurrence menu, rule unchanged"
+    *'"ok":false'*)
+      if [ -z "$LANDED" ] && [ -n "$STILL" ]; then
+        pass "[$STEP] rawax=$RAWAX — refused, no rule minted, the row untouched"
       else
-        fail "[$STEP] rawax=$RAWAX — refused but the rule changed anyway"
+        fail "[$STEP] rawax=$RAWAX — refused but the database moved (landed='$LANDED' still='$STILL')"
       fi ;;
     *)
-      fail "[$STEP] rawax=$RAWAX — the off-rule date did not produce the named refusal"
-      echo "     output: $(head -c 400 <<<"$OUT_TXT")" ;;
+      fail "[$STEP] rawax=$RAWAX — an interval of 0 was not refused"
+      echo "     output: $(head -c 300 <<<"$OUT_TXT")" ;;
   esac
 done
 

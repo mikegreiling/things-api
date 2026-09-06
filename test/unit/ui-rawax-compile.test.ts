@@ -128,6 +128,14 @@ describe("the raw-AX compiler expresses every recipe (RAWAX1)", () => {
           if (op.op === "select-occurrence" && op.iso === "") empty.push(where);
           if (op.op === "set-datetime" && op.spec === "") empty.push(where);
           if (op.op === "audit" && op.controls.length === 0) empty.push(where);
+          // A control with nothing to compare against can never agree, so the
+          // audit refuses a rule the drive entered correctly — which is how the
+          // reminder date area reported `intended , dialog shows "9:30"`.
+          if (op.op === "audit" || op.op === "verify-prefill") {
+            for (const c of op.controls) {
+              if (c.expected.length === 0) empty.push(`${where} · control ${c.label}`);
+            }
+          }
         }
       }
     }

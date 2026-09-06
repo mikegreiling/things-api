@@ -586,6 +586,30 @@ Run 1 on a routed golden-v4h guest (helpers 1.4.0, `helpers-enabled true`, the d
 
 **(3) exposed something worse than itself.** The compiler read the top-level `value` where the recipe carries the weekday titles in a SHAPE-SELECTED one — but the reason it survived unit testing is that the test called `forShape` before compiling, which copies `shaped[shape].value` onto the step and hands the compiler a value **the driver never gives it**. The harness was kinder than the caller, so it certified a function nobody calls. It now compiles raw recipe steps, and a new cell rejects any op that compiles with nothing in the field it acts on — verified for teeth by reverting the fix and watching it fire.
 
+### 5c.2 A defect in the SHIPPED path, surfaced by the A/B pair
+
+Run 3's `weekly --interval 1 --weekdays monday,thursday` pair **diverged**: the raw arm landed, and the **AppleScript arm refused at its own pre-commit audit** —
+
+```
+1 control(s) differ: Next (first occurrence) = 2026-07-09
+  (intended "2026-07-09", dialog shows "Mon, Jul 6, 2026" = 2026-07-06)
+```
+
+The mechanism is a pre-existing hazard in the certified path, and the port is not part of it.
+
+1. `make-repeating` derives its first occurrence from the seed row's scheduled date — here Thursday **2026-07-09**.
+2. The `verify-prefill` hop reads the `Next:` pop-up before any setter, finds it already showing that date, and CONFIRMS the `next` key. DEFAULTS2's tag then skips the `select-next-occurrence` actuation.
+3. The **weekday converge runs afterwards** and adds Monday to the set, so the rule's first occurrence moves to **Monday 2026-07-06** — the earliest matching day.
+4. The pre-commit audit re-reads the pop-up, finds Jul 6 against an intended Jul 9, and correctly refuses. Nothing is committed.
+
+So the audit does its job and the drive fails closed — but it fails closed on a request that is perfectly satisfiable, because a pre-fill was confirmed and then invalidated by a later step. **A verify-by-read verdict is only valid until something changes the control it read**, and the weekday converge is such a something.
+
+The raw arm passed the same cell for an incidental reason — its verify did not confirm that key, so the occurrence step ran and re-selected the date after the converge. That is luck, not design, and it is the same shape as the luck RDLAT2 §E.4 found the interval step surviving on.
+
+**Not fixed here, deliberately.** It is a defect in the shipped AppleScript recipe's ORDERING, it predates this campaign, and changing the order of a certified drive is its own change with its own certification. Recorded, queued, and the A/B pair is left in place so it keeps reporting.
+
+**And it is an argument for the A/B cell's design.** A campaign that had only certified "the raw arm lands a correct rule" would have seen nothing here; running the same request both ways and comparing is what turned a passing cell into a defect report about the path that was not being ported.
+
 ### 5c.1 One operational rule, paid for
 
 **`npm run check` must not run while a Tart guest is up.** A concurrent run took **3,255 s** and produced five spurious failures — `osacompile` and `osascript` suites timing out at their 5 s budgets under starvation. The same suites take **6.7 s** with the slot empty. A red suite under contention looks exactly like a red suite from a defect, and this campaign spent an hour on the difference.
