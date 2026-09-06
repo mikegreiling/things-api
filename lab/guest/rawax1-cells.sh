@@ -1,0 +1,294 @@
+#!/bin/bash
+# RAWAX1 cells — the raw-AX Repeat drive, certified with the FIELD'S OWN SYNTAX.
+#
+# Runs ON THE GUEST. On golden-v4h (routed, helpers 1.4.0, `helpers-enabled
+# true`) these are the release gate's field-shaped arm; on golden-v4 with
+# THINGS_API_UI_DIRECT=1 they are the direct arm. Same cells either way — the
+# routing-arm law says WHICH IDENTITY EXECUTES A SCRIPT is a certification
+# dimension, so the cells must be identical and only the host differs.
+#
+# WHAT IS BEING CERTIFIED. The raw-AX transport replaces every System Events
+# round-trip in the Repeat drive and MERGES the dialog entry into two or three
+# scripts. Three questions follow, and each has cells:
+#
+#  1. DOES IT LAND THE SAME RULE? The oracle is the committed blob, byte for
+#     byte, against the same drive with `THINGS_API_REPEAT_RAWAX=0`. Not "a
+#     correct rule" — the SAME one. A transport change that alters a landed rule
+#     is not a transport change.
+#  2. IS EVERY QUADRANT CERTIFIED? Optional machinery multiplies (DEFAULTS3): the
+#     drive now has THREE switches — {rawax on/off} x {observer up/down} x
+#     {prefill on/off} — so the matrix below crosses all three rather than
+#     certifying each against the others' defaults, which is how #700 shipped.
+#  3. DOES IT REFUSE THE SAME WAY? A faster driver that degrades a refusal has
+#     traded the thing the refusals are for. The mismatch cell poisons an
+#     intended value and requires the SAME sentence, naming the same control.
+#
+# NORMAL CLI SYNTAX ONLY: no osascript, no hand-built things:/// URL, no direct
+# driver invocation. The one exception is the beep sentinel, which is the rig.
+#
+# Usage: rawax1-cells.sh <node-binary> <app-dir>
+set -u
+NODE="$1"
+APP="$2/dist/cli/main.js"
+OUT="$HOME/things-lab/out"
+mkdir -p "$OUT"
+FAILURES=0
+STEP=0
+TAG="RAWAX1"
+START="2026-07-09"    # a Thursday; the guest clock is pinned to 2026-07-05
+DEADLINE="2026-07-12"
+
+things() { "$NODE" "$APP" "$@"; }
+
+db() {
+  python3 -c "
+import glob, os, sqlite3, sys
+db = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]
+c = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+r = c.execute(sys.argv[1]).fetchone()
+print('' if r is None else ('' if r[0] is None else r[0]))
+" "$1"
+}
+
+# THE ORACLE: the recurrence blob as a HEX LITERAL. A decoded summary can agree
+# while the blob differs; only the bytes settle "the same rule".
+blob() { db "SELECT quote(rt1_recurrenceRule) FROM TMTask WHERE uuid='$1'"; }
+
+# The readable form, for a report a human has to act on.
+rule() {
+  python3 -c "
+import glob, os, plistlib, sqlite3, sys
+db = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]
+c = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+r = c.execute('SELECT rt1_recurrenceRule, rt1_nextInstanceStartDate, deadline FROM TMTask WHERE uuid=?', (sys.argv[1],)).fetchone()
+def dpk(v):
+    if not isinstance(v, int) or v == 0: return v
+    y = v >> 16; m = (v >> 12) & 0xF; d = (v >> 7) & 0x1F
+    return '%04d-%02d-%02d' % (y, m, d) if 1 < y < 5000 else v
+if not r: print('NO-ROW'); raise SystemExit
+d = plistlib.loads(r[0]) if r[0] else {}
+offs = ','.join('{' + ','.join('%s=%s' % (k, o[k]) for k in ('dy','mo','wd','wdo') if k in o) + '}' for o in d.get('of', []))
+print('tp=%s fu=%s fa=%s ts=%s rc=%s of=[%s] next=%s deadlined=%s' % (
+  d.get('tp'), d.get('fu'), d.get('fa'), d.get('ts'), d.get('rc'), offs, dpk(r[1]), 'yes' if r[2] else 'no'))
+" "$1"
+}
+
+fail() { echo "FAIL $*"; FAILURES=$((FAILURES + 1)); }
+pass() { echo "ok   $*"; }
+
+seed() {
+  local title="$1" when="$2" dl="${3:-}"
+  if [ -n "$dl" ]; then
+    things todo add "$title" --when "$when" --deadline "$dl" --json >/dev/null 2>&1
+  else
+    things todo add "$title" --when "$when" --json >/dev/null 2>&1
+  fi
+  db "SELECT uuid FROM TMTask WHERE title='$title' AND trashed=0 ORDER BY creationDate DESC LIMIT 1"
+}
+
+# drive <name> <title> -- <make-repeating args...>
+#
+# Runs one promote in the CURRENT quadrant (the caller exports the switches) and
+# leaves the landed blob in $LAST_BLOB / the readable rule in $LAST_RULE.
+LAST_BLOB=""
+LAST_RULE=""
+LAST_MS=0
+LAST_CODE=0
+drive() {
+  local name="$1" title="$2"; shift 2
+  local uuid t0 t1 out code tmpl
+  uuid=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
+  if [ -z "$uuid" ]; then fail "[$STEP] $name — no seed row titled $title"; return 1; fi
+  STEP=$((STEP + 1))
+  t0=$(python3 -c 'import time;print(int(time.time()*1000))')
+  out=$(things todo make-repeating "$uuid" "$@" --dangerously-drive-gui --verify-timeout 90000 --json 2>/dev/null)
+  code=$?
+  t1=$(python3 -c 'import time;print(int(time.time()*1000))')
+  printf '%s\n' "$out" >"$OUT/$name.json"
+  LAST_CODE=$code
+  LAST_MS=$((t1 - t0))
+  tmpl=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
+  if [ "$code" -ne 0 ] || [ -z "$tmpl" ]; then
+    LAST_BLOB=""; LAST_RULE=""
+    fail "[$STEP] $name — exit $code, template='$tmpl' wall=${LAST_MS}ms"
+    echo "     output: $(head -c 600 <<<"$out")"
+    return 1
+  fi
+  LAST_BLOB=$(blob "$tmpl")
+  LAST_RULE=$(rule "$tmpl")
+  echo "     landed: $LAST_RULE   (wall=${LAST_MS}ms)"
+  return 0
+}
+
+# ab <name> <freq-args...> — the SAME rule driven both ways, blobs compared.
+#
+# This is the campaign's central assertion and the reason the switch exists: a
+# transport change that alters a landed rule is not a transport change.
+ab() {
+  local name="$1"; shift
+  local rawTitle="$TAG-$name-RAW" oldTitle="$TAG-$name-OLD"
+  seed "$rawTitle" "$START" >/dev/null
+  seed "$oldTitle" "$START" >/dev/null
+
+  THINGS_API_REPEAT_RAWAX=1 drive "$name-raw" "$rawTitle" "$@" || return 1
+  local rawBlob="$LAST_BLOB" rawRule="$LAST_RULE" rawMs="$LAST_MS"
+  THINGS_API_REPEAT_RAWAX=0 drive "$name-old" "$oldTitle" "$@" || return 1
+  local oldBlob="$LAST_BLOB" oldMs="$LAST_MS"
+
+  STEP=$((STEP + 1))
+  if [ "$rawBlob" = "$oldBlob" ] && [ -n "$rawBlob" ]; then
+    pass "[$STEP] $name — blobs BYTE-IDENTICAL across transports  (raw ${rawMs}ms / applescript ${oldMs}ms)"
+  else
+    fail "[$STEP] $name — the transports landed DIFFERENT rules"
+    echo "     raw: $rawBlob"
+    echo "     old: $oldBlob"
+    echo "     raw rule: $rawRule"
+  fi
+}
+
+echo "############################################################"
+echo "# RAWAX1 — the raw-AX Repeat drive"
+echo "# clock: $(date)"
+echo "############################################################"
+
+things config set ui-enabled true >/dev/null && pass "ui-enabled on" || fail "could not set ui-enabled"
+export THINGS_API_TRACE=1
+
+echo ""
+echo "===== A/B: every dialog state lands the SAME rule on both transports ====="
+ab "daily"     --frequency daily --interval 3
+ab "weekly"    --frequency weekly --interval 1 --weekdays monday,thursday
+ab "monthly"   --frequency monthly --interval 2
+ab "yearly"    --frequency yearly --interval 1
+ab "aftercomp" --frequency weekly --interval 3 --after-completion
+ab "endsafter" --frequency daily --interval 1 --ends-after 4
+ab "deadline"  --frequency weekly --interval 1 --deadline --start-days-earlier 2
+ab "zerodl"    --frequency weekly --interval 1 --deadline --start-days-earlier 0
+ab "reminder"  --frequency weekly --interval 1 --reminder 09:30
+ab "nextdate"  --frequency weekly --interval 1 --when "$START"
+
+echo ""
+echo "===== the QUADRANTS: {rawax} x {observer} x {prefill}, crossed ====="
+# DEFAULTS3's law: optional machinery multiplies, so the shapes that ship broken
+# are the PRODUCTS. Three switches is eight shapes; each lands the same blob or
+# the matrix is not certified.
+QUAD_BLOBS=""
+for RAWAX in 1 0; do
+  for OBS in 1 0; do
+    for PF in 1 0; do
+      NAME="q-r$RAWAX-o$OBS-p$PF"
+      TITLE="$TAG-Q-r$RAWAX-o$OBS-p$PF"
+      seed "$TITLE" "$START" >/dev/null
+      echo "  -- quadrant rawax=$RAWAX observer=$OBS prefill=$PF"
+      THINGS_API_REPEAT_RAWAX="$RAWAX" THINGS_API_AX_OBSERVER="$OBS" THINGS_API_PREFILL="$PF" \
+        drive "$NAME" "$TITLE" --frequency weekly --interval 1 --weekdays thursday --when "$START"
+      if [ -n "$LAST_BLOB" ]; then
+        QUAD_BLOBS="$QUAD_BLOBS$NAME=$LAST_BLOB"$'\n'
+      fi
+      # PROVE THE QUADRANT FROM THE DRIVE'S OWN TRACE, never from the variable
+      # the cell set (DEFAULTS3): a switch is only one of the reasons machinery
+      # can be absent.
+      python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+tp = (d.get('data') or {}).get('tracePath')
+print('     quadrant proof:', 'trace=' + str(tp) if tp else '(no trace path in output)')
+" "$OUT/$NAME.json" 2>/dev/null || true
+    done
+  done
+done
+STEP=$((STEP + 1))
+UNIQ=$(printf '%s' "$QUAD_BLOBS" | sed 's/^[^=]*=//' | sort -u | grep -c . || true)
+COUNT=$(printf '%s' "$QUAD_BLOBS" | grep -c . || true)
+if [ "$COUNT" = "8" ] && [ "$UNIQ" = "1" ]; then
+  pass "[$STEP] all 8 quadrants landed and agree on ONE blob"
+else
+  fail "[$STEP] quadrants: $COUNT/8 landed, $UNIQ distinct blob(s)"
+  printf '%s' "$QUAD_BLOBS" | sed 's/^/     /'
+fi
+
+echo ""
+echo "===== the REFUSAL keeps its sentence (the fold's debt) ====="
+# RDLAT2 §10 declined the hop merge because folding costs per-step failure
+# attribution. An off-rule first occurrence is the cheapest refusal to provoke
+# with normal syntax: the 3.23 Next: menu offers only the rule's own occurrences,
+# so a date the rule cannot produce must fail closed NAMING that — on both
+# transports, in the same words.
+for RAWAX in 1 0; do
+  TITLE="$TAG-REFUSE-$RAWAX"
+  seed "$TITLE" "$START" >/dev/null
+  U=$(db "SELECT uuid FROM TMTask WHERE title='$TITLE' AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
+  STEP=$((STEP + 1))
+  OUT_TXT=$(THINGS_API_REPEAT_RAWAX="$RAWAX" things todo make-repeating "$U" \
+    --frequency weekly --interval 1 --when 2026-07-10 \
+    --dangerously-drive-gui --verify-timeout 90000 --json 2>&1)
+  printf '%s\n' "$OUT_TXT" >"$OUT/refuse-$RAWAX.json"
+  LANDED=$(db "SELECT uuid FROM TMTask WHERE title='$TITLE' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 LIMIT 1")
+  case "$OUT_TXT" in
+    *"is not one of them"*)
+      if [ -z "$LANDED" ]; then
+        pass "[$STEP] rawax=$RAWAX — refused with the occurrence sentence, nothing committed"
+      else
+        fail "[$STEP] rawax=$RAWAX — refused but a rule landed anyway"
+      fi ;;
+    *)
+      fail "[$STEP] rawax=$RAWAX — the off-rule date did not produce the named refusal"
+      echo "     output: $(head -c 500 <<<"$OUT_TXT")" ;;
+  esac
+done
+
+echo ""
+echo "===== the deadlined source (DLSEED1, under the new transport) ====="
+# BATCH1's ruling, re-asserted on the raw-AX path: a deadlined seed promotes to a
+# deadlined series, and a NAMED zero offset is driven rather than skipped.
+U=$(seed "$TAG-DL" "$START" "$DEADLINE")
+THINGS_API_REPEAT_RAWAX=1 drive "dl-inherited" "$TAG-DL" --frequency weekly --interval 1
+STEP=$((STEP + 1))
+case "$LAST_RULE" in
+  *"ts=-3 "*deadlined=yes) pass "[$STEP] the inherited deadline survives the port (ts=-3, deadlined)" ;;
+  *) fail "[$STEP] the inherited deadline did not land: $LAST_RULE" ;;
+esac
+U=$(seed "$TAG-DLZ" "$START" "$DEADLINE")
+THINGS_API_REPEAT_RAWAX=1 drive "dl-zero" "$TAG-DLZ" --frequency weekly --interval 1 --deadline --start-days-earlier 0
+STEP=$((STEP + 1))
+case "$LAST_RULE" in
+  *"ts=0 "*deadlined=yes) pass "[$STEP] a NAMED zero offset is typed, not skipped (ts=0, deadlined)" ;;
+  *) fail "[$STEP] the named zero offset did not land: $LAST_RULE" ;;
+esac
+
+echo ""
+echo "===== the hop count, from the drive's own trace ====="
+# The number the cost table is built on, read out of the trace rather than
+# asserted: `ui-rawax` hop records on the raw path, `ui-dispatch` on both.
+python3 -c "
+import glob, json, os, sys
+outs = sorted(glob.glob(os.path.expanduser('~/things-lab/out/*.json')))
+for name in ('weekly-raw', 'weekly-old'):
+    path = os.path.expanduser('~/things-lab/out/%s.json' % name)
+    if not os.path.exists(path): continue
+    try: d = json.load(open(path))
+    except Exception: continue
+    tp = (d.get('data') or {}).get('tracePath')
+    if not tp or not os.path.exists(tp):
+        print('     %-12s (no trace)' % name); continue
+    hops = rawhops = ops = elems = calls = 0
+    for line in open(tp):
+        try: r = json.loads(line)
+        except Exception: continue
+        if r.get('phase') == 'ui-dispatch' and r.get('event') == 'end': hops += 1
+        if r.get('phase') == 'ui-rawax' and r.get('event') == 'hop':
+            rawhops += 1; calls += r.get('axCalls') or 0; elems += r.get('axElems') or 0
+        if r.get('phase') == 'ui-rawax' and r.get('event') == 'op': ops += 1
+    print('     %-12s osascript hops=%d  merged hops=%d  ops=%d  rawAxCalls=%d  elems=%d'
+          % (name, hops, rawhops, ops, calls, elems))
+" 2>/dev/null || echo "     (trace summary unavailable)"
+
+echo ""
+echo "############################################################"
+if [ "$FAILURES" -eq 0 ]; then
+  echo "# RAWAX1: GREEN ($STEP cells)"
+else
+  echo "# RAWAX1: RED — $FAILURES failure(s) in $STEP cells"
+fi
+echo "############################################################"
+exit "$FAILURES"
