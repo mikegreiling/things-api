@@ -736,3 +736,25 @@ occurrence to day 20, so a first occurrence on 2026-07-09 would not hold.
 — so the `next` claim the fix withdraws was never reachable there. The withdrawal is correct and defensive for that family, and the cells now assert the FENCE (both transports, same sentence) rather than a drive that cannot happen.
 
 **The yearly family has no such fence**, and the same request drove for 20 s before refusing deep in the occurrence menu (`this Repeat dialog offers only the rule's own upcoming occurrences … searched 6 level(s)`). That asymmetry is not this campaign's to settle — the refusal is correct and legible, and the caller's remedy (`--when` on a date the rule produces) is the same either way — but it is a real inconsistency between two families of the same verb, and it belongs on the queue rather than in a footnote.
+
+### 5c.8 The service System Events was silently providing
+
+The DIRECT arm — the same 74 cells on a golden-v4 clone with no helpers — came back **RED: 32 of 70**, and the shape of it named the cause before the trace did. Every cell that PROBES the dialog shape refused, on the raw arm only:
+
+```
+FAIL [1] daily-raw    — ui drive stopped at "measure the Repeat dialog's shape"
+   (its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a
+    date field, so the dialog matched neither known shape — a Things update has
+    redesigned it again; nothing was entered into the rule)
+ok   [15] aftercomp   — blobs BYTE-IDENTICAL across transports
+```
+
+`aftercomp` is the one recipe with `needsShape === false`. Every other cell probes, and every other cell's raw arm refused — while the AppleScript arm passed all of them, in the same dialog, on the same boot, seconds apart.
+
+**`AXEnhancedUserInterface`.** It is an app-level flag an assistive client SETS to ask AppKit for the full Accessibility tree, and System Events sets it on every process it attaches to. The direct arm's warm-up deliberately pokes it to `false` (as most rigs here do, and as `lab/guest/stage5-cells.sh` does per drive); the routed orchestrator does not. So the shipped transport has been reading the ENHANCED tree for the life of this project — every address, every census, every certified ordinal — and nothing here knew it, because nothing here had ever read the tree any other way. A raw client sets nothing, gets the plain tree, and the `Next:` row in the plain tree carries neither control.
+
+This is the deepest thing the campaign found, and it is the same shape as §5c.6 one level down: **the transport was not just a cost, it was a set of side effects nobody had written down.** The fold cost us a settle; the transport swap costs us this. Both were invisible to every unit suite and to the routed arm, and both were found by running the identical cells in a configuration the campaign had no reason to believe was different.
+
+The port now asks for the flag itself — one idempotent AX write per hop, before anything reads, leaving it on exactly as a System Events drive does. That is not a new claim on the app; it is the claim the certified transport was making on our behalf.
+
+**And the rig KEEPS the poke.** A guest that pokes the flag to false is not an artificial condition — the flag is off by default and only an attached assistive client turns it on, so a raw client on a real Mac is in exactly that state until something else attaches. The direct arm is now the adversarial arm this campaign needed, and it earned its keep on the first run.

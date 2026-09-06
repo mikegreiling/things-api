@@ -629,6 +629,30 @@ function ${RAWAX_MARKER}(){
   RAWAX_APP = rawAppEl();
   if (RAWAX_APP === null) return { ok:false, detail:'Things is not running', ops:[], axCalls:0, axElems:0 };
   /*
+   * THE SERVICE SYSTEM EVENTS WAS SILENTLY PROVIDING (RAWAX1 §5c.8).
+   *
+   * AXEnhancedUserInterface is an app-level flag an assistive client SETS to
+   * ask AppKit for the full Accessibility tree, and System Events sets it on
+   * every process it attaches to. So every read the shipped drive ever made was
+   * made against the enhanced tree — and nothing in this project knew that,
+   * because nothing in this project had ever read the tree any other way.
+   *
+   * A raw client sets nothing. On a guest whose flag was poked to false, the
+   * Repeat dialog's Next: row exposes NEITHER the occurrence pop-up nor a date
+   * field: the shape probe measured neither known shape and refused, on every
+   * cell that probes — and the after-completion cell, alone, passed, because its
+   * recipe never asks for a shape. The AppleScript arm passed all of them on the
+   * same boot, in the same dialog, because asking through System Events turned
+   * the flag back on as a side effect of asking.
+   *
+   * So the port asks for it explicitly, once per hop, before anything reads:
+   * one AX write, idempotent, and it leaves the flag on exactly as a System
+   * Events drive does. This is not a new claim on the app — it is the claim the
+   * certified transport was making on our behalf, written down.
+   */
+  if (rawBool(RAWAX_APP, 'AXEnhancedUserInterface') !== true) {
+    rawSetBool(RAWAX_APP, 'AXEnhancedUserInterface', true) }
+  /*
    * THE SHAPE NODE ALREADY MEASURED (RAWAX1 phase 2, second defect).
    *
    * A merged hop that contains no probe still ADDRESSES shape-forked controls —
