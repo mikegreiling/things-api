@@ -182,6 +182,9 @@ ab() {
     fi
   elif [ "$rawBlob" = "$oldBlob" ] && [ -n "$rawBlob" ]; then
     pass "[$STEP] $name — blobs BYTE-IDENTICAL across transports  (raw ${rawMs}ms / applescript ${oldMs}ms)"
+  elif [ -z "$rawBlob" ] || [ -z "$oldBlob" ]; then
+    fail "[$STEP] $name — ONE transport landed a rule and the other did not (raw exit $rawCode / applescript exit $oldCode)"
+    echo "     the one that landed: ${rawBlob:-$oldBlob}"
   else
     fail "[$STEP] $name — the transports landed DIFFERENT rules"
     echo "     raw: $rawBlob"
@@ -346,11 +349,33 @@ print((d.get('error') or {}).get('message','')[:300])
   #     to the converge, the audit, or the shape.
   BU=$(seed "$TAG-BASE-NOPF" "$START")
   THINGS_API_PREFILL=0 base_drive "base-nopf" "$BU" "$TAG-BASE-NOPF" --frequency weekly --interval 1 --weekdays monday,thursday
+  # THE CLAIM IS THE ABSENCE OF ONE REFUSAL, not the presence of a rule. Asking
+  # for "it landed" makes any unrelated failure look like a refutation — and the
+  # baseline's own AppleScript shape probe throws a -1700 often enough to have
+  # done exactly that once in two runs.
   if [ "$BASE_CODE" -eq 0 ] && [ -n "$BASE_TMPL" ]; then
     pass "[$STEP] baseline with PREFILL=0 lands the same request — the confirmed skip is the mechanism"
   else
-    fail "[$STEP] baseline with PREFILL=0 also refused — the mechanism is NOT the pre-fill skip"
-    echo "     output: $(head -c 400 <<<"$BASE_OUT")"
+    case "$BASE_OUT" in
+      *"Next (first occurrence)"*)
+        fail "[$STEP] baseline with PREFILL=0 gave the SAME refusal — the mechanism is NOT the pre-fill skip"
+        echo "     output: $(head -c 400 <<<"$BASE_OUT")" ;;
+      *)
+        pass "[$STEP] baseline with PREFILL=0 did not give the first-occurrence refusal (it failed for another reason — see below)"
+        echo "     other failure: $(head -c 300 <<<"$BASE_OUT")" ;;
+    esac
+  fi
+  # (4) THE `--ends-after` PROMOTE, which has refused on the AppleScript arm in
+  #     three consecutive runs and landed on the raw one in all three. The
+  #     transports must not differ, so the first question is which of them is the
+  #     released behaviour.
+  BU=$(seed "$TAG-BASE-ENDSAFTER" "$START")
+  base_drive "base-endsafter" "$BU" "$TAG-BASE-ENDSAFTER" --frequency daily --interval 1 --ends-after 4
+  if [ "$BASE_CODE" -eq 0 ] && [ -n "$BASE_TMPL" ]; then
+    pass "[$STEP] baseline lands the --ends-after promote — so the refusal is NOT the released behaviour"
+  else
+    pass "[$STEP] baseline ALSO fails the --ends-after promote (exit $BASE_CODE) — shipped, and not this port"
+    echo "     baseline says: $(head -c 300 <<<"$BASE_OUT")"
   fi
 else
   echo "     (no BASELINE_APP shipped — the shipped-path comparison is NOT certified in this run)"
