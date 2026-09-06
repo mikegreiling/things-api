@@ -239,12 +239,6 @@ export function provenPrefills(
     // weekly is the one after-completion shape whose unit needs no actuation.
     if (rule.frequency === "weekly") keys.add("ac-unit");
   } else {
-    // `Next:` — the requested first occurrence must BE the anchor. The recipe's
-    // `next` is already deadline-shifted (it names the DUE date for a deadlined
-    // rule), which is the same date the dialog derives from a seed scheduled on
-    // the due date, so one comparison serves both shapes.
-    if (isIsoDate(rule.next) && rule.next === anchor) keys.add("next");
-
     if (rule.frequency === "weekly" && rule.weekdays !== undefined) {
       const anchorWeekday = WD_TO_WEEKDAY[weekdayOfIso(anchor)];
       if (rule.weekdays.length === 1 && rule.weekdays[0] === anchorWeekday) keys.add("weekdays");
@@ -263,6 +257,38 @@ export function provenPrefills(
         keys.add("yearly-ordinal");
       }
     }
+
+    // `Next:` — the requested first occurrence must BE the anchor. The recipe's
+    // `next` is already deadline-shifted (it names the DUE date for a deadlined
+    // rule), which is the same date the dialog derives from a seed scheduled on
+    // the due date, so one comparison serves both shapes.
+    //
+    // AND NOTHING THE DRIVE HAS YET TO ACTUATE MAY MOVE IT (RAWAX1 §5c.2, the
+    // defect the A/B pair found in the shipped path). This key is decided LAST,
+    // after every rule-shaping key above, because the `Next:` pop-up is not an
+    // independent control: it holds the rule's FIRST OCCURRENCE, and the app
+    // recomputes it whenever the rule's shape changes. So a verify-by-read that
+    // confirms it before a weekday converge — or a monthly/yearly mode or
+    // ordinal pick — confirms a value that step is about to invalidate, and the
+    // skip it licenses then leaves the dialog holding the app's recomputed date.
+    // The pre-commit audit catches that and refuses, so nothing wrong is ever
+    // committed; but the refusal is of a request that was perfectly satisfiable,
+    // which is a defect and not a safety margin.
+    //
+    // A VERIFY-BY-READ VERDICT IS ONLY VALID UNTIL SOMETHING CHANGES THE CONTROL
+    // IT READ. Every shape key above names exactly such a something, so `next` is
+    // provable only when each one that applies is itself pre-filled — i.e. when
+    // the drive will actuate nothing that reshapes the rule.
+    //
+    // The interval field is deliberately NOT in this list: measured on the daily
+    // cell (RAWAX1 run 4), typing `3` into `Every [n] days` leaves the `Next:`
+    // pop-up on the anchor and the audit agrees. It sets the CADENCE, not the
+    // first occurrence.
+    const reshapes =
+      (rule.frequency === "weekly" && rule.weekdays !== undefined && !keys.has("weekdays")) ||
+      (rule.monthly !== undefined && !keys.has("monthly-ordinal")) ||
+      (rule.yearly !== undefined && !(keys.has("yearly-month") && keys.has("yearly-ordinal")));
+    if (!reshapes && isIsoDate(rule.next) && rule.next === anchor) keys.add("next");
   }
 
   // DEADLINES (DEFAULTS1 §4). A deadline ON THE SEED re-anchors the whole cadence

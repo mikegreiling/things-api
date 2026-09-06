@@ -110,6 +110,15 @@ LAST_BLOB=""
 LAST_RULE=""
 LAST_MS=0
 LAST_CODE=0
+LAST_TRACE=""
+
+# THE DRIVE'S OWN TRACE FILE. `THINGS_API_TRACE=1` writes one JSONL per CLI
+# invocation under the state dir, and a `tracePath` reaches the JSON result only
+# on a failure — which is why run 3 and run 4 both printed "(no trace)" for
+# perfectly good drives, and why the quadrant proof read an absent field. The
+# drive is the last thing to run a CLI, so the newest file is its own.
+TRACE_DIR="$HOME/.local/state/things-api/trace"
+newest_trace() { ls -t "$TRACE_DIR"/*.jsonl 2>/dev/null | head -1; }
 drive() {
   local name="$1" uuid="$2" title="$3"; shift 3
   local t0 t1 out code tmpl
@@ -126,6 +135,8 @@ drive() {
   printf '%s\n' "$out" >"$OUT/$name.json"
   LAST_CODE=$code
   LAST_MS=$((t1 - t0))
+  LAST_TRACE=$(newest_trace)
+  [ -n "$LAST_TRACE" ] && cp "$LAST_TRACE" "$OUT/$name.trace.jsonl" 2>/dev/null
   tmpl=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
   if [ "$code" -ne 0 ] || [ -z "$tmpl" ]; then
     LAST_BLOB=""; LAST_RULE=""
@@ -193,6 +204,96 @@ ab "deadline"  --frequency weekly --interval 1 --deadline --start-days-earlier 2
 ab "zerodl"    --frequency weekly --interval 1 --deadline --start-days-earlier 0
 ab "reminder"  --frequency weekly --interval 1 --reminder 09:30
 ab "nextdate"  --frequency weekly --interval 1 --when "$START"
+# THE RESHAPING SHAPES (RAWAX1 §5c.2's fix, certified where it was found). Each
+# of these names a rule whose FIRST OCCURRENCE the app recomputes away from the
+# seed's own date — a second weekday, a day-of-month that is not the seed's, an
+# ordinal weekday, a yearly month that is not the seed's. Before the fix, the
+# `Next:` pre-fill was confirmed by a read taken before that step and the skip it
+# licensed left the dialog holding the recomputed date, which the pre-commit
+# audit refused. They are A/B pairs like every other, so the fix is asserted on
+# BOTH transports rather than on the one that happened to survive.
+ab "monthlast" --frequency monthly --interval 1 --on-day last
+ab "monthord"  --frequency monthly --interval 1 --on-weekday tuesday --on-ordinal 2
+ab "monthday"  --frequency monthly --interval 1 --on-day 20
+ab "yearmonth" --frequency yearly --interval 1 --yearly-month 11 --on-day 3
+ab "endson"    --frequency weekly --interval 1 --ends-on 2026-09-30
+
+echo ""
+echo "===== the SHIPPED path, as it stands on origin/main (RAWAX1 §5c.2) ====="
+# IS THE DEFECT OURS, OR WAS IT ALREADY THERE? The A/B pair above compares two
+# transports inside ONE build, which can never answer that — `THINGS_API_REPEAT_RAWAX=0`
+# is this branch's rendering of the certified path, not the released one. So the
+# orchestrator ships the BASELINE dist (origin/main) into the same guest, over the
+# same fixtures, on the same boot, and the released CLI drives the same request.
+#
+# A refusal here is a SHIPPED defect and not a port regression; a pass here would
+# mean the branch introduced it. Skipped, loudly, when no baseline was shipped.
+if [ -n "${BASELINE_APP:-}" ]; then
+  BASE_APP_DIR="${BASELINE_APP/#\$HOME/$HOME}"
+  BASE_CLI="$BASE_APP_DIR/dist/cli/main.js"
+  base_drive() {
+    local name="$1" uuid="$2" title="$3"; shift 3
+    local out code tmpl
+    STEP=$((STEP + 1))
+    out=$("$NODE" "$BASE_CLI" todo make-repeating "$uuid" "$@" \
+      --dangerously-drive-gui --verify-timeout 90000 --json 2>/dev/null)
+    code=$?
+    printf '%s\n' "$out" >"$OUT/$name.json"
+    tmpl=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
+    BASE_CODE=$code
+    BASE_OUT=$out
+    BASE_TMPL=$tmpl
+  }
+  echo "     baseline CLI: $BASE_CLI ($("$NODE" "$BASE_CLI" --version 2>/dev/null))"
+
+  # (1) THE GATE'S OWN WEEKLY SHAPE — `weekly --interval 1`, exactly what
+  #     stage5-cells.sh 07b drives. It passes, which is why the release gate has
+  #     never seen this.
+  BU=$(seed "$TAG-BASE-GATE" "$START")
+  base_drive "base-gate" "$BU" "$TAG-BASE-GATE" --frequency weekly --interval 1
+  if [ "$BASE_CODE" -eq 0 ] && [ -n "$BASE_TMPL" ]; then
+    pass "[$STEP] baseline: the release gate's weekly shape lands (this is the blind spot, not the bug)"
+  else
+    fail "[$STEP] baseline: the gate's own weekly shape did NOT land — exit $BASE_CODE"
+    echo "     output: $(head -c 400 <<<"$BASE_OUT")"
+  fi
+
+  # (2) THE SAME REQUEST THE A/B PAIR REFUSED. Two weekdays, one of them the
+  #     seed's own — the shape whose first occurrence the converge moves.
+  BU=$(seed "$TAG-BASE-WEEKLY" "$START")
+  base_drive "base-weekly" "$BU" "$TAG-BASE-WEEKLY" --frequency weekly --interval 1 --weekdays monday,thursday
+  case "$BASE_OUT" in
+    *"dialog shows"*)
+      pass "[$STEP] baseline REPRODUCES the refusal — the defect is SHIPPED, not introduced here"
+      echo "     baseline says: $(python3 -c "
+import json,sys
+d=json.loads(sys.stdin.read())
+print((d.get('error') or {}).get('message','')[:300])
+" <<<"$BASE_OUT" 2>/dev/null)" ;;
+    *)
+      if [ "$BASE_CODE" -eq 0 ] && [ -n "$BASE_TMPL" ]; then
+        fail "[$STEP] baseline LANDED the multi-weekday rule — then this branch introduced the refusal"
+      else
+        fail "[$STEP] baseline failed for some OTHER reason — exit $BASE_CODE"
+      fi
+      echo "     output: $(head -c 400 <<<"$BASE_OUT")" ;;
+  esac
+
+  # (3) AND THE SAME REQUEST WITH THE PRE-FILL SWITCHED OFF, on the baseline.
+  #     `THINGS_API_PREFILL=0` tags nothing, so the occurrence setter runs and the
+  #     rule lands — which localizes the defect to the confirmed skip rather than
+  #     to the converge, the audit, or the shape.
+  BU=$(seed "$TAG-BASE-NOPF" "$START")
+  THINGS_API_PREFILL=0 base_drive "base-nopf" "$BU" "$TAG-BASE-NOPF" --frequency weekly --interval 1 --weekdays monday,thursday
+  if [ "$BASE_CODE" -eq 0 ] && [ -n "$BASE_TMPL" ]; then
+    pass "[$STEP] baseline with PREFILL=0 lands the same request — the confirmed skip is the mechanism"
+  else
+    fail "[$STEP] baseline with PREFILL=0 also refused — the mechanism is NOT the pre-fill skip"
+    echo "     output: $(head -c 400 <<<"$BASE_OUT")"
+  fi
+else
+  echo "     (no BASELINE_APP shipped — the shipped-path comparison is NOT certified in this run)"
+fi
 
 echo ""
 echo "===== the QUADRANTS: {rawax} x {observer} x {prefill}, crossed ====="
@@ -214,13 +315,30 @@ for RAWAX in 1 0; do
       fi
       # PROVE THE QUADRANT FROM THE DRIVE'S OWN TRACE, never from the variable
       # the cell set (DEFAULTS3): a switch is only one of the reasons machinery
-      # can be absent.
-      python3 -c "
+      # can be absent. Each switch has a phase that only appears when it is ON —
+      # `ui-rawax` for the transport, an ARMED `ui-observer` for the sidecar, and
+      # a `ui-prefill`/`verify-prefill` verdict for the pre-fill reads — so the
+      # trace says which of the eight shapes actually ran.
+      STEP=$((STEP + 1))
+      PROOF=$(python3 -c "
 import json, sys
-d = json.load(open(sys.argv[1]))
-tp = (d.get('data') or {}).get('tracePath')
-print('     quadrant proof:', 'trace=' + str(tp) if tp else '(no trace path in output)')
-" "$OUT/$NAME.json" 2>/dev/null || true
+raw = obs = pf = False
+for line in open(sys.argv[1], errors='ignore'):
+    try: r = json.loads(line)
+    except Exception: continue
+    ph, ev = r.get('phase'), r.get('event')
+    if ph == 'ui-rawax' and ev in ('op', 'hop'):
+        raw = True
+        if r.get('op') == 'verify-prefill': pf = True
+    elif ph == 'ui-observer' and ev == 'armed': obs = True
+    elif ph == 'ui-prefill' and ev == 'verify': pf = True
+print('%d%d%d' % (raw, obs, pf))
+" "$OUT/$NAME.trace.jsonl" 2>/dev/null || echo "???")
+      if [ "$PROOF" = "$RAWAX$OBS$PF" ]; then
+        pass "[$STEP] $NAME — the trace shows exactly this quadrant (rawax/observer/prefill = $PROOF)"
+      else
+        fail "[$STEP] $NAME — asked for $RAWAX$OBS$PF, the trace shows $PROOF"
+      fi
     done
   done
 done

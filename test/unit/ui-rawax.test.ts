@@ -211,7 +211,7 @@ function everyOpProgram(): AxProgram {
       commit: { in: "shell", role: "AXButton", title: "OK" },
     },
   ];
-  return { shellIndex: 0, shape: "next-popup", ops };
+  return { shellIndex: 0, shape: "next-popup", confirmed: [], ops };
 }
 
 describe("the rendered executor", () => {
@@ -339,6 +339,7 @@ describe("the defects the routed arm caught", () => {
     const script = renderRawAxScript({
       shellIndex: 0,
       shape: "next-popup",
+      confirmed: [],
       ops: [{ label: "audit", op: "audit", controls: [], expect: null, commit: null }],
     });
     // The program carries it…
@@ -346,6 +347,23 @@ describe("the defects the routed arm caught", () => {
     // …and the interpreter SEEDS from it rather than starting at null.
     expect(script).toContain("RAWAX_PROGRAM.shape === 'next-popup'");
     expect(script).toMatch(/RAWAX_SHAPE = RAWAX_PROGRAM\.shape/);
+  });
+
+  it("seeds the CONFIRMED pre-fills the same way, so a tagged setter in a later hop skips", () => {
+    // The same defect class as the shape one above, found by run 4's trace:
+    // RAWAX_CONFIRMED is per-SCRIPT too, so the occurrence step — which sits in
+    // the committing tail, one hop after the verify op that confirmed `next` —
+    // dispatched on the raw transport while the AppleScript transport skipped
+    // it. Only the op's own idempotence guard made that harmless. Two
+    // transports must not decide differently from the same verdict.
+    const script = renderRawAxScript({
+      shellIndex: 0,
+      shape: "next-popup",
+      confirmed: ["next", "interval"],
+      ops: [{ label: "audit", op: "audit", controls: [], expect: null, commit: null }],
+    });
+    expect(script).toContain('"confirmed":["next","interval"]');
+    expect(script).toContain("RAWAX_CONFIRMED[RAWAX_PROGRAM.confirmed[ci]] = true");
   });
 
   it("asks for focus the canonical way, and proves it the way the app answers", () => {

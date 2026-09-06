@@ -100,6 +100,48 @@ describe("what a seed PROVES (DEFAULTS1 §3)", () => {
     expect(keys({ frequency: "daily", interval: 1, next: "2026-07-10" })).not.toContain("next");
   });
 
+  it("withdraws `Next:` when a later step will RESHAPE the rule (RAWAX1 §5c.2)", () => {
+    // THE DEFECT THIS CELL IS THE FENCE FOR. The `Next:` pop-up is not an
+    // independent control — it shows the rule's FIRST OCCURRENCE, and the app
+    // recomputes it whenever the rule's shape changes. Confirming it by a read
+    // taken BEFORE the weekday converge (or a monthly/yearly mode pick) licensed
+    // a skip, the converge then moved the occurrence to the earliest matching
+    // day, and the pre-commit audit refused a request that was satisfiable.
+    // Measured end to end on the routed arm: a `weekly --weekdays monday,thursday`
+    // promote off a Thursday seed refused with `dialog shows "Mon, Jul 6, 2026"`.
+    const twoDays = keys({
+      frequency: "weekly",
+      interval: 1,
+      weekdays: ["monday", "thursday"],
+      next: THU,
+    });
+    expect(twoDays).not.toContain("next");
+    // …and the one-weekday shape, whose converge is itself pre-filled, keeps it:
+    // nothing will be actuated, so nothing can invalidate the read.
+    expect(keys({ frequency: "weekly", interval: 1, weekdays: ["thursday"], next: THU })).toContain(
+      "next",
+    );
+
+    // The same law, on the two other rule-shaping families.
+    expect(
+      keys({ frequency: "monthly", interval: 1, monthly: { day: 12 }, next: THU }),
+    ).not.toContain("next");
+    expect(keys({ frequency: "monthly", interval: 1, monthly: { day: 9 }, next: THU })).toContain(
+      "next",
+    );
+    expect(
+      keys({ frequency: "yearly", interval: 1, yearly: { month: 8, day: 9 }, next: THU }),
+    ).not.toContain("next");
+    expect(
+      keys({ frequency: "yearly", interval: 1, yearly: { month: 7, day: 9 }, next: THU }),
+    ).toContain("next");
+
+    // AND THE CADENCE IS NOT A RESHAPE. Typing `3` into `Every [n] days` sets the
+    // period, not the first occurrence — measured on run 4's daily cell, where
+    // the pop-up stayed on the anchor and the audit agreed.
+    expect(keys({ frequency: "daily", interval: 3, next: THU })).toContain("next");
+  });
+
   it("claims the weekly weekday only for a single weekday on the anchor's own day", () => {
     // 2026-07-09 is a Thursday.
     expect(keys({ frequency: "weekly", interval: 1, weekdays: ["thursday"] })).toContain(

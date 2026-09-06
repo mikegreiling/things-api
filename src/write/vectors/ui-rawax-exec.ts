@@ -628,6 +628,18 @@ function ${RAWAX_MARKER}(){
    */
   if (RAWAX_PROGRAM.shape === 'next-popup' || RAWAX_PROGRAM.shape === 'legacy') {
     RAWAX_SHAPE = RAWAX_PROGRAM.shape }
+  /*
+   * AND THE PRE-FILL VERDICTS IT ALREADY HOLDS (DEFAULTS2), for the same reason
+   * and by the same route. RAWAX_CONFIRMED is per-SCRIPT too, so a tagged setter
+   * that lands in a LATER hop than the verify op that confirmed it would run
+   * anyway — measured on run 4's daily cell, where the occurrence step dispatched
+   * in the committing tail and only its own idempotence guard stopped it. Every
+   * such op is self-guarding, so nothing wrong was ever driven; but the drive
+   * paid for a decision it had already made, and the AppleScript transport
+   * skipped what this one ran. Seeding closes both gaps.
+   */
+  if (RAWAX_PROGRAM.confirmed) {
+    for (var ci=0;ci<RAWAX_PROGRAM.confirmed.length;ci++) RAWAX_CONFIRMED[RAWAX_PROGRAM.confirmed[ci]] = true }
   var records = [], i;
   for (i=0;i<RAWAX_PROGRAM.ops.length;i++){
     var o = RAWAX_PROGRAM.ops[i];

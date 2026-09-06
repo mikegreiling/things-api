@@ -4392,6 +4392,7 @@ async function driveRawAxGroup(
   run: UiRunner,
   shellIndex: number | null,
   shape: RepeatDialogShape | null,
+  prefilled: ReadonlySet<string>,
 ): Promise<{
   ok: boolean;
   why?: string;
@@ -4408,7 +4409,12 @@ async function driveRawAxGroup(
       primitive: "audit-dialog",
       label,
       lang: "javascript",
-      script: renderRawAxScript({ shellIndex, shape, ops: [...group.ops] }),
+      script: renderRawAxScript({
+        shellIndex,
+        shape,
+        confirmed: [...prefilled],
+        ops: [...group.ops],
+      }),
       meta: { rawax: true, ops: group.ops.length, steps: group.steps.length },
     },
     STEP_TIMEOUT_MS,
@@ -4428,6 +4434,13 @@ async function driveRawAxGroup(
         axElems: record.axElems,
         verdict: record.verdict,
         ...(record.detail !== undefined && { detail: record.detail }),
+        // THE PRE-FILL VERDICT, IN THE TRACE THE FIELD READS (DEFAULTS2). The
+        // AppleScript arm emits `ui-prefill/verify` with the keys it confirmed;
+        // without these the raw arm reported only that the op ran, so which keys
+        // a drive claimed — and which it missed, and what they showed instead —
+        // was unreadable on the transport that now makes the claim.
+        ...(record.confirmed !== undefined && { confirmed: record.confirmed }),
+        ...(record.missed !== undefined && { missed: record.missed }),
       }));
     }
     trace(() => ({
@@ -5372,7 +5385,7 @@ async function driveSteps(
         const polls = !injector.live && !injector.nodeSettled.has("cadence-rebuild");
         const compiled = compileRawAxGroups(group.steps, polls);
         const ready = compiled?.groups[0] ?? group;
-        const outcome = await driveRawAxGroup(ready, run, shellIndex, dialogShape);
+        const outcome = await driveRawAxGroup(ready, run, shellIndex, dialogShape, prefilled);
         for (const key of outcome.confirmed) prefilled.add(key);
         if (outcome.shape !== undefined) {
           dialogShape = outcome.shape;

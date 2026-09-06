@@ -604,25 +604,61 @@ The mechanism is a pre-existing hazard in the certified path, and the port is no
 
 So the audit does its job and the drive fails closed — but it fails closed on a request that is perfectly satisfiable, because a pre-fill was confirmed and then invalidated by a later step. **A verify-by-read verdict is only valid until something changes the control it read**, and the weekday converge is such a something.
 
-The raw arm passed the same cell for an incidental reason — its verify did not confirm that key, so the occurrence step ran and re-selected the date after the converge. That is luck, not design, and it is the same shape as the luck RDLAT2 §E.4 found the interval step surviving on.
+The raw arm passed the same cell, and **run 4's trace says why, which is not what run 3 assumed**. The assumption on record was that the raw arm's verify simply did not confirm the key. It did. What the raw arm does not do is CARRY that confirmation across a hop boundary — §5c.3 — so the occurrence op dispatched in the committing tail, re-read the pop-up for itself, found Jul 6 where Jul 9 was wanted, and re-selected it. It is still not design; but the mechanism is a second defect, in the port, and not luck about the read.
 
-**Not fixed here, deliberately.** It is a defect in the shipped AppleScript recipe's ORDERING, it predates this campaign, and changing the order of a certified drive is its own change with its own certification. Recorded, queued, and the A/B pair is left in place so it keeps reporting.
+**FIXED HERE.** Run 4 re-opened the question with a whole transcript instead of one cell, and the answer changed the disposition. Three facts moved it:
+
+- the request is not exotic. `things todo make-repeating <uuid> --frequency weekly --weekdays monday,thursday` is ordinary CLI vocabulary, and it refuses on the released build (`base-weekly`, §5c.4);
+- the fix is not a reordering. Nothing about the certified drive's step order changes. What changes is a CLAIM: `provenPrefills` no longer nominates `next` when the drive will actuate something that reshapes the rule. The recipe, the audit and every setter are untouched, and the failure direction is the safe one — the occurrence step simply runs, as it did before DEFAULTS2 existed;
+- and it is not weekly-only. The same arithmetic produces the same defect for `--on-day 20`, for `--on-weekday tuesday --on-ordinal 2`, and for a `--yearly-month` that is not the seed's: any control that moves the rule's first occurrence invalidates a `Next:` read taken before it. Leaving one shape broken while certifying a transport over it is the trade RDLAT2 §E.4 warned about.
+
+**The law, stated once:** *a verify-by-read verdict is valid only until something changes the control it read.* `Next:` is the one control in this dialog that is not independent — it displays the rule's first occurrence, so the app rewrites it whenever the rule's shape changes. Its key is therefore decided LAST, after every rule-shaping key, and only when each one that applies is itself pre-filled. The cadence interval is deliberately not in that set: run 4's daily cell typed `3` into `Every [n] days` and the pop-up stayed on the anchor.
+
+**Why the release gate never saw it.** `lab/guest/stage5-cells.sh` cell `07b` drives `--frequency weekly --interval 1` — no `--weekdays`, so no converge, so nothing invalidates the read. Every weekly shape the gate has ever certified is the one shape of the family that cannot reproduce this. The gate's cell is now joined by the reshaping shapes (`monthlast`, `monthord`, `monthday`, `yearmonth`), which is the actual repair to the gate: a family is not certified by its degenerate member.
 
 **And it is an argument for the A/B cell's design.** A campaign that had only certified "the raw arm lands a correct rule" would have seen nothing here; running the same request both ways and comparing is what turned a passing cell into a defect report about the path that was not being ported.
 
-### 5c.1 One operational rule, paid for
+### 5c.3 The port defect underneath it: a verdict that dies at the hop boundary
+
+`RAWAX_CONFIRMED` is a per-SCRIPT global, exactly as `RAWAX_SHAPE` was (§5c defect 2) — and the fix that landed for the shape was never applied to the pre-fill verdicts. So on the raw transport:
+
+| | AppleScript | raw-AX, before this fix |
+| --- | --- | --- |
+| verify confirms `next` in the probe hop | node adds it to `prefilled` | the executor sets it in that script's own `RAWAX_CONFIRMED` |
+| the occurrence setter, one hop later | node skips the step | the tail script starts with an EMPTY confirmed set and **dispatches it** |
+
+Measured on run 4's `daily` cell, which is the clean case: the occurrence op ran in the committing tail and reported `skipped — the Next: pop-up already showed 2026-07-09`, its own idempotence guard. Nothing wrong was ever driven, which is why 43 cells could not see it; but **the two transports made different decisions from the same verdict**, and that is precisely what a transport change must not do. The program now carries `confirmed` the way it carries `shape`, and the executor seeds from it.
+
+It was also invisible: the AppleScript arm emits `ui-prefill/verify` with the keys it confirmed, and the merged hop's op records dropped `confirmed` and `missed` on the floor. A drive on the new transport could not be asked which pre-fills it had claimed. Both fields now reach the trace, which is how §5c.4's cells prove a quadrant rather than trusting the switch that was set.
+
+### 5c.4 Asking the RELEASED build, in the same guest
+
+An A/B pair compares two transports inside ONE build, so it cannot say whether a defect is ours. `stage5-rc-run.sh` already ships a second dist for exactly this (`RC_DIST_BASELINE`, `$BASELINE_APP` in the cells), so the question is answered the only way it can be: origin/main's own CLI, driving the same request, over the same fixtures, on the same boot, against the same app.
+
+Three cells, and each one is a different claim:
+
+| cell | request | what a pass means |
+| --- | --- | --- |
+| `base-gate` | `--frequency weekly --interval 1` | the gate's own shape (stage5 cell `07b`) still lands on the released build — this is the blind spot, not the bug |
+| `base-weekly` | `--frequency weekly --interval 1 --weekdays monday,thursday` | the released build REPRODUCES the refusal ⇒ the defect is shipped, not introduced here |
+| `base-nopf` | the same, with `THINGS_API_PREFILL=0` | it lands with the pre-fill machinery off ⇒ the mechanism is the confirmed skip, and not the converge, the audit or the shape |
+
+The three together localize the defect without reading a line of the released source.
+
+### 5c.5 One operational rule, paid for
 
 **`npm run check` must not run while a Tart guest is up.** A concurrent run took **3,255 s** and produced five spurious failures — `osacompile` and `osascript` suites timing out at their 5 s budgets under starvation. The same suites take **6.7 s** with the slot empty. A red suite under contention looks exactly like a red suite from a defect, and this campaign spent an hour on the difference.
 
 ## 6. Run log
 
-Three runs on two clones of golden-v4, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
+Four runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
 
 | run | cells | outcome |
 | --- | --- | --- |
 | **1** | `shape` · `prims` · `menu` | complete (§5.1–5.3). `dates` degraded, `menubar`/`rowselect`/`cost`/`setvalue` **not reached** — the driver wedged on the sheet gate. **No beep evidence**: `beep_reset` without a `mark` measures nothing, and every cell printed `ORACLE FAIL`. |
 | **2** | `dismissprobe` · `dates` · `menubar` · `rowselect` · `cost` · `setvalue` | complete (§5.4–5.9), on a fresh clone with the rig fixed |
 | **3** | `dismissprobe --how=pick` · `dates` | complete — the two follow-ups run 2 earned (§5.8, §5.9) |
+| **4** (routed, golden-v4h) | the full Phase 2 cell script, 43 cells | **RED — 2**, and both were findings rather than port failures: `weekly-old` reproduced §5c.2's shipped-path refusal, and `endsafter-old` hit §6.4's promote-composite race. Every A/B blob that landed was byte-identical across transports; all eight quadrants agreed on one blob; both DLSEED1 promote cells passed. Harvested from the live guest before teardown (the driver outlived its author), so the traces §5c.2/§5c.3 are argued from are run 4's own. |
 
 ### 6.1 Rig defects found, and why each is worth carrying
 
@@ -643,3 +679,27 @@ A batched `AXUIElementCopyMultipleAttributeValues` returns an **error placeholde
 Run 1 saw an addressed Cancel press refused and was one sentence away from a claim about production: that the shipped cleanup ladder's background-safe first rung is useless in practice, since every drive opens a pop-up. Run 3 measured the discriminator and the claim was false — the refusal needs a menu closed by re-pressing its pop-up, and every drive closes menus by SELECTING. Two disciplines did that work and both are cheap: **record a single sighting as an observation, never a law**, and **when a probe's own sequence differs from the drive's, the difference is the first hypothesis, not the last**.
 
 The same shape appears twice more in this campaign, which is why it is worth naming. `NSDataDetector` matching nothing looked like a rig bug in run 1 and was a finding in run 2 (two spellings, 17 live titles). The `AXFocused` write returning `AXError 0` looked like a success and reads back `false` — a one-shot `set focused; type` would have shipped, and FGRD1's loop is what catches it. **Neither a pass nor a failure is self-certifying on this surface.**
+
+### 6.4 A second shipped defect the pair found, and did NOT fix
+
+`endsafter-old` refused with `no to-do matching uuid or partial-uuid "E3EX88P3mtXCYUkGWWoKsP"` — a uuid the cell never named. Run 4's trace says the whole story in four `result` records:
+
+```
+result todo.add    ok  uuid E3EX88P3mtXCYUkGWWoKsP  vector url-scheme   (+337ms)
+result todo.delete ok  uuid LXsGrT2kfVGoVYBdYbQwSV  vector applescript  (+456ms)
+result todo.restore ok uuid LXsGrT2kfVGoVYBdYbQwSV  vector applescript  (+9560ms)
+result todo.update  ok uuid LXsGrT2kfVGoVYBdYbQwSV  vector url-scheme   (+9715ms)
+invocation-end exitCode 2
+```
+
+So `make-repeating … --ends-after 4` took the clone-and-replace leg, minted the replacement through the URL scheme, deleted the original — and the promote leg it handed the fresh uuid to could not resolve it. The rollback is exemplary: the original is restored and re-patched, and nothing is left half-done. But the operation refused a request it should have landed, and the refusal names an internal uuid the caller has no use for.
+
+**Not this campaign's to fix, and genuinely not**: it is in `promote-clone.ts`'s composite, it is transport-independent (the raw arm ran the same shape successfully on the same boot), and the one-sighting discipline of §6.3 applies — a single occurrence is an observation. The cell stays in the set so a second sighting is a report rather than a surprise. What the evidence does NOT support is calling it a commit race: the add's own discovery probe had already found the row, so the next leg failing to resolve it wants a look at which snapshot that resolver reads.
+
+## 7. Handoff — state, at the last commit before the certification runs
+
+**Branch** `mg/rawax1-repeat-drive`, draft PR [#734](https://github.com/mikegreiling/things-api/pull/734).
+
+**Landed since the phase-2 commits:** the §5c.2 root fix in `provenPrefills` (with a unit cell verified for teeth by reverting it), the §5c.3 hop-boundary carry and its trace fields, and three rig repairs to `lab/guest/rawax1-cells.sh` — the quadrant proof now reads the drive's own trace file instead of an absent `tracePath`, each drive's trace is kept beside its JSON in `out/`, and five reshaping A/B pairs plus the three `BASELINE_APP` cells (§5c.4) are new.
+
+**What the certification runs still owe:** the routed arm with `RC_DIST_BASELINE` pointed at origin/main's dist (the §5c.4 cells), the direct arm on golden-v4, `npm run lab:regress` in both arms, and the cost table §4 asks for. `npm run check` is green at this commit and must not be run while a guest is up (§5c.1).

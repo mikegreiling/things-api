@@ -604,7 +604,7 @@ export function everyUiScript(
           commit: { in: "shell", role: "AXButton", title: "OK" },
         },
       ];
-      const rawScript = renderRawAxScript({ shellIndex: 0, shape, ops });
+      const rawScript = renderRawAxScript({ shellIndex: 0, shape, confirmed: [], ops });
       if (seen.has(rawScript)) continue;
       seen.add(rawScript);
       out.push({

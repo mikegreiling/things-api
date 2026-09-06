@@ -216,6 +216,15 @@ export interface AxProgram {
   readonly shellIndex: number | null;
   /** The measured dialog shape, or null when no shape-dependent op is present. */
   readonly shape: RepeatDialogShape | null;
+  /**
+   * The pre-fill keys node has ALREADY had confirmed by a read (DEFAULTS2), for
+   * the same reason {@link AxProgram.shape} travels: the executor's confirmed set
+   * is per-SCRIPT, so a hop that holds a tagged setter but not the verify op that
+   * confirmed it would re-actuate a control the drive has proven is already
+   * right — and the two transports would then make different decisions from the
+   * same verdict, which is exactly what a transport change must not do.
+   */
+  readonly confirmed: readonly string[];
   readonly ops: readonly AxOp[];
 }
 
