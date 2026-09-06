@@ -95,10 +95,13 @@ LAST_RULE=""
 LAST_MS=0
 LAST_CODE=0
 drive() {
-  local name="$1" title="$2"; shift 2
-  local uuid t0 t1 out code tmpl
-  uuid=$(db "SELECT uuid FROM TMTask WHERE title='$title' AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
-  if [ -z "$uuid" ]; then fail "[$STEP] $name — no seed row titled $title"; return 1; fi
+  local name="$1" uuid="$2" title="$3"; shift 3
+  local t0 t1 out code tmpl
+  # THE UUID IS PASSED IN, NOT RE-LOOKED-UP (run 2 rig defect). A promote mints a
+  # TEMPLATE and an INSTANCE carrying the seed's own title, so a title lookup
+  # after one returns the template — and make-repeating on a template refuses
+  # with "no to-do matching uuid", which reads exactly like a drive failure.
+  if [ -z "$uuid" ]; then fail "[$STEP] $name — no seed uuid for $title"; return 1; fi
   STEP=$((STEP + 1))
   t0=$(python3 -c 'import time;print(int(time.time()*1000))')
   out=$(things todo make-repeating "$uuid" "$@" --dangerously-drive-gui --verify-timeout 90000 --json 2>/dev/null)
@@ -126,13 +129,13 @@ drive() {
 # transport change that alters a landed rule is not a transport change.
 ab() {
   local name="$1"; shift
-  local rawTitle="$TAG-$name-RAW" oldTitle="$TAG-$name-OLD"
-  seed "$rawTitle" "$START" >/dev/null
-  seed "$oldTitle" "$START" >/dev/null
+  local rawTitle="$TAG-$name-RAW" oldTitle="$TAG-$name-OLD" rawU oldU
+  rawU=$(seed "$rawTitle" "$START")
+  oldU=$(seed "$oldTitle" "$START")
 
-  THINGS_API_REPEAT_RAWAX=1 drive "$name-raw" "$rawTitle" "$@" || return 1
+  THINGS_API_REPEAT_RAWAX=1 drive "$name-raw" "$rawU" "$rawTitle" "$@" || return 1
   local rawBlob="$LAST_BLOB" rawRule="$LAST_RULE" rawMs="$LAST_MS"
-  THINGS_API_REPEAT_RAWAX=0 drive "$name-old" "$oldTitle" "$@" || return 1
+  THINGS_API_REPEAT_RAWAX=0 drive "$name-old" "$oldU" "$oldTitle" "$@" || return 1
   local oldBlob="$LAST_BLOB" oldMs="$LAST_MS"
 
   STEP=$((STEP + 1))
@@ -178,10 +181,10 @@ for RAWAX in 1 0; do
     for PF in 1 0; do
       NAME="q-r$RAWAX-o$OBS-p$PF"
       TITLE="$TAG-Q-r$RAWAX-o$OBS-p$PF"
-      seed "$TITLE" "$START" >/dev/null
+      QU=$(seed "$TITLE" "$START")
       echo "  -- quadrant rawax=$RAWAX observer=$OBS prefill=$PF"
       THINGS_API_REPEAT_RAWAX="$RAWAX" THINGS_API_AX_OBSERVER="$OBS" THINGS_API_PREFILL="$PF" \
-        drive "$NAME" "$TITLE" --frequency weekly --interval 1 --weekdays thursday --when "$START"
+        drive "$NAME" "$QU" "$TITLE" --frequency weekly --interval 1 --weekdays thursday --when "$START"
       if [ -n "$LAST_BLOB" ]; then
         QUAD_BLOBS="$QUAD_BLOBS$NAME=$LAST_BLOB"$'\n'
       fi
@@ -210,30 +213,38 @@ fi
 echo ""
 echo "===== the REFUSAL keeps its sentence (the fold's debt) ====="
 # RDLAT2 §10 declined the hop merge because folding costs per-step failure
-# attribution. An off-rule first occurrence is the cheapest refusal to provoke
-# with normal syntax: the 3.23 Next: menu offers only the rule's own occurrences,
-# so a date the rule cannot produce must fail closed NAMING that — on both
-# transports, in the same words.
+# attribution, so a refusal has to survive it — on both transports, in the same
+# words, with nothing committed.
+#
+# It is provoked through a RESCHEDULE, not a promote. On make-repeating `--when`
+# sets the SEED's own date as well as the first occurrence, so the requested date
+# is on-rule by construction and no refusal is reachable — run 2 asked for one
+# and correctly got a landed rule instead. A reschedule opens on an EXISTING
+# rule, so a first occurrence the new rule cannot produce is expressible: a
+# Thursday-weekly series cannot start on a Monday.
 for RAWAX in 1 0; do
   TITLE="$TAG-REFUSE-$RAWAX"
-  seed "$TITLE" "$START" >/dev/null
-  U=$(db "SELECT uuid FROM TMTask WHERE title='$TITLE' AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
+  RU=$(seed "$TITLE" "$START")
+  THINGS_API_REPEAT_RAWAX="$RAWAX" drive "refuse-seed-$RAWAX" "$RU" "$TITLE" --frequency weekly --interval 1 >/dev/null 2>&1
+  TMPL=$(db "SELECT uuid FROM TMTask WHERE title='$TITLE' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 ORDER BY creationDate DESC LIMIT 1")
   STEP=$((STEP + 1))
-  OUT_TXT=$(THINGS_API_REPEAT_RAWAX="$RAWAX" things todo make-repeating "$U" \
-    --frequency weekly --interval 1 --when 2026-07-10 \
+  if [ -z "$TMPL" ]; then fail "[$STEP] rawax=$RAWAX — could not seed a series to reschedule"; continue; fi
+  BEFORE=$(blob "$TMPL")
+  OUT_TXT=$(THINGS_API_REPEAT_RAWAX="$RAWAX" things todo reschedule-repeat "$TMPL" \
+    --frequency weekly --interval 1 --when 2026-07-13 \
     --dangerously-drive-gui --verify-timeout 90000 --json 2>&1)
   printf '%s\n' "$OUT_TXT" >"$OUT/refuse-$RAWAX.json"
-  LANDED=$(db "SELECT uuid FROM TMTask WHERE title='$TITLE' AND rt1_recurrenceRule IS NOT NULL AND trashed=0 LIMIT 1")
+  AFTER=$(blob "$TMPL")
   case "$OUT_TXT" in
     *"is not one of them"*)
-      if [ -z "$LANDED" ]; then
-        pass "[$STEP] rawax=$RAWAX — refused with the occurrence sentence, nothing committed"
+      if [ "$BEFORE" = "$AFTER" ]; then
+        pass "[$STEP] rawax=$RAWAX — refused naming the occurrence menu, rule unchanged"
       else
-        fail "[$STEP] rawax=$RAWAX — refused but a rule landed anyway"
+        fail "[$STEP] rawax=$RAWAX — refused but the rule changed anyway"
       fi ;;
     *)
       fail "[$STEP] rawax=$RAWAX — the off-rule date did not produce the named refusal"
-      echo "     output: $(head -c 500 <<<"$OUT_TXT")" ;;
+      echo "     output: $(head -c 400 <<<"$OUT_TXT")" ;;
   esac
 done
 
@@ -242,14 +253,14 @@ echo "===== the deadlined source (DLSEED1, under the new transport) ====="
 # BATCH1's ruling, re-asserted on the raw-AX path: a deadlined seed promotes to a
 # deadlined series, and a NAMED zero offset is driven rather than skipped.
 U=$(seed "$TAG-DL" "$START" "$DEADLINE")
-THINGS_API_REPEAT_RAWAX=1 drive "dl-inherited" "$TAG-DL" --frequency weekly --interval 1
+THINGS_API_REPEAT_RAWAX=1 drive "dl-inherited" "$U" "$TAG-DL" --frequency weekly --interval 1
 STEP=$((STEP + 1))
 case "$LAST_RULE" in
   *"ts=-3 "*deadlined=yes) pass "[$STEP] the inherited deadline survives the port (ts=-3, deadlined)" ;;
   *) fail "[$STEP] the inherited deadline did not land: $LAST_RULE" ;;
 esac
 U=$(seed "$TAG-DLZ" "$START" "$DEADLINE")
-THINGS_API_REPEAT_RAWAX=1 drive "dl-zero" "$TAG-DLZ" --frequency weekly --interval 1 --deadline --start-days-earlier 0
+THINGS_API_REPEAT_RAWAX=1 drive "dl-zero" "$U" "$TAG-DLZ" --frequency weekly --interval 1 --deadline --start-days-earlier 0
 STEP=$((STEP + 1))
 case "$LAST_RULE" in
   *"ts=0 "*deadlined=yes) pass "[$STEP] a NAMED zero offset is typed, not skipped (ts=0, deadlined)" ;;
