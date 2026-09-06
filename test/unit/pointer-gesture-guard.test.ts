@@ -92,11 +92,46 @@ const GUARDED_SITES: Readonly<Record<string, string>> = {
 };
 
 /**
- * What makes a HID-tap line a KEY post rather than a pointer post. A keyboard
+ * What makes a HID-tap post a KEY post rather than a pointer post. A keyboard
  * event carries no screen coordinate, so `ptrGuard` — whose whole job is to
  * prove a POINT is over the right window — has nothing to check about it.
+ *
+ * IT IS READ OVER THE POST'S OWN STATEMENT GROUP, NOT THE SINGLE LINE (RAWAX1).
+ * The line-level form classified a post by whether the CREATE happened to sit on
+ * the same line, so a two-line
+ *
+ *     var d = $.CGEventCreateKeyboardEvent($(), code, true);
+ *     $.CGEventPost($.kCGHIDEventTap, d);
+ *
+ * came out as a POINTER post and would have been waved through by the mouse
+ * allowlist — a hole opened by a line break rather than by a decision.
+ *
+ * The window is deliberately SMALL: the post's line plus the few lines directly
+ * above it, stopped by a blank line or a closing brace. A first cut widened it
+ * to the enclosing function and mis-filed `jxaSidebarScrollScript`'s wheel posts
+ * as keys, because a wide-enough window will always find a keyboard create
+ * somewhere. A classifier for a safety census must not be able to reach a create
+ * that is not the one being posted.
  */
 const KEY_POST_MARKER = /CGEventCreateKeyboardEvent/;
+
+/** How far above a post its own create may sit before the window closes. */
+const POST_SCOPE_LINES = 4;
+
+/**
+ * The post's own statement group: the line itself plus the few directly above,
+ * stopping at a blank line or a `}` — the nearest thing to "the statement that
+ * built the event this line posts" that a line scanner can honestly claim.
+ */
+function postScope(lines: string[], index: number): string {
+  const out: string[] = [lines[index] ?? ""];
+  for (let i = index - 1; i >= 0 && index - i <= POST_SCOPE_LINES; i -= 1) {
+    const line = lines[i] ?? "";
+    if (line.trim() === "" || line.trim().endsWith("}")) break;
+    out.unshift(line);
+  }
+  return out.join("\n");
+}
 
 /**
  * The declarations allowed to post a KEY at the global HID tap, and why each is
@@ -109,6 +144,31 @@ const KEY_TAP_SITES: Readonly<Record<string, string>> = {
   // read to guard against. The script posts it ONLY when it has just read the
   // saver as running, and believes only the re-read that follows.
   jxaWakeScreenSaverScript: "a lone modifier press: no coordinate, and inert wherever it lands",
+  // RAWAX1. The raw-AX executor types into the Repeat dialog's NUMERIC fields,
+  // because the AX attribute write is a repaint that never fires the app's
+  // binding (RAWAX1-2, measured against the committed rule). These keys are NOT
+  // inert, so the second half of the rule applies instead: they go through the
+  // frontmost-guarded keystroke path, and `GUARDED_KEY_PATHS` below requires
+  // that assertion rather than taking this line's word for it.
+  RAWAX_INTERPRETER: "digits and Tab, behind the #620 frontmost assertion",
+  // AXDRAG1-d, reclassified by the scope-aware census above — it was reaching
+  // the MOUSE allowlist only because its create and its post sit on different
+  // lines. The Escape that aborts a held drag is not inert (it cancels), so it
+  // is here for the same reason: the drag's own PTRGD1 verdict is already in
+  // hand when it fires, and the pointer is still held over the guarded surface.
+  JXA_PRELUDE: "the held-drag abort: posted only past ptrGuard's verdict, with the button down",
+};
+
+/**
+ * Key-tap sites that are NOT inert, and the assertion each must carry.
+ *
+ * An allowlist entry is a claim; this is the check. A site that types has to
+ * assert who owns the screen in the same script, BEFORE its first post, or it is
+ * exactly the leak the pointer guard exists to prevent — one keyboard event
+ * further along.
+ */
+const GUARDED_KEY_PATHS: Readonly<Record<string, string>> = {
+  RAWAX_INTERPRETER: "rawAssertFront(",
 };
 
 /** Strip comments so a JSDoc line naming `CGEventPost(kCGHIDEventTap)` is not a site. */
@@ -142,23 +202,33 @@ function enclosingDeclaration(lines: string[], index: number): string {
 
 /** Every (file, declaration) in the vector tree that posts a mouse event. */
 function mousePostSites(): { file: string; declaration: string; line: string }[] {
-  return hidPostSites().filter((s) => !KEY_POST_MARKER.test(s.line));
+  return hidPostSites().filter((s) => !KEY_POST_MARKER.test(s.scope));
 }
 
 /** Every HID-tap post that is NOT a pointer gesture. */
 function keyPostSites(): { file: string; declaration: string; line: string }[] {
-  return hidPostSites().filter((s) => KEY_POST_MARKER.test(s.line));
+  return hidPostSites().filter((s) => KEY_POST_MARKER.test(s.scope));
 }
 
 /** Every (file, declaration) in the vector tree that posts a synthesized event. */
-function hidPostSites(): { file: string; declaration: string; line: string }[] {
-  const found: { file: string; declaration: string; line: string }[] = [];
+function hidPostSites(): {
+  file: string;
+  declaration: string;
+  line: string;
+  scope: string;
+}[] {
+  const found: { file: string; declaration: string; line: string; scope: string }[] = [];
   for (const name of readdirSync(VECTORS_DIR).toSorted()) {
     if (!name.endsWith(".ts")) continue;
     const lines = stripComments(readFileSync(join(VECTORS_DIR, name), "utf8")).split("\n");
     lines.forEach((line, i) => {
       if (!HID_MARKERS.some((re) => re.test(line))) return;
-      found.push({ file: name, declaration: enclosingDeclaration(lines, i), line: line.trim() });
+      found.push({
+        file: name,
+        declaration: enclosingDeclaration(lines, i),
+        line: line.trim(),
+        scope: postScope(lines, i),
+      });
     });
   }
   return found;
@@ -250,6 +320,56 @@ describe("the keyboard-at-the-HID-tap census (LOCKSCR2)", () => {
   it("pins every declaration it names", () => {
     const live = new Set(keyPostSites().map((s) => s.declaration));
     expect(Object.keys(KEY_TAP_SITES).filter((d) => !live.has(d))).toEqual([]);
+  });
+
+  it("makes a key path that TYPES assert frontmost before its first post", () => {
+    // The inert-modifier members earn their place by being harmless wherever
+    // they land. A member that types cannot, so it names its guard and this
+    // proves the guard is defined, called, and called FIRST.
+    for (const [declaration, assertion] of Object.entries(GUARDED_KEY_PATHS)) {
+      const sites = keyPostSites().filter((s) => s.declaration === declaration);
+      expect(sites.length, `${declaration} posts no key — the entry is stale`).toBeGreaterThan(0);
+      const file = sites[0]?.file as string;
+      const source = stripComments(readFileSync(join(VECTORS_DIR, file), "utf8"));
+      const assertAt = source.indexOf(assertion);
+      expect(assertAt, `${declaration} never calls ${assertion}`).toBeGreaterThanOrEqual(0);
+      const firstPost = source.search(/postHID\(|CGEventPost\(/);
+      expect(
+        assertAt,
+        `${declaration} posts a key before it asserts who owns the screen`,
+      ).toBeLessThan(firstPost);
+      // And it refuses in a keystroke's own words, not a click's.
+      expect(source).toContain("a keystroke goes to whatever owns the screen");
+      expect(source).toContain("nothing was typed");
+    }
+  });
+
+  it("classifies a two-line create-then-post as a KEY post (RAWAX1)", () => {
+    // The regression this scoped census exists for: the line-level form read the
+    // POST line alone, saw no keyboard create on it, and filed the whole thing
+    // under the mouse allowlist.
+    const lines = [
+      "function rawKey(code){",
+      "  var d = $.CGEventCreateKeyboardEvent($(), code, true);",
+      "  $.CGEventPost($.kCGHIDEventTap, d);",
+      "}",
+    ];
+    expect(KEY_POST_MARKER.test(lines[2] as string)).toBe(false);
+    expect(KEY_POST_MARKER.test(postScope(lines, 2))).toBe(true);
+  });
+
+  it("does NOT reach a create that is not the one being posted", () => {
+    // The over-reach a first cut shipped: widen the window far enough and every
+    // wheel post in a prelude that also defines an Escape becomes a key post.
+    const lines = [
+      "function postEscape(){ var kd = $.CGEventCreateKeyboardEvent($(), 53, true); }",
+      "",
+      "function scroll(px, py, dir){",
+      "  var ev = $.CGEventCreateScrollWheelEvent($(), 1, 1, dir * 3);",
+      "  $.CGEventPost($.kCGHIDEventTap, ev);",
+      "}",
+    ];
+    expect(KEY_POST_MARKER.test(postScope(lines, 4))).toBe(false);
   });
 });
 

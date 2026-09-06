@@ -1518,6 +1518,31 @@ No `AXSubrole`, no `AXDescription`, no distinct height, no static text. So a cli
 
 Both measured builds behave identically, so this is not a regression — it is the state of a feature that is one attribute short of complete. Evidence: [lab/drplc1-drop-slot.md](lab/drplc1-drop-slot.md) §1 (height histograms and the 48 pt gap on both builds), §3 (the collapsed-frame hit test), §4 (what the reconstruction has to get right).
 
+## 34. Things 3.23: a Repeat-dialog pop-up menu dismissed by re-pressing its pop-up leaves the sheet unable to take an addressed `Cancel` — the button reads enabled, the press returns success, and nothing happens (RAWAX1, 2026-09-05, golden-v4 / Things 3.23 build 32300036)
+
+Open the Repeat dialog. `AXPress` one of its pop-up buttons to open the menu, then `AXPress` the SAME pop-up again to close the menu without selecting anything. Now press the dialog's own `Cancel`:
+
+```
+Cancel button:  AXEnabled = true       AXActions = AXPress
+AXUIElementPerformAction(cancel, AXPress) -> AXError 0
+the sheet:      still open, 3 rounds out of 3
+```
+
+The same press through System Events (`click button "Cancel" of sheet 1 …`) behaves identically — it reports the button it clicked, exits 0, and the sheet stays. A synthesized **Escape** dismisses it immediately, every time.
+
+**It is specific to how the menu was closed.** With the menu closed the way any ordinary interaction closes it — by pressing a menu ITEM — `Cancel` works 3 rounds out of 3 and Escape is never needed:
+
+| how the menu was closed | `Cancel` | Escape needed |
+| --- | :---: | :---: |
+| pressed the pop-up a second time | **refuses 3/3** (`AXError 0`, sheet stands) | yes |
+| pressed a menu item | works 3/3 | no |
+
+So the reachable-by-accident state is narrow, and no ordinary GUI use produces it: a person clicking a pop-up open and clicking it shut again goes through the window server's own menu tracking, not through two `AXPress` actions. What makes it worth reporting is the SHAPE of the failure — an enabled control whose documented action is accepted and then ignored, with no error at any layer. An assistive client has nothing to test: `AXEnabled` says yes, `AXActions` lists `AXPress`, the call returns success, and the only way to find out is to look at the sheet afterwards.
+
+**Consequence for a client.** Anything that cleans up after itself through the Accessibility API has to treat "the action returned 0" as no evidence at all and re-read the state — which is the right discipline anyway, and is what this project's cleanup ladder already does (its own Cancel, then Escape, then close-and-reopen). This is [§26](#26-things-323-a-repeat-dialog-opened-while-things-is-in-the-background-becomes-an-un-dismissable-detached-window--its-own-cancel-button-does-nothing-and-neither-does-anything-else-drvlat1-2026-08-28-golden-v4--things-323-build-32300036)'s family — a Cancel button that does nothing — arriving on an ATTACHED sheet rather than the detached editor, and reachable without ever backgrounding the app.
+
+**The ask:** either let the second `AXPress` on a pop-up leave the sheet in the state a menu-item press leaves it in, or — failing that — report the refusal, so a client can tell a swallowed action from a completed one. Evidence: [lab/rawax1-repeat-drive.md](lab/rawax1-repeat-drive.md) §5.9 (both variants, three rounds each, with the tree dumped at the moment of refusal: one sheet, no open `AXMenu`, Things frontmost).
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

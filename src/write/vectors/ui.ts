@@ -71,6 +71,9 @@ import {
 } from "./ui-observer.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import { POINTER_GUARD_STANDALONE } from "./ui-pointer-guard.ts";
+import { compileRawAxGroups, type AxGroup } from "./ui-rawax-compile.ts";
+import { renderRawAxScript } from "./ui-rawax-exec.ts";
+import { parseAxEnvelope, rawAxDisabled, type AxOpRecord } from "./ui-rawax-ops.ts";
 import {
   type CadenceExpectation,
   cadenceExpectationFor,
@@ -4368,6 +4371,116 @@ async function driveClickElement(
 }
 
 /**
+ * Dispatch ONE merged raw-AX hop (RAWAX1) and fold its answer back into the
+ * driver's own state.
+ *
+ * WHAT THIS REPLACES is not a step — it is a RUN of them. The fold test
+ * (RAWAX1 §3.2a, ruled 2026-09-05) keeps a hop boundary only where node must
+ * DECIDE or SETTLE between operations, and inside the dialog entry it must do
+ * neither: the shape verdict and the pre-fill verdict are both made from reads
+ * the executor has just taken, and both come back on the envelope.
+ *
+ * RDLAT2 §10 declined exactly this fold, on the grounds that it costs the
+ * per-step trace granularity and per-step failure attribution that make a field
+ * report readable. It does not: every op reports itself — label, duration, raw
+ * calls, elements realized, verdict — so what lands in the trace is strictly
+ * more than a hop boundary ever gave, and the step trail the caller reads is
+ * unchanged because it is rebuilt from the same recipe steps.
+ */
+async function driveRawAxGroup(
+  group: AxGroup,
+  run: UiRunner,
+  shellIndex: number | null,
+  shape: RepeatDialogShape | null,
+  prefilled: ReadonlySet<string>,
+): Promise<{
+  ok: boolean;
+  why?: string;
+  failedAt?: string;
+  shape?: RepeatDialogShape;
+  confirmed: string[];
+  committed: boolean;
+  records: AxOpRecord[];
+  timedOut: boolean;
+}> {
+  const label = group.steps.map((step) => step.label).join(" → ");
+  const res = await run(
+    {
+      primitive: "audit-dialog",
+      label,
+      lang: "javascript",
+      script: renderRawAxScript({
+        shellIndex,
+        shape,
+        confirmed: [...prefilled],
+        ops: [...group.ops],
+      }),
+      meta: { rawax: true, ops: group.ops.length, steps: group.steps.length },
+    },
+    STEP_TIMEOUT_MS,
+  );
+  const env = parseAxEnvelope(res.stdout);
+  // EVERY OP IN THE TRACE, whether the hop passed or refused — the failure
+  // attribution the fold was said to cost.
+  if (env !== null) {
+    for (const record of env.ops) {
+      trace(() => ({
+        phase: "ui-rawax",
+        event: "op",
+        label: record.label,
+        op: record.op,
+        durationMs: record.durationMs,
+        axCalls: record.axCalls,
+        axElems: record.axElems,
+        verdict: record.verdict,
+        ...(record.detail !== undefined && { detail: record.detail }),
+        // THE PRE-FILL VERDICT, IN THE TRACE THE FIELD READS (DEFAULTS2). The
+        // AppleScript arm emits `ui-prefill/verify` with the keys it confirmed;
+        // without these the raw arm reported only that the op ran, so which keys
+        // a drive claimed — and which it missed, and what they showed instead —
+        // was unreadable on the transport that now makes the claim.
+        ...(record.confirmed !== undefined && { confirmed: record.confirmed }),
+        ...(record.missed !== undefined && { missed: record.missed }),
+      }));
+    }
+    trace(() => ({
+      phase: "ui-rawax",
+      event: "hop",
+      label,
+      ops: env.ops.length,
+      axCalls: env.axCalls,
+      axElems: env.axElems,
+      ok: env.ok,
+    }));
+  }
+  const timedOut = res.timedOut === true;
+  if (env === null) {
+    // The hop produced something that is not an envelope — a script that died,
+    // or a transport failure. Prefer the script's OWN sentence, exactly as every
+    // other dispatch here does, and never invent a verdict from half a structure.
+    const named = scriptErrorText(res.stderr);
+    return {
+      ok: false,
+      why: timedOut ? "the step timed out" : (named ?? res.stderr.trim()) || "the step failed",
+      confirmed: [],
+      committed: false,
+      records: [],
+      timedOut,
+    };
+  }
+  return {
+    ok: env.ok,
+    ...(env.detail !== undefined && { why: env.detail }),
+    ...(env.failedAt !== undefined && { failedAt: env.failedAt }),
+    ...(env.shape === "next-popup" || env.shape === "legacy" ? { shape: env.shape } : {}),
+    confirmed: [...(env.confirmed ?? [])],
+    committed: env.committed === true,
+    records: [...env.ops],
+    timedOut,
+  };
+}
+
+/**
  * Execute the PRE-COMMIT FULL-DIALOG AUDIT step (CGRD1): re-read every control the
  * drive set — through each control's own discriminated address — and refuse the
  * commit if any of them does not hold the intended value.
@@ -5207,6 +5320,46 @@ async function driveSteps(
    * the same conclusion from the app's silence.
    */
   let setterSinceShape = false;
+  /**
+   * THE MERGED DIALOG ENTRY (RAWAX1, #695), or null when this drive keeps the
+   * certified AppleScript transport.
+   *
+   * It is null in four cases, and all four are the safe direction: the switch is
+   * off; the recipe has no dialog-entry run (the menu-only pause/resume ops); or
+   * the compiler could not express one of the recipe's addresses structurally,
+   * in which case it refuses the WHOLE recipe rather than porting half of it.
+   *
+   * The compile happens ONCE, here, and needs no dialog shape — the probe that
+   * measures the shape runs inside the merged hop, so every shape-dependent
+   * address travels as both variants and the executor picks with the verdict it
+   * produced (see `ui-rawax-compile.ts`). What node still decides is the probe's
+   * POLL form, which is the DEPOBS3 question: a live sidecar settles in-script,
+   * and a routed host whose node absorbed the rebuild says so through
+   * `nodeSettled` — neither of which can be known here, so the group that owns
+   * the probe is compiled at dispatch time instead (below).
+   */
+  const rawAx = rawAxDisabled() ? null : compileRawAxGroups(recipe.steps, true);
+  if (rawAx !== null) {
+    trace(() => ({
+      phase: "ui-rawax",
+      event: "compiled",
+      startIndex: rawAx.startIndex,
+      groups: rawAx.groups.length,
+      dispatching: rawAx.groups.filter((g) => g.ops.length > 0).length,
+      ops: rawAx.groups.reduce((n, g) => n + g.ops.length, 0),
+    }));
+  } else if (!rawAxDisabled()) {
+    trace(() => ({ phase: "ui-rawax", event: "not-compiled", op: recipe.op }));
+  }
+  /** Where each merged group starts, by recipe-step index. */
+  const groupAt = new Map<number, AxGroup>();
+  if (rawAx !== null) {
+    let cursor = rawAx.startIndex;
+    for (const group of rawAx.groups) {
+      groupAt.set(cursor, group);
+      cursor += group.steps.length;
+    }
+  }
   for (let i = idx; i < recipe.steps.length; i += 1) {
     let step = recipe.steps[i] as UiStep;
     // TAKE WHAT THE PREVIOUS HOP ESTABLISHED, AND TAKE IT ONCE (DEPOBS3). A
@@ -5215,6 +5368,84 @@ async function driveSteps(
     // then does with the step — including skipping it.
     awaited = pendingSettled;
     pendingSettled = NO_NODE_SETTLES;
+    // THE MERGED HOP (RAWAX1). A compiled group starting at this step replaces
+    // the run of steps it folded, and the loop resumes past them.
+    const group = groupAt.get(i);
+    if (group !== undefined) {
+      if (overBudget()) return watchdogResult(step.label);
+      // A node-side boundary (settle-occurrences) compiles to no ops; it falls
+      // through to the existing per-step handling below, which is where its two
+      // skips and its ledger await live.
+      if (group.ops.length > 0) {
+        // The probe's poll form is the ONE thing node still decides, and it is
+        // decided here rather than at compile time because it depends on what
+        // this hop's injector knows (DEPOBS3's node-side absorb on a routed host).
+        //
+        // IT ASKS WHETHER *NODE* ABSORBED THE REBUILD, AND NOTHING ELSE (RAWAX1
+        // §5c.9). It used to drop the poll for a LIVE sidecar as well, and that
+        // is the DEPOBS3 licence read one word too widely: a live sidecar
+        // licenses an IN-SCRIPT settle, and the script that would perform it is
+        // an AppleScript one that can talk to the sidecar's socket. The merged
+        // raw-AX program has no sidecar client at all — so on a direct host,
+        // where `live` is true and `nodeSettled` is empty, the probe skipped its
+        // poll and nothing waited for the cadence group to be rebuilt. It then
+        // read the group as it was BEFORE the frequency selection and refused
+        // that the dialog "matched neither known shape", which is true of a
+        // dialog still showing its after-completion default and false about the
+        // app. Every shape-probing cell in the unrouted arm failed that way.
+        //
+        // A routed host is unchanged: it absorbs the rebuild between hops, the
+        // marker is set, and the poll is still dropped. A routed host whose
+        // absorb DIDN'T happen now polls instead of guessing, which is the safe
+        // direction and costs one read when the group is already right.
+        const injector = obs();
+        const polls = !injector.nodeSettled.has("cadence-rebuild");
+        const compiled = compileRawAxGroups(group.steps, polls);
+        const ready = compiled?.groups[0] ?? group;
+        const outcome = await driveRawAxGroup(ready, run, shellIndex, dialogShape, prefilled);
+        for (const key of outcome.confirmed) prefilled.add(key);
+        if (outcome.shape !== undefined) {
+          dialogShape = outcome.shape;
+          // The shape probe is the fence the `settle-occurrences` dependency is
+          // measured from, exactly as it is on the AppleScript path.
+          setterSinceShape = false;
+        }
+        // A setter dispatched inside the hop counts, for the same reason.
+        if (group.steps.some((st) => DIALOG_SETTER_PRIMITIVES.has(st.primitive))) {
+          setterSinceShape = true;
+        }
+        if (!outcome.ok) {
+          const clear = await clearNow();
+          const failed = outcome.failedAt ?? group.steps[0]?.label ?? "the Repeat dialog";
+          // Every op that DID run is already in the trail, so a merged hop's
+          // failure reads as precisely as a per-step one did.
+          for (const record of outcome.records) {
+            if (record.verdict === "ok" || record.verdict === "skipped") done.push(record.label);
+          }
+          return partial(
+            failed,
+            outcome.why ?? "the Repeat dialog could not be driven",
+            clear,
+            outcome.timedOut,
+          );
+        }
+        for (const record of outcome.records) {
+          done.push(
+            record.verdict === "skipped" && record.detail !== undefined
+              ? `${record.label} (${record.detail})`
+              : record.label,
+          );
+        }
+        // The commit rides the audit's own script, so the recipe's OK press is
+        // named in the trail without a hop of its own (RDLAT2 §4d).
+        if (outcome.committed) {
+          const okStep = group.steps.find((st) => st.primitive === "press");
+          if (okStep !== undefined) done.push(okStep.label);
+        }
+        i += group.steps.length - 1;
+        continue;
+      }
+    }
     // ALREADY PRE-FILLED, AND READ BACK TO PROVE IT (DEFAULTS2). The step stays in
     // the recipe — it still contributes its control to the pre-commit audit — but
     // its actuation is unnecessary: the verify hop read this very control, through

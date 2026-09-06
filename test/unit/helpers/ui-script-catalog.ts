@@ -57,6 +57,8 @@ import {
 } from "../../../src/write/vectors/ui-observer.ts";
 import { axFocusGuardPrelude, axUiStateScript } from "../../../src/write/vectors/ui-state.ts";
 import { jxaSessionLockScript } from "../../../src/write/vectors/session-lock.ts";
+import { renderRawAxScript } from "../../../src/write/vectors/ui-rawax-exec.ts";
+import { ORDINAL_JUSTIFICATIONS, type AxOp } from "../../../src/write/vectors/ui-rawax-ops.ts";
 
 /** One rendered script, labeled by the recipe/shape/settle-shape that produced it. */
 export interface CatalogScript {
@@ -409,6 +411,208 @@ export function everyUiScript(
   if (!seen.has(lockProbe.script)) {
     seen.add(lockProbe.script);
     out.push(lockProbe);
+  }
+  // THE RAW-AX EXECUTOR (RAWAX1, #695). One rendered program per DIALOG SHAPE,
+  // carrying every op kind the Repeat drive can emit — so both suites see it:
+  // `osacompile -l JavaScript` proves the interpreter and its ops parse
+  // together, and the broker-safety suite proves the whole thing reaches its
+  // verdicts without a phrase the deputy refuses, which is #695's own lesson.
+  //
+  // Rendered in BOTH poll shapes as well, because `probe-shape` is the op
+  // DEPOBS3 (#736) taught to drop its polling rounds when node already waited
+  // out the cadence rebuild — two script bodies, and a suite that saw only one
+  // would be blind to exactly the host class this campaign exists for.
+  for (const poll of [true, false]) {
+    for (const shape of ["next-popup", "legacy"] as const) {
+      const ops: AxOp[] = [
+        { label: "the Repeat dialog", op: "census-shell", expectRoles: true },
+        {
+          label: "frequency = weekly",
+          op: "select-popup",
+          ref: {
+            in: "shell",
+            role: "AXPopUpButton",
+            ordinal: 1,
+            because: ORDINAL_JUSTIFICATIONS.frequency,
+          },
+          titles: ["weekly"],
+        },
+        { label: "measure the dialog's shape", op: "probe-shape", tolerance: 8, poll },
+        {
+          label: "read the pre-filled controls",
+          op: "verify-prefill",
+          controls: [
+            {
+              label: "interval",
+              ref: { field: "group", target: "interval", tolerance: 8 },
+              kind: "number",
+              expected: ["1"],
+              prefillKey: "interval",
+            },
+            {
+              label: "first occurrence",
+              ref: {
+                in: "group",
+                role: "AXPopUpButton",
+                ordinal: 2,
+                because: ORDINAL_JUSTIFICATIONS.nextPopup,
+              },
+              kind: "occurrence",
+              expected: ["2026-08-20"],
+              prefillKey: "next",
+            },
+          ],
+        },
+        {
+          label: "interval = 3",
+          op: "type-into",
+          ref: { field: "group", target: "interval", tolerance: 8 },
+          value: "3",
+          what: 'type "3" into the interval field',
+          attempts: 3,
+          unlessPrefilled: "interval",
+        },
+        {
+          label: "weekdays = monday, thursday",
+          op: "converge-weekdays",
+          base: 3,
+          titles: ["Monday", "Thursday"],
+          shapedBase: { "next-popup": 3, legacy: 2 },
+        },
+        {
+          label: "monthly day = 20",
+          op: "select-popup",
+          ref: { at: "group" },
+          titles: ["20th"],
+          shapedRef: {
+            "next-popup": {
+              in: "group",
+              role: "AXPopUpButton",
+              ordinal: 4,
+              because: ORDINAL_JUSTIFICATIONS.anchor,
+            },
+            legacy: {
+              in: "group",
+              role: "AXPopUpButton",
+              ordinal: 3,
+              because: ORDINAL_JUSTIFICATIONS.anchor,
+            },
+          },
+        },
+        {
+          label: "Add deadlines",
+          op: "ensure-checkbox",
+          ref: { in: "shell", role: "AXCheckBox", title: "Add deadlines" },
+          target: true,
+          attempts: 3,
+        },
+        {
+          label: "start 14 days earlier",
+          op: "type-into",
+          ref: { field: "shell", rowLabel: "days earlier", tolerance: 8 },
+          value: "14",
+          what: 'type "14" into the "days earlier" field',
+          attempts: 3,
+        },
+        {
+          label: "ends after = 5",
+          op: "type-into",
+          ref: { field: "group", target: "ends-count", tolerance: 8 },
+          value: "5",
+          what: 'type "5" into the ends-count field',
+          attempts: 3,
+        },
+        {
+          label: "Next (first occurrence)",
+          op: "select-occurrence",
+          ref: {
+            in: "group",
+            role: "AXPopUpButton",
+            ordinal: 2,
+            because: ORDINAL_JUSTIFICATIONS.nextPopup,
+          },
+          iso: "2026-08-20",
+          levels: 6,
+          sampleItems: 5,
+          onlyShape: "next-popup",
+        },
+        {
+          label: "Next (first occurrence, legacy)",
+          op: "set-datetime",
+          target: "next",
+          spec: "date:2026-08-20",
+          onlyShape: "legacy",
+        },
+        { label: "reminder = 09:00", op: "set-datetime", target: "reminder", spec: "time:09:00" },
+        {
+          label: "settle the cadence group",
+          op: "settle-group",
+          expect: { fields: 2, requiredLabels: ["Every", "Ends:"], forbiddenLabels: [] },
+          reads: 40,
+          pollMs: 100,
+        },
+        {
+          label: "audit the Repeat dialog against the requested rule",
+          op: "audit",
+          expect: { fields: null, requiredLabels: ["Every", "Ends:"], forbiddenLabels: [] },
+          controls: [
+            {
+              label: "frequency",
+              ref: {
+                in: "shell",
+                role: "AXPopUpButton",
+                ordinal: 1,
+                because: ORDINAL_JUSTIFICATIONS.frequency,
+              },
+              kind: "popup",
+              expected: ["weekly"],
+            },
+            {
+              label: "interval",
+              ref: { field: "group", target: "interval", tolerance: 8 },
+              kind: "number",
+              expected: ["3"],
+            },
+            {
+              label: "weekdays",
+              ref: { at: "group" },
+              kind: "weekdays",
+              weekdayBase: 3,
+              expected: ["Monday", "Thursday"],
+            },
+            {
+              label: "add deadlines",
+              ref: { in: "shell", role: "AXCheckBox", title: "Add deadlines" },
+              kind: "checkbox",
+              expected: ["1"],
+              expectedLabel: "checked",
+            },
+            {
+              label: "start earlier",
+              ref: { field: "shell", rowLabel: "days earlier", tolerance: 8 },
+              kind: "number",
+              expected: ["14"],
+            },
+            {
+              label: "the reminder time",
+              ref: { dateArea: "reminder" },
+              kind: "date-area",
+              expected: ["9:00"],
+              spec: "time:09:00",
+            },
+          ],
+          commit: { in: "shell", role: "AXButton", title: "OK" },
+        },
+      ];
+      const rawScript = renderRawAxScript({ shellIndex: 0, shape, confirmed: [], ops });
+      if (seen.has(rawScript)) continue;
+      seen.add(rawScript);
+      out.push({
+        label: `driver · raw-AX program · ${shape} · ${poll ? "polling" : "settled"}`,
+        script: rawScript,
+        lang: "javascript",
+      });
+    }
   }
   const jxa = {
     label: "driver · verify-prefill (date-area leg)",

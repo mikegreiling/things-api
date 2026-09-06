@@ -32,7 +32,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const VECTORS = resolve(dirname(fileURLToPath(import.meta.url)), "../../src/write/vectors");
-const FILES = ["ui-recipes.ts", "ui.ts", "ui-drag.ts"];
+const FILES = [
+  "ui-recipes.ts",
+  "ui.ts",
+  "ui-drag.ts",
+  "ui-rawax.ts",
+  "ui-rawax-ops.ts",
+  "ui-rawax-exec.ts",
+];
 
 /** The marker a justified positional address must carry. */
 const MARKER = "positional-ok:";
@@ -173,5 +180,61 @@ describe("ui vector: positional element addressing is fenced (CGRD1)", () => {
     // A marker separated from the address by code does NOT cover it.
     const detached = ["// positional-ok: measured", "const A = 1;", "const B = `text field 1`;"];
     expect(justified(detached, 2)).toBe(false);
+  });
+});
+
+/**
+ * THE SAME FENCE, ONE TRANSPORT OVER (RAWAX1, #695).
+ *
+ * The raw-AX port does not spell an address as `pop up button 2 of group 1`; it
+ * spells it as `{ in: "group", role: "AXPopUpButton", ordinal: 2 }`. That is the
+ * SAME claim — "the element in slot N of a state-dependent tree" — and it fails
+ * the same way, so it needs the same justification or the fence has a hole
+ * exactly where the addresses moved.
+ *
+ * The port's answer is that the justification travels WITH the address, as a
+ * `because` field, so a refusal can quote the evidence for the index it used.
+ * This is what makes that mandatory rather than customary.
+ *
+ * RAWAX1 §5.1 is what licensed these indices in the first place: the
+ * role-filtered `AXChildren` ordinal IS System Events' `<class> N` index, in all
+ * five dialog states, so the ordinals `ui-recipes.ts` certified carry across the
+ * transport rather than being re-derived — and they carry their evidence too.
+ */
+const ORDINAL_PATTERN = /\bordinal:\s*(\d+)/g;
+
+describe("ui vector: a STRUCTURED positional address carries its evidence (RAWAX1)", () => {
+  for (const file of ["ui-rawax-ops.ts", "ui-rawax-exec.ts"]) {
+    it(`${file} pairs every \`ordinal:\` with a justification`, () => {
+      const lines = readFileSync(join(VECTORS, file), "utf8").split("\n");
+      const violations: string[] = [];
+      lines.forEach((line, i) => {
+        if (isComment(line)) return;
+        for (const m of line.matchAll(ORDINAL_PATTERN)) {
+          // The justification may sit on the line, in the comment block above
+          // it, or — the shipped shape — in a `because:` on a nearby line of the
+          // same object literal.
+          const window = lines.slice(Math.max(0, i - 3), i + 4).join("\n");
+          if (window.includes(MARKER)) continue;
+          if (/\bbecause:/.test(window)) continue;
+          violations.push(
+            `${file}:${i + 1}: \`ordinal: ${m[1]}\` addresses an element by its slot with no ` +
+              `evidence. Give the descriptor a \`because\` naming what was measured (see ` +
+              `ORDINAL_JUSTIFICATIONS), or add a \`// ${MARKER} <measured reason>\` comment.`,
+          );
+        }
+      });
+      expect(violations).toEqual([]);
+    });
+  }
+
+  it("the scanner catches an ordinal shipped without its evidence", () => {
+    // Proof the guard is not vacuous: the bare descriptor matches, and the one
+    // carrying its justification does not trip the check the loop above makes.
+    const bare = 'ref: { in: "group", role: "AXPopUpButton", ordinal: 4 },';
+    expect([...bare.matchAll(ORDINAL_PATTERN)]).toHaveLength(1);
+    expect(/\bbecause:/.test(bare)).toBe(false);
+    const withEvidence = "ordinal: 4,\n  because: ORDINAL_JUSTIFICATIONS.anchor,";
+    expect(/\bbecause:/.test(withEvidence)).toBe(true);
   });
 });

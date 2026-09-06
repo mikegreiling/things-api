@@ -8,7 +8,7 @@
  */
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
@@ -39,6 +39,29 @@ import {
   screenAnswer,
   type FakeScreen,
 } from "../fixtures/ui-state.ts";
+
+/**
+ * THIS SUITE CERTIFIES THE APPLESCRIPT TRANSPORT (RAWAX1, #695).
+ *
+ * Every assertion below reads the SCRIPTS the drive dispatches — one osascript
+ * per recipe step, in System Events' own vocabulary. That is exactly what the
+ * raw-AX port replaces on the default path, and it remains a supported,
+ * selectable path: `THINGS_API_REPEAT_RAWAX=0` regenerates it byte-identically,
+ * which is the fallback a lab cell must be able to select and therefore the
+ * thing this suite is about.
+ *
+ * So the switch is pinned OFF here rather than the suite being rewritten. The
+ * raw-AX path has its own engine coverage in `write-ui-rawax-drive.test.ts`,
+ * which asserts the seam this one cannot see: one script per merged GROUP, the
+ * verdicts folding back into the driver, and the step trail rebuilt from the
+ * per-op report.
+ */
+beforeEach(() => {
+  vi.stubEnv("THINGS_API_REPEAT_RAWAX", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
