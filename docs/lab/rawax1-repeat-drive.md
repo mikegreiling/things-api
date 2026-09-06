@@ -649,6 +649,58 @@ The three together localize the defect without reading a line of the released so
 
 **`npm run check` must not run while a Tart guest is up.** A concurrent run took **3,255 s** and produced five spurious failures — `osacompile` and `osascript` suites timing out at their 5 s budgets under starvation. The same suites take **6.7 s** with the slot empty. A red suite under contention looks exactly like a red suite from a defect, and this campaign spent an hour on the difference.
 
+### 5c.6 What the fold takes away, and where it has to be given back
+
+Run 5's `endson` cell — `--ends-on 2026-09-30`, a shape no earlier cell had driven — refused on the raw arm at `set-datetime ends`:
+
+```
+op select-popup   ends = on date                    ok
+op set-datetime   ends on = 2026-09-30              refused
+   set-datetime ends: this Repeat-dialog state presents 0 date area(s) [(none)]
+```
+
+Selecting `Ends: on date` MINTS the picker the next op writes to. On the AppleScript path those two steps are two `osascript` spawns, and ~124 ms of process teardown and startup pays for the app's rebuild by accident. Merged into one hop they are adjacent statements, and the census ran on the tree as it was a millisecond earlier.
+
+**This is the fold's real debt, and it is not the one RDLAT2 §10 named.** §10 worried about failure attribution, which the per-op record answers. The debt that is actually owed is that *every hop boundary was also an implicit settle*, bought with a spawn nobody was buying it for. §3.2a's test — keep a boundary where node must DECIDE or SETTLE — is about the settles NODE performs; it says nothing about the ones the operating system was performing for free.
+
+The repair is in the executor rather than in the hop map, because raw reads are ~0.1 ms: a resolve for a control that a preceding op reveals POLLS for it (2 s ceiling, 50 ms period), so the wait costs one census when the control is already present and the refusal is unchanged when the shape genuinely has none. **The general lesson for any future fold: an op that reveals a control has a settle, and folding it means writing that settle down.**
+
+### 5c.7 The monthly family cannot reach §5c.2's defect, and the yearly one can
+
+The reshaping cells were meant to prove the §5c.2 fix across all three families. The monthly ones instead measured a fence: `--on-day 20`, `--on-day last` and `--on-weekday tuesday --on-ordinal 2` are all REFUSED before anything is driven —
+
+```
+a monthly rule cannot start off its anchor: the Repeat dialog snaps the first
+occurrence to day 20, so a first occurrence on 2026-07-09 would not hold.
+```
+
+— so the `next` claim the fix withdraws was never reachable there. The withdrawal is correct and defensive for that family, and the cells now assert the FENCE (both transports, same sentence) rather than a drive that cannot happen.
+
+**The yearly family has no such fence**, and the same request drove for 20 s before refusing deep in the occurrence menu (`this Repeat dialog offers only the rule's own upcoming occurrences … searched 6 level(s)`). That asymmetry is not this campaign's to settle — the refusal is correct and legible, and the caller's remedy (`--when` on a date the rule produces) is the same either way — but it is a real inconsistency between two families of the same verb, and it belongs on the queue rather than in a footnote.
+
+### 5c.8 The DIRECT arm: the raw client is not in the GUI session, and the tree it gets says so
+
+The direct arm — the same cells on a golden-v4 clone with no helpers, every script run by an `osascript` the CLI spawns under an **ssh** session — came back **RED: 32 of 70**, and the shape of it is a fact rather than an opinion:
+
+```
+FAIL [1] daily-raw   — ui drive stopped at "measure the Repeat dialog's shape"
+   (its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a
+    date field, so the dialog matched neither known shape)
+ok   [15] aftercomp  — blobs BYTE-IDENTICAL across transports
+```
+
+Every cell that PROBES the dialog shape refused on the raw arm; `aftercomp`, the one recipe whose `needsShape` is false, passed. The AppleScript arm passed all of them, in the same dialog, on the same boot, seconds apart.
+
+**The control experiment settles what that means.** The same 70 cells were run in the same rig against **origin/main's dist**, which has no raw transport at all: **zero** shape-probe refusals, on any cell. So this is not the guest, not the clone, not the clock, and not the dialog — it is the raw client.
+
+**What the raw client does not have is the GUI session.** System Events runs as an agent inside the user's Aqua session, so an Apple event to it is executed there however the caller got in; an `osascript` spawned over ssh is executed in the ssh session. Every read the shipped drive has ever made was made from inside the login session by a process that was already there, and the port moved those reads into a process that is not.
+
+**Two claims are NOT supported by this evidence and are recorded as refuted rather than left hanging.** The first hypothesis was `AXEnhancedUserInterface` — the flag an assistive client sets to ask AppKit for the full tree, which System Events sets on every process it attaches to and which the direct rig's warm-up deliberately pokes to `false`. It is a good story and it is wrong: a build that asked for the flag explicitly, once per hop before anything read, changed the failure count from 32 to 34. A standalone probe then measured the write itself returning **`-25208`** from that process. Recorded here, and the code reverted, because §6.3's discipline cuts both ways: an unverified fix that ships is worse than a defect that is understood.
+
+**What this costs, and who pays it.** The maintainer's own `things` runs in Terminal — inside the Aqua session — and the deputy is a launchd agent in that session too, which is why the routed arm certifies 74 cells and this one does not. What the port takes away is a case that used to work: driving the Repeat dialog from an ssh session, or from anything else outside the login session, where System Events would carry the request in and a raw client cannot follow. `THINGS_API_REPEAT_RAWAX=0` restores it exactly, which is what that switch is for — but **the drive should detect the condition and say so, rather than reporting "a Things update has redesigned it again" about a dialog that is fine.** That is a ruling to take, not one to make here: an automatic fall-back to the certified transport is a different contract from a refusal that names the cause, and the two are worth choosing between deliberately.
+
+**Both remaining unknowns are cheap to close and neither is closed yet**: whether the missing controls are the whole reduced tree or only the sheet's, and whether a GUI-session `osascript` on the same guest (launched through the deputy, or through a `launchctl asuser` shim) sees them. The direct arm keeps its cells so both are one run away.
+
 ## 6. Run log
 
 Four runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
@@ -694,67 +746,52 @@ invocation-end exitCode 2
 
 So `make-repeating … --ends-after 4` took the clone-and-replace leg, minted the replacement through the URL scheme, deleted the original — and the promote leg it handed the fresh uuid to could not resolve it. The rollback is exemplary: the original is restored and re-patched, and nothing is left half-done. But the operation refused a request it should have landed, and the refusal names an internal uuid the caller has no use for.
 
+**AND IT IS NOT A TRANSPORT DIFFERENCE AT ALL — the control run says so.** Running the same cells against origin/main's dist, where BOTH arms of every pair are the same AppleScript drive, `endsafter` reported the identical asymmetry: the first promote landed and the second refused. So the discriminator is not which transport drives it. It is that this is the SECOND consecutive `--ends-after` promote, and something the first one leaves behind is what the second one's verify does not survive. Every earlier reading of this — including the one two paragraphs down, and the cell's own name for it — attributed to the transport what belongs to the sequence.
+
 **Runs 5, 6 and 7 reproduced it exactly, and run 7 asked the released build.** `base-endsafter` drives the same shape with origin/main's own CLI, in the same guest, on the same boot: it refuses too, exit 2. So the AppleScript arm's behaviour is the SHIPPED behaviour and the raw arm is the one that departs from it — by landing the rule. Four sightings also retire §6.3's one-sighting caution: this is a report.
 
 The trace pair says where to look. The drive itself SUCCEEDS on both transports — `execute-done, exitCode 0`, the pre-commit audit agreeing the dialog holds what was entered — and the two diverge in the POST-DRIVE verify: `stage todo.make-repeating ok` in 421 ms on the raw arm against `stage verify mismatch attempts=30 recovered=false` on the shipped one. So the dialog held the right rule and the oracle did not find what it asked for; the `not-found` the caller reads is the rollback re-reading the clone that the promote had already replaced.
 
 **Not this campaign's to fix, and genuinely not**: it is in `promote-clone.ts`'s composite, it is transport-independent (the raw arm ran the same shape successfully on the same boot), and the one-sighting discipline of §6.3 applies — a single occurrence is an observation. The cell stays in the set, as `endsafter_pair`, and asserts the KNOWN shape — raw lands, the shipped path refuses — so a change in either direction is a failure rather than a surprise. What the evidence does NOT support is calling it a commit race: the drive completes and the audit passes, so it is the verify's oracle that wants the look, not the resolver.
 
-## 7. Handoff — state, at the last commit before the certification runs
+## 7. Handoff — where the certification stands
 
-**Branch** `mg/rawax1-repeat-drive`, draft PR [#734](https://github.com/mikegreiling/things-api/pull/734).
+**Branch** `mg/rawax1-repeat-drive`, draft PR [#734](https://github.com/mikegreiling/things-api/pull/734). `npm run check` green at every commit; it must not be run while a guest is up (§5c.5).
 
-**Landed since the phase-2 commits:** the §5c.2 root fix in `provenPrefills` (with a unit cell verified for teeth by reverting it), the §5c.3 hop-boundary carry and its trace fields, and three rig repairs to `lab/guest/rawax1-cells.sh` — the quadrant proof now reads the drive's own trace file instead of an absent `tracePath`, each drive's trace is kept beside its JSON in `out/`, and five reshaping A/B pairs plus the three `BASELINE_APP` cells (§5c.4) are new.
+### 7.1 What is certified
 
-**What the certification runs still owe:** the routed arm with `RC_DIST_BASELINE` pointed at origin/main's dist (the §5c.4 cells), the direct arm on golden-v4, `npm run lab:regress` in both arms, and the cost table §4 asks for. `npm run check` is green at this commit and must not be run while a guest is up (§5c.1).
+**The ROUTED arm — the release gate's own arm (b) — at 74 cells.** Every A/B pair lands a byte-identical blob on both transports (daily, weekly incl. multi-weekday, monthly, yearly, after-completion, ends-on-date, deadline offset incl. a named zero, reminders, a named `--when`, an off-anchor monthly and yearly). All eight `{rawax} x {observer} x {prefill}` quadrants land one blob and each is PROVEN from its own trace file rather than from the switch the cell set. Both no-commit refusals hold on both transports; all four pre-dispatch fences (three off-anchor monthly shapes and the DEFAULTS1 clamp) refuse with the same sentence on both. Both DLSEED1 promote cells pass. The three `BASELINE_APP` cells run origin/main's own CLI in the same guest and localize §5c.2 to the shipped build.
 
-### 5c.6 What the fold takes away, and where it has to be given back
+The one pair that does not agree is `endsafter`, and §6.4 is why: it reproduces with both arms AppleScript on origin/main, so it is a sequencing defect in the promote composite rather than anything this port touches.
 
-Run 5's `endson` cell — `--ends-on 2026-09-30`, a shape no earlier cell had driven — refused on the raw arm at `set-datetime ends`:
+### 7.2 What is NOT certified, and the one thing that blocks it
 
-```
-op select-popup   ends = on date                    ok
-op set-datetime   ends on = 2026-09-30              refused
-   set-datetime ends: this Repeat-dialog state presents 0 date area(s) [(none)]
-```
+**The DIRECT arm is RED and the reason is understood but not repaired (§5c.8).** The raw transport's reads happen in the process the CLI spawns; over ssh that process is outside the Aqua session, and the Repeat dialog's `Next:` row comes back without the control the shape probe needs. `origin/main` runs the identical cells in the identical rig with zero such refusals, so this is the port and not the rig. The maintainer's Terminal and the deputy are both inside that session, which is why the routed arm is green — but a drive from outside it now refuses where it used to work, and it refuses by blaming the dialog.
 
-Selecting `Ends: on date` MINTS the picker the next op writes to. On the AppleScript path those two steps are two `osascript` spawns, and ~124 ms of process teardown and startup pays for the app's rebuild by accident. Merged into one hop they are adjacent statements, and the census ran on the tree as it was a millisecond earlier.
+**`npm run lab:regress` in both arms has NOT been run**, and running it before §5c.8 has a ruling would only re-measure §5c.8 eight more times.
 
-**This is the fold's real debt, and it is not the one RDLAT2 §10 named.** §10 worried about failure attribution, which the per-op record answers. The debt that is actually owed is that *every hop boundary was also an implicit settle*, bought with a spawn nobody was buying it for. §3.2a's test — keep a boundary where node must DECIDE or SETTLE — is about the settles NODE performs; it says nothing about the ones the operating system was performing for free.
+### 7.3 The ruling §5c.8 wants
 
-The repair is in the executor rather than in the hop map, because raw reads are ~0.1 ms: a resolve for a control that a preceding op reveals POLLS for it (2 s ceiling, 50 ms period), so the wait costs one census when the control is already present and the refusal is unchanged when the shape genuinely has none. **The general lesson for any future fold: an op that reveals a control has a settle, and folding it means writing that settle down.**
+Three options, and they are genuinely different contracts:
 
-### 5c.7 The monthly family cannot reach §5c.2's defect, and the yearly one can
+1. **detect and fall back** — the drive notices the reduced tree and re-runs the step on the certified AppleScript transport, silently. Cheapest for callers, and it makes the raw path's coverage depend on where the process happens to be;
+2. **detect and refuse, naming the cause** — "this drive reads the Accessibility tree directly and must run inside the login session; re-run it from the Mac's own terminal, or set `THINGS_API_REPEAT_RAWAX=0`". Honest, and it costs the ssh case a working command;
+3. **certify the port as session-bound** and make the direct lab arm route its scripts through the GUI session (a `launchctl asuser` shim), so the arm measures the field shape rather than an ssh shape.
 
-The reshaping cells were meant to prove the §5c.2 fix across all three families. The monthly ones instead measured a fence: `--on-day 20`, `--on-day last` and `--on-weekday tuesday --on-ordinal 2` are all REFUSED before anything is driven —
+(3) is the one that makes the direct arm meaningful again; (1) or (2) is still needed for the field. They are not exclusive.
 
-```
-a monthly rule cannot start off its anchor: the Repeat dialog snaps the first
-occurrence to day 20, so a first occurrence on 2026-07-09 would not hold.
-```
+### 7.4 The measured cost, so far
 
-— so the `next` claim the fix withdraws was never reachable there. The withdrawal is correct and defensive for that family, and the cells now assert the FENCE (both transports, same sentence) rather than a drive that cannot happen.
+From run 7's trace summary across all its drives — the numbers §4's model wanted, though the multiplier to the maintainer's M1 is his own trace and not this one:
 
-**The yearly family has no such fence**, and the same request drove for 20 s before refusing deep in the occurrence menu (`this Repeat dialog offers only the rule's own upcoming occurrences … searched 6 level(s)`). That asymmetry is not this campaign's to settle — the refusal is correct and legible, and the caller's remedy (`--when` on a date the rule produces) is the same either way — but it is a real inconsistency between two families of the same verb, and it belongs on the queue rather than in a footnote.
+| | run 7 (routed, 74 cells) |
+| --- | ---: |
+| dispatched `osascript` hops, all drives | 481 |
+| merged raw-AX hops | 50 |
+| ops executed inside them | 173 |
+| raw AX calls | 11,259 |
+| elements realized | 1,912 |
+| ops per merged hop | 3.5 |
+| raw calls per merged hop | 225.2 |
 
-### 5c.8 The service System Events was silently providing
-
-The DIRECT arm — the same 74 cells on a golden-v4 clone with no helpers — came back **RED: 32 of 70**, and the shape of it named the cause before the trace did. Every cell that PROBES the dialog shape refused, on the raw arm only:
-
-```
-FAIL [1] daily-raw    — ui drive stopped at "measure the Repeat dialog's shape"
-   (its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a
-    date field, so the dialog matched neither known shape — a Things update has
-    redesigned it again; nothing was entered into the rule)
-ok   [15] aftercomp   — blobs BYTE-IDENTICAL across transports
-```
-
-`aftercomp` is the one recipe with `needsShape === false`. Every other cell probes, and every other cell's raw arm refused — while the AppleScript arm passed all of them, in the same dialog, on the same boot, seconds apart.
-
-**`AXEnhancedUserInterface`.** It is an app-level flag an assistive client SETS to ask AppKit for the full Accessibility tree, and System Events sets it on every process it attaches to. The direct arm's warm-up deliberately pokes it to `false` (as most rigs here do, and as `lab/guest/stage5-cells.sh` does per drive); the routed orchestrator does not. So the shipped transport has been reading the ENHANCED tree for the life of this project — every address, every census, every certified ordinal — and nothing here knew it, because nothing here had ever read the tree any other way. A raw client sets nothing, gets the plain tree, and the `Next:` row in the plain tree carries neither control.
-
-This is the deepest thing the campaign found, and it is the same shape as §5c.6 one level down: **the transport was not just a cost, it was a set of side effects nobody had written down.** The fold cost us a settle; the transport swap costs us this. Both were invisible to every unit suite and to the routed arm, and both were found by running the identical cells in a configuration the campaign had no reason to believe was different.
-
-The port now asks for the flag itself — one idempotent AX write per hop, before anything reads, leaving it on exactly as a System Events drive does. That is not a new claim on the app; it is the claim the certified transport was making on our behalf.
-
-**And the rig KEEPS the poke.** A guest that pokes the flag to false is not an artificial condition — the flag is off by default and only an attached assistive client turns it on, so a raw client on a real Mac is in exactly that state until something else attaches. The direct arm is now the adversarial arm this campaign needed, and it earned its keep on the first run.
+Per-op wall times are in each drive's `out/<cell>.trace.jsonl`, kept beside its JSON since run 5. On the routed guest the raw arm is faster than the AppleScript one on every A/B pair but two (`yearly`, where they tie, and the first cell of a run, which pays the warm-up): typically 3.2–4.9 s against 3.2–6.1 s. That is a clone's arithmetic, not the field's.

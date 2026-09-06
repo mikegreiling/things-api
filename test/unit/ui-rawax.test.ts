@@ -366,18 +366,6 @@ describe("the defects the routed arm caught", () => {
     expect(script).toContain("RAWAX_CONFIRMED[RAWAX_PROGRAM.confirmed[ci]] = true");
   });
 
-  it("asks for the enhanced tree, which System Events was turning on for us", () => {
-    // The direct arm's whole shape-probing half refused with "its first-occurrence
-    // row holds neither an occurrence pop-up nor a date field" — on a guest whose
-    // `AXEnhancedUserInterface` had been poked to false, where the AppleScript arm
-    // passed every one of the same cells because asking through System Events
-    // turns the flag back on. Every read this project has ever made was made
-    // against the enhanced tree; nothing had ever read it any other way.
-    const script = renderRawAxScript(everyOpProgram());
-    expect(script).toContain("rawBool(RAWAX_APP, 'AXEnhancedUserInterface')");
-    expect(script).toContain("rawSetBool(RAWAX_APP, 'AXEnhancedUserInterface', true)");
-  });
-
   it("waits for a date area the PREVIOUS op reveals, because the fold took its settle away", () => {
     // Run 5's `endson` cell: `select-popup ends = on date` reported ok and the
     // very next op censused the sheet for the picker that selection mints —

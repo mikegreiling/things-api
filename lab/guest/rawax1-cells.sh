@@ -248,19 +248,21 @@ ab "weekly"    --frequency weekly --interval 1 --weekdays monday,thursday
 ab "monthly"   --frequency monthly --interval 2
 ab "yearly"    --frequency yearly --interval 1
 ab "aftercomp" --frequency weekly --interval 3 --after-completion
-# `--ends-after` IS THE ONE PAIR THAT DOES NOT AGREE, AND THE RELEASED BUILD IS
-# WHY. Four consecutive runs, the same shape every time: the raw arm lands `rc=4`
-# and the AppleScript arm's post-drive verify polls thirty times, reports
-# `mismatch`, and rolls the original back — cleanly, but the caller sees a
-# refusal naming an internal clone uuid. `base-endsafter` below asks origin/main
-# the same question and gets the same refusal, so this is SHIPPED and the port is
-# not its cause. What the port does is land it.
+# `--ends-after` IS THE ONE PAIR THAT DOES NOT AGREE, AND IT IS NOT ABOUT THE
+# TRANSPORT. Five runs, the same shape every time: the FIRST promote of the pair
+# lands `rc=4` and the SECOND one's post-drive verify polls thirty times, reports
+# `mismatch`, and rolls the original back — cleanly, but the caller sees a refusal
+# naming an internal clone uuid.
 #
-# The cell therefore asserts the SHAPE OF THE DISAGREEMENT rather than agreement:
-# either both transports land the same blob (the defect has been fixed elsewhere,
-# and this cell should then go back to being a plain `ab`), or the raw arm lands
-# and the shipped one refuses — which is the state on record. Any other
-# combination, including the raw arm starting to refuse, fails.
+# The control run is what settles it: the same cells against origin/main's dist,
+# where BOTH arms are the same AppleScript drive, reproduce the identical
+# asymmetry — first lands, second refuses. So the discriminator is the SEQUENCE,
+# not which transport drove it, and `base-endsafter` below confirms the released
+# build refuses the same shape.
+#
+# The cell therefore asserts the shape on record — first lands, second refuses —
+# and fails on anything else, including the day the defect is fixed elsewhere and
+# the pair can go back to being a plain `ab`.
 endsafter_pair() {
   local rawTitle="$TAG-endsafter-RAW" oldTitle="$TAG-endsafter-OLD" rawU oldU
   rawU=$(seed "$rawTitle" "$START")
@@ -273,9 +275,9 @@ endsafter_pair() {
   if [ -n "$rawBlob" ] && [ "$rawBlob" = "$oldBlob" ]; then
     pass "[$STEP] endsafter — blobs BYTE-IDENTICAL across transports (the shipped defect is GONE; make this a plain ab)"
   elif [ -n "$rawBlob" ] && [ -z "$oldBlob" ]; then
-    pass "[$STEP] endsafter — the KNOWN shipped divergence: raw lands, the shipped path refuses (exit $oldCode). See base-endsafter."
+    pass "[$STEP] endsafter — the KNOWN shipped asymmetry: the FIRST promote lands, the SECOND refuses (exit $oldCode). Reproduces on origin/main with both arms AppleScript; see base-endsafter."
   else
-    fail "[$STEP] endsafter — an UNKNOWN divergence (raw exit $rawCode blob='$rawBlob' / applescript exit $oldCode blob='$oldBlob')"
+    fail "[$STEP] endsafter — an UNKNOWN divergence (first exit $rawCode blob='$rawBlob' / second exit $oldCode blob='$oldBlob')"
   fi
 }
 endsafter_pair
