@@ -703,3 +703,32 @@ So `make-repeating … --ends-after 4` took the clone-and-replace leg, minted th
 **Landed since the phase-2 commits:** the §5c.2 root fix in `provenPrefills` (with a unit cell verified for teeth by reverting it), the §5c.3 hop-boundary carry and its trace fields, and three rig repairs to `lab/guest/rawax1-cells.sh` — the quadrant proof now reads the drive's own trace file instead of an absent `tracePath`, each drive's trace is kept beside its JSON in `out/`, and five reshaping A/B pairs plus the three `BASELINE_APP` cells (§5c.4) are new.
 
 **What the certification runs still owe:** the routed arm with `RC_DIST_BASELINE` pointed at origin/main's dist (the §5c.4 cells), the direct arm on golden-v4, `npm run lab:regress` in both arms, and the cost table §4 asks for. `npm run check` is green at this commit and must not be run while a guest is up (§5c.1).
+
+### 5c.6 What the fold takes away, and where it has to be given back
+
+Run 5's `endson` cell — `--ends-on 2026-09-30`, a shape no earlier cell had driven — refused on the raw arm at `set-datetime ends`:
+
+```
+op select-popup   ends = on date                    ok
+op set-datetime   ends on = 2026-09-30              refused
+   set-datetime ends: this Repeat-dialog state presents 0 date area(s) [(none)]
+```
+
+Selecting `Ends: on date` MINTS the picker the next op writes to. On the AppleScript path those two steps are two `osascript` spawns, and ~124 ms of process teardown and startup pays for the app's rebuild by accident. Merged into one hop they are adjacent statements, and the census ran on the tree as it was a millisecond earlier.
+
+**This is the fold's real debt, and it is not the one RDLAT2 §10 named.** §10 worried about failure attribution, which the per-op record answers. The debt that is actually owed is that *every hop boundary was also an implicit settle*, bought with a spawn nobody was buying it for. §3.2a's test — keep a boundary where node must DECIDE or SETTLE — is about the settles NODE performs; it says nothing about the ones the operating system was performing for free.
+
+The repair is in the executor rather than in the hop map, because raw reads are ~0.1 ms: a resolve for a control that a preceding op reveals POLLS for it (2 s ceiling, 50 ms period), so the wait costs one census when the control is already present and the refusal is unchanged when the shape genuinely has none. **The general lesson for any future fold: an op that reveals a control has a settle, and folding it means writing that settle down.**
+
+### 5c.7 The monthly family cannot reach §5c.2's defect, and the yearly one can
+
+The reshaping cells were meant to prove the §5c.2 fix across all three families. The monthly ones instead measured a fence: `--on-day 20`, `--on-day last` and `--on-weekday tuesday --on-ordinal 2` are all REFUSED before anything is driven —
+
+```
+a monthly rule cannot start off its anchor: the Repeat dialog snaps the first
+occurrence to day 20, so a first occurrence on 2026-07-09 would not hold.
+```
+
+— so the `next` claim the fix withdraws was never reachable there. The withdrawal is correct and defensive for that family, and the cells now assert the FENCE (both transports, same sentence) rather than a drive that cannot happen.
+
+**The yearly family has no such fence**, and the same request drove for 20 s before refusing deep in the occurrence menu (`this Repeat dialog offers only the rule's own upcoming occurrences … searched 6 level(s)`). That asymmetry is not this campaign's to settle — the refusal is correct and legible, and the caller's remedy (`--when` on a date the rule produces) is the same either way — but it is a real inconsistency between two families of the same verb, and it belongs on the queue rather than in a footnote.

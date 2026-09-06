@@ -160,13 +160,27 @@ ab() {
   rawU=$(seed "$rawTitle" "$START")
   oldU=$(seed "$oldTitle" "$START")
 
-  THINGS_API_REPEAT_RAWAX=1 drive "$name-raw" "$rawU" "$rawTitle" "$@" || return 1
-  local rawBlob="$LAST_BLOB" rawRule="$LAST_RULE" rawMs="$LAST_MS"
-  THINGS_API_REPEAT_RAWAX=0 drive "$name-old" "$oldU" "$oldTitle" "$@" || return 1
-  local oldBlob="$LAST_BLOB" oldMs="$LAST_MS"
+  # BOTH ARMS RUN, ALWAYS. Returning at the first arm's failure was how run 5
+  # spent a VM slot without learning whether the OTHER transport agreed — and
+  # "the two transports do the same thing" is the entire thesis, so a failure is
+  # exactly the case where the second arm is most worth having. The COMPARE needs
+  # both blobs; the drives do not.
+  THINGS_API_REPEAT_RAWAX=1 drive "$name-raw" "$rawU" "$rawTitle" "$@"
+  local rawBlob="$LAST_BLOB" rawRule="$LAST_RULE" rawMs="$LAST_MS" rawCode="$LAST_CODE"
+  THINGS_API_REPEAT_RAWAX=0 drive "$name-old" "$oldU" "$oldTitle" "$@"
+  local oldBlob="$LAST_BLOB" oldMs="$LAST_MS" oldCode="$LAST_CODE"
 
   STEP=$((STEP + 1))
-  if [ "$rawBlob" = "$oldBlob" ] && [ -n "$rawBlob" ]; then
+  if [ -z "$rawBlob" ] && [ -z "$oldBlob" ]; then
+    # NEITHER landed. The two drives have already reported themselves; what this
+    # cell adds is the one thing neither can say alone — that the transports
+    # refused ALIKE, which is a passing transport result about a failing request.
+    if [ "$rawCode" = "$oldCode" ]; then
+      pass "[$STEP] $name — neither transport landed a rule, and both exited $rawCode (SAME on both)"
+    else
+      fail "[$STEP] $name — the transports refused DIFFERENTLY (raw exit $rawCode / applescript exit $oldCode)"
+    fi
+  elif [ "$rawBlob" = "$oldBlob" ] && [ -n "$rawBlob" ]; then
     pass "[$STEP] $name — blobs BYTE-IDENTICAL across transports  (raw ${rawMs}ms / applescript ${oldMs}ms)"
   else
     fail "[$STEP] $name — the transports landed DIFFERENT rules"
@@ -174,6 +188,30 @@ ab() {
     echo "     old: $oldBlob"
     echo "     raw rule: $rawRule"
   fi
+}
+
+# refuses <name> <expected-substring> -- <make-repeating args...>
+#
+# THE REQUESTS THE OPERATION FENCES BEFORE IT DRIVES ANYTHING. A refusal is part
+# of the contract a transport change must not alter, so each is asserted on BOTH
+# transports and required to name the same thing.
+refuses() {
+  local name="$1" want="$2"; shift 2
+  local title="$TAG-$name" u out code r
+  for r in 1 0; do
+    u=$(seed "$title-$r" "$START")
+    STEP=$((STEP + 1))
+    out=$(THINGS_API_REPEAT_RAWAX=$r things todo make-repeating "$u" "$@" \
+      --dangerously-drive-gui --verify-timeout 90000 --json 2>/dev/null)
+    code=$?
+    printf '%s\n' "$out" >"$OUT/$name-$r.json"
+    if [ "$code" -ne 0 ] && [[ "$out" == *"$want"* ]]; then
+      pass "[$STEP] $name (rawax=$r) — refused before driving, and named it"
+    else
+      fail "[$STEP] $name (rawax=$r) — exit $code, and the sentence did not name: $want"
+      echo "     output: $(head -c 400 <<<"$out")"
+    fi
+  done
 }
 
 echo "############################################################"
@@ -212,11 +250,34 @@ ab "nextdate"  --frequency weekly --interval 1 --when "$START"
 # licensed left the dialog holding the recomputed date, which the pre-commit
 # audit refused. They are A/B pairs like every other, so the fix is asserted on
 # BOTH transports rather than on the one that happened to survive.
-ab "monthlast" --frequency monthly --interval 1 --on-day last
-ab "monthord"  --frequency monthly --interval 1 --on-weekday tuesday --on-ordinal 2
-ab "monthday"  --frequency monthly --interval 1 --on-day 20
-ab "yearmonth" --frequency yearly --interval 1 --yearly-month 11 --on-day 3
+#
+# AND THE MONTHLY/YEARLY FAMILIES CANNOT REACH IT — measured, not assumed (run 5).
+# A monthly rule whose anchor is not the seed's own date is REFUSED before the
+# drive: "a monthly rule cannot start off its anchor: the Repeat dialog snaps the
+# first occurrence to day 20…". So the withdrawn claim is defensive there rather
+# than load-bearing, and what the cells assert for those families is the FENCE —
+# on both transports, because a refusal is contract too.
+ab "monthday"  --frequency monthly --interval 1 --on-day 20 --when 2026-07-20
+ab "yearmonth" --frequency yearly --interval 1 --yearly-month 11 --on-day 3 --when 2026-11-03
 ab "endson"    --frequency weekly --interval 1 --ends-on 2026-09-30
+
+echo ""
+echo "===== the FENCES: requests refused before anything is driven ====="
+# THE ANCHOR GUARD, on the three monthly shapes that reach it. The sentence is
+# the contract — it names the anchor the dialog would snap to and the two ways
+# out — and it must survive the transport change unchanged.
+refuses "fence-monthlast" "cannot start off its anchor" \
+  --frequency monthly --interval 1 --on-day last
+refuses "fence-monthord" "cannot start off its anchor" \
+  --frequency monthly --interval 1 --on-weekday tuesday --on-ordinal 2
+refuses "fence-monthday" "cannot start off its anchor" \
+  --frequency monthly --interval 1 --on-day 20
+# THE DEFAULTS1 CLAMP (oddities §32), refused pre-dispatch rather than driven: an
+# after-completion series caps its deadline offset at one day short of its period
+# and enforces the cap by silently substituting what you typed, so a request that
+# exceeds it is refused instead of being committed as something else.
+refuses "fence-clamp" "Things caps the offset at 6" \
+  --frequency weekly --interval 1 --after-completion --deadline --start-days-earlier 9
 
 echo ""
 echo "===== the SHIPPED path, as it stands on origin/main (RAWAX1 §5c.2) ====="

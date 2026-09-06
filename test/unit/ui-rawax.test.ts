@@ -366,6 +366,20 @@ describe("the defects the routed arm caught", () => {
     expect(script).toContain("RAWAX_CONFIRMED[RAWAX_PROGRAM.confirmed[ci]] = true");
   });
 
+  it("waits for a date area the PREVIOUS op reveals, because the fold took its settle away", () => {
+    // Run 5's `endson` cell: `select-popup ends = on date` reported ok and the
+    // very next op censused the sheet for the picker that selection mints —
+    // "presents 0 date area(s)". On the AppleScript path those two steps were two
+    // osascript spawns and the rebuild was paid for by the process boundary; in
+    // one hop they are adjacent statements. Cheap raw reads make the wait free
+    // when the control is already there.
+    const script = renderRawAxScript(everyOpProgram());
+    expect(script).toContain("if (dtWaited >= 2000) break");
+    expect(script).toMatch(/sleep\(50\); dtWaited \+= 50/);
+    // …and the refusal it falls through to is unchanged.
+    expect(script).toContain("this Repeat-dialog state presents ");
+  });
+
   it("asks for focus the canonical way, and proves it the way the app answers", () => {
     // Defect 1: writing the ELEMENT's AXFocused returns AXError 0 and reads back
     // FALSE, every time — so a loop that proves focus by that flag alone can

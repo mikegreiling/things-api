@@ -178,11 +178,27 @@ function rawResolve(ref){
     if (mi === null) throw new Error('the menu item ' + ref.path.join(' > ') + ' did not resolve');
     return mi }
   if (ref.dateArea !== undefined){
-    var areas = [];
-    rawCollect(rawShellEl(), 'AXDateTimeArea', 16, areas);
-    var dt = rawPickArea(areas, ref.dateArea);
-    if (dt === null) throw new Error('set-datetime ' + ref.dateArea + ': this Repeat-dialog state presents ' + areas.length + ' date area(s) [' + rawAreaInv(areas) + '] but none is the ' + ref.dateArea + ' control — the requested first occurrence / bound cannot be set in this dialog shape');
-    return dt }
+    /* A DATE AREA IS MINTED BY THE STEP BEFORE IT, AND THE FOLD TOOK AWAY ITS
+     * SETTLE. Selecting \`Ends: on date\` (or ticking Add reminders) makes the app
+     * REBUILD the sheet and add a picker that did not exist a moment earlier. On
+     * the AppleScript path each of those was its own osascript, and the spawn
+     * paid for the rebuild by accident; merged into one hop they are adjacent
+     * statements, and the census ran on the tree as it was BEFORE the rebuild —
+     * "presents 0 date area(s)" on a dialog that was about to present one.
+     *
+     * So a resolve for a revealed control polls for it. Raw reads are ~0.1 ms,
+     * so the wait costs nothing when the control is already there (the common
+     * case: one census, no loop), and the refusal below still fires — with the
+     * same sentence — when the shape genuinely has no such area. */
+    var areas = [], dt = null, dtWaited = 0;
+    for (;;){
+      areas = [];
+      rawCollect(rawShellEl(), 'AXDateTimeArea', 16, areas);
+      dt = rawPickArea(areas, ref.dateArea);
+      if (dt !== null) return dt;
+      if (dtWaited >= 2000) break;
+      sleep(50); dtWaited += 50 }
+    throw new Error('set-datetime ' + ref.dateArea + ': this Repeat-dialog state presents ' + areas.length + ' date area(s) [' + rawAreaInv(areas) + '] but none is the ' + ref.dateArea + ' control — the requested first occurrence / bound cannot be set in this dialog shape'); }
   if (ref.field === 'group'){
     var snap = rawSnap(rawGroupEl());
     RAWAX_ELEMS += snap.reads;
