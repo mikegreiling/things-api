@@ -717,7 +717,7 @@ which is DEPOBS3's licence read one word too widely. A live sidecar licenses an 
 
 ## 6. Run log
 
-Eleven runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
+Seventeen runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 measured, no crash, no `.ips`.
 
 | run | cells | outcome |
 | --- | --- | --- |
@@ -732,6 +732,12 @@ Eleven runs, all destroyed; **0 alert beeps** in every window run 2 and run 3 me
 | **9** (direct) | the same, with the `AXEnhancedUserInterface` write | **RED — 34**. The hypothesis is refuted, not confirmed; the code was reverted. |
 | **10** (direct, CONTROL) | the same 70 cells against **origin/main's dist** | **RED — 6**, and **zero** shape-probe refusals — which is what makes §5c.8 a statement about the raw client rather than about the guest. Two of the six are §5c.2 reproducing on main a third time; four are the quadrant proof correctly reporting that main has no raw transport. |
 | **11** (routed, FINAL) | the full cell script, 74 cells | **GREEN.** |
+| **12** (direct, in-session shim) | the same 70 cells through `launchctl asuser` | **RED — 32**, unchanged by the shim: 16 shape-probe refusals before it and 16 after. Hypothesis 1 refuted. |
+| **13** (direct, diagnostic) | the same, with the shape refusal carrying its inventory | **RED**, and the refusal now names the real state: the dialog was still in its after-completion default one op after a `select-popup` that reported `ok` (§5c.8). |
+| **14** (direct) | the same, with `select-popup`'s read-back | **RED**, and the read-back passed — which located the second defect: the probe was never waiting for the cadence rebuild. |
+| **15** (direct, FINAL) | the same 70 cells | **GREEN.** |
+| **16** (routed, FINAL) | the full cell script, 74 cells, re-confirmed under the poll fix | **GREEN.** |
+| **17** | `npm run lab:regress` — eight suites plus the write-layer e2e in BOTH arms | **ALL GREEN** (`direct arm GREEN`, `routed arm GREEN`, 0 alert beeps, no crash). |
 
 ### 6.1 Rig defects found, and why each is worth carrying
 
@@ -787,11 +793,13 @@ The trace pair says where to look. The drive itself SUCCEEDS on both transports 
 
 The one pair that does not agree is `endsafter`, and §6.4 is why: it reproduces with both arms AppleScript on origin/main, so it is a sequencing defect in the promote composite rather than anything this port touches.
 
-### 7.2 What is NOT certified
+### 7.2 What is certified beyond the cells
 
-**The DIRECT arm is GREEN at 70 of 70** (§5c.8), so both arms are certified and the routing-arm law is satisfied in both directions.
+**Both arms are GREEN** — routed at 74 of 74 and direct at 70 of 70 (§5c.8) — so the routing-arm law is satisfied in both directions.
 
-What remains open is `npm run lab:regress` in both arms — the release gate's condition (a) — which this campaign has not run, and the two shipped defects it queued rather than fixed (§6.4, §5c.7).
+**`npm run lab:regress` is ALL GREEN in both arms** — the eight probe suites plus the write-layer e2e, direct and deputy-routed, each reported by name, with 0 alert beeps and no crash. That is the release gate's condition (a) satisfied on this branch.
+
+What remains open is only what this campaign measured and deliberately did not fix: the two shipped defects it queued (§6.4's `--ends-after` sequencing and §5c.7's missing yearly fence), both with cells that keep reporting them.
 
 ### 7.3 The ruling, and what it turned out to be about
 
