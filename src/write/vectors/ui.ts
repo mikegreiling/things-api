@@ -5379,10 +5379,27 @@ async function driveSteps(
       if (group.ops.length > 0) {
         // The probe's poll form is the ONE thing node still decides, and it is
         // decided here rather than at compile time because it depends on what
-        // this hop's injector knows (a live sidecar, or DEPOBS3's node-side
-        // absorb on a routed host).
+        // this hop's injector knows (DEPOBS3's node-side absorb on a routed host).
+        //
+        // IT ASKS WHETHER *NODE* ABSORBED THE REBUILD, AND NOTHING ELSE (RAWAX1
+        // §5c.9). It used to drop the poll for a LIVE sidecar as well, and that
+        // is the DEPOBS3 licence read one word too widely: a live sidecar
+        // licenses an IN-SCRIPT settle, and the script that would perform it is
+        // an AppleScript one that can talk to the sidecar's socket. The merged
+        // raw-AX program has no sidecar client at all — so on a direct host,
+        // where `live` is true and `nodeSettled` is empty, the probe skipped its
+        // poll and nothing waited for the cadence group to be rebuilt. It then
+        // read the group as it was BEFORE the frequency selection and refused
+        // that the dialog "matched neither known shape", which is true of a
+        // dialog still showing its after-completion default and false about the
+        // app. Every shape-probing cell in the unrouted arm failed that way.
+        //
+        // A routed host is unchanged: it absorbs the rebuild between hops, the
+        // marker is set, and the poll is still dropped. A routed host whose
+        // absorb DIDN'T happen now polls instead of guessing, which is the safe
+        // direction and costs one read when the group is already right.
         const injector = obs();
-        const polls = !injector.live && !injector.nodeSettled.has("cadence-rebuild");
+        const polls = !injector.nodeSettled.has("cadence-rebuild");
         const compiled = compileRawAxGroups(group.steps, polls);
         const ready = compiled?.groups[0] ?? group;
         const outcome = await driveRawAxGroup(ready, run, shellIndex, dialogShape, prefilled);

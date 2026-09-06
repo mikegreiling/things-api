@@ -678,31 +678,42 @@ occurrence to day 20, so a first occurrence on 2026-07-09 would not hold.
 
 **The yearly family has no such fence**, and the same request drove for 20 s before refusing deep in the occurrence menu (`this Repeat dialog offers only the rule's own upcoming occurrences … searched 6 level(s)`). That asymmetry is not this campaign's to settle — the refusal is correct and legible, and the caller's remedy (`--when` on a date the rule produces) is the same either way — but it is a real inconsistency between two families of the same verb, and it belongs on the queue rather than in a footnote.
 
-### 5c.8 The DIRECT arm is RED, and both explanations for it are REFUTED
+### 5c.8 The DIRECT arm, and two confident wrong answers before the right one
 
-The direct arm — the same cells on a golden-v4 clone with no helpers — refuses on every cell that PROBES the dialog shape, and only on the raw arm:
+The direct arm — the same cells on a golden-v4 clone with no helpers — refused on every cell that PROBES the dialog shape, and only on the raw arm. `aftercomp`, the one recipe with `needsShape === false`, passed. The AppleScript arm passed all of them in the same dialog on the same boot, and the CONTROL run (the same 70 cells, same rig, same golden, against **origin/main's dist**, which has no raw transport at all) produced **zero** such refusals. So it was the raw client. Everything after that was wrong twice.
+
+| # | hypothesis | the test | the result |
+| --- | --- | --- | --- |
+| 1 | **the login session** — System Events runs as an agent inside the user's Aqua session and executes the request there however the caller got in; an `osascript` spawned over ssh does not | a `launchctl asuser <uid>` shim moved the whole cell run into the console session's bootstrap namespace | **no change: 16 refusals before, 16 after.** A paired raw tree census run both ways is identical to within one element (86 vs 87 three levels down), `AXIsProcessTrusted` true on both sides |
+| 2 | **`AXEnhancedUserInterface`** — the flag an assistive client sets to ask AppKit for the full tree, which the direct rig's warm-up pokes to `false` | ask for it from the executor, once per hop, before anything reads | **no change in kind: 32 failures became 34.** The flag is already `true` when any raw hop runs, because the dialog is opened by a System Events hop outside the merged group |
+
+**What ended it was making the refusal show its evidence instead of stating a diagnosis.** The probe was saying *"a Things update has redesigned it again"* — a claim about Cultured Code — on no evidence at all. One commit later it says what it actually sees:
 
 ```
-FAIL [1] daily-raw   — ui drive stopped at "measure the Repeat dialog's shape"
-   (its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a
-    date field, so the dialog matched neither known shape)
-ok   [15] aftercomp  — blobs BYTE-IDENTICAL across transports
+its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date
+field, so the dialog matched neither known shape — it shows 1 pop-up(s) and 0
+date field(s), labelled: "after previous item is checked off."
 ```
 
-`aftercomp` is the one recipe with `needsShape === false`. The AppleScript arm passes all of them, in the same dialog, on the same boot, seconds apart — and the CONTROL run (the same 70 cells, same rig, same golden, against **origin/main's dist**, which has no raw transport at all) produces **zero** such refusals. So it is the raw client. That much is settled.
+The dialog was not redesigned. It was **still in its after-completion default**, one op after a `select-popup frequency = daily` that had reported `ok`. Two defects, in the same sentence.
 
-**What it is NOT — two hypotheses, each tested and each refuted.** Both are recorded because a refuted hypothesis with a measurement attached is worth more than an open question with a story attached, and because both are the obvious next guesses for whoever picks this up.
+**(a) `select-popup` never read the control back.** It pressed the menu item and returned `ok` — the one actuator in the file that did not verify itself. `ensure-checkbox` three lines below reads, presses and re-reads; `select-occurrence` refuses outright when the pop-up committed something other than what was asked for. The discipline existed in two places out of three and was missing from exactly the one that broke. It now accepts either proof — the pop-up shows the title that was pressed, or it shows something other than what it showed before the press — and retries three times before refusing with both values.
 
-| hypothesis | the test | the result |
-| --- | --- | --- |
-| **the login session** — System Events runs as an agent inside the user's Aqua session and executes the request there however the caller got in, while an `osascript` spawned over ssh does not | a `launchctl asuser <uid>` shim moved the whole cell run into the console session's bootstrap namespace | **no change: 16 shape-probe refusals before, 16 after.** A paired raw tree census run both ways is identical to within one element (86 vs 87 three levels down), with `AXIsProcessTrusted` true on both sides |
-| **`AXEnhancedUserInterface`** — the flag an assistive client sets to ask AppKit for the full tree, which System Events sets on every process it attaches to, and which the direct rig's warm-up pokes to `false` | ask for it explicitly from the executor, once per hop, before anything reads | **no change in kind: 32 failures became 34.** And the flag is not the discriminator it looked like — the dialog is OPENED by a System Events hop (`press Items ▸ Repeat…` sits outside the merged group), so the flag is already `true` by the time any raw hop runs |
+**(b) And the reason nothing had taken: the probe was not waiting for the cadence rebuild.** Node decided the probe's poll form with
 
-The second test did turn up one measurement worth keeping, because it will mislead the next person too: **the raw write to `AXEnhancedUserInterface` returns `-25208` and SUCCEEDS anyway** — the probe read the flag back as `true` immediately after taking that error. An `AXError` from this attribute is not evidence that the write did not land.
+```ts
+const polls = !injector.live && !injector.nodeSettled.has("cadence-rebuild");
+```
 
-**Where that leaves it.** The refusal is real, reproducible, raw-arm-only, and confined to the shape probe: everything upstream works, including the raw menu press that opens the dialog and the raw frequency selection in the hop before. What is missing is specifically the control the probe looks for on the `Next:` row, in a sheet the same process can otherwise address. The next probe is the one this campaign has not yet run: dump the sheet raw **after a frequency has been selected**, in the direct guest, beside the same read through System Events — the state the drive is actually in, which neither census so far has reproduced (a freshly opened dialog is in its after-completion default and legitimately has no `Next:` row at all, which is why the first two dumps could not have answered this).
+which is DEPOBS3's licence read one word too widely. A live sidecar licenses an **in-script** settle, and the script that performs it is an AppleScript one that can reach the sidecar's socket. **The merged raw-AX program has no sidecar client at all.** So on a direct host — `live` true, `nodeSettled` empty — the probe dropped its poll and nothing waited; it read the cadence group as it was *before* the frequency selection and refused. On a routed host node absorbs the rebuild between hops, the marker is set, and dropping the poll is correct, which is exactly why the routed arm certified 74 cells while this one could not certify one. The condition now asks only what node absorbed. A routed host whose absorb did not happen polls instead of guessing — the safe direction, and one read when the group is already right.
 
-**The field is not affected either way, and that is measured rather than assumed**: the routed arm — the deputy, which is what a helpers-enabled Mac runs — certifies 74 of 74. What is not certified is the unrouted path, and `THINGS_API_REPEAT_RAWAX=0` is its exact escape hatch.
+**Direct arm: GREEN, 70 of 70.**
+
+**Three lessons, and the middle one is the expensive one.**
+
+1. **A refusal that states a diagnosis instead of its evidence is a bug in the refusal.** "A Things update has redesigned it again" cost this campaign three runs and two hypotheses; the same refusal carrying its inventory ended the question in one.
+2. **Neither hypothesis was lazy — and both were wrong.** Each had a mechanism, each explained the routed/direct split, and each was tested rather than argued. What neither had was a measurement that could distinguish it from the alternative, and both were reached before the cheap diagnostic existed. §6.3's rule — a single sighting is an observation, never a law — has a corollary this campaign paid for twice: **a hypothesis that explains the evidence is not thereby supported by it.**
+3. **The `launchctl asuser` shim is kept anyway.** It fixed nothing, and the arm should still represent a terminal on a real host rather than an ssh login, because the next in-process reader will have the same question and this arm should not be the reason it is asked twice.
 
 ## 6. Run log
 
@@ -776,23 +787,29 @@ The trace pair says where to look. The drive itself SUCCEEDS on both transports 
 
 The one pair that does not agree is `endsafter`, and §6.4 is why: it reproduces with both arms AppleScript on origin/main, so it is a sequencing defect in the promote composite rather than anything this port touches.
 
-### 7.2 What is NOT certified, and the one thing that blocks it
+### 7.2 What is NOT certified
 
-**The DIRECT arm is RED and the reason is understood but not repaired (§5c.8).** The raw transport's reads happen in the process the CLI spawns; over ssh that process is outside the Aqua session, and the Repeat dialog's `Next:` row comes back without the control the shape probe needs. `origin/main` runs the identical cells in the identical rig with zero such refusals, so this is the port and not the rig. The maintainer's Terminal and the deputy are both inside that session, which is why the routed arm is green — but a drive from outside it now refuses where it used to work, and it refuses by blaming the dialog.
+**The DIRECT arm is GREEN at 70 of 70** (§5c.8), so both arms are certified and the routing-arm law is satisfied in both directions.
 
-**`npm run lab:regress` in both arms has NOT been run**, and running it before §5c.8 has a ruling would only re-measure §5c.8 eight more times.
+What remains open is `npm run lab:regress` in both arms — the release gate's condition (a) — which this campaign has not run, and the two shipped defects it queued rather than fixed (§6.4, §5c.7).
 
-### 7.3 The ruling, and why it is BLOCKED on a diagnosis rather than on work
+### 7.3 The ruling, and what it turned out to be about
 
-**Ruled 2026-09-06 (orchestrator): options (2) and (3), not (1).** (2) the raw client DETECTS the reduced tree by a POSITIVE test on the tree — never an inference from the parent process — and REFUSES before the first write, naming the cause and the remedy, with no silent fallback to the slower transport (`THINGS_API_REPEAT_RAWAX=0` stays as the explicit manual escape and the refusal may mention it). (3) the lab's direct arm gets a `launchctl asuser` shim so it represents a terminal on a real host, with one control cell run WITHOUT the shim to prove the (2) refusal fires.
+**Ruled 2026-09-06 (orchestrator): options (2) and (3), not (1).** (2) the raw client DETECTS the condition by a POSITIVE test on the tree — never an inference from the parent process — and REFUSES before the first write, naming the cause and the remedy, with no silent fallback to the slower transport (`THINGS_API_REPEAT_RAWAX=0` stays the explicit manual escape). (3) the lab's direct arm gets a `launchctl asuser` shim so it represents a terminal on a real host, with a control that proves the refusal fires.
 
-**(3) is implemented and it changed nothing measurable.** `lab/scripts/rawax1-direct-arm.sh` now runs its whole cell script through `sudo launchctl asuser <console uid> sudo -u admin`, inside the console session's bootstrap namespace. The shape-probe refusal count before the shim and after it is the same: **16 and 16**. The arm is kept in-session anyway, because an arm that is meant to represent a terminal on a real host should be one — but it is not a fix and must not be recorded as one.
+**The ruling's doctrine held; its premise did not.** There was no reduced tree and no out-of-session client — §5c.8 has the two refutations and the actual cause, which was a `select-popup` that never read its control back and a probe that was not waiting for the cadence group to be rebuilt. So there is no environment to detect and nothing to refuse: **the drive works out of session, and the direct arm is GREEN at 70 of 70.**
 
-**(2) cannot be built yet, and the reason is §5c.8.** The ruling's positive test is a test FOR something, and the two candidate somethings are both refuted by measurement: the session (the shim changed nothing; the paired census is identical to within one element) and `AXEnhancedUserInterface` (the flag is already `true` by the time any raw hop runs, because the dialog is opened by a System Events hop outside the merged group). Writing a detector now would mean choosing a discriminator on no evidence and shipping a refusal that names a cause we have not established — which is the failure mode §6.3 exists to prevent, and which this campaign has already committed and reverted once.
+What survives of (2) is its doctrine, and it is what found the bug rather than what the bug turned out to be:
 
-**What unblocks it is one probe, and it is specified in §5c.8**: dump the sheet raw *after a frequency has been selected*, in the direct guest, beside the same read through System Events. Neither census so far reproduced that state — a freshly opened dialog is in its after-completion default and has no `Next:` row at all — so neither could have answered the question. With that dump in hand the positive test writes itself, and (2) is a small change.
+- **a positive test on the thing itself, never an inference.** Applied where it belonged: `select-popup` now reads the control back, and accepts either proof (the title it pressed, or a value that moved);
+- **refuse before the first write, naming the cause.** The shape probe's refusal used to name a cause it had not established — *"a Things update has redesigned it again"* — and now carries the inventory it actually read. That change is what ended a three-run diagnosis;
+- **no silent fallback.** Nothing was added, and nothing should be: a transport that cannot read what it needs still refuses, and `THINGS_API_REPEAT_RAWAX=0` is still the only fallback, chosen by hand.
 
-**The gate cells the ruling also asked for are independent of this and are landed**: `lab/guest/stage5-cells.sh` gains the weekly-with-weekdays cell whose absence is why the release gate never saw §5c.2, and the `--ends-after`-twice cell marked KNOWN-RED against the queued item.
+Both rulings are recorded in [design/decisions.md](../design/decisions.md) with what the measurement actually showed, including that the shim fixed nothing.
+
+**(3) is implemented and kept.** `lab/scripts/rawax1-direct-arm.sh` runs its cells through `sudo launchctl asuser <console uid> sudo -u admin` and collects the guest's artifacts, which it never did — three runs went by without anyone being able to read the refusing drive's own per-op records. It is a representativeness rule, not a repair, and [harness.md](harness.md) says so in those words. It is deliberately NOT applied to `regress.sh` or `e2e-write-smoke.sh`: changing eight recurring suites' execution identity for no measured gain is the worse trade.
+
+**The gate cells the ruling asked for are landed** in `lab/guest/stage5-cells.sh`: the weekly-with-weekdays cell whose absence is why the release gate never saw §5c.2, and the `--ends-after`-twice cell marked KNOWN RED against the queued item, which fails if the shape changes in either direction.
 
 ### 7.4 The measured cost, so far
 

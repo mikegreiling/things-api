@@ -1,22 +1,17 @@
 #!/bin/bash
-# RAWAX1 §5c.8 — WHAT the raw client cannot see, and under which condition.
+# RAWAX1 §5c.8 — the state the drive is actually in, dumped both ways.
 #
-# The direct arm's raw shape probe refuses on every probing cell; the AppleScript
-# arm passes them all in the same dialog on the same boot, and origin/main's dist
-# shows zero such refusals in the same rig. Two hypotheses have already been
-# refuted by measurement rather than by argument:
+# The direct arm's raw shape probe refuses on every probing cell while the
+# AppleScript arm passes them all. Two hypotheses are already refuted by
+# measurement (the login session, and AXEnhancedUserInterface — see the campaign
+# doc), and neither earlier census could have answered the question, because both
+# dumped a FRESHLY OPENED dialog: that one is in its after-completion default and
+# legitimately has no `Next:` row at all.
 #
-#   - the LOGIN SESSION. A `launchctl asuser` shim moved the whole cell run into
-#     the console session's bootstrap namespace and changed nothing (16 refusals
-#     before, 16 after), and a paired tree census in and out of the session is
-#     identical to within one element (86 vs 87 three levels down).
-#   - AXEnhancedUserInterface as a WRITE from the executor: asking for it once per
-#     hop moved the failure count from 32 to 34.
-#
-# So this probe stops inferring and dumps the thing itself: the Repeat dialog's
-# own sheet, opened through the RAW menu press the drive uses (never through
-# System Events, which would set the flag as a side effect and contaminate the
-# reading), in three states.
+# So this one reproduces the drive's own state — open the dialog, SELECT A
+# FREQUENCY, and only then read — and dumps the sheet twice: raw, and through
+# System Events, in that order, because a System Events read attaches and would
+# contaminate the raw one if it went first.
 #
 # Usage: rawax1-session-census.sh <node-binary> <app-dir>
 set -u
@@ -52,22 +47,23 @@ function attr(el, name){
 function sv(el, name){ var v = attr(el, name); if (!v) return ''; try { return String(v.js) } catch(e){ return '' } }
 function kids(el, name){ var c = attr(el, name || 'AXChildren'); if (!c) return [];
   var a = [], n = Number(c.count); for (var i = 0; i < n; i++) a.push(c.objectAtIndex(i)); return a; }
+function byRole(el, role){ var ch = kids(el), out = [];
+  for (var i = 0; i < ch.length; i++) if (sv(ch[i], 'AXRole') === role) out.push(ch[i]); return out; }
 function press(el){ return $.AXUIElementPerformAction(el, $('AXPress')); }
+function sleep(s){ $.NSThread.sleepForTimeInterval(s); }
 function appEl(){
   var apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
   if (!apps || Number(apps.count) === 0) return null;
   return $.AXUIElementCreateApplication(Number(apps.objectAtIndex(0).processIdentifier)); }
-function sleep(s){ $.NSThread.sleepForTimeInterval(s); }
 
-// The sheet, addressed the way the drive addresses it.
+// The sheet, addressed every way the drive knows how.
 function shellOf(app){
-  var ws = kids(app, 'AXWindows'), i;
+  var ws = kids(app, 'AXWindows'), i, j;
   for (i = 0; i < ws.length; i++){
     var sh = kids(ws[i], 'AXSheets');
-    if (sh.length > 0) return sh[0]; }
+    for (j = 0; j < sh.length; j++) return sh[j]; }
   for (i = 0; i < ws.length; i++)
-    if (sv(ws[i], 'AXSubrole') === 'AXUnknown' && sv(ws[i], 'AXTitle') === '') {
-      var k = kids(ws[i]); if (k.length > 0) return ws[i]; }
+    if (sv(ws[i], 'AXSubrole') === 'AXUnknown' && kids(ws[i]).length > 0) return ws[i];
   return null; }
 
 function dump(el, depth, lines, max){
@@ -78,48 +74,70 @@ function dump(el, depth, lines, max){
     if (depth < max) dump(ch[i], depth + 1, lines, max); } }
 
 var app = appEl(), r = { trusted: $.AXIsProcessTrusted() };
-if (app === null) { console.log(JSON.stringify({ app: 'NOT-RUNNING' })); }
+r.enhAtStart = sv(app, 'AXEnhancedUserInterface');
+
+// 1. Open the dialog through the RAW menu press — the drive's own path, and the
+//    one that does not attach System Events on the way in.
+var mb = attr(app, 'AXMenuBar'), items = kids(mb), i, itemsMenu = null;
+for (i = 0; i < items.length; i++) if (sv(items[i], 'AXTitle') === 'Items') itemsMenu = items[i];
+if (itemsMenu !== null){
+  press(itemsMenu); sleep(0.8);
+  var menu = kids(itemsMenu)[0], mis = menu ? kids(menu) : [], rep = null;
+  for (i = 0; i < mis.length; i++) if (sv(mis[i], 'AXTitle').indexOf('Repeat') === 0) rep = mis[i];
+  if (rep !== null){ press(rep); sleep(2.5); } }
+
+var shell = shellOf(app);
+r.sheetFound = shell !== null;
+if (shell === null) { console.log(JSON.stringify(r, null, 1)); }
 else {
-  r.enhRaw = sv(app, 'AXEnhancedUserInterface');
-  // OPEN THE DIALOG THROUGH THE RAW MENU PRESS — the drive's own path, and the
-  // one that does not attach System Events and set the flag on the way in.
-  var mb = attr(app, 'AXMenuBar'), items = kids(mb), i, itemsMenu = null;
-  for (i = 0; i < items.length; i++) if (sv(items[i], 'AXTitle') === 'Items') itemsMenu = items[i];
-  r.menuFound = itemsMenu !== null;
-  if (itemsMenu !== null){
-    press(itemsMenu); sleep(0.8);
-    var menu = kids(itemsMenu)[0], mis = menu ? kids(menu) : [], rep = null;
-    for (i = 0; i < mis.length; i++) if (sv(mis[i], 'AXTitle').indexOf('Repeat') === 0) rep = mis[i];
-    r.repeatItemFound = rep !== null;
-    if (rep !== null){ press(rep); sleep(2.5); } }
+  r.shellRoles = [];
+  var sk = kids(shell);
+  for (i = 0; i < sk.length; i++) r.shellRoles.push(sv(sk[i], 'AXRole'));
 
-  var shell = shellOf(app);
-  r.sheetFound = shell !== null;
-  r.stateA = [];
-  if (shell !== null) dump(shell, 0, r.stateA, 2);
+  // 2. SELECT A FREQUENCY — the step that makes a `Next:` row exist at all, and
+  //    the reason every earlier census dumped a dialog that could not answer.
+  var pops = byRole(shell, 'AXPopUpButton');
+  r.shellPopUps = pops.length;
+  r.freqBefore = pops.length ? sv(pops[0], 'AXValue') : '(none)';
+  if (pops.length){
+    press(pops[0]); sleep(0.8);
+    var fmenu = kids(pops[0])[0], fitems = fmenu ? kids(fmenu) : [], weekly = null;
+    r.freqMenuItems = [];
+    for (i = 0; i < fitems.length; i++){
+      var t = sv(fitems[i], 'AXTitle');
+      r.freqMenuItems.push(t);
+      if (t.toLowerCase() === 'weekly') weekly = fitems[i]; }
+    if (weekly !== null){ press(weekly); sleep(2.0); }
+    r.freqAfter = sv(pops[0], 'AXValue'); }
 
-  // STATE B: ask for the enhanced tree from THIS process, and report the code.
-  r.writeErr = $.AXUIElementSetAttributeValue(app, $('AXEnhancedUserInterface'), $(true));
-  r.enhAfterWrite = sv(app, 'AXEnhancedUserInterface');
-  sleep(1.0);
-  r.stateB = [];
-  var shellB = shellOf(app);
-  if (shellB !== null) dump(shellB, 0, r.stateB, 2);
+  // 3. THE READ THE PROBE MAKES, in the state the drive makes it.
+  shell = shellOf(app);
+  r.afterRoles = [];
+  sk = kids(shell);
+  for (i = 0; i < sk.length; i++) r.afterRoles.push(sv(sk[i], 'AXRole'));
+  var groups = byRole(shell, 'AXGroup');
+  r.groupCount = groups.length;
+  r.groupDump = [];
+  if (groups.length) dump(groups[0], 0, r.groupDump, 1);
+  r.groupPopUps = groups.length ? byRole(groups[0], 'AXPopUpButton').length : 0;
+  r.groupStaticTexts = groups.length ? byRole(groups[0], 'AXStaticText').length : 0;
+  r.enhAtEnd = sv(app, 'AXEnhancedUserInterface');
   console.log(JSON.stringify(r, null, 1));
 }
 JXA
 
-echo "===== states A (as the drive finds it) and B (after a raw enhanced-UI write) ====="
+echo "===== RAW: the sheet after a frequency has been selected ====="
 osascript -l JavaScript "$HOME/things-lab/census.js" 2>&1 | tee "$OUT/census.json"
 
-echo "===== state C: after System Events attaches (which sets the flag itself) ====="
-osascript -e 'tell application "System Events" to tell process "Things3" to get value of attribute "AXEnhancedUserInterface"' 2>&1
+echo ""
+echo "===== SYSTEM EVENTS: the same sheet, the same moment ====="
 osascript -e 'tell application "System Events" to tell process "Things3" to tell (first window whose subrole is "AXStandardWindow") to tell sheet 1 to get role of UI elements' 2>&1 | head -c 400
 echo ""
 osascript -e 'tell application "System Events" to tell process "Things3" to tell (first window whose subrole is "AXStandardWindow") to tell sheet 1 to tell group 1 to get {name, value} of pop up buttons' 2>&1 | head -c 600
 echo ""
+osascript -e 'tell application "System Events" to tell process "Things3" to tell (first window whose subrole is "AXStandardWindow") to tell sheet 1 to tell group 1 to get value of static texts' 2>&1 | head -c 600
+echo ""
 
-# Tear down through the ladder.
 osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1
 sleep 1
 osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1

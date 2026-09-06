@@ -296,12 +296,34 @@ function shapeVerdictOnce(tol){
     var ady = af.y - nextY; if (ady < 0) ady = -ady;
     if (ady <= tol) return { verdict:'legacy', sig:sig } }
   return { verdict:'unknown', sig:sig } }
+/*
+ * WHAT THE PROBE ACTUALLY SAW, in the refusal itself.
+ *
+ * "A Things update has redesigned it again" is a diagnosis, and the probe was
+ * stating it without evidence — which cost this campaign three runs and two
+ * wrong hypotheses about a dialog that turned out to be fine. A refusal that
+ * cannot be told apart from a different failure with the same symptom is not
+ * doing its job, so it now carries the row it was looking for and the controls
+ * it found instead.
+ */
+function shapeInventory(){
+  var g = null, texts = [], pops = 0, areas = [];
+  try { g = rawGroupEl() } catch(e){ return 'the cadence controls could not be read at all' }
+  if (g === null) return 'the cadence controls could not be read at all';
+  var snap = rawSnap(g), i;
+  for (i=0;i<snap.statics.length;i++)
+    if (snap.statics[i].value !== '') texts.push('"' + snap.statics[i].value + '"');
+  pops = rawKidsByRole(g, 'AXPopUpButton').length;
+  rawCollect(g, 'AXDateTimeArea', 4, areas);
+  return 'it shows ' + pops + ' pop-up(s) and ' + areas.length + ' date field(s), labelled: ' +
+    (texts.length ? texts.join(', ') : '(nothing)') }
+
 function opProbeShape(o){
   var res;
   if (!o.poll){
     res = shapeVerdictOnce(o.tolerance);
     if (res.verdict !== 'unknown'){ RAWAX_SHAPE = res.verdict; return { verdict:'ok', shape:res.verdict } }
-    throw new Error('its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date field, so the dialog matched neither known shape — a Things update has redesigned it again; nothing was entered into the rule') }
+    throw new Error('its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date field, so the dialog matched neither known shape — ' + shapeInventory() + '. Nothing was entered into the rule') }
   var prev = '<none>';
   for (var i=0;i<${40};i++){
     res = shapeVerdictOnce(o.tolerance);
@@ -309,7 +331,7 @@ function opProbeShape(o){
     prev = res.sig;
     sleep(100) }
   if (res.verdict === 'unknown')
-    throw new Error('its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date field, so the dialog matched neither known shape — a Things update has redesigned it again; nothing was entered into the rule');
+    throw new Error('its first-occurrence row ("Next:") holds neither an occurrence pop-up nor a date field, so the dialog matched neither known shape — ' + shapeInventory() + '. Nothing was entered into the rule');
   throw new Error("the Repeat dialog's cadence group never stopped re-laying out, so which control shares its first-occurrence row (\\"Next:\\") could not be measured; nothing was entered into the rule") }
 
 /*
@@ -318,25 +340,65 @@ function opProbeShape(o){
  * one-press-per-round cadence is unchanged, and a second press never goes into
  * a menu that is already opening.
  */
-function opSelectPopup(o){
-  var pu = rawResolve(rawOpRef(o)), menu = null, i;
-  for (i=0;i<20 && menu === null;i++){
+function rawOpenMenu(pu){
+  var menu = null;
+  for (var i=0;i<20 && menu === null;i++){
     menu = rawMenuOf(pu);
     if (menu !== null) break;
     rawPress(pu);
     var dl = Date.now() + 300;
     while (Date.now() < dl && menu === null){ menu = rawMenuOf(pu); if (menu === null) sleep(10) } }
-  if (menu === null) throw new Error('the pop-up would not open, so none of the candidate menu items could be reached: ' + o.titles.join(', '));
-  /* The menu's items are realized by the title search below, so the whole menu
-   * is content-touched however early the match hits (RDLAT2's counting law). */
-  var titles = rawMenuTitles(menu);
-  RAWAX_ELEMS += titles.length;
-  for (i=0;i<o.titles.length;i++){
-    var item = rawMenuItem(menu, o.titles[i]);
-    if (item === null) continue;
+  return menu }
+
+/*
+ * A PRESS IS NOT A SELECTION UNTIL THE CONTROL SAYS SO (RAWAX1 §5c.9).
+ *
+ * This op pressed the menu item and returned 'ok' without ever reading the
+ * pop-up back — the one actuator in this file that did not. ensure-checkbox
+ * three lines below reads, presses, and re-reads; select-occurrence refuses
+ * outright when the pop-up committed something other than what was asked for.
+ * The discipline existed in two places out of three and was missing from
+ * exactly the one that broke.
+ *
+ * What it cost: in the unrouted arm the press lands nowhere, the op reported
+ * success, and the SHAPE PROBE one op later refused because the dialog was
+ * still showing its after-completion default — which reads as "a Things update
+ * has redesigned the dialog" and sent this campaign chasing the login session
+ * and AXEnhancedUserInterface for three runs. A silent no-op does not announce
+ * itself as one; it announces itself as damage somewhere downstream.
+ *
+ * The read-back accepts either proof: the pop-up now shows the title that was
+ * pressed, or it shows something other than what it showed before the press
+ * (a pop-up whose value spells its selection differently from its menu item is
+ * still a pop-up that MOVED). Re-selecting a value the control already holds is
+ * a legitimate no-op, and the title match is what covers it.
+ */
+function opSelectPopup(o){
+  var pu = rawResolve(rawOpRef(o)), i, attempt, before, chosen = null;
+  for (attempt=0; attempt<3; attempt++){
+    var menu = rawOpenMenu(pu);
+    if (menu === null){
+      if (attempt < 2) { sleep(200); continue }
+      throw new Error('the pop-up would not open, so none of the candidate menu items could be reached: ' + o.titles.join(', ')) }
+    /* The menu's items are realized by the title search below, so the whole menu
+     * is content-touched however early the match hits (RDLAT2's counting law). */
+    var titles = rawMenuTitles(menu);
+    RAWAX_ELEMS += titles.length;
+    var item = null;
+    for (i=0;i<o.titles.length && item === null;i++){
+      item = rawMenuItem(menu, o.titles[i]);
+      if (item !== null) chosen = o.titles[i] }
+    if (item === null) throw new Error('none of the candidate menu items exist: ' + o.titles.join(', ') + ' — the menu offers: ' + titles.join(', '));
+    before = rawSv(pu, 'AXValue'); RAWAX_ELEMS += 1;
     rawPress(item);
-    return { verdict:'ok' } }
-  throw new Error('none of the candidate menu items exist: ' + o.titles.join(', ')) }
+    /* Poll rather than sleep: the app repaints the pop-up when it takes the
+     * selection, and a read costs ~0.1 ms, so this is free when it works. */
+    for (i=0;i<40;i++){
+      var now = rawSv(pu, 'AXValue');
+      if (now.toLowerCase() === String(chosen).toLowerCase()) return { verdict:'ok' };
+      if (now !== before) return { verdict:'ok', detail:'shows "' + now + '"' };
+      sleep(50) } }
+  throw new Error('the pop-up did not take the selection "' + chosen + '": it still shows "' + rawSv(pu, 'AXValue') + '" after 3 attempt(s), so nothing was entered into the rule') }
 
 /* ensure-checkbox (RRD1): read, press ONLY on a mismatch, re-read to confirm. */
 function opEnsureCheckbox(o){

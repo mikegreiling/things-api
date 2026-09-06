@@ -117,6 +117,13 @@ lab_ssh "$IP" "cd ~/things-lab && $IN_SESSION env THINGS_API_UI_DIRECT=1 THINGS_
 CODE=${PIPESTATUS[0]}
 set -e
 note "cells exit: $CODE"
+# COLLECT WHAT THE CELLS LEFT. The routed orchestrator has always done this and
+# this one never did, so a direct-arm failure could only be read off the
+# transcript — which is how three runs went by without anyone being able to look
+# at the refusing drive's own per-op records.
+sshpass -p "$LAB_SSH_PASS" scp "${LAB_SSH_OPTS[@]}" -O -r "admin@$IP:things-lab/out" "$OUT/out" >/dev/null 2>&1 || true
+note "collected: $(ls "$OUT/out" 2>/dev/null | wc -l | tr -d ' ') artifact(s)"
+
 lab_ssh "$IP" 'ls ~/Library/Logs/DiagnosticReports/Things3*.ips 2>/dev/null | wc -l | tr -d " "' </dev/null | \
   { read -r n; note "Things crash reports: ${n:-0}"; }
 exit "$CODE"

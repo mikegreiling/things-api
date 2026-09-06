@@ -366,6 +366,24 @@ describe("the defects the routed arm caught", () => {
     expect(script).toContain("RAWAX_CONFIRMED[RAWAX_PROGRAM.confirmed[ci]] = true");
   });
 
+  it("reads the pop-up back, because a press is not a selection until the control says so", () => {
+    // The defect that cost three direct-arm runs and two wrong hypotheses:
+    // `select-popup` pressed the menu item and returned ok without ever reading
+    // the control back. In the unrouted arm the press landed nowhere, the op
+    // reported success, and the SHAPE PROBE one op later refused — because the
+    // dialog was still showing its after-completion default, which reads as
+    // "a Things update has redesigned the dialog". A silent no-op announces
+    // itself as damage somewhere downstream, never as itself.
+    const script = renderRawAxScript(everyOpProgram());
+    expect(script).toContain("the pop-up did not take the selection");
+    // Either proof: the title it pressed, or a value that MOVED.
+    expect(script).toContain("now.toLowerCase() === String(chosen).toLowerCase()");
+    expect(script).toContain("if (now !== before) return");
+    // And the shape probe now shows what it saw instead of diagnosing the app.
+    expect(script).toContain("function shapeInventory()");
+    expect(script).toContain("date field(s), labelled: ");
+  });
+
   it("waits for a date area the PREVIOUS op reveals, because the fold took its settle away", () => {
     // Run 5's `endson` cell: `select-popup ends = on date` reported ok and the
     // very next op censused the sheet for the picker that selection mints —
