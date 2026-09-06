@@ -93,9 +93,27 @@ note "Things warm: $(lab_ssh "$IP" 'defaults read /Applications/Things3.app/Cont
 # to have recorded an Automation grant against, so the shipped capability checks
 # refuse every AppleScript-vector leg without these. They are what makes this the
 # DIRECT arm rather than a broken one.
-note "running the cells (DIRECT: no helpers, lab escapes on)"
+# THE DIRECT ARM IS IN-SESSION BY CONSTRUCTION (RAWAX1 §5c.8, ruled 2026-09-06).
+#
+# An `ssh` login is not the console session. That never mattered while every UI
+# read went through System Events — an agent that already lives in the user's
+# Aqua session, which executes the request there however the caller got in — and
+# it matters absolutely for a client that reads the Accessibility tree from its
+# OWN process, because that process is then outside the session and the app's
+# controls are not readable from it.
+#
+# A terminal on the maintainer's Mac IS in the console session, so an ssh-shaped
+# direct arm was measuring a configuration no user is in. `launchctl asuser`
+# moves the whole cell run into the console session's bootstrap namespace, which
+# is what makes this arm represent a terminal on a real host — which is what it
+# is for.
+GUEST_UID=$(lab_ssh "$IP" 'id -u' </dev/null | tr -d '\r\n ')
+IN_SESSION="sudo launchctl asuser $GUEST_UID sudo -u admin"
+note "in-session shim: $IN_SESSION (console uid $GUEST_UID)"
+
+note "running the cells (DIRECT: no helpers, lab escapes on, IN-SESSION)"
 set +e
-lab_ssh "$IP" "cd ~/things-lab && THINGS_API_UI_DIRECT=1 THINGS_API_WRITE_DIRECT=1 bash ~/things-lab/$CELLS_BASE ~/things-lab/bin/node ~/things-lab/things-api" </dev/null 2>&1 | tee "$OUT/cells.log"
+lab_ssh "$IP" "cd ~/things-lab && $IN_SESSION env THINGS_API_UI_DIRECT=1 THINGS_API_WRITE_DIRECT=1 HOME=/Users/admin bash ~/things-lab/$CELLS_BASE ~/things-lab/bin/node ~/things-lab/things-api" </dev/null 2>&1 | tee "$OUT/cells.log"
 CODE=${PIPESTATUS[0]}
 set -e
 note "cells exit: $CODE"

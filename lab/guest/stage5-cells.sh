@@ -218,6 +218,58 @@ else
   fail "make-repeating trace shows no deputy observer"
 fi
 
+# THE WEEKLY SHAPE THE GATE WAS MISSING (RAWAX1 §5c.2, ruled 2026-09-06).
+#
+# `07b` above is `--frequency weekly --interval 1` — the one shape of the weekly
+# family with NO weekday converge, and therefore the one shape that cannot
+# reproduce the defect the gate went eight releases without seeing: a `Next:`
+# pre-fill confirmed by a read taken before the converge, invalidated by it, and
+# then correctly refused by the pre-commit audit. A family is not certified by
+# its degenerate member.
+#
+# The seed is scheduled on a THURSDAY and the request names Monday as well, so
+# the app recomputes the first occurrence away from the seed's own date. That is
+# the whole mechanism, and it is what this cell exists to keep fixed.
+run_cell 0 "07c-seed-weekdays" todo add "$RCTAG-MRW" --when 2026-07-09
+MRW=$(db "SELECT uuid FROM TMTask WHERE title='$RCTAG-MRW' AND trashed=0 LIMIT 1")
+echo "     seed: $MRW (2026-07-09 is a Thursday)"
+clear_banners
+run_cell 0 "07d-make-repeating-weekdays" todo make-repeating "$MRW" \
+  --frequency weekly --interval 1 --weekdays monday,thursday \
+  --dangerously-drive-gui --verify-timeout 90000
+MRWT=$(db "SELECT count(*) FROM TMTask WHERE title='$RCTAG-MRW' AND rt1_recurrenceRule IS NOT NULL")
+[ "$MRWT" -ge 1 ] && pass "the multi-weekday series landed" || fail "no series for $RCTAG-MRW"
+
+# `--ends-after` TWICE IN A ROW — KNOWN RED, and marked so.
+#
+# The FIRST such promote lands and the SECOND refuses: the drive succeeds (exit
+# 0, the pre-commit audit agreeing the dialog holds what was entered) and the
+# post-drive oracle then polls thirty times, reports `mismatch`, and rolls the
+# original back — the caller sees `not-found` naming an internal clone uuid.
+# Reproduced five times, including on origin/main with BOTH arms running the same
+# AppleScript drive, so it is the SEQUENCE and not any transport. Queued in
+# docs/up-next.md; the cell asserts the shape on record so the day it changes —
+# in either direction — the gate says so rather than staying quietly red.
+run_cell 0 "07e-seed-ea1" todo add "$RCTAG-EA1" --when 2026-07-10
+EA1=$(db "SELECT uuid FROM TMTask WHERE title='$RCTAG-EA1' AND trashed=0 LIMIT 1")
+run_cell 0 "07f-seed-ea2" todo add "$RCTAG-EA2" --when 2026-07-10
+EA2=$(db "SELECT uuid FROM TMTask WHERE title='$RCTAG-EA2' AND trashed=0 LIMIT 1")
+clear_banners
+"$NODE" "$APP" todo make-repeating "$EA1" --frequency daily --interval 1 --ends-after 4 \
+  --dangerously-drive-gui --verify-timeout 90000 --json >/dev/null 2>&1
+EA1C=$?
+clear_banners
+"$NODE" "$APP" todo make-repeating "$EA2" --frequency daily --interval 1 --ends-after 4 \
+  --dangerously-drive-gui --verify-timeout 90000 --json >/dev/null 2>&1
+EA2C=$?
+if [ "$EA1C" -eq 0 ] && [ "$EA2C" -ne 0 ]; then
+  pass "KNOWN RED (queued): --ends-after lands first ($EA1C) and refuses second ($EA2C) — unchanged"
+elif [ "$EA1C" -eq 0 ] && [ "$EA2C" -eq 0 ]; then
+  fail "KNOWN RED cell: both --ends-after promotes landed — the queued defect is FIXED, retire this cell"
+else
+  fail "KNOWN RED cell: --ends-after changed shape (first $EA1C / second $EA2C) — re-open the queued item"
+fi
+
 ########################################################################
 echo ""
 echo "===== CELL 8 — area reorder (PTRGD1 pointer guards, ui-drag) ====="
