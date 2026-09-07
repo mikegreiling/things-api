@@ -120,7 +120,7 @@ No crossing, no cohort change, no beep, no `umd`. So **any** chord on a someday-
 * **Cohorts inside This Evening.** Every live evening row in the fixture shared one cohort key, so the section ordered on `todayIndex` alone. Whether two live evening rows can carry different `tiRef` values — and therefore whether the evening column needs the cohort fence at all — is unmeasured. PR 2 fences both columns anyway, which is correct under either answer.
 * **Why a fresh evening row is stamped `tiRef` two days behind the clock** (§1). Reproduced twice; unexplained.
 * **Multi-slot crossings.** Every cell posted exactly one chord. Whether a run of chords across two cohort boundaries re-stamps twice is unmeasured (the fence makes it unreachable through the shipped op).
-* **ORD-19** — whether a chord-set rank on a repeating template's projected row in an Upcoming day-block survives the next occurrence spawn. Still open; it needs a clock roll inside the trial wall, which this driver does not do.
+* **ORD-19 is no longer open** — it was taken here, in §8.
 * **Sync.** Airgapped clone. A `tiRef` re-stamp is an ordinary attribute change and SYNC2's 3-way merge should treat it as one, but nothing here measured it.
 
 ---
@@ -197,3 +197,49 @@ Same shape as CHORD3 §4: the cost is the SELECT WALK, not the chords. The eveni
 * **The undo inverse is scoped to ONE cohort.** `undo` reconstructs a previous order by sorting the captured ranks ascending, and on the day axis the rank is not the displayed order. So the ordering delta captures the movees' own entry-cohort BLOCK — the region where `todayIndex` ascending *is* the displayed order, and which the pre-flight fence guarantees the move never left. That gives the day axis the same single-row-undo fix the `index` columns got in PR 1, over the only region where the inverse is well defined.
 * **`--in today --end` on a multi-cohort list is a refusal, not a bug** (cell 13c). The caller who means it can have it through `--strategy bounce`, which expresses it the only way the app does: by re-dating.
 * **The `today` scope's membership is unchanged.** A deadline-pulled row is a slot the chord counts, never a row it will move; naming one is still refused by `computeReorderPre`.
+
+---
+
+## §8 — ORD-19, answered: a chord-set position on a projected row SURVIVES the spawn
+
+The one cell step 4 was gated on, taken here because the day axis was already rigged. Driver: [`lab/scripts/research-ord19.sh`](../../lab/scripts/research-ord19.sh), one clone of `things-lab-golden-v4`, Things 3.23, clock pinned 2026-07-05 and rolled ONE day to 2026-07-06 (the trial wall is 2026-07-18). Run `gscr-ord19-94319`, **0 alert beeps**.
+
+> **The law.** A repeating template's projected row can be positioned inside its Upcoming day-block by chord, and **the occurrence that materializes there inherits the template's `todayIndex` verbatim** — so it arrives at exactly the slot the projection was put in. Nothing else about the series moves.
+
+### The cell
+
+Seed a 2026-07-06 day-block: three ordinary dated rows plus a DAILY template whose next occurrence lands there. `add-repeating` places a new series at the FRONT of its block, so the chord is ⌘↓ (a ⌘↑ there is declined at the leading edge — measured on the first pass: one beep, zero delta, which proves the edge law and nothing about a rank).
+
+```
+two ⌘↓ on the template's projected row (selected by uuid — it selects back as the TEMPLATE's own)
+  CHANGED J8CM5nHN(O19-R3).todayIndex: -1593 -> -3219
+  CHANGED TLL23iK9(O19-R2).todayIndex: -1107 -> -2951
+  (nothing else changed on any of the 39 untrashed rows)
+block after:  O19-R3 < O19-R2 < O19-TMPL[T] < O19-R1
+```
+
+CHORD2 §2a again, on the day axis: the app satisfied the move by renumbering the two rows the projection passed rather than the projection itself, whose `todayIndex` stayed `-2600`. Then the clock rolls to 2026-07-06 and Things relaunches:
+
+```
+INSERTED row VzXw2A9mHQeAm4pSmfMKxZ
+    title                    = O19-TMPL
+    rt1_repeatingTemplate    = YVN5yeS5…          <- the template
+    startDate                = 132805376(2026-07-06)
+    todayIndexReferenceDate  = 132805376(2026-07-06)
+    todayIndex               = -2600              <- the projection's value, verbatim
+CHANGED …rt1_instanceCreationStartDate: 2026-07-06 -> 2026-07-07   (the cursor advances)
+```
+
+and the Today list reads
+
+```
+O19-R3 (-3219) · O19-R2 (-2951) · O19-TMPL (-2600) · O19-R1 (-494)
+```
+
+— the instance third, exactly where the projection was put.
+
+### What that means for step 4
+
+Both halves of the day-group ordering op are now measured: CHORD2 §5d proved a chord can SET the projection's position, and this proves the position is what the person gets tomorrow. The op is worth building.
+
+Two things it does not settle: the cell used a DAILY template (one spawn, one day of drift — a weekly or monthly series' projection sits further out and nothing here says the value survives a longer wait or an intervening edit), and it moved the projection by renumbering its neighbours, so a run where the app writes the MOVER's own rank is untested against a spawn. Neither is a reason to wait; both are cells the op's own certification arm should carry.
