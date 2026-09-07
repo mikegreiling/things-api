@@ -425,8 +425,11 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
     expect(inv.kind).toBe("ui-drive");
     const steps = inv.recipe?.steps ?? [];
     expect(steps.map((s) => s.primitive)).toEqual(["reveal", "resolve", "chord-reorder"]);
-    // NO `activate` step: the whole gesture is background-capable (CHORDMH1 §1).
+    // NO `activate` step: the whole gesture is background-capable (CHORDMH1 §1)
+    // — and the reveal that opens the project must be BACKGROUNDED too, or the
+    // handler app comes forward and the certified shape is gone (2026-09-07).
     expect(steps.some((s) => s.primitive === "activate")).toBe(false);
+    expect(steps.find((s) => s.primitive === "reveal")?.backgroundReveal).toBe(true);
     expect(inv.recipe?.needsWindowReachability).toBe(true);
     const chord = steps.find((s) => s.primitive === "chord-reorder")?.chord;
     expect(chord?.projectUuid).toBe("PROJ-9");
