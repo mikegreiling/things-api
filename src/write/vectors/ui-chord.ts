@@ -357,22 +357,39 @@ export function planChordStep(
   order: readonly string[],
   target: readonly string[],
   movees: ReadonlySet<string>,
+  opts: {
+    /**
+     * Take the one-dispatch ⌘⌥ endpoint chords when a movee's target is the very
+     * top or bottom. TRUE for HEADINGS, whose bucket is the project's heading
+     * list and nothing else (HEADORD1 1i3). FALSE for the to-do columns, where
+     * ⌘⌥ is BUCKET-scoped and the bucket is the app's, not ours (CHORD2 §3d):
+     * a column that is a SUBSET of its view's rows would be carried past its own
+     * first/last member in one dispatch, which is the crossing the fences exist
+     * to prevent. The to-do driver walks ±1 instead and pays N dispatches.
+     */
+    endpointShortcuts?: boolean;
+    /** What the rows are called in a refusal ("heading" / "to-do"). */
+    noun?: string;
+  } = {},
 ): ChordStep | { error: string } | null {
+  const noun = opts.noun ?? "heading";
   const last = target.length - 1;
-  // Endpoint shortcuts, taken before the walk.
-  const top = target[0];
-  if (top !== undefined && movees.has(top) && order[0] !== top) {
-    return { uuid: top, chord: "to-top", landsAt: 0 };
-  }
-  const bottom = target[last];
-  if (bottom !== undefined && movees.has(bottom) && order[last] !== bottom) {
-    return { uuid: bottom, chord: "to-bottom", landsAt: last };
+  if (opts.endpointShortcuts !== false) {
+    // Endpoint shortcuts, taken before the walk.
+    const top = target[0];
+    if (top !== undefined && movees.has(top) && order[0] !== top) {
+      return { uuid: top, chord: "to-top", landsAt: 0 };
+    }
+    const bottom = target[last];
+    if (bottom !== undefined && movees.has(bottom) && order[last] !== bottom) {
+      return { uuid: bottom, chord: "to-bottom", landsAt: last };
+    }
   }
   for (let i = 0; i <= last; i++) {
     const want = target[i] as string;
     if (order[i] === want) continue;
     const at = order.indexOf(want);
-    if (at < 0) return { error: `heading ${want} is no longer in the project` };
+    if (at < 0) return { error: `${noun} ${want} is no longer in the list` };
     if (movees.has(want)) {
       // Below slot i by construction — step it up one.
       return { uuid: want, chord: "up-one", landsAt: at - 1 };
@@ -382,8 +399,8 @@ export function planChordStep(
     if (pusher === undefined || !movees.has(pusher)) {
       return {
         error:
-          `reaching the requested order would mean moving heading ${pusher ?? want}, which was ` +
-          "not one of the headings named in the move",
+          `reaching the requested order would mean moving ${noun} ${pusher ?? want}, which was ` +
+          `not one of the ${noun}s named in the move`,
       };
     }
     return { uuid: pusher, chord: "down-one", landsAt: at };

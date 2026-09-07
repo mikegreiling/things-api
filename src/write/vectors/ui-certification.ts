@@ -156,6 +156,21 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     status: "lab-certified",
     evidence: ["HEADORD1", "CHORDMH1", "CHORDMH2"],
   },
+  reorder: {
+    // CHORD2 (2026-08-25, chord2-lab, Things 3.23 / golden-v4) measured the full
+    // law matrix the to-do chord rides: the gesture lands with Things
+    // BACKGROUNDED at tier 0 (cells 1B/1C), a plain ±1 rewrites exactly one row
+    // and stamps no `userModificationDate` (§2a, §6a), the rank column is `index`
+    // for Someday and Anytime (§4), a chord at a bucket edge REPARENTS silently
+    // instead of declining (§3a/§3f/§4be2), a non-contiguous multi-selection
+    // COALESCES (§2b), and the whole gesture is VIEW-relative (§4bf).
+    //
+    // CHORD3 (docs/lab/chord3-todo-chord-op.md) certifies the SHIPPED op — the
+    // ui-vector implementation of `reorder` for the `area-someday` and `anytime`
+    // columns, with the bounce kept as the vector the pipeline falls back to.
+    status: "uncertified",
+    evidence: ["CHORD2"],
+  },
   "project.dissolve-heading": {
     // DISS1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Delete recipe ran
     // end-to-end in the clone — HID-click the "More. <title>" button → Delete — and
@@ -182,7 +197,15 @@ export function certificationOf(op: OperationKind): CertificationEntry | undefin
 
 /** Every ui-vector op's certification, for the doctor section + capabilities. */
 export function allCertifications(): { op: OperationKind; entry: CertificationEntry }[] {
-  return UI_DRIVE_OPS.map((op) => ({
+  // UI_DRIVE_OPS are the GUI-ONLY verbs; an op that merely has a ui-vector
+  // IMPLEMENTATION alongside a headless one (`reorder`, whose chord vector the
+  // pipeline picks over the bounce when Accessibility is there) is not in that
+  // list but still owes the reader a certification line.
+  const ops = [
+    ...UI_DRIVE_OPS,
+    ...Object.keys(CERTIFICATION).filter((op) => !UI_DRIVE_OPS.includes(op as OperationKind)),
+  ] as OperationKind[];
+  return ops.map((op) => ({
     op,
     entry: CERTIFICATION[op] ?? { status: "uncertified", evidence: [] },
   }));

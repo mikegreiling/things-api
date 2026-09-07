@@ -72,6 +72,7 @@ import {
   dissolveHeadingRecipe,
   headingConvertToProjectRecipe,
   moveHeadingChordRecipe,
+  todoChordReorderRecipe,
   moveHeadingToProjectRecipe,
   makeRepeatingRecipe,
   createNextCopyRecipe,
@@ -84,6 +85,7 @@ import {
   resumeRepeatRecipe,
   type RepeatRuleExtras,
 } from "./vectors/ui-recipes.ts";
+import { todoChordColumnOf } from "./vectors/ui-chord-todo.ts";
 import type { SeedRowFacts } from "./vectors/ui-prefill.ts";
 import type { SidebarPlacement } from "./vectors/ui-drag.ts";
 import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
@@ -1524,7 +1526,10 @@ const reorder: CommandSpec<"reorder"> = {
       pre.destProject = resolveProject(db, params.container ?? {});
       containerUuid = pre.destProject.resolved?.uuid ?? null;
     }
-    if (params.scope === "area") {
+    if (params.scope === "area" || params.scope === "area-someday") {
+      // `area-someday` resolves its area here too: the CHORD vector reaches this
+      // preRead (the bounce orchestrator resolves its own container), and the
+      // chord spec needs the area uuid to read the column back.
       pre.destArea = resolveArea(db, params.container ?? {});
       containerUuid = pre.destArea.resolved?.uuid ?? null;
     }
@@ -1586,6 +1591,29 @@ const reorder: CommandSpec<"reorder"> = {
     };
   },
   compile(params, vector, pre) {
+    if (vector === "ui") {
+      // THE CHORD VECTOR (CHORD3, on the CHORD2 law matrix) — the same operation
+      // reached by the app's own arrow-key shortcuts instead of by a `when=`
+      // round-trip. It is chosen by resolveStrategy, which only offers it for the
+      // columns whose chord behaviour is measured, so an unmapped scope here is a
+      // routing bug rather than a caller error.
+      const column = todoChordColumnOf(params.scope);
+      if (column === null) {
+        throw new Error(`reorder: the ${params.scope} scope has no chord column (routing bug?)`);
+      }
+      return uiDrive(
+        todoChordReorderRecipe({
+          column,
+          containerUuid: pre.destArea?.resolved?.uuid ?? null,
+          // The full end state of the column: the named rows in the requested
+          // order, then every member the caller did not name, in the order they
+          // already had (`wireList`). Same end state the bounce lands — the chord
+          // just reaches it without taking the rows out of the container.
+          targetOrder: [...(pre.reorder?.wireList ?? params.uuids)],
+          movees: [...params.uuids],
+        }),
+      );
+    }
     if (vector !== "applescript") unsupportedVector(this.op, vector);
     const containerDaySpecifier =
       pre.destProject?.resolved != null

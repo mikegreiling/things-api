@@ -12,6 +12,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
+import type { UiCapability } from "../../src/capability.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate } from "../../src/model/dates.ts";
@@ -1455,6 +1456,209 @@ describe("area-someday scope (SOMEBNC-area reverse-order front-insert)", () => {
       expect(row.start).toBe(2);
       expect(row.area).toBe(area);
     }
+  });
+});
+
+/**
+ * A ui vector standing in for the CHORD drive: it reads the compiled recipe's
+ * chord spec and applies the target order the way the app's arrow chords do —
+ * rank rewrites only, no `userModificationDate` bump, no containment change
+ * (CHORD2 §6a). `blocked` simulates the ui vector's own session gate refusing
+ * before it touched anything (a locked screen), which is the condition the
+ * pipeline is allowed to fall back to the bounce from.
+ */
+function chordVector(opts: { blocked?: boolean } = {}) {
+  const specs: {
+    column: string;
+    containerUuid: string | null;
+    targetOrder: string[];
+    movees: string[];
+  }[] = [];
+  const vector: WriteVector = {
+    id: "ui",
+    drivesGui: true,
+    matrix: { reorder: { support: "yes", disruption: 0, validation: "validated" } },
+    async execute(invocation) {
+      const step = invocation.recipe?.steps.find((x) => x.primitive === "chord-reorder-todo");
+      const spec = step?.todoChord;
+      if (spec !== undefined) {
+        specs.push({
+          column: spec.column,
+          containerUuid: spec.containerUuid,
+          targetOrder: [...spec.targetOrder],
+          movees: [...spec.movees],
+        });
+      }
+      if (opts.blocked === true) {
+        return {
+          exitCode: 4,
+          stdout: "",
+          stderr: "",
+          blocked: {
+            hazard: "H-UI-SESSION-UNREACHABLE",
+            detail: "the screen is locked",
+            remediation: "unlock the Mac",
+          },
+        };
+      }
+      let rank = 1;
+      for (const uuid of spec?.targetOrder ?? []) {
+        fixture.db.prepare('UPDATE TMTask SET "index" = ? WHERE uuid = ?').run(rank++, uuid);
+      }
+      return { exitCode: 0, stdout: "drove 3 step(s)", stderr: "" };
+    },
+  };
+  return { vector, specs };
+}
+
+function uiConfig(): ThingsApiConfig {
+  return { ...config(true), ui: { enabled: true } };
+}
+
+/**
+ * The Accessibility standing the pipeline's GUI gate reads. `helpers` is the
+ * granted case; without it the gate refuses BEFORE dispatch — which is exactly
+ * the fallback condition the chord vector relies on, and one of the cases below
+ * asserts it.
+ */
+function uiGranted(): () => UiCapability {
+  return () => ({
+    mode: "helpers",
+    detail: "the helpers hold Accessibility and app control for System Events",
+    remediation: [],
+    host: { bundleId: "com.example.test", name: "TestHost" },
+  });
+}
+
+describe("the chord vector (CHORD3 — reorder on the arrow chords)", () => {
+  it("area-someday rides the chord when the ui vector is available, not the bounce", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedTodo(fixture.db, { title: "a", area, start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", area, start: "someday", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", area, start: "someday", index: 30 });
+    const chord = chordVector();
+    const bounce = indexBounceVector();
+    const result = await runReorder(
+      deps([chord.vector, bounce.vector], { config: uiConfig(), uiCapability: uiGranted() }),
+      {
+        scope: "area-someday",
+        container: { uuid: area },
+        uuids: [c, a],
+      },
+    );
+    expect(result.kind).toBe("ok");
+    // The bounce never ran: no item was rescheduled away and back.
+    expect(bounce.calls).toHaveLength(0);
+    expect(chord.specs).toHaveLength(1);
+    expect(chord.specs[0]).toMatchObject({
+      column: "area-someday",
+      containerUuid: area,
+      movees: [c, a],
+      // The full end state: the named rows first, then the member nobody named.
+      targetOrder: [c, a, b],
+    });
+    expect(ascending(ranks([c, a, b], `"index"`))).toBe(true);
+  });
+
+  it("anytime rides the chord, with the area-less loose column as its target", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
+    const chord = chordVector();
+    const bounce = indexBounceVector();
+    const result = await runReorder(
+      deps([chord.vector, bounce.vector], { config: uiConfig(), uiCapability: uiGranted() }),
+      {
+        scope: "anytime",
+        uuids: [c, a],
+      },
+    );
+    expect(result.kind).toBe("ok");
+    expect(bounce.calls).toHaveLength(0);
+    expect(chord.specs[0]).toMatchObject({
+      column: "anytime",
+      containerUuid: null,
+      targetOrder: [c, a, b],
+    });
+    expect(ascending(ranks([c, a, b], `"index"`))).toBe(true);
+  });
+
+  it("falls back to the bounce when the chord drive refuses before touching anything", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
+    const chord = chordVector({ blocked: true });
+    const bounce = indexBounceVector();
+    const result = await runReorder(
+      deps([chord.vector, bounce.vector], { config: uiConfig(), uiCapability: uiGranted() }),
+      {
+        scope: "anytime",
+        uuids: [c, a],
+      },
+    );
+    expect(result.kind).toBe("ok");
+    // The chord was attempted, refused with zero mutation, and the bounce landed it.
+    expect(chord.specs).toHaveLength(1);
+    expect(bounce.calls.length).toBeGreaterThan(0);
+    expect(ascending(ranks([c, a], `"index"`))).toBe(true);
+    const notes = (result as { notes?: string[] }).notes ?? [];
+    expect(notes.join(" ")).toContain("keyboard-shortcut reorder could not run here");
+  });
+
+  it("falls back to the bounce when Accessibility is not granted on this machine", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
+    const chord = chordVector();
+    const bounce = indexBounceVector();
+    // ui.enabled is on, but the GUI gate finds no standing — it refuses before
+    // the tree is touched, so nothing was mutated and the bounce may still run.
+    const result = await runReorder(deps([chord.vector, bounce.vector], { config: uiConfig() }), {
+      scope: "anytime",
+      uuids: [c, a],
+    });
+    expect(result.kind).toBe("ok");
+    expect(chord.specs).toHaveLength(0);
+    expect(bounce.calls.length).toBeGreaterThan(0);
+    const notes = (result as { notes?: string[] }).notes ?? [];
+    expect(notes.join(" ")).toContain("keyboard-shortcut reorder could not run here");
+  });
+
+  it("stays on the bounce when the ui vector is switched off", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
+    const chord = chordVector();
+    const bounce = indexBounceVector();
+    // `config(true)` leaves ui.enabled false — the machine-level opt-in is the
+    // one key the chord vector needs, and it is off by default.
+    const result = await runReorder(deps([chord.vector, bounce.vector]), {
+      scope: "anytime",
+      uuids: [c, a],
+    });
+    expect(result.kind).toBe("ok");
+    expect(chord.specs).toHaveLength(0);
+    expect(bounce.calls.length).toBeGreaterThan(0);
+  });
+
+  it("records pre-ranks, so `undo` reverses a chord reorder like any other", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
+    const chord = chordVector();
+    const result = await runReorder(
+      deps([chord.vector], { config: uiConfig(), uiCapability: uiGranted() }),
+      {
+        scope: "anytime",
+        uuids: [c, a],
+      },
+    );
+    expect(result.kind).toBe("ok");
+    const record = auditRecords.findLast((r) => r.op === "reorder" && r.result === "ok");
+    expect(record).toBeDefined();
+    expect(record?.vector).toBe("ui");
+    const plan = planUndo(record as AuditRecord, NOW);
+    expect(plan.kind).toBe("invertible");
+    // The inverse is the same verb with the previous order.
+    const step = plan.kind === "invertible" ? plan.steps[0] : undefined;
+    expect(step?.op).toBe("reorder");
+    expect((step?.params as { uuids: string[] } | undefined)?.uuids).toEqual([a, c]);
   });
 });
 

@@ -77,6 +77,7 @@ import {
   type WriteOptions,
 } from "./pipeline.ts";
 import type { WriteVector } from "./vectors/types.ts";
+import { todoChordColumnOf, type TodoChordColumn } from "./vectors/ui-chord-todo.ts";
 import { simFenceActive } from "./vectors/simulator.ts";
 import { createDbReader, evaluateDelta } from "./verify/delta.ts";
 import { pollUntilVerified } from "./verify/poller.ts";
@@ -409,6 +410,7 @@ async function runReorderUnlocked(
     const res = await runMutation(deps, "reorder", params, { ...options, vector: "applescript" });
     return discloseTodayCohortRestamp(res, restampCount);
   }
+  if (strategy.strategy === "chord") return runChord(deps, params, strategy, options);
   const result =
     strategy.strategy === "bounce"
       ? await runBounce(deps, params, strategy.bounceKind, options)
@@ -422,6 +424,47 @@ async function runReorderUnlocked(
     return attach(result, bag);
   }
   return result;
+}
+
+/**
+ * THE CHORD VECTOR, with the bounce underneath it (CHORD3).
+ *
+ * One dispatch through the ordinary pipeline on the `ui` vector — so the chord
+ * drive gets the same pre-capture, verify, audit record and undo token every
+ * other reorder gets, and `things undo` reverses it exactly as it reverses a
+ * native re-rank (the inverse is the same op with the pre-ranks the record
+ * carries).
+ *
+ * WHEN IT REFUSES BEFORE TOUCHING ANYTHING, THE BOUNCE RUNS. The ui vector's own
+ * gates — a locked screen or a full-screen Space (H-UI-SESSION-UNREACHABLE), no
+ * Accessibility grant, the vector switched off — all refuse with the guarantee
+ * that ZERO mutation happened, which is exactly the condition under which
+ * another vector may be tried. A drive that got as far as posting a chord never
+ * falls back: its result stands, whatever it says. A locked-screen reorder is
+ * therefore served by the bounce rather than refused outright, and the caller is
+ * told which transport ran.
+ */
+async function runChord(
+  deps: WriteDeps,
+  params: ReorderParams,
+  strategy: { column: TodoChordColumn; bounceKind: BounceKind | null },
+  options: WriteOptions,
+): Promise<ReorderResult> {
+  const result = await runMutation(deps, "reorder", params, { ...options, vector: "ui" });
+  if (result.kind !== "blocked" || strategy.bounceKind === null) return result;
+  // `blocked` is the pipeline's zero-mutation class (a hazard refusal or a
+  // vector that refused before it touched the app), so the bounce can still run.
+  const viaBounce = await runBounce(deps, params, strategy.bounceKind, options);
+  if (viaBounce.kind !== "ok") return viaBounce;
+  const bag = disclosuresOf(viaBounce);
+  disclose(
+    bag,
+    "reorder-chord-unavailable",
+    `the keyboard-shortcut reorder could not run here (${result.detail}), so the order was ` +
+      "set with the schedule round-trip instead — the same result, but each item was " +
+      "rescheduled away and back to land it",
+  );
+  return attach(viaBounce, bag);
 }
 
 /**
@@ -456,6 +499,13 @@ type FallbackKind = "inbox-park" | "proj-root" | "area-back";
 
 type StrategyDecision =
   | { kind: "ok"; strategy: "native" }
+  | {
+      kind: "ok";
+      strategy: "chord";
+      column: TodoChordColumn;
+      /** The bounce to fall back to when the chord cannot run here (or null: none wired). */
+      bounceKind: BounceKind | null;
+    }
   | { kind: "ok"; strategy: "bounce"; bounceKind: BounceKind; fallbackNote?: string }
   | { kind: "ok"; strategy: "fallback"; fallback: FallbackKind; fallbackNote: string }
   | { kind: "blocked"; result: MutationResult };
@@ -613,6 +663,48 @@ function nativeReorderAvailable(deps: WriteDeps): boolean {
   return (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
 }
 
+/**
+ * Is the CHORD vector available for this call?
+ *
+ * ONE key, not two. `ui.enabled` is the machine-level opt-in to the
+ * Accessibility transport, and that is the whole gate here: unlike the GUI-only
+ * verbs it does not also take a per-call `--dangerously-drive-gui`
+ * acknowledgement, because that acknowledgement fences a drive that foregrounds
+ * Things and moves the pointer, and the chord does neither (CHORD2 §1: Finder
+ * frontmost throughout, zero disruption-monitor events, tier 0). What CANNOT be
+ * answered cheaply here is whether the Accessibility grant is actually in place
+ * and whether the session is unlocked — the drive's own gates answer both, and
+ * a refusal from either falls back to the bounce with nothing mutated.
+ *
+ * The bench simulator fence keeps the bounce: under it every vector is applied
+ * as SQL by the simulator, so choosing the chord would change which protocol the
+ * bench arms exercise without exercising any more of the app.
+ */
+function chordAvailable(deps: WriteDeps): boolean {
+  return deps.config.ui.enabled && !simFenceActive();
+}
+
+/**
+ * The chord for a column the evidence covers, with the bounce named as the
+ * fallback the pipeline drops to when the drive refuses (a locked screen, a
+ * missing Accessibility grant, a full-screen Space). When the chord is not
+ * available at all this is just the bounce, unchanged.
+ */
+function chordOrBounce(
+  deps: WriteDeps,
+  what: string,
+  column: TodoChordColumn,
+  kind: BounceKind,
+): StrategyDecision {
+  if (!chordAvailable(deps)) return bounceOk(deps, what, kind);
+  return {
+    kind: "ok",
+    strategy: "chord",
+    column,
+    bounceKind: deps.config.bounceEnabled ? kind : null,
+  };
+}
+
 function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecision {
   const nativeAvailable = nativeReorderAvailable(deps);
 
@@ -626,6 +718,11 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
     anytime: { kind: "anytime", what: "area-less loose anytime order" },
   };
   const bounceEntry = bounceOnly[params.scope];
+  // THE MIGRATED CLASSES (CHORD3). `area-someday` and `anytime` are `index`-axis
+  // container orders whose chord behaviour is measured end to end, so the chord
+  // is the primary vector for them and the bounce is what the pipeline falls
+  // back to. Every other class still routes exactly as it did.
+  const chordColumn = todoChordColumnOf(params.scope);
 
   if (params.strategy === "native") {
     if (bounceEntry !== undefined) {
@@ -664,7 +761,11 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
   }
 
   // Default per scope.
-  if (bounceEntry !== undefined) return bounceOk(deps, bounceEntry.what, bounceEntry.kind);
+  if (bounceEntry !== undefined) {
+    return chordColumn !== null
+      ? chordOrBounce(deps, bounceEntry.what, chordColumn, bounceEntry.kind)
+      : bounceOk(deps, bounceEntry.what, bounceEntry.kind);
+  }
   switch (params.scope) {
     case "today":
       return nativeAvailable

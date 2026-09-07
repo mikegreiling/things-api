@@ -128,6 +128,10 @@ export const DISCLOSURES = {
     tier: "note",
     why: "mechanism disclosure: the placement was realized a different way, and it did land as asked",
   },
+  "reorder-chord-unavailable": {
+    tier: "note",
+    why: "mechanism disclosure: the keyboard-shortcut reorder was unavailable on this machine, so the order was set by rescheduling each item away and back — it landed as asked, by a route with more side effects",
+  },
   "reorder-today-cohort-restamp": {
     tier: "warning",
     why: "rows the caller never named had their Today grouping changed — collateral they may need to inspect",
