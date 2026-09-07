@@ -583,6 +583,12 @@ export function jxaSidebarLiveDragScript(
   /** The static estimate the pointer travels to before the loop takes over. */
   staticY: number,
   source: SidebarRect,
+  /**
+   * The source row's TITLE — the pointer guard's text leg (PTRGD1). The frame
+   * alone cannot identify a row on the sidebar's uniform 40 pt grid, so the row
+   * under the grab point must still READ as this area.
+   */
+  sourceTitle: string,
   areaTitles: readonly string[],
   /** The row to insert above, or null for "below the last table row". */
   anchor: LiveDropAnchor | null,
@@ -603,6 +609,7 @@ var A_TITLE = ${JSON.stringify(anchor === null ? null : anchor.title)};
 var A_ORD = ${anchor === null ? -1 : Math.trunc(anchor.ordinal)};
 var A_UNIQUE = ${anchor === null ? "false" : anchor.unique ? "true" : "false"};
 var SRC = ${JSON.stringify({ x: source.x, y: source.y, w: source.w, h: source.h })};
+var SRC_TITLE = ${JSON.stringify(sourceTitle)};
 var SPAN = ${Math.max(0, Math.round(span))};
 var DEPTH = ${ROW_TEXT_DEPTH_FAST}, MAX_ITER = ${LIVE_AIM_MAX_ITER};
 var T0 = Date.now(), ANCHOR_EL = null, ITERS = [];
@@ -823,7 +830,7 @@ var G0 = Date.now();
 var refusal = ptrGuard('drag the area row', [{x:sx,y:sy},{x:sx,y:STATIC_Y}], { identity: function(chain){
   if (chain.length === 0) return 'the grab point resolves to no element inside Things, so the row frame this drag was planned against is stale';
   if (!ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)) return 'the sidebar row under the grab point is not the row this drag was planned against (the point sits in ' + ptrChainRoles(chain) + '), so the frames are stale';
-  return null } });
+  return ptrTitleMismatch(chain, ['AXRow','AXTableRow'], SRC_TITLE) } });
 var G1 = Date.now() - G0;
 if (refusal !== null) { out({refused:true, stop:'ptrgd1-refused', why:refusal,
   ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
@@ -1159,7 +1166,7 @@ if (el === undefined) {
         var refusal = ptrGuard('click the disclosure arrow', [{x:cx,y:cy}], { identity: function(chain){
           if (chain.length === 0) return 'the arrow\\'s position resolves to no element inside Things, so its frame is stale';
           if (!ptrChainHasFrame(chain, null, cf) && !ptrChainHasFrame(chain, ['AXRow','AXTableRow'], ROWF)) return 'the element at the arrow\\'s position is not the arrow (the point sits in ' + ptrChainRoles(chain) + '), so its frame is stale';
-          return null } });
+          return ptrTitleMismatch(chain, ['AXRow','AXTableRow'], VTITLE) } });
         var G1 = Date.now() - G0;
         MS.guard = G1; MS.guardOps = PTR_OPS;
         if (refusal !== null) { out({clicked:false, reason:'ptrgd1-refused', why:refusal, x:cx, y:cy}) } else {
@@ -1276,6 +1283,7 @@ function dragCommand(
   sy: number,
   staticY: number,
   source: SidebarRect,
+  sourceTitle: string,
   areaTitles: readonly string[],
   anchor: LiveDropAnchor | null,
   paneIndex: number | null,
@@ -1285,7 +1293,17 @@ function dragCommand(
     primitive: "sidebar-drag",
     label: "drag the area row to the live slot boundary",
     lang: "javascript",
-    script: jxaSidebarLiveDragScript(sx, sy, staticY, source, areaTitles, anchor, paneIndex, span),
+    script: jxaSidebarLiveDragScript(
+      sx,
+      sy,
+      staticY,
+      source,
+      sourceTitle,
+      areaTitles,
+      anchor,
+      paneIndex,
+      span,
+    ),
     meta: {
       staticY,
       span,
@@ -1313,6 +1331,8 @@ export function jxaSidebarHeldScrollDragScript(
   maxTicks: number,
   areaTitles: readonly string[],
   source: SidebarRect,
+  /** The source row's TITLE — the pointer guard's text leg (PTRGD1). */
+  sourceTitle: string,
 ): string {
   const [a, b] = [sx, sy].map(Math.round) as [number, number];
   const anchor = JSON.stringify(anchorTitle);
@@ -1329,6 +1349,7 @@ function matches(text, title){ var segs=text.split('|');
 function viewportRect(){ var r=resolveSidebar(TITLES, ${ROW_TEXT_DEPTH_FAST}); return r.ok===true? r.viewport : null }
 var sx=${a}, sy=${b}, anchorTitle=${anchor}, maxTicks=${Math.trunc(maxTicks)};
 var SRC = ${src};
+var SRC_TITLE = ${JSON.stringify(sourceTitle)};
 var vp = viewportRect();
 if (vp === null) { JSON.stringify({aborted:true, why:'no sidebar viewport'}) } else {
 var bandTop = vp.y + 6, bandBot = vp.y + vp.h - 6;
@@ -1343,7 +1364,7 @@ var G0 = Date.now();
 var refusal = ptrGuard('drag the area row', [{x:sx,y:sy}], { identity: function(chain){
   if (chain.length === 0) return 'the grab point resolves to no element inside Things, so the row frame this drag was planned against is stale';
   if (!ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)) return 'the sidebar row under the grab point is not the row this drag was planned against (the point sits in ' + ptrChainRoles(chain) + '), so the frames are stale';
-  return null } });
+  return ptrTitleMismatch(chain, ['AXRow','AXTableRow'], SRC_TITLE) } });
 var G1 = Date.now() - G0;
 if (refusal !== null) { JSON.stringify({refused:true, why:refusal, ptrgd1:{ops:PTR_OPS, ms:G1}}) } else {
 postHID(mev(MOVED, sx, sy, 0)); sleep(30);
@@ -1531,7 +1552,7 @@ if (pick === null) {
         var refusal = ptrGuard('click the disclosure arrow', [{x:cx,y:cy}], { identity: function(chain){
           if (chain.length === 0) return 'the arrow\\'s position resolves to no element inside Things, so its frame is stale';
           if (!ptrChainHasFrame(chain, null, cf) && !ptrChainHasFrame(chain, ['AXRow','AXTableRow'], pick.f)) return 'the element at the arrow\\'s position is not the arrow (the point sits in ' + ptrChainRoles(chain) + '), so its frame is stale';
-          return null } });
+          return ptrTitleMismatch(chain, ['AXRow','AXTableRow'], want) } });
         var G1 = Date.now() - G0;
         MS.guard = G1; MS.guardOps = PTR_OPS;
         if (refusal !== null) { out({clicked:false, reason:'ptrgd1-refused', why:refusal, x:cx, y:cy}) } else {
@@ -1585,12 +1606,21 @@ function heldScrollDragCommand(
   maxTicks: number,
   areaTitles: readonly string[],
   source: SidebarRect,
+  sourceTitle: string,
 ): UiCommand {
   return {
     primitive: "sidebar-held-drag",
     label: "held-scroll drag toward the destination",
     lang: "javascript",
-    script: jxaSidebarHeldScrollDragScript(sx, sy, anchorTitle, maxTicks, areaTitles, source),
+    script: jxaSidebarHeldScrollDragScript(
+      sx,
+      sy,
+      anchorTitle,
+      maxTicks,
+      areaTitles,
+      source,
+      sourceTitle,
+    ),
     meta: { sx, sy, anchorTitle, maxTicks },
   };
 }
@@ -3483,6 +3513,8 @@ export interface LiveDropAnchor {
 
 interface PlannedDrop {
   source: SidebarRowInfo;
+  /** The source row's title, for the pointer guard's text leg (PTRGD1). */
+  sourceTitle: string;
   /**
    * The static ESTIMATE — the pre-drag boundary corrected by the old collapse
    * model. DRPLC1 measured that model wrong on 3.23/3.23.3 (a ~48 pt landing
@@ -3614,6 +3646,7 @@ function planDrop(
   const sourceCenter = source.y + source.h / 2;
   return {
     source,
+    sourceTitle: spec.targetTitle,
     dropY: correctedDropY(boundary.y, sourceCenter, span),
     staticY: boundary.y,
     live,
@@ -3674,6 +3707,7 @@ async function performDrag(
       grab.y,
       drop.dropY,
       drop.source,
+      drop.sourceTitle,
       ctx.areaTitles,
       drop.live,
       ctx.map?.paneIndex ?? null,
@@ -4403,7 +4437,15 @@ async function runDragLadder(
           // the held gesture must complete before its DB assert
           const res = await runCmd(
             ctx,
-            heldScrollDragCommand(g.x, g.y, anchor, maxTicks, ctx.areaTitles, src),
+            heldScrollDragCommand(
+              g.x,
+              g.y,
+              anchor,
+              maxTicks,
+              ctx.areaTitles,
+              src,
+              spec.targetTitle,
+            ),
           );
           const parsed = parseHeldDragResult(res);
           if (parsed.guardRefusal !== undefined) {
@@ -4585,6 +4627,7 @@ async function runDragLadder(
     // the hop gesture must land before its DB assert
     const landed = await performDrag(ctx, {
       source: source.row,
+      sourceTitle: source.title,
       dropY: hopAnchor.dropY,
       staticY: hopAnchor.staticY,
       live: hopAnchor.live,

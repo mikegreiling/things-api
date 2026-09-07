@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Improved — when a sidebar move refuses because the list shifted underneath it, the refusal now names the area it found there.** Reordering an area drives the app's own sidebar: the command reads where a row is, then aims the pointer at it. If the list scrolls in between, it checks that the row under the pointer is still the one it planned for and refuses rather than dragging the wrong area. That check only compared the row's POSITION — and every sidebar row is the same size on the same grid, so a row that had scrolled into the planned one's place could satisfy it. It now also reads the name of the row it is about to grab: *"refused to drag the area row: expected area “Errands” under the pointer, found “Reading”, so the frames are stale — nothing was posted"*. The disclosure arrows the same command clicks are checked the same way. Nothing is posted on a refusal, as before. Refs #676.
+
 - **Added — `npm run worktree:gc`, maintainer tooling: it removes the agent worktrees under `.claude/worktrees/` whose work has landed.** A dry run by default (path, branch, age, verdict, reason per worktree); `--apply` removes the eligible ones. A worktree is eligible only when its tree is clean, its HEAD is either an ancestor of `origin/main` or the exact merged tip of a squash-merged PR, and nothing has touched it for 24 hours. Branches are never deleted — they are this repo's audit trail.
 
 ## 0.20.12 — 2026-09-06

@@ -344,3 +344,66 @@ The refusal copy family, the other three legs, the drop-time re-check, and cell 
 ### Second finding from the same gate — an OPEN cell
 
 A **fired 12:00 reminder banner** made the Repeat-dialog shape probe fail once with `-1700`. That is the DEFAULTS3 failure shape, and it is **unmeasured**: whether a banner can break a dialog-shape read (as opposed to a pointer gesture, which this guard now refuses cleanly) is not established, nor is how often. It needs its own cell — seed a reminder, let it fire, and drive the Repeat dialog across the banner's lifetime. Filed in [up-next.md](../up-next.md).
+
+---
+
+## 9. The identity leg's TEXT compare — closing §7's first open item (2026-09-07)
+
+**Probed under:** `things-lab-golden-v4h` (ROUTED arm — helpers 1.4.0 installed, granted and `helpers-enabled true` in the guest) · Things **3.23** (build 32300036) · macOS **15.7.7** · DB **v27** · package built from the branch (`0.20.12` + this change) and shipped into the guest · clock pinned 2026-07-05 (trial wall 2026-07-18, never approached) · airgapped clone `gscr-ptrgd-…`, destroyed at teardown · fixture 100 % synthetic (12 areas `PTX-AREA-01…12`, 18 projects under three of them, **61 sidebar rows / 27 visible**, so every drive had to scroll).
+
+Driver: [`lab/scripts/stage5-rc-run.sh`](../../lab/scripts/stage5-rc-run.sh) with [`lab/guest/stage5-ptrgd1-text.sh`](../../lab/guest/stage5-ptrgd1-text.sh) as the cell script. Every landing cell is the NORMAL CLI syntax (`things area reorder … --dangerously-drive-gui`) through the deputy; the negative cell's probe is generated from the RC's own `dist` (`POINTER_GUARD_STANDALONE`), so it interrogates the same guard the gestures carry.
+
+### What changed
+
+§7's first open item — "the identity leg compares GEOMETRY on a uniform grid" — is closed by an ADDITIONAL leg, not a replacement. The frame check runs first and unchanged; where the caller planned against a NAMED row, the guard then reads that row's text under the pointer and requires it to still be that name.
+
+- The text is harvested exactly as the sparse census harvests it (VOPAT2 PR 2 `rowText`): one batched `AXUIElementCopyMultipleAttributeValues` per element over `AXValue`/`AXDescription`/`AXTitle`, descending two generations because a sidebar row carries an EMPTY AXDescription and is named only by its descendant static texts (AXDRAG1). Segments are joined with `|` and matched by SEGMENT equality with the trailing-dot variant — the census's own `segMatch`, so the two can never disagree about what a row is called.
+- Four call sites gained it, all in `ui-drag.ts`: the live-aim drag and the held-scroll drag (against the source row's title, `SRC_TITLE`), and both disclosure clicks (census-addressed against `want`, ordinal-addressed against `VTITLE` — the title the address prelude already confirmed).
+- The two WHEEL SCROLLS did not. They aim at the sidebar's centre, which belongs to no particular row, so there is no expected title to compare and no row to realize; their identity leg stays list-membership by frame. A unit test pins that they never call the text leg, so the guard's cost does not grow where it buys nothing.
+- The comparison itself is split into `POINTER_GUARD_TEXT_JS` — pure, no ObjC bridge — so `test/unit/pointer-gesture-guard.test.ts` EXECUTES the shipped source rather than pattern-matching it, the same arrangement §8 gave the occlusion table.
+
+### The cells
+
+| cell | move | sidebar offsets it forced | verdict |
+|---|---|---|---|
+| T1 | `PTX-AREA-01 --last` | top → bottom, the whole list | **landed**, exit 0, 3.7 s — text leg silent |
+| T2 | `PTX-AREA-12 --first` | bottom → top | **landed**, exit 0, 3.6 s — text leg silent |
+| T3 | `PTX-AREA-07 --before PTX-AREA-04` | mid-list, short move | **landed**, exit 0, 2.7 s — text leg silent |
+| T4 | `PTX-AREA-05 --last` | middle → bottom | **landed**, exit 0, 3.5 s — text leg silent |
+| T5a | the guard asked with the TRUE title at a real row point | scroll fraction 1.0 | **passes** — `sentence_right: null` |
+| T5b | the same point, the expected title swapped for one the row does not carry | scroll fraction 1.0 | **REFUSES**, naming both |
+
+Every landing cell is confirmed by the DB oracle (`TMArea.title ORDER BY "index"`, read before and after each drive), not by the drive's own report. The sidebar stood at scroll fraction **1.0** with 27 of 61 rows visible when the probe ran, i.e. the list had genuinely scrolled by many whole rows — the condition that defeats the geometry leg.
+
+### T5b — the refusal, verbatim
+
+```
+refused to drag the area row: expected area "PTX-AREA-NOT-HERE" under the pointer, found "PTX-AREA-08", so the frames are stale — nothing was posted
+```
+
+with the leg probe's context around it:
+
+```json
+{ "point": [212, 116],
+  "chain": "AXUnknown < AXCell < AXRow < AXTable < AXScrollArea < AXWindow < AXApplication",
+  "rowText": "PTX-AREA-08.",
+  "sentence_right": null,
+  "sentence_wrong": "refused to drag the area row: expected area \"PTX-AREA-NOT-HERE\" under the pointer, found \"PTX-AREA-08\", so the frames are stale — nothing was posted",
+  "ops": 102 }
+```
+
+Both sentences come from the SAME `ptrGuard` call shape the drag script makes, at the same point, on the same chain: the only difference between the pass and the refusal is the expected title. Note `rowText` is a single segment here (`PTX-AREA-08.`) — the harvest reads the row's own dotted name plus whatever static texts it exposes, and the label in the sentence strips the dot.
+
+### Cost
+
+`ops: 102` covers TWO full guard passes at one point (the pass and the refusal) plus a chain walk and a text harvest done for the report — so one guarded gesture's identity work is roughly a third of that. The harvest is one realized row, the same row the drive is about to grab, and it is counted in `AXR` so the guard's own price stays legible in every report.
+
+### A seeding observation, recorded because it looked like a defect and is not
+
+T1's DB oracle shows the whole `PTX-AREA-*` order rewritten, not a single row moved: `01…12` before, `06,04,09,07,12,08,05,03,11,02,10,01` after. The dragged row did land last, and cells T2–T4 each show a clean single-row move with every other row's relative order preserved. The reading: `TMArea."index"` for a dozen areas created seconds earlier had not settled into the order the SIDEBAR was already showing, and the app renumbered the lot when the drag committed — consistent with AXDRAG1's standing rule that a drag may renumber a NEIGHBOR rather than the dragged row, which is why every assert here compares RELATIVE positions. It is not a guard finding, and nothing about it involves the text leg.
+
+### What this does NOT close
+
+- **E2** (firing the drop-time re-check on a live held drag) and **F1** (opening the Repeat dialog from a bare script) are untouched — §7's other items stand.
+- The drop-time re-check still takes NO identity leg at all: it re-asserts frontmost / containment / occlusion at the live drop point, where there is no planned row to name.
+- Real-display and multi-Space arms remain the release gate's business; this is a `--no-graphics` guest.

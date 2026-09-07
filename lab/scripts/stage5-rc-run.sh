@@ -27,7 +27,10 @@ GUEST_CELLS="${GUEST_CELLS:-lab/guest/stage5-cells.sh}"
 CELLS_BASE=$(basename "$GUEST_CELLS")
 
 GOLDEN_V4H="${GOLDEN:-things-lab-golden-v4h}"
-VM="things-rc-stage5-$(date +%Y%m%d-%H%M%S)"
+# The clone's name is overridable so a run can announce itself in `tart list`
+# to whatever else is waiting for the single VM slot (agents coordinate by
+# reading that list before they clone).
+VM="${VM_NAME:-things-rc-stage5-$(date +%Y%m%d-%H%M%S)}"
 ARTIFACTS="lab/artifacts/$VM"
 mkdir -p "$ARTIFACTS"
 
