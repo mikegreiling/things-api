@@ -294,7 +294,11 @@ export function createTodoOrderReader(db: DatabaseSync): TodoOrderReader {
       db
         .prepare(
           `SELECT uuid, COALESCE(title,'') AS title, ${rankCol} AS rank, ${BUCKET_EXPR} AS bucket, ` +
-            `${COHORT_EXPR} AS cohort, start, startDate, startBucket, ` +
+            // The entry cohort belongs to the DAY axis alone. Read on an `index`
+            // column it would be noise that arms the fence by accident: a loose
+            // anytime row carrying a DEADLINE has a non-null `COALESCE(tiRef,
+            // startDate, deadline)` and no entry grouping whatsoever.
+            `${isDayAxisColumn(column) ? COHORT_EXPR : "NULL"} AS cohort, start, startDate, startBucket, ` +
             `userModificationDate AS umd FROM TMTask WHERE ${where} ORDER BY ${orderBy}`,
         )
         .all(...(column === "area-someday" ? [containerUuid ?? ""] : binds)) as unknown as {
