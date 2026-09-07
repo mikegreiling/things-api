@@ -173,7 +173,7 @@ emit() {
 }
 
 consider() {
-  local wt_path=$1 wt_head=$2 wt_branch=$3
+  local wt_path=$1 wt_head=$2 wt_branch=$3 wt_lock=$4
   local display=${wt_path#"$PRIMARY"/}
   local branch=${wt_branch#refs/heads/}
   if [ -z "$branch" ]; then branch="(detached)"; fi
@@ -253,9 +253,18 @@ consider() {
     return 0
   fi
 
+  # A lock is the harness's "agent in flight" marker, but it is never released
+  # when the agent finishes (its reason names the parent session's pid, which
+  # outlives every agent). A worktree that is clean, landed and idle >24h has
+  # a STALE lock by construction; it is released before removal.
+  local lock_note=""
+  if [ -n "$wt_lock" ]; then lock_note=", stale lock released"; fi
   ELIGIBLE=$((ELIGIBLE + 1))
-  emit "$display" "$branch" "$age_text" ELIGIBLE "$landed_reason, clean, idle $age_text"
+  emit "$display" "$branch" "$age_text" ELIGIBLE "$landed_reason, clean, idle $age_text$lock_note"
   if [ "$APPLY" -eq 1 ]; then
+    if [ -n "$wt_lock" ]; then
+      (cd "$REPO_DIR" && git worktree unlock "$wt_path" 2>>"$WORK/remove.err") || true
+    fi
     if (cd "$REPO_DIR" && git worktree remove "$wt_path" 2>>"$WORK/remove.err"); then
       REMOVED=$((REMOVED + 1))
     else
@@ -268,22 +277,25 @@ consider() {
 wt_path=""
 wt_head=""
 wt_branch=""
+wt_lock=""
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     "worktree "*)
       wt_path=${line#worktree }
       wt_head=""
       wt_branch=""
+      wt_lock=""
       ;;
     "HEAD "*) wt_head=${line#HEAD } ;;
     "branch "*) wt_branch=${line#branch } ;;
+    "locked"*) wt_lock=${line#locked}; wt_lock=${wt_lock:-locked} ;;
     "")
-      if [ -n "$wt_path" ]; then consider "$wt_path" "$wt_head" "$wt_branch"; fi
+      if [ -n "$wt_path" ]; then consider "$wt_path" "$wt_head" "$wt_branch" "$wt_lock"; fi
       wt_path=""
       ;;
   esac
 done <"$WORK/porcelain"
-if [ -n "$wt_path" ]; then consider "$wt_path" "$wt_head" "$wt_branch"; fi
+if [ -n "$wt_path" ]; then consider "$wt_path" "$wt_head" "$wt_branch" "$wt_lock"; fi
 
 if [ "$JSON" -eq 1 ]; then
   echo ""
