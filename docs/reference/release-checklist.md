@@ -212,6 +212,7 @@ spctl --assess --type exec -vv "$B"     # Gatekeeper accepts it offline, from th
 - Delete the landed items from [up-next.md](../up-next.md); update [roadmap.md](../roadmap.md), [capability-matrix.md](../capability-matrix.md) and [suite-audit.md](suite-audit.md) if the batch moved anything they track (usually done per-PR; check, don't assume).
 - Leave GitHub issues OPEN until the fix is CONFIRMED — either the reporter re-runs and says so, or the original defect was reproduced locally and the fix demonstrably removes it ("no longer reproducible", evidence named on the issue). A merge is never the confirmation; for a field bug whose conditions no lab arm can reproduce, only the maintainer's own re-run on the machine that hit it counts.
 - Leave the primary checkout on a clean, up-to-date `main` (the maintainer's live CLI is npm-linked to it).
+- Run `npm run worktree:gc -- --apply` from the primary checkout to reclaim the agent worktrees this batch merged (`.claude/worktrees/` only, dry run without `--apply`; a dirty, unmerged or under-24 h worktree is skipped, and branches are never deleted). Anything the batch left in flight simply skips.
 
 ## Version precedent
 

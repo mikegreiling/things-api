@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Added — `npm run worktree:gc`, maintainer tooling: it removes the agent worktrees under `.claude/worktrees/` whose work has landed.** A dry run by default (path, branch, age, verdict, reason per worktree); `--apply` removes the eligible ones. A worktree is eligible only when its tree is clean, its HEAD is either an ancestor of `origin/main` or the exact merged tip of a squash-merged PR, and nothing has touched it for 24 hours. Branches are never deleted — they are this repo's audit trail.
+
 ## 0.20.12 — 2026-09-06
 
 - **Fixed — a repeat command could stop with "a Things update has redesigned it again" when nothing of the sort had happened.** Setting up a repeating to-do picks a frequency and then reads the dialog to see which controls that frequency produced. The pick was reported as done the moment it was clicked, without checking that the dialog had taken it, and the read that followed did not wait for Things to rebuild that part of the dialog — so on some Macs the command read the dialog as it was a moment earlier, found the controls it expected missing, and blamed the app. It now confirms the frequency actually changed before going on, waits for the rebuilt controls, and if it genuinely cannot recognize the dialog it says what it found there instead of what it assumes happened. Refs #695.

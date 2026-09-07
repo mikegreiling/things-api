@@ -41,6 +41,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepublishOnly": "npm run check && npm run build && node scripts/stamp-skill.mjs",
     "smoke:pack": "bash scripts/pack-smoke.sh",
+    "worktree:gc": "bash scripts/worktree-gc.sh",
     "schema:gen": "node scripts/generate-schema.ts",
     "explore": "node scripts/explore/server.ts",
     "typecheck": "tsc --noEmit",
