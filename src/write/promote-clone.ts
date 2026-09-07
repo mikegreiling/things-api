@@ -711,11 +711,21 @@ function offRuleFirstNote(params: RepeatRuleParams): string | null {
 }
 
 /**
- * The template's app-materialized first occurrence (`rt1_instanceCreationStartDate`
- * = the date the current instance is dated at) as an ISO date, for the post-drive
- * Next-honored check. `null` when the row/date is absent.
+ * The template's SPAWN CURSOR (`rt1_instanceCreationStartDate`) as an ISO date, for
+ * the post-drive Next-honored check. `null` when the row/date is absent.
+ *
+ * The column names the NEXT slot the app will materialize — not the first
+ * occurrence. The two coincide only while that first occurrence has not been
+ * created yet: committing a rule whose first occurrence is TODAY materializes
+ * today's instance immediately and advances the cursor to the following slot
+ * (measured on 3.23, FGRD1 §8 — see {@link firstOccurrenceHonored}, which is why
+ * that check accepts either oracle).
+ *
+ * As the fallback for the landed-rule echo this is still the right value: it only
+ * stands in when no first occurrence was requested, and the app's own default is
+ * then a future slot with nothing materialized on it.
  */
-function firstOccurrenceOf(db: WriteDeps["db"], templateUuid: string): IsoDate | null {
+function spawnCursorOf(db: WriteDeps["db"], templateUuid: string): IsoDate | null {
   const row = db
     .prepare("SELECT rt1_instanceCreationStartDate AS ic FROM TMTask WHERE uuid = ?")
     .get(templateUuid) as { ic: number | null } | undefined;
@@ -737,8 +747,11 @@ function instanceStartDate(db: WriteDeps["db"], instanceUuid: string): IsoDate |
  * (issue #508).
  *
  * A FIXED-schedule series is anchored on the calendar: the dialog's "Next:" field
- * IS driven, and the template's own cursor (`rt1_instanceCreationStartDate`) holds
- * the resulting first occurrence — the right thing to compare against.
+ * IS driven, and the template's own spawn cursor (`rt1_instanceCreationStartDate`)
+ * then stands ON the requested occurrence for as long as the app has not
+ * materialized it — which is the case for every future-dated request, so the
+ * cursor is the thing to compare against. A same-day request is the exception the
+ * cursor cannot answer alone; {@link firstOccurrenceHonored} carries that oracle.
  *
  * An AFTER-COMPLETION series has NO calendar anchor, so {@link ruleParamsFor}
  * deliberately leaves "Next:" alone, and the app mints the template with an EMPTY
@@ -759,7 +772,7 @@ function landedFirstStart(
   instanceUuid: string | null,
   afterCompletion: boolean,
 ): IsoDate | null {
-  if (!afterCompletion) return firstOccurrenceOf(deps.db, templateUuid);
+  if (!afterCompletion) return spawnCursorOf(deps.db, templateUuid);
   return instanceUuid === null ? null : instanceStartDate(deps.db, instanceUuid);
 }
 
@@ -1451,7 +1464,7 @@ async function makeRepeatingViaClone(
     disclose(
       bag,
       "landed-rule",
-      landedRuleEcho(effParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
+      landedRuleEcho(effParams, expectedStartIso ?? spawnCursorOf(deps.db, templateUuid)),
     );
     disclose(
       bag,
@@ -1776,7 +1789,7 @@ async function addRepeatingViaCreate(
     disclose(
       bag,
       "landed-rule",
-      landedRuleEcho(ruleParams, expectedStartIso ?? firstOccurrenceOf(deps.db, templateUuid)),
+      landedRuleEcho(ruleParams, expectedStartIso ?? spawnCursorOf(deps.db, templateUuid)),
     );
     disclose(bag, "promote-placement", PLACEMENT_NOTE);
     // DBLSPAWN1 backstop: the deadline-mapping above keeps the seed deadline-free (no
