@@ -157,3 +157,25 @@ Every normal-path drive is silent. That is the beep-sentinel doctrine's pass con
 * **Multi-row selection** — whether the chords move a multi-heading selection as a block (HEADORD1 left this open too; the shipped driver never selects more than one row).
 * **The TO-DO half.** HEADORD1 measured, incidentally, that the identical chord family reorders loose project to-dos. That is a separate campaign and nothing here is wired to it.
 * **Cloud sync behaviour** of a chord-driven `index` write (airgapped clone).
+
+---
+
+## §7 — 2026-09-07: the reveal was foregrounding the app, and the fix is re-certified
+
+**Probed under: `things-lab-golden-v4h` · Things 3.23 · macOS 15.7.7 · routed guest (helpers installed, granted and enabled inside the clone) · guest clock pinned 2026-07-05 · scratch clone `gscr-resid-94759`, destroyed at the end. Fixtures synthetic.**
+
+**The defect, found by reading the recipe rather than by a probe.** §1 measured this drive with Finder frontmost at every stage and Things never activated, and `moveHeadingChordRecipe` documented exactly that — *"the reveal is a background `open -g`"*. It was not. The `reveal` primitive shelled a plain `open <url>`, which asks LaunchServices to activate the handler app; the `backgroundReveal` step flag that makes it `open -g` arrived later, with [CHORD3](chord3-todo-chord-op.md), and was set on the to-do chord recipe ONLY. So between CHORD3 and this fix the heading op's own docstring described a shape it no longer shipped. The flag is now set on the heading recipe too (`src/write/vectors/ui-recipes.ts`), and `test/unit/write-compile.test.ts` locks it beside the existing "no `activate` step" assertion.
+
+**The cell.** One routed cell, [`lab/guest/stage5-cells-heading-reveal.sh`](../../lab/guest/stage5-cells-heading-reveal.sh), run through `lab/scripts/stage5-rc-run.sh` on a `golden-v4h` clone: seed a synthetic project with three headings (json-URL seed, HX0 — the only headless heading-create path), put Finder in front, then move the last heading to the front with the NORMAL CLI syntax — `things project move-heading <project> <heading> --first --dangerously-drive-gui` — while sampling the frontmost app once a second for the whole drive.
+
+| reading | value |
+|---|---|
+| frontmost BEFORE | `Finder` |
+| frontmost DURING (6 samples, 1 Hz) | `Finder` — every sample, no other app seen |
+| frontmost AFTER | `Finder` |
+| heading order (DB oracle) | `MHR-H1 MHR-H2 MHR-H3` → **`MHR-H3 MHR-H1 MHR-H2`** |
+| exit / audit | `0` · `vector=ui, result=ok` |
+| wall | 6.1 s (routed guest; two chords' worth of closed loop plus the positional select walk) |
+
+**What this cell does and does not establish.** It certifies the SHIPPED shape after the fix: the drive lands the heading and never takes the focus, sampled throughout rather than only at the ends. It is not a paired A/B — no arm re-ran the pre-fix dist — so the claim that the old build activated Things rests on what `open` does without `-g`, not on a measurement here. That was judged enough because the fix restores a shape §1 had already measured, and because a differential arm costs a second clone of the single VM slot.
+

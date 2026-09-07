@@ -354,12 +354,18 @@ export function convertToProjectRecipe(
  * driver, which selects each heading positionally and posts one verified chord
  * at a time (src/write/vectors/ui-chord.ts).
  *
- * NO `activate` step, deliberately. The reveal is a background `open -g`, the
- * row selection is pure System Events, and the chord is posted to the Things
- * PROCESS rather than to the focused surface — so the entire gesture runs with
- * Things behind whatever the user is looking at. Measured end to end on Things
- * 3.23 / golden-v4 with Finder frontmost at every stage and Things never
- * activated at all (docs/lab/chordmh1-move-heading-build.md §1).
+ * NO `activate` step and a BACKGROUNDED reveal, deliberately. The reveal is
+ * `open -g`, the row selection is pure System Events, and the chord is posted to
+ * the Things PROCESS rather than to the focused surface — so the entire gesture
+ * runs with Things behind whatever the user is looking at. Measured end to end
+ * on Things 3.23 / golden-v4 with Finder frontmost at every stage and Things
+ * never activated at all (docs/lab/chordmh1-move-heading-build.md §1).
+ *
+ * The `backgroundReveal` FLAG carrying that shape arrived later than the
+ * measurement: CHORD3 added the step field for the to-do chord recipe and set it
+ * there only, so between the two this recipe documented `open -g` while shipping
+ * a plain `open`, which activates the handler app. Set here since 2026-09-07 and
+ * re-certified in the routed guest (chordmh1-move-heading-build.md §7).
  *
  * `needsWindowReachability` is set even though no sheet opens: the heading rows
  * only exist in a rendered project view, so a locked screen or a full-screen
@@ -384,8 +390,9 @@ export function moveHeadingChordRecipe(
     steps: [
       {
         primitive: "reveal",
-        label: "reveal the project in Things (things:///show?id=<project>)",
+        label: "open the heading's project in Things without bringing it forward",
         value: spec.projectUuid,
+        backgroundReveal: true,
       },
       {
         // Canaried: if the project view's content table is not there, the drive

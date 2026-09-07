@@ -134,6 +134,8 @@ Finder before, Finder after, on every cell that drove. The recipe carries no `ac
 * **A search-filtered view.** §3.
 * **Beeps.** The sentinel reported none on any run, but no cell deliberately drove a chord the app would decline, so the count is uninformative rather than clean.
 
+**Residual, closed 2026-09-07 — the `backgroundReveal` flag this campaign added was set on the to-do recipe only.** `moveHeadingChordRecipe` had documented the CHORDMH1 background shape while shipping a plain `open`, which activates the handler app; the flag is now set there too and re-certified with one routed cell — frontmost read before, sampled at 1 Hz during, and read after, `Finder` throughout, the heading landed by the DB oracle ([chordmh1-move-heading-build.md §7](chordmh1-move-heading-build.md)).
+
 ---
 
 ## Reproduce
