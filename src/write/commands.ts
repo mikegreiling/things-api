@@ -1581,12 +1581,27 @@ const reorder: CommandSpec<"reorder"> = {
       params.scope === "today" && pre.reorder?.todayWire != null
         ? pre.reorder.todayWire
         : params.uuids;
+    // UNDO NEEDS THE WHOLE COLUMN, not just the movees (CHORD3 cell 10). The
+    // captured pre-ranks are what `undo` reconstructs the previous order from,
+    // and capturing only the named rows makes a SINGLE-row reorder
+    // un-reversible: one rank sorts to one uuid, and the inverse "put this row
+    // in its prior relative order" is a statement about nothing. Capturing the
+    // column means the inverse names the previous order in full and lands it
+    // exactly — the same thing `area.reorder` has always done for the sidebar.
+    //
+    // CHORD COLUMNS ONLY, deliberately. On the `today` axis naming a row the
+    // caller did not name RE-STAMPS its entry cohort (TODWIRE/MOVPLC), so a
+    // whole-column inverse there would undo the order by damaging the grouping;
+    // those scopes keep the movee-only capture until that is designed.
+    const chordColumn = todoChordColumnOf(params.scope);
+    const capture = chordColumn !== null ? pre.reorder?.wireList : undefined;
     return {
       mode: "ordering",
       key:
         pre.reorder?.key ??
         (params.scope === "today" || params.scope === "evening" ? "todayIndex" : "index"),
       sequence,
+      ...(capture !== undefined && capture.length > 0 && { capture }),
       ...(frozen.length > 0 && { frozen }),
     };
   },

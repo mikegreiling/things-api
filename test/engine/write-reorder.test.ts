@@ -1638,6 +1638,28 @@ describe("the chord vector (CHORD3 — reorder on the arrow chords)", () => {
     expect(bounce.calls.length).toBeGreaterThan(0);
   });
 
+  it("captures the WHOLE column, so a single-row move is reversible", async () => {
+    // The inverse of "put c at the front" is "restore a, b, c" — which needs the
+    // ranks of the rows nobody named. Capturing only the movee leaves `undo`
+    // with one rank, and one rank sorts to one uuid, and re-asserting that uuid
+    // is the order the move just produced (CHORD3 cell 10).
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
+    const chord = chordVector();
+    const result = await runReorder(
+      deps([chord.vector], { config: uiConfig(), uiCapability: uiGranted() }),
+      { scope: "anytime", uuids: [c] },
+    );
+    expect(result.kind).toBe("ok");
+    const record = auditRecords.findLast((r) => r.op === "reorder" && r.result === "ok");
+    const plan = planUndo(record as AuditRecord, NOW);
+    expect(plan.kind).toBe("invertible");
+    const step = plan.kind === "invertible" ? plan.steps[0] : undefined;
+    // The full previous order, in the order it was in.
+    expect((step?.params as { uuids: string[] } | undefined)?.uuids).toEqual([a, b, c]);
+  });
+
   it("records pre-ranks, so `undo` reverses a chord reorder like any other", async () => {
     const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
     const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
