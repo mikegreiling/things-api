@@ -36,30 +36,35 @@ The migrated columns in PR 1 are `area-someday` (an area's someday members, `ind
 
 ## §1 — The cell table
 
-Run `gscr-chord-2` (2026-09-07), production CLI, routed guest. Columns: what the cell asked, what happened, verdict.
+Certification run `gscr-chord-5` (2026-09-07), production CLI, routed guest, **14 of 14 GREEN**.
 
 | # | cell | verdict |
 |---|---|---|
-| 2 | **move up N** — the last row of the anytime column to the front, `reorder <uuid> --in anytime --start` | *(see §1.1)* |
-| 3 | **move down N** — the same row to the end | **PASS.** Four slots, exit 0, order exact, `vector=ui result=ok` in the audit trail, Finder frontmost before and after |
-| 4a/4b | **to top / to bottom** — an area's someday column, `--in <area> --start` then `--end` | **PASS.** Both landed exactly; `vector=ui` on both |
-| 5 | **the `umd` tripwire** — every fixture row's modification date across four reorders | **PASS.** Byte-identical. A pure rank move stamps nothing (CHORD2 §6a reproduced through the shipped op) |
+| 2 | **move up N** — the LAST row of the anytime column to the front, `reorder <uuid> --in anytime --start` | **PASS.** Four slots in 4.6 s, order exact, audit `vector=ui result=ok`, **Finder frontmost before AND after** |
+| 3 | **move down N** — the same row back to the end | **PASS.** Four slots in 22.2 s, order exact, `vector=ui`, Finder frontmost |
+| 4a | **to top** — an area's someday column, `--in <area> --start` | **PASS.** 0.7 s, `vector=ui` |
+| 4b | **to bottom** — `--in <area> --end` | **PASS.** Three slots in 8.5 s, order exact, `vector=ui` |
+| 5 | **the `umd` tripwire** — every fixture row's modification date across the four reorders above | **PASS.** Byte-identical. CHORD2 §6a reproduced through the shipped op: a pure rank move stamps nothing, on the mover or on anyone else |
 | 6a | **cross-bucket, named onto an axis** — one area-someday row + one anytime row, `--in <area>` | **PASS (exit 2, usage).** *"--in "CH3-AREA" (area …) but these items are not in it: …"* |
-| 6b | **cross-bucket, bare** — the same pair with no `--in` | **PASS (exit 4, blocked).** *"the items span different containers (… in the area-someday …; … in the anytime list), so they cannot be repositioned together"* |
+| 6b | **cross-bucket, bare** — the same pair, no `--in` | **PASS (exit 4, blocked).** *"the items span different containers (… in the area-someday …; … in the anytime list), so they cannot be repositioned together"* |
 | 7a | **a repeating template, named onto the anytime axis** | **PASS (exit 2, usage).** Refused at the axis check — the template is someday-stage |
-| 7b | **a repeating template, named onto its own axis** | **PASS (exit 4, `blocked:H-REORDER-SCOPE`).** The day-group refusal names the template by uuid |
-| 8 | **a filtered view** — a tag filter applied to the Anytime view first | **PASS, by a route the fence did not have to take: the reorder LANDED correctly (exit 0).** The recipe's own reveal opens the unfiltered list, which clears the filter, so the visibility census found nothing missing. Recorded as a measured property, not as an untested fence — see §3 |
-| 9 | **the fallback** — `ui-enabled false`, same request | **PASS.** Exit 0, order exact, `vector=url-scheme` in the audit trail |
-| 10 | **undo** — a chord reorder, then `undo --txn <its token>` | *(see §1.1)* |
-| 11 | **latency** — one warm reorder, then a four-slot one | **MEASURED.** §4 |
+| 7b | **a repeating template, named onto its own axis** | **PASS (exit 4, `blocked:H-REORDER-SCOPE`).** The refusal names the template by uuid |
+| 8 | **a filtered view** — a tag filter applied to the Anytime view first | **PASS, by a better route than the fence: the reorder LANDED correctly (exit 0, 6.1 s).** The recipe's reveal opens the list unfiltered, which clears the filter before a chord is posted. See §3 |
+| 9 | **the fallback** — `ui-enabled false`, same request | **PASS.** Exit 0 in 0.16 s, order exact, audit `vector=url-scheme` |
+| 10 | **undo** — a chord reorder, then `undo --txn <its token>` | **PASS.** The move took `A3 A1 A5 A4 A2` → `A4 A3 A1 A5 A2`; the undo restored `A3 A1 A5 A4 A2` exactly, in 7.9 s |
+| 11 | **latency** — a warm one-slot move, then a four-slot one | **MEASURED.** §4 |
 
-### 1.1 — What the first two runs cost, and what they taught
+Cell 0/1 (routed identity, `ui-enabled` on, fixtures seeded) passed on every run.
 
-Run 1 was RED at 17 failures for one reason and one reason only: **`things reorder` addresses its movees by UUID or partial-UUID and never by title.** Every cell had named its fixture by title, the way every other write verb in this CLI accepts, and got *"no to-do, project, heading, or area matches"* back. The verb's axis ref (`--in "Home"`) DOES take a title — a different resolver — which is what makes the asymmetry read as a bug rather than a convention. Filed in up-next; the cells now resolve uuids from the database first.
+### 1.1 — What the four earlier runs cost, and what they taught
 
-Run 2 was RED at 3, all expectation errors in the cell script rather than product faults: cell 6b's bare cross-container request refuses as `blocked` (exit 4) and the cell expected the `--in` form's usage error (exit 2), and `things undo` has no `--yes` flag, so the undo cell exited 1 on a commander usage error and the assertion that followed it failed too. Cell 2 was also a no-op in run 2 — the seed order already had the row at the front — so the "move up N" arm did not measure a climb. Both are fixed in the committed cell script (`--txn <token>` for the undo, and the LAST row for the climb).
+**Run 1 — RED at 17, one cause: `things reorder` addresses its movees by UUID or partial-UUID and never by title.** Every cell had named its fixture by title, the way every other write verb in this CLI accepts, and got *"no to-do, project, heading, or area matches"* back. The verb's AXIS ref (`--in "Home"`) does take a title — a different resolver — which is what makes the asymmetry read as a bug rather than a convention. Filed in up-next; the cells resolve uuids from the database first.
 
----
+**Run 2 — RED at 3, and this is the run that proved the vector.** All three were the cell script's expectations, not product faults: the bare cross-container request refuses as `blocked` (exit 4) where the cell expected the `--in` form's usage error, `things undo` has no `--yes` flag (commander exited 1), and cell 2's "move up N" was a no-op because the seed order already had the row at the front. Everything the vector itself did was right: four-slot moves in both directions, both endpoint moves on the area column, the `umd` digest unchanged, the fallback, and Finder frontmost throughout.
+
+**Run 3 — RED at 1, provisioning.** `launchctl bootstrap failed: Bootstrap failed: 5: Input/output error` in the guest's helper install, before any cell ran. Transient; the next clone provisioned cleanly. Worth knowing it happens.
+
+**Run 4 — RED at 1, and the one real product finding of the campaign: `undo` could not reverse a single-row reorder.** The move landed, the token came back, `undo --txn <token>` exited 0 — and changed nothing. The cause is in what the audit record captures: an ordering delta captures the pre-ranks of the rows the caller NAMED, so a one-row move records one rank, one rank sorts to one uuid, and the inverse "put these rows back in their prior relative order" is a statement about nothing. Re-asserting that one uuid produces the order the move had just made. This was true of every vector, not just the chord — a single-row bounce reorder had the same broken inverse — and it is fixed by capturing the whole column, which is what `area.reorder` has always done for the sidebar. Scoped to the chord columns deliberately: on the `today` axis, naming a row the caller did not name RE-STAMPS its entry cohort (TODWIRE/MOVPLC), so a whole-column inverse there would undo the order by damaging the grouping. Run 5 certifies the fix (cell 10).
 
 ## §2 — Selecting a row by uuid
 
@@ -81,20 +86,22 @@ That is a stronger property than the fence, and it is the reason the fence is st
 
 ## §4 — Latency in the clone
 
-Wall times through the production CLI, routed guest, warm app:
+Wall times through the production CLI, routed guest, warm app (runs 2, 4 and 5 agree):
 
 | move | wall |
 |---|---|
 | a request already satisfied (0 chords) | **0.6–0.8 s** |
-| one slot | **3.4 s** (cell 10a) / **14.6 s** (cell 11a) |
+| one slot | **3.4–3.9 s**, and **11.6–14.6 s** when the row sits at the far end of the table |
 | three slots (area-someday, to bottom) | **8.5 s** |
-| four slots | **6.0 s** (cell 11b) / **22.2 s** (cell 3) |
+| four slots | **4.6 s**, **6.1 s**, and **22.2 s** |
+| the fallback bounce, same request | **0.16 s** |
+| undo (a four-row column restored in full) | **7.9 s** |
 
-The spread inside a single slot count is the point: the cost is dominated by the SELECT WALK (a `select` + 0.25 s settle + a readback per row probed, until the wanted uuid answers) and by the post-chord DB poll granularity (250 ms steps), not by the chords. A row near the top of the table is found in two probes; a row near the bottom of a five-row table is found in five. **Per-chord cost, net of the walk, is roughly 1.5 s in the clone.** These are clone numbers on an idle app and they are systematically optimistic about round-trips ([SBSCR1](sbscr1-sidebar-scroll.md) SS8) — real-hardware latency is the maintainer's own measurement, taken at his discretion.
+The spread WITHIN a slot count is the finding: the cost is dominated by the SELECT WALK — a `select` action plus a 0.25 s settle plus a readback per row probed, until the wanted uuid answers — and by the post-chord database poll's 250 ms granularity, not by the chords. A row near the top of the table is found in two probes; a row near the bottom in five. Net of the walk, a chord costs roughly 1.5 s here.
 
-The obvious optimization, unbuilt and worth its own cell: the walk probes rows in table order, but the driver already knows the row's POSITION in the column from the database, so it could start the walk near it. It would not be sound to trust that position as an ordinal (the view renders more than the column), but it is a sound place to start looking.
+Two consequences worth carrying. The bounce is an order of magnitude FASTER in wall time (0.16 s against seconds) and pays for it in writes — two verified mutations per item, each one a real schedule change on the way past — so this migration trades latency for correctness and side-effect freedom, not the other way round. And these are clone numbers on an idle app, which are systematically optimistic about round-trips ([SBSCR1](sbscr1-sidebar-scroll.md) SS8); real-hardware latency is the maintainer's own measurement, taken at his discretion.
 
----
+The obvious optimization, unbuilt and worth its own cell: the walk probes rows in table order, but the driver already knows the row's POSITION IN THE COLUMN from the database. It would not be sound to trust that as a table ordinal — the view renders more than the column — but it is a sound place to start looking, and it would turn an O(rows) walk into O(1) probes in the common case.
 
 ## §5 — Tier 0, certified
 

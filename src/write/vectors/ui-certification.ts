@@ -53,6 +53,7 @@ export const UI_CERTIFICATION_PROFILE =
   "UIC8 promote-via-clone compounds in-VM (golden-v2 / Things 3.22.12) + RDLG2 recipe re-point + " +
   "HXPC1 heading-ellipsis/Move-picker paths in-VM (golden-v4 / Things 3.23) + " +
   "CHORDMH1 heading-order arrow chords in-VM (golden-v4 / Things 3.23) + " +
+  "CHORD3 to-do container-column arrow chords in the ROUTED guest (golden-v4h / Things 3.23) + " +
   "RDLAT2 round-trip recut + shape manifest, re-certified across the dialog state matrix " +
   "(fixed / after-completion / deadlines / ends-count / paused) in-VM (golden-v4 / Things 3.23) — on-device pending";
 
@@ -165,11 +166,22 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     // instead of declining (§3a/§3f/§4be2), a non-contiguous multi-selection
     // COALESCES (§2b), and the whole gesture is VIEW-relative (§4bf).
     //
-    // CHORD3 (docs/lab/chord3-todo-chord-op.md) certifies the SHIPPED op — the
-    // ui-vector implementation of `reorder` for the `area-someday` and `anytime`
-    // columns, with the bounce kept as the vector the pipeline falls back to.
-    status: "uncertified",
-    evidence: ["CHORD2"],
+    // CHORD3 (2026-09-07, gscr-chord-5, Things 3.23 / golden-v4h) certified the
+    // SHIPPED vector — 14 of 14 cells GREEN through the production CLI on a
+    // ROUTED guest (helpers 1.4.0, `helpers-enabled true`): a four-slot climb
+    // and a four-slot descent in the area-less anytime column, to-top and
+    // to-bottom in an area's someday column, every fixture row's
+    // `userModificationDate` byte-identical across four reorders, the
+    // cross-container and repeating-template refusals, the fallback to the
+    // `when=` bounce with the vector switched off (audit `vector=url-scheme`),
+    // and an undo that restored the exact previous order. Finder was frontmost
+    // before AND after every drive — CHORD2 §1's tier-0 delivery reproduced by
+    // the shipped op rather than by a probe script. The filtered-view arm landed
+    // correctly rather than refusing, because the recipe's own reveal opens the
+    // list unfiltered; the visibility fence stays as the backstop.
+    // docs/lab/chord3-todo-chord-op.md.
+    status: "lab-certified",
+    evidence: ["CHORD2", "CHORD3"],
   },
   "project.dissolve-heading": {
     // DISS1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Delete recipe ran
