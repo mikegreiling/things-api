@@ -103,6 +103,12 @@ Two consequences worth carrying. The bounce is an order of magnitude FASTER in w
 
 The obvious optimization, unbuilt and worth its own cell: the walk probes rows in table order, but the driver already knows the row's POSITION IN THE COLUMN from the database. It would not be sound to trust that as a table ordinal — the view renders more than the column — but it is a sound place to start looking, and it would turn an O(rows) walk into O(1) probes in the common case.
 
+## §4.5 — The direct arm
+
+`npm run lab:run -- --suite lab/suites/o-suite.json` on a fresh golden-v4 clone (`things-run-o-20260907-192850`, 2026-09-07): **GREEN, O01–O39, 0 alert beeps across 115 sentinel marks.** The ordering suite's verdicts are unchanged by this build, which is the expected result and the point of running it — the chord is a new vector for the operation, not a change to the wire protocols the suite locks.
+
+---
+
 ## §5 — Tier 0, certified
 
 Every drive in the routed run was bracketed by a frontmost read, with Finder deliberately put in front first (Things is frontmost by default in the guest, which would have hidden a focus steal):
