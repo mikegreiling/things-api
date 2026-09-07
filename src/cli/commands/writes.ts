@@ -3096,7 +3096,9 @@ export function registerWriteCommands(program: Command): void {
           .description(
             "The ONE reorder verb — rearrange to-dos, projects, headings, OR sidebar areas IN " +
               "PLACE (REARRANGES, never changes membership; to change what an item belongs to use " +
-              "`things todo move` / `things project move`). All operands must be ONE kind (only " +
+              "`things todo move` / `things project move`). Name each item — and a --before/--after " +
+              "anchor — by uuid, partial-uuid, or unique name; a name matching several items is " +
+              "refused with the matches listed. All operands must be ONE kind (only " +
               "to-dos and projects intermix, and only on the shared Today/Evening/day axes); a " +
               "mixed-kind set, a cross-container set, and a non-member anchor each fail closed with " +
               "one precise message. Argument order is the resulting order; unmentioned siblings " +

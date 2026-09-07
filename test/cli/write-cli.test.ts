@@ -463,6 +463,45 @@ describe("project write targets accept names (Part 1)", () => {
   });
 });
 
+/**
+ * `things reorder` movee refs accept NAMES (2026-09-07). The verb is the one
+ * carve-out from "to-do and heading write targets stay uuid-only": it rearranges
+ * a set of siblings the caller is looking at, overwrites no field, and its own
+ * argument list already took an area by name while a to-do beside it had to be a
+ * uuid. Ambiguity is refused fail-closed, as everywhere else.
+ */
+describe("reorder movee refs accept names", () => {
+  it("plans a reorder for a to-do named by title", async () => {
+    const project = seedProject(fixture.db, { title: "Proj" });
+    seedTodo(fixture.db, { title: "First", project, index: 1 });
+    const second = seedTodo(fixture.db, { title: "Second", project, index: 2 });
+    await run(["reorder", "Second", "--start", "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["ok"]).toBe(true);
+    expect(JSON.stringify(env["data"])).toContain(second);
+  });
+
+  it("refuses a duplicated title fail-closed, listing the matches", async () => {
+    const project = seedProject(fixture.db, { title: "Proj" });
+    seedTodo(fixture.db, { title: "Twin", project, index: 1 });
+    seedTodo(fixture.db, { title: "Twin", project, index: 2 });
+    await run(["reorder", "Twin", "--start", "--json"]);
+    const env = envelope();
+    const err = env["error"] as Record<string, unknown>;
+    expect(String(err["message"])).toContain('"Twin" matches 2 items');
+    expect((err["detail"] as { candidates: unknown[] }).candidates).toHaveLength(2);
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("names the accepted forms when nothing matches", async () => {
+    await run(["reorder", "Ghosttodo", "--start", "--json"]);
+    const env = envelope();
+    expect(String((env["error"] as Record<string, unknown>)["message"])).toContain(
+      'no to-do, project, heading, or area matches "Ghosttodo" — tried uuid, partial-uuid, and name',
+    );
+  });
+});
+
 describe("capabilities", () => {
   it("dumps the lab-validated matrix for one op", async () => {
     await run(["capabilities", "--op", "todo.delete", "--json"]);

@@ -421,13 +421,13 @@ things todo move <refs…> [destination] [position]   (pick one destination)
   every movee in the anchor's sub-bucket, else refused.
 
 things reorder <refs…> [position] [--in <target>]
-  One kind-neutral in-place verb (replaces the old \`todo reorder\` and the raw
-  \`reorder --scope\`). Bare (no position): assemble the items as one block at the
-  EARLIEST slot, argument order (--first NOT implied); partial fine. Takes to-dos +
-  the project rows Today/Evening/day lists intermix. A Today/Evening member, and a
-  forecast set sharing one Upcoming day, sit on TWO axes (view/day-block + container
-  index) — a set coherent on both is refused; --in picks it: today|evening|anytime|
-  someday|inbox, a project/area/heading ref, upcoming, or a YYYY-MM-DD day-block.
+  One kind-neutral in-place verb (replaces \`todo reorder\`/\`reorder --scope\`); refs and
+  anchors: uuid, partial-uuid, or unique name (ambiguity refused). Bare (no position): assemble
+  the items as one block at the EARLIEST slot in argument order (--first NOT implied); partial
+  fine. Takes to-dos + the project rows Today/Evening/day lists intermix. A Today/Evening member,
+  and a forecast set sharing one Upcoming day, sit on TWO axes (view/day-block + container index)
+  — coherent on both is refused; --in picks it: today|evening|anytime|someday|inbox, a
+  project/area/heading ref, upcoming, or a YYYY-MM-DD day.
   Forcing a container index on a flagged member PRESERVES the flag (someday/inbox no).
 
 things project move <refs…> [--to-area <ref> | --no-area] [position]

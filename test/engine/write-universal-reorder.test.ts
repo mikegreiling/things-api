@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
+import type { UiCapability } from "../../src/capability.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { computeReorderPre } from "../../src/write/pre-state.ts";
@@ -81,6 +82,47 @@ function nativeVector() {
     },
   };
   return { vector, calls };
+}
+
+/**
+ * A ui vector standing in for the CHORD drive (mirrors the one in
+ * write-reorder.test.ts): it reads the compiled recipe's chord spec and applies
+ * the target order the way the app's arrow chords do — rank rewrites only.
+ */
+function chordVector() {
+  const specs: { column: string; movees: string[]; targetOrder: string[] }[] = [];
+  const vector: WriteVector = {
+    id: "ui",
+    drivesGui: true,
+    matrix: { reorder: { support: "yes", disruption: 0, validation: "validated" } },
+    async execute(invocation) {
+      const step = invocation.recipe?.steps.find((x) => x.primitive === "chord-reorder-todo");
+      const spec = step?.todoChord;
+      if (spec !== undefined) {
+        specs.push({
+          column: spec.column,
+          movees: [...spec.movees],
+          targetOrder: [...spec.targetOrder],
+        });
+      }
+      let rank = 1;
+      for (const uuid of spec?.targetOrder ?? []) {
+        fixture.db.prepare('UPDATE TMTask SET "index" = ? WHERE uuid = ?').run(rank++, uuid);
+      }
+      return { exitCode: 0, stdout: "drove 3 step(s)", stderr: "" };
+    },
+  };
+  return { vector, specs };
+}
+
+/** The granted Accessibility standing the pipeline's GUI gate reads. */
+function uiGranted(): () => UiCapability {
+  return () => ({
+    mode: "helpers",
+    detail: "the helpers hold Accessibility and app control for System Events",
+    remediation: [],
+    host: { bundleId: "com.example.test", name: "TestHost" },
+  });
 }
 
 function deps(vectors: WriteVector[], overrides: Partial<WriteDeps> = {}): WriteDeps {
@@ -547,5 +589,233 @@ describe("universal reorder — O06 heading-child protection", () => {
     const rej = pre.rejected.find((r) => r.uuid === headedDone)?.reason ?? "";
     expect(rej).toContain("heading");
     expect(rej).not.toContain("Logbook");
+  });
+});
+
+/**
+ * TITLE-NAMED MOVEES (2026-09-07). `things reorder` used to address its movees
+ * by uuid / partial-uuid ONLY while the axis ref beside them (`--in "Home"`)
+ * took a title, so a caller who typed a title got a bare not-found. The movee
+ * slot now runs the same tiered name resolution: uuid / partial-uuid first, then
+ * a unique LIVE OPEN name across the three task kinds and the sidebar areas.
+ */
+describe("universal reorder — movees named by title", () => {
+  it("resolves a to-do movee by its exact title", async () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    seedTodo(fixture.db, { title: "Draft the brief", project, index: 1 });
+    const second = seedTodo(fixture.db, { title: "Buy milk", project, index: 2 });
+    const { vector, calls } = nativeVector();
+    const result = await runUniversalReorder(deps([vector]), {
+      uuids: ["Buy milk"],
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-ok");
+    if (result.kind === "move-ok") expect(result.movees.map((m) => m.uuid)).toEqual([second]);
+    expect(calls.join(" ")).toContain(second);
+  });
+
+  it("folds case and dashes like every other name slot", async () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    const t = seedTodo(fixture.db, { title: "On Hold - review", project, index: 1 });
+    seedTodo(fixture.db, { title: "Other", project, index: 2 });
+    const { vector } = nativeVector();
+    const result = await runUniversalReorder(deps([vector]), {
+      uuids: ["onhold-review"],
+      position: { at: "last" },
+    });
+    expect(result.kind).toBe("move-ok");
+    if (result.kind === "move-ok") expect(result.movees.map((m) => m.uuid)).toEqual([t]);
+  });
+
+  it("resolves project and heading movees by title too (one kind-neutral pass)", async () => {
+    const project = seedProject(fixture.db, { title: "Kitchen rebuild" });
+    const h1 = seedHeading(fixture.db, { title: "Demolition", project, index: 1 });
+    seedHeading(fixture.db, { title: "Wiring", project, index: 2 });
+    const { vector } = nativeVector();
+    const dry = await runUniversalReorder(
+      deps([vector]),
+      { uuids: ["Demolition"], position: { at: "last" } },
+      { dryRun: true },
+    );
+    expect(dry.kind).toBe("move-dry-run");
+    if (dry.kind === "move-dry-run") {
+      expect(dry.op).toBe("project.move-heading");
+      expect(dry.plan.movees).toEqual([h1]);
+    }
+  });
+
+  it("takes a --before anchor by title (the anchor is the same ref slot)", async () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "Alpha", project, index: 1 });
+    const b = seedTodo(fixture.db, { title: "Beta", project, index: 2 });
+    const c = seedTodo(fixture.db, { title: "Gamma", project, index: 3 });
+    const { vector, calls } = nativeVector();
+    const result = await runUniversalReorder(deps([vector]), {
+      uuids: ["Gamma"],
+      position: { before: "Beta" },
+    });
+    expect(result.kind).toBe("move-ok");
+    // The wire places Gamma between Alpha and Beta.
+    const ids = /with ids "([^"]+)"/.exec(calls.join(" "))?.[1]?.split(",") ?? [];
+    expect(ids).toEqual([a, c, b]);
+  });
+
+  it("refuses an ambiguous title fail-closed, listing the matches", async () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    const one = seedTodo(fixture.db, { title: "Buy milk", project, index: 1 });
+    const two = seedTodo(fixture.db, { title: "Buy milk", project, index: 2 });
+    const { vector, calls } = nativeVector();
+    const result = await runUniversalReorder(deps([vector]), {
+      uuids: ["Buy milk"],
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-refused");
+    if (result.kind === "move-refused") {
+      expect(result.refusal).toBe("usage");
+      expect(result.detail).toContain('"Buy milk" matches 2 items');
+      expect(result.detail).toContain("disambiguate with a ref below");
+      expect(result.detail).toContain("(to-do)");
+      expect(result.candidates?.map((c) => c.uuid).toSorted()).toEqual([one, two].toSorted());
+    }
+    // Nothing was dispatched.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a name that is BOTH a task and a sidebar area", async () => {
+    const area = seedArea(fixture.db, "Home", 0);
+    const t = seedTodo(fixture.db, { title: "Home", index: 1 });
+    const { vector } = nativeVector();
+    const result = await runUniversalReorder(deps([vector]), {
+      uuids: ["Home"],
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-refused");
+    if (result.kind === "move-refused") {
+      expect(result.detail).toContain("names both the to-do");
+      expect(result.detail).toContain("and the area");
+      expect(result.candidates?.map((c) => c.uuid).toSorted()).toEqual([area, t].toSorted());
+    }
+  });
+
+  it("never resolves a name to a trashed or completed row", async () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    seedTodo(fixture.db, { title: "Ghost", project, trashed: true, index: 1 });
+    seedTodo(fixture.db, {
+      title: "Ghost",
+      project,
+      status: "completed",
+      stopDate: 1_785_000_000,
+      index: 2,
+    });
+    const { vector } = nativeVector();
+    const result = await runUniversalReorder(deps([vector]), { uuids: ["Ghost"] });
+    expect(result.kind).toBe("move-refused");
+    if (result.kind === "move-refused") {
+      expect(result.detail).toContain("no to-do, project, heading, or area matches");
+      expect(result.detail).toContain("tried uuid, partial-uuid, and name");
+    }
+  });
+
+  it("an explicit uuid still outranks a same-named row", async () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    const target = seedTodo(fixture.db, { title: "Twin", project, index: 1 });
+    seedTodo(fixture.db, { title: "Twin", project, index: 2 });
+    const { vector } = nativeVector();
+    const result = await runUniversalReorder(deps([vector]), {
+      uuids: [target],
+      position: { at: "last" },
+    });
+    expect(result.kind).toBe("move-ok");
+    if (result.kind === "move-ok") expect(result.movees.map((m) => m.uuid)).toEqual([target]);
+  });
+});
+
+/**
+ * ROUTING ON EITHER TRANSPORT (CHORD3 residual, 2026-09-07). `area-someday` and
+ * `anytime` are the two classes the arrow chord re-ranks, so the target
+ * classifier must not gate them on `bounce-enabled` alone — a host with the
+ * chord and no bounce reorders them fine. Both transports off still refuses,
+ * with the bounce remediation it always gave.
+ */
+describe("universal reorder — the chord classes route on either transport", () => {
+  /** bounce-enabled=false, ui-enabled=true — the chord-only host. */
+  function chordOnly(): ThingsApiConfig {
+    return { ...config(), bounceEnabled: false, ui: { enabled: true } };
+  }
+  /** Both transports off. */
+  function neither(): ThingsApiConfig {
+    return { ...config(), bounceEnabled: false, ui: { enabled: false } };
+  }
+
+  it("routes area-less loose anytime to the anytime scope with only the chord on", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 1 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 2 });
+    const { vector } = nativeVector();
+    const dry = await runUniversalReorder(
+      deps([vector], { config: chordOnly() }),
+      { uuids: [b, a], position: { at: "first" } },
+      { dryRun: true },
+    );
+    expect(dry.kind).toBe("move-dry-run");
+    if (dry.kind === "move-dry-run") expect(dry.plan.placement).toContain("scope=anytime");
+  });
+
+  it("routes an area's someday members to area-someday with only the chord on", async () => {
+    const area = seedArea(fixture.db, "A", 0);
+    const a = seedTodo(fixture.db, { title: "a", area, start: "someday", index: 1 });
+    const b = seedTodo(fixture.db, { title: "b", area, start: "someday", index: 2 });
+    const { vector } = nativeVector();
+    const dry = await runUniversalReorder(
+      deps([vector], { config: chordOnly() }),
+      { uuids: [b, a], position: { at: "first" } },
+      { dryRun: true },
+    );
+    expect(dry.kind).toBe("move-dry-run");
+    if (dry.kind === "move-dry-run") expect(dry.plan.placement).toContain("scope=area-someday");
+  });
+
+  it("drives the chord end to end on a bounce-disabled host", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 1 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 2 });
+    const chord = chordVector();
+    const result = await runUniversalReorder(
+      deps([chord.vector], { config: chordOnly(), uiCapability: uiGranted() }),
+      { uuids: [b, a], position: { at: "first" } },
+    );
+    expect(result.kind).toBe("move-ok");
+    expect(chord.specs).toHaveLength(1);
+    expect(chord.specs[0]).toMatchObject({ column: "anytime", movees: [b, a] });
+  });
+
+  it("refuses both classes when NEITHER transport is available", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 1 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 2 });
+    const { vector } = nativeVector();
+    const result = await runUniversalReorder(deps([vector], { config: neither() }), {
+      uuids: [b, a],
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-refused");
+    if (result.kind === "move-refused") {
+      expect(result.detail).toContain("area-less loose anytime order");
+      expect(result.detail).toContain("bounce-enabled=false");
+      expect(result.detail).toContain("things config set bounce-enabled true");
+    }
+  });
+
+  it("leaves the bounce-only classes gated on bounce-enabled", async () => {
+    // `projects` (top-level sidebar order) has no chord column, so the chord-only
+    // host still refuses it — the migration is per measured class, not wholesale.
+    const p1 = seedProject(fixture.db, { title: "P1", start: "active", index: 1 });
+    const p2 = seedProject(fixture.db, { title: "P2", start: "active", index: 2 });
+    const { vector } = nativeVector();
+    const result = await runUniversalReorder(deps([vector], { config: chordOnly() }), {
+      uuids: [p2, p1],
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-refused");
+    if (result.kind === "move-refused") {
+      expect(result.detail).toContain("top-level projects order");
+    }
   });
 });

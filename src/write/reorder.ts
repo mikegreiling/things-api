@@ -680,7 +680,7 @@ function nativeReorderAvailable(deps: WriteDeps): boolean {
  * as SQL by the simulator, so choosing the chord would change which protocol the
  * bench arms exercise without exercising any more of the app.
  */
-function chordAvailable(deps: WriteDeps): boolean {
+export function chordVectorAvailable(deps: WriteDeps): boolean {
   return deps.config.ui.enabled && !simFenceActive();
 }
 
@@ -696,7 +696,7 @@ function chordOrBounce(
   column: TodoChordColumn,
   kind: BounceKind,
 ): StrategyDecision {
-  if (!chordAvailable(deps)) return bounceOk(deps, what, kind);
+  if (!chordVectorAvailable(deps)) return bounceOk(deps, what, kind);
   return {
     kind: "ok",
     strategy: "chord",

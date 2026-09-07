@@ -40,8 +40,14 @@ import {
   type TemplateProjectionRow,
   templateProjectionDay,
 } from "../model/template-projection.ts";
-import { ReferenceResolutionError, resolveTaskUuidPrefix } from "../read/queries.ts";
-import type { CandidateRef } from "../read/shape.ts";
+import {
+  fusedRef,
+  type NamedResolution,
+  ReferenceResolutionError,
+  resolveNamedRef,
+  resolveTaskUuidPrefix,
+} from "../read/queries.ts";
+import { candidateRef, CANDIDATE_CAP, type CandidateRef } from "../read/shape.ts";
 import { taskMembershipClause } from "../read/scope.ts";
 import { isLooseRef, LOOSE_TO_AREA_REFUSAL } from "../read/pseudo-area.ts";
 import {
@@ -63,7 +69,7 @@ import type { HazardId } from "./guards.ts";
 import { type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import type { VectorId } from "./vectors/types.ts";
 import { runLockedComposite, runMutation } from "./pipeline.ts";
-import { runReorder, type ReorderResult } from "./reorder.ts";
+import { chordVectorAvailable, runReorder, type ReorderResult } from "./reorder.ts";
 
 // --------------------------------------------------------------- request shapes
 
@@ -332,6 +338,26 @@ type ScopeTarget =
   | { scope: ReorderScope; container?: string; day?: number }
   | { scope: null; reason: string; prohibited?: boolean };
 
+/**
+ * Which reorder TRANSPORTS this host has, as the target classifier sees them.
+ * A class routes as long as SOME transport reaches it — the pipeline picks which
+ * one runs (reorder.ts `resolveStrategy`), and the two are not interchangeable
+ * per class: the `when=` bounce reaches every wired class, the arrow chord
+ * reaches the `index`-axis columns CHORD3 measured. Classifying on `bounce`
+ * alone made a chord-reachable class refuse on a bounce-disabled host.
+ */
+interface ReorderVectors {
+  /** `bounce-enabled` — the when= round-trip. */
+  bounce: boolean;
+  /** `ui-enabled` — the arrow-chord vector (CHORD3). */
+  chord: boolean;
+}
+
+/** The host's transports, read from config the same way the pipeline reads them. */
+function reorderVectorsOf(deps: WriteDeps): ReorderVectors {
+  return { bounce: deps.config.bounceEnabled, chord: chordVectorAvailable(deps) };
+}
+
 /** An app-default target for a bounce-dependent placement while bounce is off. */
 function bounceDisabledTarget(what: string): ScopeTarget {
   return {
@@ -362,14 +388,21 @@ function bounceDisabledTarget(what: string): ScopeTarget {
  * projects. APP-DEFAULT: an AREA project's future-day cell (only area-less project
  * rows are proven — SIT4 DAYBNC); repeating TEMPLATE rows (§9e). When bounce is
  * DISABLED the bounce-dependent classes degrade to app-default naming the flag —
- * never a destructive or unverified fallback.
+ * never a destructive or unverified fallback — EXCEPT the two classes the arrow
+ * chord also reaches (`area-someday`, `anytime`), which keep their scope as long
+ * as either transport is on (CHORD3; see {@link ReorderVectors}).
  */
 function reorderTargetOf(
   row: MoveeRow,
   isTodo: boolean,
   packedToday: number,
-  bounceEnabled: boolean,
+  vectors: ReorderVectors,
 ): ScopeTarget {
+  const bounceEnabled = vectors.bounce;
+  // THE MIGRATED CLASSES (CHORD3): `area-someday` and `anytime` are `index`-axis
+  // container orders the arrow chord re-ranks end to end, so they route whenever
+  // EITHER transport is available. Every other class is still bounce-only.
+  const chordOrBounce = vectors.bounce || vectors.chord;
   if (row.isTemplate) {
     // A repeating template's Upcoming-day-block projection is a first-class todayIndex
     // member of its projection day (TMPLSORT/PTMPL): route it to the day-group scope so
@@ -482,7 +515,7 @@ function reorderTargetOf(
       // Area someday members: the SOMEBNC-area bounce (was §9f-prohibited via
       // the destructive area reorder command — the planner NEVER uses that).
       if (bucket === "someday") {
-        return bounceEnabled
+        return chordOrBounce
           ? { scope: "area-someday", container: row.area }
           : bounceDisabledTarget("an area's someday order");
       }
@@ -499,8 +532,9 @@ function reorderTargetOf(
     if (bucket === "inbox") return { scope: "inbox" };
     if (bucket === "someday") return { scope: "someday" };
     if (bucket === "anytime") {
-      // ANYBNC reverse-order bounce for area-less loose anytime to-dos.
-      return bounceEnabled
+      // The CHORD3 chord, or the ANYBNC reverse-order bounce, for area-less loose
+      // anytime to-dos.
+      return chordOrBounce
         ? { scope: "anytime" }
         : bounceDisabledTarget("area-less loose anytime order");
     }
@@ -573,13 +607,13 @@ const IN_AXES: readonly InAxis[] = ["today", "evening", "anytime", "someday", "i
  * in its container's ANYTIME bucket (start=1, no startDate — date-independent, so
  * the packedToday argument is irrelevant here).
  */
-function indexAxisTargetOf(row: MoveeRow, bounceEnabled: boolean): ScopeTarget {
+function indexAxisTargetOf(row: MoveeRow, vectors: ReorderVectors): ScopeTarget {
   const asAnytime: MoveeRow = { ...row, start: 1, startDate: null, startBucket: 0 };
   // Classify by the row's REAL kind — a project's index axis is its area / the
   // sidebar (`projects`), NOT the loose Anytime to-do list. Conflating them (an
   // isTodo=true hardcode) makes a mixed to-do+project Today block look like ONE
   // shared loose index bucket and spuriously "dual-axis ambiguous".
-  return reorderTargetOf(asAnytime, row.type === 0, 0, bounceEnabled);
+  return reorderTargetOf(asAnytime, row.type === 0, 0, vectors);
 }
 
 /**
@@ -596,9 +630,9 @@ function indexAxisTargetOf(row: MoveeRow, bounceEnabled: boolean): ScopeTarget {
 function forecastIndexTargetOf(
   row: MoveeRow,
   packedToday: number,
-  bounceEnabled: boolean,
+  vectors: ReorderVectors,
 ): ScopeTarget {
-  return reorderTargetOf({ ...row, deadline: null }, row.type === 0, packedToday, bounceEnabled);
+  return reorderTargetOf({ ...row, deadline: null }, row.type === 0, packedToday, vectors);
 }
 
 /**
@@ -763,8 +797,9 @@ function resolveReorderAxis(
   position: MovePosition | undefined,
 ): AxisResolution {
   const isTodo = op === "todo.move";
-  const bounceEnabled = deps.config.bounceEnabled;
-  const base = (r: MoveeRow): ScopeTarget => reorderTargetOf(r, isTodo, packedToday, bounceEnabled);
+  const vectors = reorderVectorsOf(deps);
+  const bounceEnabled = vectors.bounce;
+  const base = (r: MoveeRow): ScopeTarget => reorderTargetOf(r, isTodo, packedToday, vectors);
   if (verb !== "reorder") return { targetOf: base };
 
   // The coherence set is the movees PLUS the anchor (spec: "the movee set AND
@@ -798,7 +833,7 @@ function resolveReorderAxis(
 
   // The shared index-axis container target, if the whole coherence set has one
   // (classifying each row as though it sat in its container's anytime bucket).
-  const indexTargets = coherence.map((r) => indexAxisTargetOf(r, bounceEnabled));
+  const indexTargets = coherence.map((r) => indexAxisTargetOf(r, vectors));
   const indexKeys = new Set(indexTargets.map(containerKey));
   const indexTarget =
     sameKind && indexKeys.size === 1 && indexTargets[0]?.scope != null
@@ -812,9 +847,9 @@ function resolveReorderAxis(
   // axis stripped, §9o) — without this a forecast row would classify to the `day`
   // scope and the explicit `--in` would be overridden by the day route.
   const indexClassifier = (r: MoveeRow): ScopeTarget => {
-    if (viewOf(r, packedToday) !== null) return indexAxisTargetOf(r, bounceEnabled);
+    if (viewOf(r, packedToday) !== null) return indexAxisTargetOf(r, vectors);
     if (forecastDeadlineDay(r, packedToday) !== null)
-      return forecastIndexTargetOf(r, packedToday, bounceEnabled);
+      return forecastIndexTargetOf(r, packedToday, vectors);
     return base(r);
   };
 
@@ -973,7 +1008,7 @@ function resolveReorderAxis(
       };
     }
     if (view !== null) {
-      const forced = indexAxisTargetOf(rows[0] as MoveeRow, bounceEnabled);
+      const forced = indexAxisTargetOf(rows[0] as MoveeRow, vectors);
       if (!indexAxisTodaySafe(forced)) {
         return {
           refused: refused(
@@ -1022,7 +1057,7 @@ function resolveReorderAxis(
   // coherent on only the day axis → it auto-routes to `day` below, no refusal.)
   const forecastDay = sharedForecastDay(rows, packedToday);
   if (rows.length >= 2 && view === null && forecastDay !== null) {
-    const fTargets = rows.map((r) => forecastIndexTargetOf(r, packedToday, bounceEnabled));
+    const fTargets = rows.map((r) => forecastIndexTargetOf(r, packedToday, vectors));
     const fKeys = new Set(fTargets.map(containerKey));
     // A cross-kind forecast set has no shared container index (kinds isolate), so it
     // is coherent on ONLY the day-block axis — not dual-axis. Auto-route it there
@@ -1202,6 +1237,100 @@ function resolveMovee(deps: WriteDeps, ref: string): { uuid: string } | Referenc
   }
 }
 
+/**
+ * The `things reorder` MOVEE ref, resolved by NAME — the tier the uuid /
+ * partial-uuid pass above leaves for it, and the same tiered
+ * {@link resolveNamedRef} core the verb's AXIS ref (`--in "Home"`) has always
+ * used (exact title → case-insensitive → normalized → decorated `Title [ref]`).
+ * Before this, a movee could be named ONLY by uuid or partial-uuid while the
+ * axis beside it took a title, which read as a bug to anyone who typed one.
+ *
+ * Kind-neutral by construction: to-dos, projects and headings all live in
+ * TMTask, so ONE name pass covers the three task kinds the verb rearranges
+ * (sidebar areas live in TMArea and are resolved beside this by the caller).
+ *
+ * The name pool is LIVE + OPEN (`trashed = 0 AND status = 0`): a completed,
+ * canceled or trashed row holds no slot in any rendered order, so it is never a
+ * reorder operand, and a dead twin must not shadow the live row the caller
+ * means. An explicit uuid / partial-uuid still reaches any row through the tier
+ * above, where the engine's own guards report it precisely.
+ *
+ * Duplicate titles are ordinary in Things, so an ambiguous name is REFUSED
+ * fail-closed with the candidates listed — never a silent pick.
+ *
+ * The table is spelled `TMTask t`: the resolver aliases nothing (its own
+ * predicates are unqualified and still bind), while the container-scope clause —
+ * which IS written on alias `t` — keeps binding, so the no-oracle guarantee
+ * covers the name tiers exactly as it covers the uuid tiers.
+ */
+function resolveMoveeByName(deps: WriteDeps, ref: string): NamedResolution {
+  const scope = deps.scope !== undefined ? taskMembershipClause(deps.scope) : undefined;
+  return resolveNamedRef(deps.db, "TMTask t", "trashed = 0 AND status = 0", [], ref, {
+    prefixTier: false,
+    ...(scope !== undefined && { scopeWhere: scope.where, scopeBinds: scope.binds }),
+  });
+}
+
+/** Fixed-shape candidates for an ambiguous movee name, each tagged with its kind. */
+function moveeCandidates(deps: WriteDeps, rows: { uuid: string; title: string }[]): CandidateRef[] {
+  const stmt = deps.db.prepare("SELECT type FROM TMTask WHERE uuid = ?");
+  return rows
+    .slice(0, CANDIDATE_CAP)
+    .map((r) =>
+      candidateRef(
+        CANDIDATE_KIND[(stmt.get(r.uuid) as { type: number } | undefined)?.type ?? 0] ?? "to-do",
+        r,
+      ),
+    );
+}
+
+/** The task-kind candidate types, keyed by TMTask.type. */
+const CANDIDATE_KIND: Record<number, "to-do" | "project" | "heading"> = {
+  0: "to-do",
+  1: "project",
+  2: "heading",
+};
+
+/**
+ * The ambiguous-NAME refusal for a movee ref — the same fail-closed shape a
+ * project write target gives: the count, then one pasteable `Title [ref]` line
+ * per candidate (tagged with its kind, since this slot spans three of them).
+ */
+function ambiguousMoveeRefusal(deps: WriteDeps, ref: string, r: NamedResolution): MoveRefused {
+  const candidates = moveeCandidates(deps, r.candidates ?? []);
+  const lines = candidates
+    .map((c) => `  ${fusedRef(c.title, c.uuid)} (${c.type ?? "to-do"})`)
+    .join("\n");
+  const more = r.matches > candidates.length ? `\n  … ${r.matches - candidates.length} more` : "";
+  return {
+    kind: "move-refused",
+    op: "todo.move",
+    refusal: "usage",
+    detail: `"${ref}" matches ${r.matches} items — disambiguate with a ref below:\n${lines}${more}`,
+    candidates,
+  };
+}
+
+/**
+ * Resolve a `--before` / `--after` ANCHOR exactly the way a movee ref resolves,
+ * so the anchor may be named by title too — the two are the same slot, and an
+ * anchor that had to be a uuid beside title-named movees would be a new
+ * asymmetry in place of the one this removes. An anchor that resolves to
+ * NOTHING is passed through exactly as typed: the engine's own anchor validation
+ * owns that refusal copy (and its "not a member" / "wrong bucket" wording).
+ */
+function resolveAnchorPosition(
+  deps: WriteDeps,
+  position: MovePosition | undefined,
+): MovePosition | undefined {
+  if (position === undefined || !("before" in position || "after" in position)) return position;
+  const raw = "before" in position ? position.before : position.after;
+  if (!(resolveMovee(deps, raw) instanceof ReferenceResolutionError)) return position;
+  const byName = resolveMoveeByName(deps, raw);
+  if (byName.resolved === null) return position;
+  return "before" in position ? { before: byName.resolved.uuid } : { after: byName.resolved.uuid };
+}
+
 // --------------------------------------------------------------- todo move
 
 export function runTodoMove(
@@ -1316,7 +1445,7 @@ async function runTodoMoveUnlocked(
     rows.map((r) => todoLandedRow(deps, dest, r)),
     true,
     packedToday,
-    deps.config.bounceEnabled,
+    reorderVectorsOf(deps),
   );
   // Fail-closed BEFORE any membership leg: an explicit --before/--after into a
   // destination bucket with no guaranteed protocol cannot be honored, so refuse
@@ -1546,9 +1675,9 @@ function uniformLanding(
   landed: MoveeRow[],
   isTodo: boolean,
   packedToday: number,
-  bounceEnabled: boolean,
+  vectors: ReorderVectors,
 ): ScopeTarget {
-  const targets = landed.map((r) => reorderTargetOf(r, isTodo, packedToday, bounceEnabled));
+  const targets = landed.map((r) => reorderTargetOf(r, isTodo, packedToday, vectors));
   const keys = new Set(targets.map(containerKey));
   return keys.size === 1
     ? (targets[0] as ScopeTarget)
@@ -1657,7 +1786,7 @@ async function runProjectMoveUnlocked(
     rows.map((r) => ({ ...r, area: landedArea })),
     false,
     packedToday,
-    deps.config.bounceEnabled,
+    reorderVectorsOf(deps),
   );
   const anchorRefusal = preflightAnchor(op, position, landing);
   if (anchorRefusal !== null) return anchorRefusal;
@@ -1892,19 +2021,10 @@ export async function runUniversalReorder(
         continue;
       }
     }
-    // Not a task ref — try a sidebar area (areas live in TMArea, not TMTask).
-    const a = resolveArea(deps.db, { uuid: ref, title: ref });
-    if (a.resolved !== null) {
-      classified.push({ kind: "area", uuid: a.resolved.uuid, ref, title: a.resolved.title });
-      continue;
-    }
-    // Neither a task nor an area — surface an AMBIGUOUS task match (its candidates
-    // are the useful signal); a clean not-found names all four kinds.
-    if (
-      t instanceof ReferenceResolutionError &&
-      t.candidates !== undefined &&
-      t.candidates.length > 0
-    ) {
+    // An AMBIGUOUS partial-uuid is a genuine collision between two ids, and its
+    // candidates are the useful signal — surface it verbatim rather than falling
+    // through to the name tiers (the precedence every other resolver keeps).
+    if (t instanceof ReferenceResolutionError && t.code === "ambiguous") {
       return {
         kind: "move-refused",
         op: "todo.move",
@@ -1913,12 +2033,75 @@ export async function runUniversalReorder(
         candidates: t.candidates,
       };
     }
-    return refused("todo.move", "usage", `no to-do, project, heading, or area matches "${ref}"`);
+    // Not addressed by id — the NAME tiers. The task kinds and the sidebar areas
+    // are resolved SIDE BY SIDE because this verb rearranges both, so a name that
+    // hits one of each is genuinely ambiguous and refuses naming both. (The area
+    // pass is `resolveArea`'s own core, taken directly for its candidate rows.)
+    const byName = resolveMoveeByName(deps, ref);
+    const byArea = resolveNamedRef(deps.db, "TMArea", "1=1", [], ref);
+    if (byName.resolved !== null && byArea.resolved !== null) {
+      const task = moveeCandidates(deps, [byName.resolved]);
+      const area = candidateRef("area", byArea.resolved);
+      return {
+        kind: "move-refused",
+        op: "todo.move",
+        refusal: "usage",
+        detail:
+          `"${ref}" names both the ${task[0]?.type ?? "to-do"} ` +
+          `${fusedRef(byName.resolved.title, byName.resolved.uuid)} and the area ` +
+          `${fusedRef(byArea.resolved.title, byArea.resolved.uuid)} — \`reorder\` rearranges ` +
+          "either kind, so name the one you mean with a ref below",
+        candidates: [...task, area],
+      };
+    }
+    if (byName.resolved !== null) {
+      const row = loadRow(deps.db, byName.resolved.uuid);
+      if (row !== undefined) {
+        const kind = row.type === 1 ? "project" : row.type === 2 ? "heading" : "todo";
+        classified.push({ kind, uuid: row.uuid, ref, row });
+        continue;
+      }
+    }
+    if (byArea.resolved !== null) {
+      classified.push({
+        kind: "area",
+        uuid: byArea.resolved.uuid,
+        ref,
+        title: byArea.resolved.title,
+      });
+      continue;
+    }
+    // Several same-named rows of one kind: fail closed with the candidates, never
+    // a silent pick (duplicate titles are ordinary in Things).
+    if (byName.matches > 1) return ambiguousMoveeRefusal(deps, ref, byName);
+    if (byArea.matches > 1) {
+      const candidates = (byArea.candidates ?? [])
+        .slice(0, CANDIDATE_CAP)
+        .map((c) => candidateRef("area", c));
+      return {
+        kind: "move-refused",
+        op: "todo.move",
+        refusal: "usage",
+        detail:
+          `"${ref}" matches ${byArea.matches} areas — disambiguate with a ref below:\n` +
+          candidates.map((c) => `  ${fusedRef(c.title, c.uuid)}`).join("\n"),
+        candidates,
+      };
+    }
+    return refused(
+      "todo.move",
+      "usage",
+      `no to-do, project, heading, or area matches "${ref}" — tried uuid, partial-uuid, and name`,
+    );
   }
 
   const kinds = new Set(classified.map((c) => c.kind));
   const hasHeading = kinds.has("heading");
   const hasArea = kinds.has("area");
+  // The ANCHOR resolves like a movee, so it too may be a title — except on the
+  // area path, whose own anchor resolution reads TMArea (a same-named task must
+  // never capture an area anchor).
+  const position = hasArea ? request.position : resolveAnchorPosition(deps, request.position);
 
   // Mixed-kind refusal (item 2): only a to-do+project set may share a call (and
   // only on a global axis, enforced downstream). A heading or an area never mixes.
@@ -1964,7 +2147,7 @@ export async function runUniversalReorder(
     return runHeadingReorder(
       deps,
       classified.filter((c): c is TaskClassified => c.kind === "heading"),
-      request.position,
+      position,
       options,
     );
   }
@@ -1972,7 +2155,18 @@ export async function runUniversalReorder(
   // through project.move; any to-do present routes through todo.move (which handles
   // the to-do+project global-axis intermix and refuses a non-global mixed set).
   const op: MoveOp = kinds.has("todo") ? "todo.move" : "project.move";
-  return runInPlaceReorder(deps, op, request, options);
+  // The engine below addresses rows by id only — NAME resolution is this verb's
+  // entry-point job — so it is handed the resolved uuids, movees and anchor alike.
+  return runInPlaceReorder(
+    deps,
+    op,
+    {
+      ...request,
+      uuids: classified.map((c) => c.uuid),
+      ...(position !== undefined && { position }),
+    },
+    options,
+  );
 }
 
 /** The project's heading uuids in current display (index) order. */
@@ -2919,7 +3113,7 @@ function groupByReorderTarget(
 ): LandingGroup[] {
   const groups = new Map<string, LandingGroup>();
   for (const r of rows) {
-    const target = reorderTargetOf(r, r.type === 0, packedToday, deps.config.bounceEnabled);
+    const target = reorderTargetOf(r, r.type === 0, packedToday, reorderVectorsOf(deps));
     const key = containerKey(target);
     const g = groups.get(key);
     if (g !== undefined) g.rows.push(r);
