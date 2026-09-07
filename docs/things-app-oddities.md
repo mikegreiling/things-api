@@ -1543,6 +1543,36 @@ So the reachable-by-accident state is narrow, and no ordinary GUI use produces i
 
 **The ask:** either let the second `AXPress` on a pop-up leave the sheet in the state a menu-item press leaves it in, or — failing that — report the refusal, so a client can tell a swallowed action from a completed one. Evidence: [lab/rawax1-repeat-drive.md](lab/rawax1-repeat-drive.md) §5.9 (both variants, three rounds each, with the tree dumped at the moment of refusal: one sheet, no open `AXMenu`, Things frontmost).
 
+## 35. Things 3.23: a ⌘-arrow reorder across a Today entry-cohort boundary silently REWRITES the row's entry date — and unlike every other silent crossing, this one leaves no `userModificationDate` (CHORD4, 2026-09-07, golden-v4 / Things 3.23 build 32300036)
+
+The Today list is ordered `startBucket ASC, COALESCE(todayIndexReferenceDate, startDate, deadline) DESC, todayIndex ASC, uuid ASC` — the day a row ENTERED Today outranks its manual position, which is what keeps yesterday's leftovers below today's new work. Select the last row of one entry cohort and press ⌘↓ once:
+
+```
+LAB-REPEAT-DAILY, last row of the 2026-07-05 cohort, ⌘↓ (one slot, onto a 2026-07-04 row)
+  CHANGED <passed row>.todayIndex:              0 -> -539
+  CHANGED <mover>.todayIndexReferenceDate:      2026-07-05 -> 2026-07-04
+  0 alert beeps · no userModificationDate on ANY of the 39 untrashed rows
+```
+
+The app does not decline the move; it makes the position expressible by **re-dating the row's entry into Today**, backwards, to the cohort it is moving toward. The change is durable across a relaunch and it is **one-way** — pressing ⌘↑ to put the row back writes only `todayIndex` and leaves the row permanently filed in the older cohort. So a person tidying their Today list one keystroke at a time slowly migrates rows out of the "entered today" group, and the only visible symptom arrives tomorrow, when a row they touched sorts with the wrong day's work.
+
+**What makes it worth reporting is the second half.** Things is otherwise admirably consistent about this: every other silent membership change the same chord can perform — a headed child deported to the project root, a loose row adopted by a heading, a This Evening row carried into the daytime section — stamps `userModificationDate`, which is exactly the signal a sync peer or an assistive client needs to notice that something more than a reorder happened. A pure rank move stamps nothing, correctly. The cohort re-stamp is the one case that changes durable, order-affecting state and reports it like a pure rank move. There is nothing for a client to observe after the fact.
+
+**The ask:** either decline the crossing (the cohort boundary is a real grouping and the app already declines at the top of the list, with a beep), or perform it and stamp `userModificationDate` like every other silent crossing does. Evidence: [lab/chord4-today-cohort.md](lab/chord4-today-cohort.md) §3 (full 41-column diff over every untrashed row, before and after, plus the relaunch read).
+
+### 35a. …and any chord on a someday-stage row pinned into Today promotes it to anytime (`start` 2 → 1), also silently
+
+The same campaign's isolation cell moves a `start = 2` row that carries a Today start date **inside** its own cohort — no boundary, no section change:
+
+```
+LAB-PINNED-TODAY (start = 2, startDate = today), ⌘↑, one slot, same cohort
+  CHANGED <mover>.start:       2 -> 1
+  CHANGED <mover>.todayIndex:  0 -> -201
+  0 alert beeps · no userModificationDate
+```
+
+Reordering a row changes its scheduling stage. It is a small change — the row is showing in Today either way — but it is a state change made by a gesture that presents itself as a reorder, and again with no modification stamp. Evidence: [lab/chord4-today-cohort.md](lab/chord4-today-cohort.md) §4.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
