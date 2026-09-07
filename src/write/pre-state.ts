@@ -18,6 +18,7 @@ import { logBoundary } from "../read/log-boundary.ts";
 import { todayOrderBy } from "../read/predicates.ts";
 import { deadNameMatchHint, resolveHeadingRef, resolveNamedRef } from "../read/queries.ts";
 import type { ContainerRef, HeadingPlacement, ReorderParams } from "./operations.ts";
+import { columnPredicate } from "./vectors/ui-chord-todo.ts";
 
 export interface ResolvedContainer {
   uuid: string;
@@ -78,6 +79,27 @@ export interface ReorderPre {
   mixedTypes: boolean;
   /** Full wire list: requested order first, remaining members after. */
   wireList: string[];
+  /**
+   * CHORD4 — the day-axis CHORD column exactly as the VIEW renders it (the
+   * `today` / `evening` scopes only; null on every other). Two things make it
+   * a different list from {@link wireList}, and the chord vector needs both:
+   *
+   *  - **Order.** {@link todayOrderBy}, not the rank column — the entry COHORT
+   *    outranks `todayIndex`, and the gesture moves a row one DISPLAYED slot.
+   *  - **Membership.** A SUPERSET of the scope on `today`: a deadline-pulled row
+   *    (undated, dragged in by a due deadline) is rendered, shares the
+   *    `todayIndex` axis and is renumbered by a chord stepping over it (CHORD4
+   *    §1). It is never a movee — it is a slot the walk has to count.
+   *
+   * Each entry carries its entry COHORT so the pre-flight fence can refuse a
+   * requested position that would cross a boundary (see `cohortFenceViolation`).
+   */
+  chordColumn: { uuid: string; title: string; cohort: number | null }[] | null;
+  /**
+   * The consumer day, packed — pinned at plan time so the drive keeps asserting
+   * against the list it planned for even if it straddles local midnight.
+   */
+  packedToday: number;
   /**
    * TODWIRE — the MINIMAL native `list "Today"` wire (today scope only; null on
    * every other scope). The native reorder re-stamps every NAMED row's
@@ -1786,8 +1808,41 @@ export function computeReorderPre(
     todayRestampNonMovees = todayWire.filter((u) => !namedMovees.has(u));
   }
 
+  // CHORD4 — the day-axis chord column, as the view renders it. One predicate,
+  // shared with the driver's own oracle (`columnPredicate`), so the target order
+  // the planner compiles and the list the drive asserts against cannot drift.
+  let chordColumn: ReorderPre["chordColumn"] = null;
+  if (params.scope === "today" || params.scope === "evening") {
+    const { where, binds, orderBy } = columnPredicate(params.scope, packedToday);
+    chordColumn = (
+      db
+        .prepare(
+          `SELECT uuid, COALESCE(title,'') AS title,
+                  COALESCE(todayIndexReferenceDate, startDate, deadline) AS cohort,
+                  start, startDate, startBucket
+           FROM TMTask WHERE ${where} ORDER BY ${orderBy}`,
+        )
+        .all(...binds) as unknown as {
+        uuid: string;
+        title: string;
+        cohort: number | null;
+        start: number;
+        startDate: number | null;
+        startBucket: number | null;
+      }[]
+    )
+      .filter((r) =>
+        params.scope === "today"
+          ? todayPlacement(r, packedToday) !== "evening"
+          : todayPlacement(r, packedToday) === "evening",
+      )
+      .map((r) => ({ uuid: r.uuid, title: r.title, cohort: r.cohort }));
+  }
+
   return {
     key,
+    chordColumn,
+    packedToday,
     members: members.map((m) => ({
       uuid: m.uuid,
       title: m.title,

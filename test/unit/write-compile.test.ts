@@ -381,6 +381,8 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
     const pre = emptyPreState();
     pre.reorder = {
       key: "index",
+      chordColumn: null,
+      packedToday: 0,
       members: [],
       rejected: [],
       duplicates: [],

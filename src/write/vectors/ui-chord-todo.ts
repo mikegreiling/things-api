@@ -1,7 +1,8 @@
 /**
  * IN-CONTAINER TO-DO ORDER on the arrow-chord vector (CHORD2 — the full law
  * matrix, docs/lab/chord2-reorder-laws.md; built as CHORD3,
- * docs/lab/chord3-todo-chord-op.md).
+ * docs/lab/chord3-todo-chord-op.md; extended to the DAY axis by CHORD4,
+ * docs/lab/chord4-today-cohort.md).
  *
  * THE LAW THIS RIDES (measured, Things 3.23 / golden-v4, CHORD2 cells 1B/1C,
  * 2a, 3, 4, 6a):
@@ -32,6 +33,16 @@
  *     destructive collapse. This driver selects exactly ONE row at a time, so
  *     the shape cannot arise; the op's own fence refuses a non-contiguous
  *     request before the drive starts.
+ *  4. **On the DAY axis, a cohort crossing is silent AND `umd`-silent**
+ *     (CHORD4 §3) — the one exception to hazard 1's tripwire. The Today list is
+ *     grouped by the day each row ENTERED Today before it is ordered by hand,
+ *     and a chord that would cross a group boundary does not decline: it
+ *     re-dates the mover's entry to the destination group, durably, one-way,
+ *     with no `userModificationDate` on any row. So the day-axis columns carry a
+ *     PRE-FLIGHT cohort fence (`cohortFenceViolation`, asked by the pipeline one
+ *     read before the drive so a refusal can fall back to the bounce with
+ *     nothing mutated) and the per-chord assertion below compares the cohort as
+ *     well as the containment digest.
  *
  * WHY IT IS A CLOSED LOOP. A bare keybinding on an undocumented surface has no
  * contract (harness.md §AX-drive scrutiny): the DATABASE is the only oracle. So
@@ -45,6 +56,8 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { todayPlacement } from "../../model/today-placement.ts";
+import { todayOrderBy } from "../../read/predicates.ts";
 import { chordCommand, chordGlyph, planChordStep, type ChordStep } from "./ui-chord.ts";
 import type { UiCommand, UiRunner } from "./ui.ts";
 
@@ -56,7 +69,12 @@ import type { UiCommand, UiRunner } from "./ui.ts";
  * chord needs, because the gesture moves a row one DISPLAYED slot and the
  * assertion is made against the member column.
  */
-export type TodoChordColumn = "area-someday" | "anytime";
+export type TodoChordColumn = "area-someday" | "anytime" | "today" | "evening";
+
+/** The day-axis columns — the two whose rank key is `todayIndex` (CHORD4). */
+export function isDayAxisColumn(column: TodoChordColumn): boolean {
+  return column === "today" || column === "evening";
+}
 
 /**
  * The chord column a `reorder` SCOPE maps onto, or null when the scope has no
@@ -67,15 +85,16 @@ export type TodoChordColumn = "area-someday" | "anytime";
  * certified batch at a time so each arrives with its own cell verdicts.
  */
 export function todoChordColumnOf(scope: string): TodoChordColumn | null {
-  return scope === "area-someday" || scope === "anytime" ? scope : null;
+  return scope === "area-someday" || scope === "anytime" || scope === "today" || scope === "evening"
+    ? scope
+    : null;
 }
 
 /** The rank column a {@link TodoChordColumn} is ordered on. */
-export function columnRankKey(_column: TodoChordColumn): "index" | "todayIndex" {
-  // Both PR-1 columns are `index` columns (CHORD2 §4: Someday and Anytime both
-  // re-rank on `index`). The signature carries the day-axis columns that the
-  // `today` / `evening` migration adds next.
-  return "index";
+export function columnRankKey(column: TodoChordColumn): "index" | "todayIndex" {
+  // CHORD2 §4's per-view column map: Someday and Anytime re-rank on `index`,
+  // Today and This Evening on `todayIndex`.
+  return isDayAxisColumn(column) ? "todayIndex" : "index";
 }
 
 /**
@@ -87,8 +106,13 @@ export function columnRankKey(_column: TodoChordColumn): "index" | "todayIndex" 
  * there, whereas an area view ranks every direct member — someday and anytime
  * alike — on one interleaved `index` axis. `anytime` reveals the Anytime stage
  * list, where the area-less loose rows are the ungrouped block at the top.
+ *
+ * `today` and `evening` BOTH reveal `today`: This Evening is a SECTION of the
+ * Today view, not a view of its own (CHORD2 §4, CHORD4 §1 — the AX census shows
+ * one table with a `This Evening` header row inside it).
  */
 export function columnViewId(column: TodoChordColumn): string {
+  if (isDayAxisColumn(column)) return "today";
   return column === "area-someday" ? "someday" : "anytime";
 }
 
@@ -97,6 +121,14 @@ export interface TodoChordSpec {
   column: TodoChordColumn;
   /** The area whose someday members are being reordered; null for `anytime`. */
   containerUuid: string | null;
+  /**
+   * The consumer day, packed — the clock the day-axis columns' membership is
+   * judged against ({@link todayPlacement}). Pinned at PLAN time and reused for
+   * every read the drive makes, so a drive that straddles local midnight keeps
+   * asserting against the list it planned for instead of silently switching
+   * columns mid-walk. Ignored by the `index` columns.
+   */
+  packedToday: number;
   /**
    * Every member of the column, in the order they must end up in — the full end
    * state, not just the moved block, so it doubles as the verification target.
@@ -128,10 +160,22 @@ export interface TodoColumnRow {
   bucket: string;
   /**
    * `userModificationDate`. A pure rank move leaves it alone (§6a); every
-   * measured crossing stamped it. The cheap tripwire for "did this chord
-   * silently reparent something?".
+   * measured CONTAINER crossing stamped it. The cheap tripwire for "did this
+   * chord silently reparent something?".
    */
   umd: number | null;
+  /**
+   * The Today ENTRY COHORT — `COALESCE(todayIndexReferenceDate, startDate,
+   * deadline)`, the second key of {@link todayOrderBy} — or null on the `index`
+   * columns, which have no such dimension.
+   *
+   * It is a tripwire in its own right, and the ONE the `umd` field cannot serve
+   * (CHORD4 §3): a chord across a cohort boundary re-stamps the mover's entry
+   * date to the destination cohort's key, durably and one-way, with **no** `umd`
+   * on any row. So the cohort is asserted per chord as well, behind the
+   * pre-flight fence that stops such a chord being posted at all.
+   */
+  cohort: number | null;
 }
 
 /** The database read the driver asserts against between chords. */
@@ -146,6 +190,8 @@ export interface TodoOrderState {
 export type TodoOrderReader = (spec: {
   column: TodoChordColumn;
   containerUuid: string | null;
+  /** The consumer day, packed — see {@link TodoChordSpec.packedToday}. */
+  packedToday: number;
 }) => TodoOrderState;
 
 /** `project|heading|area|start|startBucket` — see {@link TodoColumnRow.bucket}. */
@@ -153,57 +199,234 @@ const BUCKET_EXPR =
   "COALESCE(project,'')||'|'||COALESCE(heading,'')||'|'||COALESCE(area,'')||'|'||" +
   "COALESCE(start,-1)||'|'||COALESCE(startBucket,-1)";
 
+/** `COALESCE(todayIndexReferenceDate, startDate, deadline)` — {@link todayOrderBy}'s cohort key. */
+const COHORT_EXPR = "COALESCE(todayIndexReferenceDate, startDate, deadline)";
+
+/** The rows a chord ROW is never counted among, on any column. */
+const NOT_TEMPLATE = "(rt1_recurrenceRule IS NULL AND repeater IS NULL)";
+
 /**
- * The member predicate per column — the SAME predicate `computeReorderPre` uses
- * for the scope, so the planner's target order and the driver's oracle are the
- * one list. Kept here as data so the two can be diff-tested against each other.
+ * The DERIVED-trash chain (A24B): a row whose heading or effective project is
+ * trashed is not rendered, so it is not a slot the gesture can step over.
  */
-export function columnPredicate(column: TodoChordColumn): { where: string; binds: number } {
-  return column === "area-someday"
-    ? {
-        where:
-          "type = 0 AND trashed = 0 AND status = 0 AND area = ? AND heading IS NULL " +
-          "AND start = 2 AND startDate IS NULL",
-        binds: 1,
-      }
-    : {
-        where:
-          "type = 0 AND trashed = 0 AND status = 0 AND project IS NULL AND area IS NULL " +
-          "AND heading IS NULL AND start = 1 AND startDate IS NULL",
-        binds: 0,
-      };
+const EFF_PROJECT =
+  "COALESCE(TMTask.project, (SELECT h.project FROM TMTask h WHERE h.uuid = TMTask.heading))";
+const CONTAINER_UNTRASHED =
+  "(TMTask.heading IS NULL OR EXISTS (SELECT 1 FROM TMTask hh WHERE hh.uuid = TMTask.heading AND hh.trashed = 0)) " +
+  `AND (${EFF_PROJECT} IS NULL OR EXISTS (SELECT 1 FROM TMTask cc WHERE cc.uuid = ${EFF_PROJECT} AND cc.trashed = 0))`;
+
+/**
+ * The member predicate per column, in the order the VIEW renders them.
+ *
+ * The `index` columns are the SAME predicate `computeReorderPre` uses for the
+ * scope, so the planner's target order and the driver's oracle are the one list.
+ *
+ * THE DAY-AXIS COLUMNS ARE NOT (CHORD4 §1, §5.3), and the difference is the
+ * reason this takes a clock:
+ *
+ *  - Membership is SQL **plus a host-side placement rule** — `startBucket = 1`
+ *    alone is not This Evening, because evening expires daily and a STALE
+ *    bucket-1 row is rendered in Today PROPER ({@link todayPlacement}, STEV1).
+ *    So the SQL admits the arrived set and {@link todayPlacement} splits it.
+ *  - The `today` column is a **SUPERSET of the `today` reorder scope**: a
+ *    DEADLINE-PULLED row (undated, dragged into Today by a due deadline) is
+ *    rendered, ranks on the same `todayIndex` axis, and CHORD4 measured a chord
+ *    stepping over one renumbering it. The gesture counts DISPLAYED slots, so
+ *    the driver's column has to be what the view renders. Such a row is never a
+ *    movee — `movees` fences that — it is a slot to step over.
+ *  - The order is {@link todayOrderBy}, not the rank column: the entry COHORT
+ *    outranks `todayIndex`. CHORD4 confirmed that comparator reproduces the
+ *    app's rendered order to the `uuid` tiebreak.
+ */
+export function columnPredicate(
+  column: TodoChordColumn,
+  packedToday: number,
+): { where: string; binds: (string | number)[]; orderBy: string } {
+  if (column === "area-someday") {
+    return {
+      where:
+        "type = 0 AND trashed = 0 AND status = 0 AND area = ? AND heading IS NULL " +
+        "AND start = 2 AND startDate IS NULL",
+      binds: [""],
+      orderBy: `"index", uuid`,
+    };
+  }
+  if (column === "anytime") {
+    return {
+      where:
+        "type = 0 AND trashed = 0 AND status = 0 AND project IS NULL AND area IS NULL " +
+        "AND heading IS NULL AND start = 1 AND startDate IS NULL",
+      binds: [],
+      orderBy: `"index", uuid`,
+    };
+  }
+  const orderBy = todayOrderBy();
+  if (column === "evening") {
+    // The live This Evening section: arrived, bucket-1 — and the host-side
+    // placement filter keeps only the rows whose evening flag is still LIVE.
+    return {
+      where:
+        `type IN (0, 1) AND trashed = 0 AND status = 0 AND ${NOT_TEMPLATE} AND ${CONTAINER_UNTRASHED} ` +
+        "AND startDate IS NOT NULL AND startDate <= ? AND start IN (1, 2) AND startBucket = 1",
+      binds: [packedToday],
+      orderBy,
+    };
+  }
+  // `today`: the rendered Today-PROPER section — the scheduled arm plus the
+  // BANNER1 deadline-pull arm, with the live evening rows removed host-side.
+  return {
+    where:
+      `type IN (0, 1) AND trashed = 0 AND status = 0 AND ${NOT_TEMPLATE} AND ${CONTAINER_UNTRASHED} ` +
+      "AND ((startDate IS NOT NULL AND startDate <= ? AND start IN (1, 2)) " +
+      "OR (deadline IS NOT NULL AND deadline <= ? AND startDate IS NULL " +
+      "AND (deadlineSuppressionDate IS NULL OR deadlineSuppressionDate < deadline)))",
+    binds: [packedToday, packedToday],
+    orderBy,
+  };
 }
 
 /** The client-side default: the column's members + their crossing tripwires. */
 export function createTodoOrderReader(db: DatabaseSync): TodoOrderReader {
-  return ({ column, containerUuid }): TodoOrderState => {
-    const { where, binds } = columnPredicate(column);
+  return ({ column, containerUuid, packedToday }): TodoOrderState => {
+    const { where, binds, orderBy } = columnPredicate(column, packedToday);
     const rankCol = columnRankKey(column) === "index" ? `"index"` : "todayIndex";
-    const rows = db
-      .prepare(
-        `SELECT uuid, COALESCE(title,'') AS title, ${rankCol} AS rank, ${BUCKET_EXPR} AS bucket, ` +
-          `userModificationDate AS umd FROM TMTask WHERE ${where} ORDER BY ${rankCol}, uuid`,
-      )
-      .all(...(binds === 1 ? [containerUuid ?? ""] : [])) as unknown as {
-      uuid: string;
-      title: string;
-      rank: number;
-      bucket: string;
-      umd: number | null;
-    }[];
+    const rows = (
+      db
+        .prepare(
+          `SELECT uuid, COALESCE(title,'') AS title, ${rankCol} AS rank, ${BUCKET_EXPR} AS bucket, ` +
+            // The entry cohort belongs to the DAY axis alone. Read on an `index`
+            // column it would be noise that arms the fence by accident: a loose
+            // anytime row carrying a DEADLINE has a non-null `COALESCE(tiRef,
+            // startDate, deadline)` and no entry grouping whatsoever.
+            `${isDayAxisColumn(column) ? COHORT_EXPR : "NULL"} AS cohort, start, startDate, startBucket, ` +
+            `userModificationDate AS umd FROM TMTask WHERE ${where} ORDER BY ${orderBy}`,
+        )
+        .all(...(column === "area-someday" ? [containerUuid ?? ""] : binds)) as unknown as {
+        uuid: string;
+        title: string;
+        rank: number;
+        bucket: string;
+        cohort: number | null;
+        start: number;
+        startDate: number | null;
+        startBucket: number | null;
+        umd: number | null;
+      }[]
+    ).filter((r) => {
+      // The host-side half of the day-axis membership ({@link todayPlacement}).
+      // A deadline-pulled row (startDate NULL) has no placement and is never an
+      // evening member; it belongs to the rendered `today` column.
+      if (column === "today") return todayPlacement(r, packedToday) !== "evening";
+      if (column === "evening") return todayPlacement(r, packedToday) === "evening";
+      return true;
+    });
     const hash = createHash("sha256");
-    for (const r of rows) hash.update(`${r.uuid}:${r.rank}:${r.bucket}:${r.umd}\n`);
+    for (const r of rows) hash.update(`${r.uuid}:${r.rank}:${r.bucket}:${r.cohort}:${r.umd}\n`);
     return {
       rows: rows.map((r) => ({
         uuid: r.uuid,
         title: r.title,
         rank: r.rank,
         bucket: r.bucket,
+        cohort: r.cohort,
         umd: r.umd,
       })),
       digest: hash.digest("hex"),
     };
   };
+}
+
+/**
+ * The chord's end state for a DAY-AXIS column: the rendered column with the
+ * movee block lifted out and spliced back in at the requested position.
+ *
+ * The `index` columns can use `wireList` directly, because there the wire order
+ * IS the displayed order and the wire covers the whole column. On the day axis
+ * neither holds (CHORD4 §1): the displayed order is {@link todayOrderBy}, and
+ * the rendered column includes rows the reorder SCOPE does not admit. So the
+ * target is derived instead — every non-movee keeps its displayed position
+ * relative to the others, and the movees land as one block.
+ *
+ * The insertion point is read out of `requested`, which already encodes the
+ * caller's placement: `--first` puts the movees at the head (no preceding
+ * non-movee → the front of the column), `--last` and `--before`/`--after` put
+ * them after a specific row, which is the row this looks for.
+ */
+export function chordTargetOrder(
+  displayed: readonly string[],
+  requested: readonly string[],
+  movees: ReadonlySet<string>,
+): string[] {
+  const inColumn = new Set(displayed);
+  const block = requested.filter((u) => movees.has(u) && inColumn.has(u));
+  if (block.length === 0) return [...displayed];
+  const firstMoveeAt = requested.findIndex((u) => movees.has(u));
+  let anchorBefore: string | null = null;
+  for (let i = firstMoveeAt - 1; i >= 0; i--) {
+    const u = requested[i] as string;
+    if (!movees.has(u) && inColumn.has(u)) {
+      anchorBefore = u;
+      break;
+    }
+  }
+  const rest = displayed.filter((u) => !movees.has(u));
+  const anchorAt = anchorBefore === null ? -1 : rest.indexOf(anchorBefore);
+  const insertAt = anchorBefore === null ? 0 : anchorAt < 0 ? rest.length : anchorAt + 1;
+  return [...rest.slice(0, insertAt), ...block, ...rest.slice(insertAt)];
+}
+
+/**
+ * THE COHORT FENCE (CHORD4, ruling 2026-09-07) — pre-flight, before any chord.
+ *
+ * The Today list is grouped by ENTRY COHORT before it is ordered by the manual
+ * rank ({@link todayOrderBy}), and a chord that would carry a row across a
+ * cohort boundary does NOT decline: it re-stamps the mover's
+ * `todayIndexReferenceDate` to the destination cohort's key — backwards,
+ * durably, one-way — and stamps no `userModificationDate` on any row, so
+ * nothing downstream of the gesture can notice (CHORD4 §3, oddities §35).
+ *
+ * So the crossing is refused before it is posted. Two conditions, both cheap:
+ *
+ *  1. every named movee shares ONE cohort (a set spanning cohorts cannot be
+ *     gathered into a contiguous block without a crossing), and
+ *  2. the target order preserves the column's cohort SEQUENCE — every row stays
+ *     inside its own cohort's block, so every ±1 the walk plans is intra-cohort.
+ *
+ * Returns the refusal sentence, or null when the move is inside one cohort.
+ * `index` columns have no cohort dimension and always pass.
+ */
+export function cohortFenceViolation(
+  rows: readonly TodoColumnRow[],
+  target: readonly string[],
+  movees: ReadonlySet<string>,
+): string | null {
+  if (rows.every((r) => r.cohort === null)) return null;
+  const cohortOf = new Map(rows.map((r) => [r.uuid, r.cohort]));
+  const named = [...movees].filter((u) => cohortOf.has(u));
+  const moveeCohorts = new Set(named.map((u) => cohortOf.get(u)));
+  if (moveeCohorts.size > 1) {
+    return (
+      `the ${named.length} to-do(s) named do not share one Today entry group — this list is ` +
+      "grouped by the day each item entered Today before it is ordered by hand, and the " +
+      "keyboard reorder cannot move an item between groups without silently re-dating its " +
+      "entry. Reorder the items of one group at a time"
+    );
+  }
+  const current = rows.map((r) => r.cohort);
+  const wanted = target.map((u) => cohortOf.get(u) ?? null);
+  for (let i = 0; i < current.length; i++) {
+    if (current[i] === wanted[i]) continue;
+    const uuid = target[i] ?? "";
+    const row = rows.find((r) => r.uuid === uuid);
+    return (
+      `the requested position would move "${row?.title ?? uuid}" into a different Today entry ` +
+      "group — this list is grouped by the day each item entered Today before it is ordered by " +
+      "hand, and the keyboard reorder reaches that position only by silently re-dating the " +
+      "item's entry. Reschedule the item (`things todo update <ref> --when today`) to move it " +
+      "into today's group first, then reorder inside it"
+    );
+  }
+  return null;
 }
 
 // -------------------------------------------------------------- the ladder
@@ -302,6 +525,15 @@ export function todoSingleRowWriteViolation(
         "chord changed something other than the order"
       );
     }
+    if (now.cohort !== row.cohort) {
+      // CHORD4 §3: the one silent crossing `umd` does NOT mark. Behind the
+      // pre-flight fence this is unreachable; it is the backstop for a column
+      // whose cohort structure changed between planning and this chord.
+      return (
+        `it re-dated to-do ${row.uuid}'s entry into Today — a reorder does not, so this chord ` +
+        "moved the row into a different entry group instead of reordering it"
+      );
+    }
     if (now.rank !== row.rank) rewritten.push(row.uuid);
   }
   const outside = rewritten.filter((u) => !spanned.has(u));
@@ -370,7 +602,12 @@ export async function driveTodoChordReorder(
   }
   const ctx: TodoCtx = {
     run,
-    state: () => reader({ column: spec.column, containerUuid: spec.containerUuid }),
+    state: () =>
+      reader({
+        column: spec.column,
+        containerUuid: spec.containerUuid,
+        packedToday: spec.packedToday,
+      }),
     sleep,
     selectScript,
     visibleTitlesScript,
@@ -397,6 +634,15 @@ export async function driveTodoChordReorder(
   }
   if (sameOrder(preOrder, target)) {
     return { ok: true, chords: 0, detail: "already in the requested order — no chord was sent" };
+  }
+
+  // THE COHORT FENCE (CHORD4). The pipeline runs it too, one read earlier, so
+  // that a refusal can fall back to the schedule round-trip with nothing
+  // mutated; this is the same question asked of the list as it stands NOW, the
+  // moment before the first chord.
+  const cohortRefusal = cohortFenceViolation(pre.rows, target, new Set(spec.movees));
+  if (cohortRefusal !== null) {
+    return { ok: false, chords: 0, detail: `${cohortRefusal}. Nothing was moved` };
   }
 
   // THE VIEW FENCE (CHORD2 §4bf). The chord moves a row one DISPLAYED slot, so
