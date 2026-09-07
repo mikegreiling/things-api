@@ -73,6 +73,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { trace } from "../../trace/tracer.ts";
 import { createHeadingOrderReader, type HeadingOrderReader } from "./ui-chord.ts";
+import { createTodoOrderReader, type TodoOrderReader } from "./ui-chord-todo.ts";
 import { axReopenActivateScript, type SessionLockState } from "./session-lock.ts";
 import {
   observerAwait,
@@ -128,12 +129,15 @@ export interface UiDriveAux {
   areaState?: () => AreaSidebarState;
   /** Heading order + child containment for one project (the chord driver's oracle). */
   headingOrder?: HeadingOrderReader;
+  /** One container column's to-do order + crossing tripwires (the to-do chord driver's oracle). */
+  todoOrder?: TodoOrderReader;
 }
 
 /** The client-side default aux: reads area order + assignments from the DB. */
 export function createUiDriveAux(db: DatabaseSync): UiDriveAux {
   return {
     headingOrder: createHeadingOrderReader(db),
+    todoOrder: createTodoOrderReader(db),
     areaState(): AreaSidebarState {
       const areas = db
         .prepare(`SELECT uuid, title, "index" AS idx FROM TMArea ORDER BY "index", uuid`)

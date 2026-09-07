@@ -216,6 +216,19 @@ export type UiPrimitive =
    */
   | "chord-reorder"
   /**
+   * Reorder TO-DOS inside one container column with the same arrow chords
+   * (CHORD3, on the CHORD2 law matrix). Same closed loop as `chord-reorder` and
+   * the same absence of any menu, context-menu or AX-action equivalent — what
+   * differs is the row kind and therefore the hazards: a to-do row is selected
+   * by UUID readback rather than by position, the column being reordered is a
+   * SUBSET of the rows the view renders, and a chord fired at the column's edge
+   * REPARENTS the row silently instead of declining (CHORD2 §3a/§3f/§4be2). So
+   * the driver walks one slot at a time, never takes the ⌘⌥ endpoint shortcut,
+   * and asserts containment and `userModificationDate` alongside the order after
+   * every chord. See src/write/vectors/ui-chord-todo.ts.
+   */
+  | "chord-reorder-todo"
+  /**
    * Select a PROJECT as a content-table ROW by matching its title, purely via
    * AX (UIC4-a): the content table's `AXSelectedRows` is settable, so the
    * driver walks the table's rows, sets each as the selection, and reads back
@@ -474,6 +487,14 @@ export interface UiStep {
   drag?: import("./ui-drag.ts").SidebarDragSpec;
   /** chord-reorder only: the heading order the chord driver steps the project into. */
   chord?: import("./ui-chord.ts").HeadingChordSpec;
+  /** chord-reorder-todo only: the container column the chord driver steps into order. */
+  todoChord?: import("./ui-chord-todo.ts").TodoChordSpec;
+  /**
+   * reveal only: open the view WITHOUT foregrounding Things (`open -g`). Set by
+   * the recipes whose whole gesture is background-capable, so navigating to the
+   * list does not take the focus their drive is careful never to touch.
+   */
+  backgroundReveal?: boolean;
   /**
    * set-datetime only: WHICH of the dialog's date areas to drive (ANCH2). The
    * driver selects deterministically — `reminder` = the only time-bearing area;

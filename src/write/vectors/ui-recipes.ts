@@ -41,6 +41,7 @@ import type {
   YearlyAnchor,
 } from "../operations.ts";
 import type { HeadingChordSpec } from "./ui-chord.ts";
+import { columnViewId, type TodoChordSpec } from "./ui-chord-todo.ts";
 import type { SidebarPlacement } from "./ui-drag.ts";
 import type { NodeSettledObservable, SettleSpec } from "./ui-observer.ts";
 import {
@@ -398,6 +399,61 @@ export function moveHeadingChordRecipe(
         primitive: "chord-reorder",
         label: `reorder ${spec.movees.length} heading(s) with the arrow chords`,
         chord: spec,
+      },
+    ],
+  };
+}
+
+/**
+ * Reorder the TO-DOS of one container column with the arrow chords (CHORD3, on
+ * the CHORD2 law matrix). The ui-vector implementation of the `reorder`
+ * operation — the same verb the `when=` bounce serves on hosts without
+ * Accessibility, reaching the same order by a different transport.
+ *
+ * Three steps and no element to press, like its heading sibling: reveal the
+ * list the column lives in WITHOUT foregrounding Things, confirm the content
+ * table is rendered, and hand the whole move to the to-do chord driver, which
+ * checks the list for hidden rows, selects each row by UUID readback and posts
+ * one verified chord at a time (src/write/vectors/ui-chord-todo.ts).
+ *
+ * NO `activate` step and a BACKGROUNDED reveal, deliberately: the row selection
+ * is pure System Events and the chord is posted to the Things PROCESS rather
+ * than to the focused surface, so the whole gesture runs with Things behind
+ * whatever the user is looking at (CHORD2 §1: Finder frontmost at every stage,
+ * zero disruption-monitor events, for the to-do row kind as well as the heading).
+ *
+ * `needsWindowReachability` is set even though no sheet opens: the rows only
+ * exist in a rendered list, so a locked screen or a full-screen Space refuses
+ * (SESSGATE) rather than posting chords at a window nothing can read back. That
+ * refusal is a POLICY choice, not a capability limit — CHORDLK1 measured both
+ * the chord landing under a lock and a to-do row still being addressable there
+ * by URL — and the pipeline answers it by falling back to the bounce.
+ */
+export function todoChordReorderRecipe(base: Omit<TodoChordSpec, "tablePath">): UiRecipe {
+  const spec: TodoChordSpec = { ...base, tablePath: PROJECT_CONTENT_TABLE };
+  return {
+    op: "reorder",
+    targetUuid: columnViewId(spec.column),
+    needsWindowReachability: true,
+    steps: [
+      {
+        primitive: "reveal",
+        label: `open the ${columnViewId(spec.column)} list in Things without bringing it forward`,
+        value: columnViewId(spec.column),
+        backgroundReveal: true,
+      },
+      {
+        // Canaried: if the list's content table is not there, the drive refuses
+        // before a single chord is posted.
+        primitive: "resolve",
+        label: "confirm the list's content table is present",
+        path: PROJECT_CONTENT_TABLE,
+        addressing: "title",
+      },
+      {
+        primitive: "chord-reorder-todo",
+        label: `reorder ${spec.movees.length} to-do(s) with the arrow chords`,
+        todoChord: spec,
       },
     ],
   };

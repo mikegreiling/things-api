@@ -53,6 +53,7 @@ import {
 } from "./session-reachability.ts";
 import { certificationOf } from "./ui-certification.ts";
 import { chordCommand, driveHeadingChordReorder } from "./ui-chord.ts";
+import { driveTodoChordReorder } from "./ui-chord-todo.ts";
 import {
   AX_SETTLE_LOG_PREFIX,
   inertSettleInjector,
@@ -108,6 +109,7 @@ import type {
   UiRecipe,
   UiStep,
   VectorMatrix,
+  VectorSupport,
   WriteVector,
 } from "./types.ts";
 
@@ -239,6 +241,17 @@ export interface UiCommand {
   script?: string;
   /** reveal only: the things:/// URL opened to select the target. */
   url?: string;
+  /**
+   * reveal only: open the URL WITHOUT bringing Things forward (`open -g`).
+   *
+   * A plain `open` hands the URL to LaunchServices, which activates the handler
+   * app — fine for a recipe that is about to drive a sheet the user will watch,
+   * wrong for one that must not touch the user's focus at all. The chord
+   * recipes are the second kind: CHORD2 §1 measured the whole gesture (reveal,
+   * select, chord) with Finder frontmost throughout and the guest's disruption
+   * monitor recording zero events, and that measurement was taken with `-g`.
+   */
+  background?: boolean;
   /** `script` language for the osascript hop; defaults to AppleScript. */
   lang?: "applescript" | "javascript";
   /** Structured command parameters (test-inspectable; never dispatched). */
@@ -2672,6 +2685,80 @@ return "NOMATCH"`;
 }
 
 /**
+ * select-row-by-id: select a to-do row by its UUID, purely via AX (CHORD3, on
+ * the CHORD2 §10.3 rig lesson).
+ *
+ * The title-matching sibling above is the right primitive when the title is
+ * unique in the view, and the wrong one the moment two rows share it — which is
+ * exactly what an `add-repeating` fixture produces (a template row and its
+ * occurrence, same title, both rendered) and what the chord reorder cannot
+ * afford to get wrong: the gesture moves whatever is selected. `Things3 → id of
+ * selected to dos` answers with the row's UUID, so identity is checked against
+ * the thing the caller actually named rather than against a label.
+ *
+ * Same walk and the same VMRES1 correction as `select-row`: issue the row's
+ * `select` action (single-select, UIC5), settle, require `selected of (row i)`
+ * — the row THIS iteration targeted must itself hold the selection, because the
+ * readback lags the action — then compare the selection's uuid. Non-selectable
+ * rows (headers, the blank spacer) select nothing and are skipped; a HEADING row
+ * selects but reads back no to-do id, so it is skipped too. Returns "OK" with the
+ * row left selected, or "NOMATCH". Pure System Events, background-capable, no
+ * focus steal.
+ */
+export function axSelectRowByIdScript(tablePath: string, uuid: string): string {
+  const u = escapeAppleScript(uuid);
+  return `tell application "System Events" to tell process "Things3"
+  set theTable to (${tablePath})
+  set n to (count rows of theTable)
+  repeat with i from 1 to n
+    try
+      select (row i of theTable)
+      delay 0.25
+      if (selected of (row i of theTable)) then
+        tell application "Things3" to set selIds to (id of selected to dos)
+        if (count of selIds) is 1 and ((item 1 of selIds) as text) is "${u}" then
+          return "OK"
+        end if
+      end if
+    end try
+  end repeat
+end tell
+return "NOMATCH"`;
+}
+
+/**
+ * visible-row-titles: every label the revealed content table is RENDERING, in
+ * one Apple event (CHORD3's view fence).
+ *
+ * The chord moves a row one DISPLAYED slot (CHORD2 §4bf), so a reorder is only
+ * sound while every row of the list being reordered is on screen: a tag filter
+ * or a search that hides one makes a single ⌘↑ jump two slots of that list. The
+ * caller compares this inventory against the rows the database says the list
+ * holds and refuses when any are missing. Hidden rows that are NOT part of that
+ * list are harmless and deliberately not reported.
+ *
+ * `value of static texts of <table>` is the plural form — one Apple event for
+ * the whole table rather than one per row (the RDLAT2 inventory lesson) — and it
+ * returns the row labels plus whatever chrome the view renders, which is why the
+ * comparison is one-directional (missing means hidden; extra means nothing).
+ */
+export function axVisibleRowTitlesScript(tablePath: string): string {
+  return `tell application "System Events" to tell process "Things3"
+  set sv to {}
+  try
+    set sv to (value of static texts of (${tablePath}))
+  end try
+  set out to ""
+  repeat with v in sv
+    try
+      set out to out & (v as text) & linefeed
+    end try
+  end repeat
+  return out
+end tell`;
+}
+
+/**
  * select-heading-row: select a HEADING as a content-table row by POSITION,
  * purely via AX (HEADCERT1). A heading is not `things:///show`-selectable and
  * its row carries no stable AX title handle, so identity is positional. Walks
@@ -3640,7 +3727,8 @@ async function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunR
   if (command.primitive === "reveal") {
     // `open` is consent-free (LaunchServices, no AppleEvent) — never routed.
     return new Promise((resolve) => {
-      execFile("open", [command.url ?? ""], { timeout: timeoutMs }, (err, stdout, stderr) => {
+      const args = command.background === true ? ["-g", command.url ?? ""] : [command.url ?? ""];
+      execFile("open", args, { timeout: timeoutMs }, (err, stdout, stderr) => {
         const timedOut = err !== null && (err as { killed?: boolean }).killed === true;
         resolve({
           ok: err === null,
@@ -4091,7 +4179,12 @@ export function commandForStep(
   }
   switch (step.primitive) {
     case "reveal":
-      return { primitive: "reveal", label: step.label, url: revealUrl(step.value ?? targetUuid) };
+      return {
+        primitive: "reveal",
+        label: step.label,
+        url: revealUrl(step.value ?? targetUuid),
+        ...(step.backgroundReveal === true && { background: true }),
+      };
     case "activate":
       // LOCKSCR2: one stable shape, and it carries the session read. The gate
       // that used to cost its own spawn now rides the drive's FIRST script.
@@ -4279,9 +4372,10 @@ export function commandForStep(
         script: jxaSidebarSnapshotScript([]),
       };
     case "chord-reorder":
-      // Composite step: drive() hands it to the heading-chord driver, which
-      // dispatches its own select/chord commands through `run` and asserts the
-      // database between them. This shape only exists so the step renders and
+    case "chord-reorder-todo":
+      // Composite step: drive() hands it to the heading- or to-do-chord driver,
+      // which dispatches its own select/chord commands through `run` and asserts
+      // the database between them. This shape only exists so the step renders and
       // compiles uniformly; the chord it names is the FIRST hop's, and the
       // driver recomputes every subsequent one from the live order.
       return chordCommand("up-one");
@@ -4795,7 +4889,10 @@ function recipeNeedsUnlockedSession(recipe: UiRecipe): boolean {
   return (
     recipe.needsWindowReachability === true ||
     recipe.steps.some(
-      (step) => step.primitive === "drag-reorder" || step.primitive === "chord-reorder",
+      (step) =>
+        step.primitive === "drag-reorder" ||
+        step.primitive === "chord-reorder" ||
+        step.primitive === "chord-reorder-todo",
     )
   );
 }
@@ -5618,6 +5715,26 @@ async function driveSteps(
       done.push(`${step.label} (${outcome.detail})`);
       continue;
     }
+    if (step.primitive === "chord-reorder-todo") {
+      // The to-do chord driver runs its own fence → select → chord → DB-assert
+      // loop (ui-chord-todo.ts): the list is checked for hidden rows before
+      // anything is posted, every chord is computed from the order it just read,
+      // and a chord that moves nothing (or moves the wrong row, or reparents one)
+      // stops the drive rather than being re-sent.
+      if (step.todoChord === undefined) return partial(step.label, "no chord spec compiled");
+      const spec = step.todoChord;
+      // the chord ladder depends on the UI state the reveal produced
+      const outcome = await driveTodoChordReorder(
+        spec,
+        run,
+        aux.todoOrder,
+        (uuid) => axSelectRowByIdScript(spec.tablePath, uuid),
+        axVisibleRowTitlesScript(spec.tablePath),
+      );
+      if (!outcome.ok) return partial(step.label, outcome.detail);
+      done.push(`${step.label} (${outcome.detail})`);
+      continue;
+    }
     if (step.primitive === "chord-reorder") {
       // The heading-chord driver runs its own select → chord → DB-assert loop
       // (ui-chord.ts): every chord is computed from the order it just read, and
@@ -5919,8 +6036,37 @@ async function driveSteps(
   };
 }
 
+/**
+ * `reorder`'s ui entry, which is NOT one of the GUI-only ops.
+ *
+ * Every {@link UI_DRIVE_OPS} member is a verb with no headless spelling at all,
+ * declared at tier 3 because its drive foregrounds Things and takes the pointer
+ * or the focus. `reorder` is a different animal: it HAS headless spellings (the
+ * native re-rank, the `when=` bounce) and the ui vector is a THIRD
+ * implementation of the same operation — the arrow chords, which CHORD2 §1
+ * measured end to end with Things backgrounded, Finder frontmost and the
+ * disruption monitor recording zero events. So it is declared at tier 0 and
+ * carries no per-call GUI-drive acknowledgement: the `ui.enabled` config is the
+ * one key, and what it opts into is a transport that never takes the screen.
+ */
+function reorderChordSupport(): VectorSupport {
+  const cert = certificationOf("reorder");
+  return {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    ...(cert !== undefined && { evidence: cert.evidence }),
+    notes:
+      `reorders one list with the app's own arrow-key shortcuts (${cert?.status ?? "uncertified"})` +
+      " — it needs Accessibility but not the screen: the list is opened without bringing Things " +
+      "forward, the row is selected through the Accessibility API and the keystroke is delivered " +
+      "to the Things process, so nothing takes the focus. Covers the area-someday and area-less " +
+      "anytime lists; a locked or full-screen session falls back to the when= bounce.",
+  };
+}
+
 function enabledMatrix(): VectorMatrix {
-  const matrix: VectorMatrix = {};
+  const matrix: VectorMatrix = { reorder: reorderChordSupport() };
   for (const op of UI_DRIVE_OPS) {
     const cert = certificationOf(op);
     matrix[op] = {
@@ -5945,6 +6091,8 @@ function enabledMatrix(): VectorMatrix {
 
 function disabledMatrix(): VectorMatrix {
   const matrix: VectorMatrix = {};
+  // `reorder` is absent rather than "no": it has headless spellings, so the
+  // planner must see no ui entry at all and route to them, not read a refusal.
   for (const op of UI_DRIVE_OPS) {
     matrix[op] = {
       support: "no",
