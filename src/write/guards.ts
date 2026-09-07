@@ -14,6 +14,7 @@ import {
   type RescheduleRepeatParams,
 } from "./operations.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
+import type { VectorId } from "./vectors/types.ts";
 
 export const HAZARD_IDS = [
   "H-REPEAT-SCHEDULE",
@@ -58,6 +59,16 @@ export interface GuardInput {
   params: Record<string, unknown>;
   pre: PreState;
   acks: Acknowledgements;
+  /**
+   * The vector the caller pinned for this dispatch, when one was pinned. Almost
+   * no guard consults it — a hazard is a property of the mutation, not of how it
+   * travels. `H-REORDER-SCOPE`'s evening clause is the exception: it fences the
+   * NATIVE `list "Today"` command's own behaviour (it normalizes `startBucket`,
+   * silently de-evening-ing every row it names, O03), and the arrow chord shares
+   * neither the command nor the behaviour (CHORD4: a within-section chord writes
+   * one `todayIndex` and leaves `startBucket` alone).
+   */
+  forcedVector?: VectorId;
 }
 
 type GuardFn = (input: GuardInput) => GuardBlock | null;
@@ -495,20 +506,22 @@ const GUARDS: Record<HazardId, GuardFn> = {
       "canceled via the certified flip legs) rather than writing the completion date directly";
     return { hazard: "H-BACKDATE-OPEN", detail, remediation };
   },
-  "H-REORDER-SCOPE": ({ op, params, pre }) => {
+  "H-REORDER-SCOPE": ({ op, params, pre, forcedVector }) => {
     if (op !== "reorder" || pre.reorder === null) return null;
     const problems: string[] = [];
     // The `reorder` operation IS the native private command. Evening must
     // never reach it: a native reorder normalizes startBucket to the Today
     // list, silently de-evening-ing members (O03). The evening scope is
     // served by the bounce orchestrator in reorder.ts instead.
-    if (params["scope"] === "evening") {
+    if (params["scope"] === "evening" && forcedVector !== "ui") {
       return {
         hazard: "H-REORDER-SCOPE",
         detail:
-          "evening reorder is bounce-only: the native command would silently clear " +
+          "evening reorder has no native surface: the native command would silently clear " +
           "startBucket on every listed item (O03)",
-        remediation: "use write.reorder / `things reorder <refs…> --in evening` (bounce strategy)",
+        remediation:
+          "use write.reorder / `things reorder <refs…> --in evening`, which routes to the " +
+          "arrow chord or the schedule round-trip",
       };
     }
     if (

@@ -1210,6 +1210,7 @@ export async function runMutation<K extends OperationKind>(
       params: params as Record<string, unknown>,
       pre,
       acks,
+      ...(options.vector !== undefined && { forcedVector: options.vector }),
     });
     if (block !== null) {
       audit({ result: blockedCode({ hazard: block.hazard, reason: "hazard" }) });
@@ -1374,6 +1375,7 @@ export async function runMutation<K extends OperationKind>(
     const delta = spec.expectedDelta(pre, params, {
       nowEpoch,
       todayIso,
+      vector: vector.id,
       ...(effectiveZone !== undefined && { zone: effectiveZone }),
     });
 

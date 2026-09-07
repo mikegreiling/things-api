@@ -15,16 +15,21 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { todayOrderBy } from "../../src/read/predicates.ts";
 import {
+  chordTargetOrder,
+  cohortFenceViolation,
   columnPredicate,
   columnRankKey,
   columnViewId,
   createTodoOrderReader,
   driveTodoChordReorder,
+  isDayAxisColumn,
   planTodoChordStep,
   todoChordColumnOf,
   todoSingleRowWriteViolation,
   type TodoChordSpec,
+  type TodoColumnRow,
   type TodoOrderState,
 } from "../../src/write/vectors/ui-chord-todo.ts";
 import type { ChordId } from "../../src/write/vectors/ui-chord.ts";
@@ -92,7 +97,14 @@ class TodoSim {
   state = (): TodoOrderState => {
     const rows = this.rows
       .filter((r) => r.member)
-      .map((r) => ({ uuid: r.uuid, title: r.uuid, rank: r.rank, bucket: r.bucket, umd: r.umd }));
+      .map((r) => ({
+        uuid: r.uuid,
+        title: r.uuid,
+        rank: r.rank,
+        bucket: r.bucket,
+        umd: r.umd,
+        cohort: null,
+      }));
     return { rows, digest: rows.map((r) => `${r.uuid}:${r.rank}:${r.bucket}:${r.umd}`).join("|") };
   };
 
@@ -187,6 +199,7 @@ function specFor(target: string[], movees: string[]): TodoChordSpec {
   return {
     column: "anytime",
     containerUuid: null,
+    packedToday: 0,
     targetOrder: target,
     movees,
     tablePath: TABLE,
@@ -218,16 +231,27 @@ describe("the column map", () => {
   it("maps only the scopes whose chord behaviour is measured", () => {
     expect(todoChordColumnOf("area-someday")).toBe("area-someday");
     expect(todoChordColumnOf("anytime")).toBe("anytime");
-    for (const scope of ["today", "evening", "day", "heading", "project", "someday", "inbox"]) {
+    expect(todoChordColumnOf("today")).toBe("today");
+    expect(todoChordColumnOf("evening")).toBe("evening");
+    for (const scope of ["day", "heading", "project", "someday", "inbox", "projects"]) {
       expect(todoChordColumnOf(scope)).toBeNull();
     }
   });
 
-  it("ranks both PR-1 columns on index and reveals a stage list for each", () => {
+  it("ranks each column on its measured axis and reveals the view that renders it", () => {
+    // CHORD2 §4's per-view column map.
     expect(columnRankKey("anytime")).toBe("index");
     expect(columnRankKey("area-someday")).toBe("index");
+    expect(columnRankKey("today")).toBe("todayIndex");
+    expect(columnRankKey("evening")).toBe("todayIndex");
     expect(columnViewId("anytime")).toBe("anytime");
     expect(columnViewId("area-someday")).toBe("someday");
+    // This Evening is a SECTION of the Today view, not a view of its own.
+    expect(columnViewId("today")).toBe("today");
+    expect(columnViewId("evening")).toBe("today");
+    expect(isDayAxisColumn("today")).toBe(true);
+    expect(isDayAxisColumn("evening")).toBe(true);
+    expect(isDayAxisColumn("anytime")).toBe(false);
   });
 
   it("keeps the member predicate in step with the reorder scope's own", () => {
@@ -235,17 +259,149 @@ describe("the column map", () => {
     // these predicates are transcribed from computeReorderPre's `area-someday`
     // and `anytime` cases, and a drift between them would silently reorder a
     // different set than the one the caller was shown.
-    const areaSomeday = columnPredicate("area-someday");
-    expect(areaSomeday.binds).toBe(1);
+    const areaSomeday = columnPredicate("area-someday", 0);
+    expect(areaSomeday.binds).toHaveLength(1);
     expect(areaSomeday.where).toContain("area = ?");
     expect(areaSomeday.where).toContain("heading IS NULL");
     expect(areaSomeday.where).toContain("start = 2");
     expect(areaSomeday.where).toContain("startDate IS NULL");
-    const anytime = columnPredicate("anytime");
-    expect(anytime.binds).toBe(0);
+    expect(areaSomeday.orderBy).toContain(`"index"`);
+    const anytime = columnPredicate("anytime", 0);
+    expect(anytime.binds).toHaveLength(0);
     expect(anytime.where).toContain("project IS NULL");
     expect(anytime.where).toContain("area IS NULL");
     expect(anytime.where).toContain("start = 1");
+  });
+
+  it("takes the clock for the day-axis columns, and orders them by the VISIBLE comparator", () => {
+    // CHORD4 §1: the entry cohort outranks the manual rank, and that comparator
+    // reproduced the app's rendered order to the uuid tiebreak. Ordering the
+    // driver's oracle by `todayIndex` instead would misfire on the first chord.
+    const today = columnPredicate("today", 132805248);
+    expect(today.orderBy).toBe(todayOrderBy());
+    expect(today.orderBy).toContain("startBucket ASC");
+    expect(today.orderBy).toContain("todayIndexReferenceDate");
+    expect(today.binds).toEqual([132805248, 132805248]);
+    // The rendered Today section is a SUPERSET of the reorder scope: a
+    // deadline-pulled row is a slot the gesture counts (CHORD4 section 1).
+    expect(today.where).toContain("deadline <= ?");
+    expect(today.where).toContain("deadlineSuppressionDate");
+    // Project rows share the axis (O12).
+    expect(today.where).toContain("type IN (0, 1)");
+
+    const evening = columnPredicate("evening", 132805248);
+    expect(evening.orderBy).toBe(todayOrderBy());
+    expect(evening.binds).toEqual([132805248]);
+    expect(evening.where).toContain("startBucket = 1");
+    // …and a deadline-pulled row is never an evening member.
+    expect(evening.where).not.toContain("deadline <= ?");
+  });
+});
+
+// ----------------------------------------------------- the day-axis target order
+
+const movees = (...u: string[]): Set<string> => new Set(u);
+
+const cohortCol = (...rows: [string, number][]): TodoColumnRow[] =>
+  rows.map(([uuid, cohort]) => ({
+    uuid,
+    title: uuid.toUpperCase(),
+    rank: 0,
+    bucket: "b",
+    umd: 1,
+    cohort,
+  }));
+
+describe("chordTargetOrder", () => {
+  it("puts a --first request at the head of the RENDERED column", () => {
+    // `requested` is the movees alone — the shape --first/default produces.
+    expect(chordTargetOrder(["a", "b", "c", "d"], ["c"], movees("c"))).toEqual([
+      "c",
+      "a",
+      "b",
+      "d",
+    ]);
+  });
+
+  it("splices an anchored request after the row the request put before it", () => {
+    // --last: requested is the full member order with the movees at the end.
+    expect(chordTargetOrder(["a", "b", "c"], ["b", "c", "a"], movees("a"))).toEqual([
+      "b",
+      "c",
+      "a",
+    ]);
+    // --before c: requested is [a, MOVEE, c] so the movee lands after `a`.
+    expect(chordTargetOrder(["a", "b", "c", "d"], ["a", "d", "b", "c"], movees("d"))).toEqual([
+      "a",
+      "d",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("keeps a rendered NON-member in its displayed place — it is a slot, never a movee", () => {
+    // `p` is a deadline-pulled row: rendered, on the same axis, not in the scope.
+    // A --first request steps the movee over it without naming it.
+    expect(chordTargetOrder(["a", "p", "b"], ["b"], movees("b"))).toEqual(["b", "a", "p"]);
+  });
+
+  it("moves a multi-row request as one contiguous block", () => {
+    expect(chordTargetOrder(["a", "b", "c", "d"], ["c", "d"], movees("c", "d"))).toEqual([
+      "c",
+      "d",
+      "a",
+      "b",
+    ]);
+  });
+
+  it("returns the column untouched when no movee is in it", () => {
+    expect(chordTargetOrder(["a", "b"], ["z"], movees("z"))).toEqual(["a", "b"]);
+  });
+});
+
+// -------------------------------------------------------------- the cohort fence
+
+describe("cohortFenceViolation", () => {
+  const col = cohortCol;
+
+  it("passes a reorder that stays inside one entry group", () => {
+    const rows = col(["a", 5], ["b", 5], ["c", 5]);
+    expect(cohortFenceViolation(rows, ["c", "a", "b"], new Set(["c"]))).toBeNull();
+  });
+
+  it("passes a multi-group column when every movee stays in its own group", () => {
+    const rows = col(["a", 5], ["b", 5], ["c", 4], ["d", 4]);
+    expect(cohortFenceViolation(rows, ["b", "a", "c", "d"], new Set(["b"]))).toBeNull();
+    expect(cohortFenceViolation(rows, ["a", "b", "d", "c"], new Set(["d"]))).toBeNull();
+  });
+
+  it("REFUSES a position that would carry a row into another entry group", () => {
+    // CHORD4 section 3: the app does not decline this — it re-dates the row's
+    // entry into Today, durably, one-way, with no `umd` on any row.
+    const rows = col(["a", 5], ["b", 5], ["c", 4]);
+    const refusal = cohortFenceViolation(rows, ["c", "a", "b"], new Set(["c"]));
+    expect(refusal).not.toBeNull();
+    expect(refusal).toContain('"C"');
+    expect(refusal).toContain("entry");
+    expect(refusal).toContain("--when today");
+  });
+
+  it("REFUSES a movee set that spans two entry groups before looking at the target", () => {
+    const rows = col(["a", 5], ["b", 4]);
+    const refusal = cohortFenceViolation(rows, ["a", "b"], new Set(["a", "b"]));
+    expect(refusal).toContain("do not share one Today entry group");
+  });
+
+  it("is inert on the index columns, which have no entry grouping", () => {
+    const rows: TodoColumnRow[] = ["a", "b"].map((uuid) => ({
+      uuid,
+      title: uuid,
+      rank: 0,
+      bucket: "b",
+      umd: 1,
+      cohort: null,
+    }));
+    expect(cohortFenceViolation(rows, ["b", "a"], new Set(["b"]))).toBeNull();
   });
 });
 
@@ -278,7 +434,7 @@ describe("planTodoChordStep", () => {
 // ------------------------------------------------------------- the per-chord laws
 
 const st = (
-  rows: { uuid: string; rank: number; bucket?: string; umd?: number }[],
+  rows: { uuid: string; rank: number; bucket?: string; umd?: number; cohort?: number }[],
 ): TodoOrderState => ({
   rows: rows.map((r) => ({
     uuid: r.uuid,
@@ -286,6 +442,7 @@ const st = (
     rank: r.rank,
     bucket: r.bucket ?? "loose",
     umd: r.umd ?? 1,
+    cohort: r.cohort ?? null,
   })),
   digest: "d",
 });

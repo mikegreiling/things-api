@@ -85,7 +85,7 @@ import {
   resumeRepeatRecipe,
   type RepeatRuleExtras,
 } from "./vectors/ui-recipes.ts";
-import { todoChordColumnOf } from "./vectors/ui-chord-todo.ts";
+import { chordTargetOrder, isDayAxisColumn, todoChordColumnOf } from "./vectors/ui-chord-todo.ts";
 import type { SeedRowFacts } from "./vectors/ui-prefill.ts";
 import type { SidebarPlacement } from "./vectors/ui-drag.ts";
 import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
@@ -109,6 +109,16 @@ export interface DeltaCtx {
   todayIso: IsoDate;
   /** Effective consumer zone (see {@link CompileCtx.zone}). */
   zone?: string;
+  /**
+   * The vector this dispatch is running on. Almost no delta needs it — the same
+   * mutation is the same mutation however it is transported. `reorder` on the
+   * DAY axis does (CHORD4): the bounce mints fresh ascending `todayIndex` values
+   * and re-stamps the named rows into today's entry cohort, so its wire verifies
+   * as a strictly ascending run; the chord swaps existing ranks and re-stamps
+   * NOTHING, so the only thing that reads as ascending afterwards is the movee
+   * block inside its own cohort.
+   */
+  vector?: VectorId;
 }
 
 export interface CommandSpec<K extends OperationKind = OperationKind> {
@@ -1516,6 +1526,25 @@ const tagUpdate: CommandSpec<"tag.update"> = {
   },
 };
 
+/**
+ * The rows of the DAY-AXIS chord column that share the movees' entry cohort, in
+ * displayed order — the region an ordering inverse is well defined over
+ * (CHORD4; see the capture comment in `reorder.expectedDelta`). Empty when the
+ * column is unknown or the movees span cohorts, in which case nothing extra is
+ * captured and the movee-only inverse stands.
+ */
+function moveeCohortBlock(
+  pre: { chordColumn: { uuid: string; cohort: number | null }[] | null } | null | undefined,
+  movees: ReadonlySet<string>,
+): string[] | undefined {
+  const column = pre?.chordColumn;
+  if (column == null) return undefined;
+  const cohorts = new Set(column.filter((r) => movees.has(r.uuid)).map((r) => r.cohort));
+  if (cohorts.size !== 1) return undefined;
+  const [cohort] = [...cohorts];
+  return column.filter((r) => r.cohort === cohort).map((r) => r.uuid);
+}
+
 const reorder: CommandSpec<"reorder"> = {
   op: "reorder",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REORDER-SCOPE"],
@@ -1556,7 +1585,7 @@ const reorder: CommandSpec<"reorder"> = {
     pre.reorder = computeReorderPre(db, params, containerUuid, now, { admitResolved: true, zone });
     return pre;
   },
-  expectedDelta(pre, params) {
+  expectedDelta(pre, params, ctx) {
     // Verify the REQUESTED sequence (strictly ascending ranks). The wire
     // list pins the unrequested tail too, but the caller's contract is the
     // requested prefix; tail members are covered by pre-rank tripwires.
@@ -1577,8 +1606,19 @@ const reorder: CommandSpec<"reorder"> = {
         { field: "stoppedDate", equals: m.stoppedDate },
       ] satisfies FieldAssertion[],
     }));
-    const sequence =
-      params.scope === "today" && pre.reorder?.todayWire != null
+    // THE DAY AXIS VERIFIES DIFFERENTLY ON THE CHORD (CHORD4). The bounce and
+    // the native wire mint FRESH ascending `todayIndex` values for the rows they
+    // name and re-stamp those rows into today's entry cohort, so the whole wire
+    // reads back as one strictly ascending run. The chord swaps EXISTING ranks
+    // and re-stamps nothing, so the unnamed tail keeps its cohort-interleaved
+    // (non-monotonic) ranks and only the movee block — single-cohort by the
+    // pre-flight fence — is ascending. Assert exactly that block.
+    const chordColumn = todoChordColumnOf(params.scope);
+    const dayAxisChord =
+      ctx.vector === "ui" && chordColumn !== null && isDayAxisColumn(chordColumn);
+    const sequence = dayAxisChord
+      ? (params.named ?? params.uuids)
+      : params.scope === "today" && pre.reorder?.todayWire != null
         ? pre.reorder.todayWire
         : params.uuids;
     // UNDO NEEDS THE WHOLE COLUMN, not just the movees (CHORD3 cell 10). The
@@ -1589,12 +1629,30 @@ const reorder: CommandSpec<"reorder"> = {
     // column means the inverse names the previous order in full and lands it
     // exactly — the same thing `area.reorder` has always done for the sidebar.
     //
-    // CHORD COLUMNS ONLY, deliberately. On the `today` axis naming a row the
-    // caller did not name RE-STAMPS its entry cohort (TODWIRE/MOVPLC), so a
-    // whole-column inverse there would undo the order by damaging the grouping;
-    // those scopes keep the movee-only capture until that is designed.
-    const chordColumn = todoChordColumnOf(params.scope);
-    const capture = chordColumn !== null ? pre.reorder?.wireList : undefined;
+    // CHORD COLUMNS ONLY, deliberately — and on the DAY axis, only the movees'
+    // own entry-cohort BLOCK (CHORD4). Two reasons it cannot be the whole
+    // column there:
+    //
+    //  - `undo` reconstructs the previous order by sorting the captured ranks
+    //    ASCENDING, and on the day axis the rank is not the displayed order —
+    //    the entry cohort outranks it. Sorting a multi-cohort capture by
+    //    `todayIndex` would name an order the view never had.
+    //  - A whole-column inverse on the day axis would also name rows the caller
+    //    never touched, and on the BOUNCE (the inverse's fallback transport)
+    //    naming a row re-stamps its cohort (TODWIRE/MOVPLC) — undoing the order
+    //    by damaging the grouping.
+    //
+    // Inside ONE cohort neither applies: `todayIndex` ascending IS the displayed
+    // order, and the pre-flight fence guarantees a chord reorder never moved a
+    // row out of its cohort, so the block is intact to be restored. That gives
+    // the day axis the same single-row-undo fix the `index` columns got, scoped
+    // to the only region where the inverse is well defined.
+    const capture =
+      chordColumn === null
+        ? undefined
+        : isDayAxisColumn(chordColumn)
+          ? moveeCohortBlock(pre.reorder, new Set(params.named ?? params.uuids))
+          : pre.reorder?.wireList;
     return {
       mode: "ordering",
       key:
@@ -1616,16 +1674,33 @@ const reorder: CommandSpec<"reorder"> = {
       if (column === null) {
         throw new Error(`reorder: the ${params.scope} scope has no chord column (routing bug?)`);
       }
+      // Only the rows the caller NAMED may be chorded; on an anchored placement
+      // (`--last` / `--before` / `--after`) `params.uuids` is the whole target
+      // order, so the movee set comes from `named` when the orchestrator supplied
+      // it. Everything else in the column is a slot to step over.
+      const movees = new Set(params.named ?? params.uuids);
+      const displayed = pre.reorder?.chordColumn;
       return uiDrive(
         todoChordReorderRecipe({
           column,
           containerUuid: pre.destArea?.resolved?.uuid ?? null,
+          packedToday: pre.reorder?.packedToday ?? 0,
           // The full end state of the column: the named rows in the requested
           // order, then every member the caller did not name, in the order they
-          // already had (`wireList`). Same end state the bounce lands — the chord
-          // just reaches it without taking the rows out of the container.
-          targetOrder: [...(pre.reorder?.wireList ?? params.uuids)],
-          movees: [...params.uuids],
+          // already had. On the `index` columns that is `wireList`, whose order
+          // IS the displayed order. On the DAY axis it is not (CHORD4): the
+          // displayed order is `todayOrderBy`, and the column the gesture counts
+          // slots in is a SUPERSET of the scope, so the target is built by
+          // splicing the movee block into the rendered column instead.
+          targetOrder:
+            isDayAxisColumn(column) && displayed != null
+              ? chordTargetOrder(
+                  displayed.map((r) => r.uuid),
+                  params.uuids,
+                  movees,
+                )
+              : [...(pre.reorder?.wireList ?? params.uuids)],
+          movees: [...movees],
         }),
       );
     }

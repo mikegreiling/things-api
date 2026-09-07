@@ -77,7 +77,13 @@ import {
   type WriteOptions,
 } from "./pipeline.ts";
 import type { WriteVector } from "./vectors/types.ts";
-import { todoChordColumnOf, type TodoChordColumn } from "./vectors/ui-chord-todo.ts";
+import {
+  chordTargetOrder,
+  cohortFenceViolation,
+  isDayAxisColumn,
+  todoChordColumnOf,
+  type TodoChordColumn,
+} from "./vectors/ui-chord-todo.ts";
 import { simFenceActive } from "./vectors/simulator.ts";
 import { createDbReader, evaluateDelta } from "./verify/delta.ts";
 import { pollUntilVerified } from "./verify/poller.ts";
@@ -450,7 +456,16 @@ async function runChord(
   strategy: { column: TodoChordColumn; bounceKind: BounceKind | null },
   options: WriteOptions,
 ): Promise<ReorderResult> {
-  const result = await runMutation(deps, "reorder", params, { ...options, vector: "ui" });
+  // THE COHORT FENCE, PRE-FLIGHT (CHORD4, ruling 2026-09-07). Asked here rather
+  // than only inside the drive so a request the chord cannot express costs
+  // nothing — no reveal, no selection, no chord — and can still be served by the
+  // transport that CAN express it. The app does not decline such a chord: it
+  // re-dates the row's entry into Today, durably, one-way, with no
+  // `userModificationDate` on any row, so there is no after-the-fact signal to
+  // rely on. See `cohortFenceViolation`.
+  const fenced = chordCohortRefusal(deps, params, strategy.column);
+  const result =
+    fenced ?? (await runMutation(deps, "reorder", params, { ...options, vector: "ui" }));
   if (result.kind !== "blocked" || strategy.bounceKind === null) return result;
   // `blocked` is the pipeline's zero-mutation class (a hazard refusal or a
   // vector that refused before it touched the app), so the bounce can still run.
@@ -465,6 +480,50 @@ async function runChord(
       "rescheduled away and back to land it",
   );
   return attach(viaBounce, bag);
+}
+
+/**
+ * The pre-flight cohort check, as a `blocked` result the chord path can fall
+ * back from — or null when the requested order stays inside one Today entry
+ * group (and always, on the `index` columns, which have no such grouping).
+ *
+ * It reads the column the way the drive will (`computeReorderPre` →
+ * `chordColumn`, one predicate shared with the driver's own oracle) and builds
+ * the same end state `compile` will, so the question asked here is the question
+ * the drive would have asked one reveal later.
+ */
+function chordCohortRefusal(
+  deps: WriteDeps,
+  params: ReorderParams,
+  column: TodoChordColumn,
+): ReorderResult | null {
+  if (!isDayAxisColumn(column)) return null;
+  const pre = computeReorderPre(deps.db, params, null, deps.now?.() ?? new Date(), {
+    ...(deps.zone !== undefined && { zone: deps.zone }),
+  });
+  const displayed = pre.chordColumn;
+  if (displayed === null || displayed.length === 0) return null;
+  const movees = new Set(params.named ?? params.uuids);
+  const target = chordTargetOrder(
+    displayed.map((r) => r.uuid),
+    params.uuids,
+    movees,
+  );
+  const rows = displayed.map((r) => ({
+    uuid: r.uuid,
+    title: r.title,
+    rank: 0,
+    bucket: "",
+    umd: null,
+    cohort: r.cohort,
+  }));
+  const violation = cohortFenceViolation(rows, target, movees);
+  if (violation === null) return null;
+  return blocked(
+    violation,
+    "reschedule the item into today (`things todo update <ref> --when today`) and reorder " +
+      "inside that group, or re-run with `--strategy bounce` to accept the re-dating",
+  ).result as ReorderResult;
 }
 
 /**
@@ -768,6 +827,22 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
   }
   switch (params.scope) {
     case "today":
+      // CHORD4 — the day axis joins the chord vector. It is preferred over the
+      // native private command for the same reason the `index` columns are: the
+      // chord rewrites ONE row's rank and re-stamps nothing, where the native
+      // `list "Today"` wire re-stamps every row it names into today's entry
+      // cohort (TODWIRE/MOVPLC). The native wire is still what a cross-cohort
+      // request needs, and `runChord`'s pre-flight fence routes such a request
+      // to it (via the bounce) rather than posting a chord that would silently
+      // re-date the row.
+      if (chordColumn !== null && chordVectorAvailable(deps)) {
+        return {
+          kind: "ok",
+          strategy: "chord",
+          column: chordColumn,
+          bounceKind: deps.config.bounceEnabled ? "today" : null,
+        };
+      }
       return nativeAvailable
         ? { kind: "ok", strategy: "native" }
         : bounceOk(deps, "Today-section order", "today");

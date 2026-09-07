@@ -399,9 +399,10 @@ function reorderTargetOf(
   vectors: ReorderVectors,
 ): ScopeTarget {
   const bounceEnabled = vectors.bounce;
-  // THE MIGRATED CLASSES (CHORD3): `area-someday` and `anytime` are `index`-axis
-  // container orders the arrow chord re-ranks end to end, so they route whenever
-  // EITHER transport is available. Every other class is still bounce-only.
+  // THE MIGRATED CLASSES (CHORD3, extended by CHORD4): `area-someday` and
+  // `anytime` (the `index` axis) and `evening` (the day axis) are orders the
+  // arrow chord re-ranks end to end, so they route whenever EITHER transport is
+  // available. Every other bounce-only class still needs the bounce.
   const chordOrBounce = vectors.bounce || vectors.chord;
   if (row.isTemplate) {
     // A repeating template's Upcoming-day-block projection is a first-class todayIndex
@@ -472,10 +473,11 @@ function reorderTargetOf(
       // The evening flag is live (startBucket=1) only while startDate == today
       // (§9n), and `scheduleBucket` gates on exactly that — so only a LIVE evening
       // member reaches here; a stale one bucketed `today` above and routes to the
-      // today scope. A live evening member front-inserts via the shipped `evening`
-      // bounce (container FK + startBucket=1 preserved, R07 reminder-loss caveat
-      // inherited). Same scope for loose and every child.
-      return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
+      // today scope. CHORD4: the section is an arrow-chord column now too, so it
+      // routes whenever EITHER transport is available — the chord re-ranks it in
+      // place (and keeps `reminderTime`, which the bounce's away leg strips,
+      // R07); the bounce front-inserts as it always did.
+      return chordOrBounce ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
     }
     if (row.heading !== null) {
       // Within-heading order (HEADSUB1). anytime → the forward-order bounce
