@@ -48,6 +48,7 @@ import {
 import {
   POINTER_GUARD_DECISION_JS,
   POINTER_GUARD_JXA,
+  POINTER_GUARD_TEXT_JS,
   PTRGD1_GUARD_END,
   PTRGD1_MARKER,
   THINGS_BUNDLE_ID,
@@ -246,6 +247,7 @@ const RENDERED: { label: string; script: string }[] = [
       220,
       420,
       SIDEBAR_ROW,
+      "Errands",
       SIDEBAR_TITLES,
       { title: "Reading", ordinal: 17, unique: true },
       1,
@@ -254,11 +256,29 @@ const RENDERED: { label: string; script: string }[] = [
   },
   {
     label: "sidebar-drag (live-aim, to last)",
-    script: jxaSidebarLiveDragScript(180, 220, 420, SIDEBAR_ROW, SIDEBAR_TITLES, null, null, 40),
+    script: jxaSidebarLiveDragScript(
+      180,
+      220,
+      420,
+      SIDEBAR_ROW,
+      "Errands",
+      SIDEBAR_TITLES,
+      null,
+      null,
+      40,
+    ),
   },
   {
     label: "sidebar-held-drag",
-    script: jxaSidebarHeldScrollDragScript(180, 220, "Reading", 40, SIDEBAR_TITLES, SIDEBAR_ROW),
+    script: jxaSidebarHeldScrollDragScript(
+      180,
+      220,
+      "Reading",
+      40,
+      SIDEBAR_TITLES,
+      SIDEBAR_ROW,
+      "Errands",
+    ),
   },
   {
     label: "sidebar-chevron",
@@ -432,6 +452,58 @@ describe("every rendered pointer gesture carries the guard", () => {
       expect(script).toContain('var SRC = {"x":12,"y":208,"w":240,"h":24}');
       expect(script).toContain("ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)");
       expect(script).toContain("so the frames are stale");
+    }
+  });
+
+  it("compares the row's TEXT as well as its frame, at every row-addressed site", () => {
+    // The frame leg alone degenerates on the sidebar's uniform 40 pt grid
+    // (PTRGD1 §4 "D again"), so every gesture planned against a NAMED row also
+    // requires that row to still read as that name. Both legs, both drags.
+    for (const label of ["sidebar-drag (live-aim)", "sidebar-held-drag"]) {
+      const script = (RENDERED.find((r) => r.label === label) as { script: string }).script;
+      expect(script).toContain('var SRC_TITLE = "Errands";');
+      expect(script).toContain("ptrTitleMismatch(chain, ['AXRow','AXTableRow'], SRC_TITLE)");
+      // The text leg is ADDITIONAL: the frame check still runs, and first.
+      // Measured in the gesture's own body, past the guard block, so the
+      // helpers' DEFINITIONS in the prelude cannot stand in for the calls.
+      const body = script.slice(script.indexOf(PTRGD1_GUARD_END));
+      expect(body.indexOf("ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)")).toBeGreaterThan(
+        -1,
+      );
+      expect(body.indexOf("ptrChainHasFrame(chain, ['AXRow','AXTableRow'], SRC)")).toBeLessThan(
+        body.indexOf("ptrTitleMismatch(chain"),
+      );
+    }
+    // The disclosure click knows the row's title two ways — the census-addressed
+    // script hunted for it, the ordinal-addressed one confirmed it — and both
+    // hand it to the text leg.
+    expect(jxaSidebarChevronClickScript("Errands", -1, SIDEBAR_TITLES)).toContain(
+      "ptrTitleMismatch(chain, ['AXRow','AXTableRow'], want)",
+    );
+    const sparse = jxaSidebarSparseChevronClickScript(SPARSE_ADDR, SIDEBAR_ROW);
+    expect(sparse).toContain('var VTITLE = "Errands";');
+    expect(sparse).toContain("ptrTitleMismatch(chain, ['AXRow','AXTableRow'], VTITLE)");
+  });
+
+  it("harvests the row text the way the sparse census harvests it", () => {
+    // One batched multi-attribute fetch per element, the same three attributes
+    // and the same '|' join — so the guard and the census can never disagree
+    // about what a row is called (VOPAT2 PR 2 `rowText`).
+    expect(POINTER_GUARD_JXA).toContain("$(['AXValue','AXDescription','AXTitle','AXChildren'])");
+    expect(POINTER_GUARD_JXA).toContain("AXUIElementCopyMultipleAttributeValues");
+    expect(POINTER_GUARD_JXA).toContain("var PTRGD1_TEXT_DEPTH = 2");
+    // And it counts as a REALIZED row, because that is what it is.
+    expect(POINTER_GUARD_JXA).toContain("AXR++");
+  });
+
+  it("pays the harvest only where a caller named a row", () => {
+    // The wheel scroll aims at the sidebar's CENTRE, which belongs to no
+    // particular row — it has no expected title, so it must not realize one.
+    for (const label of ["sidebar-scroll (wheel)", "sidebar-scroll (wheel, ordinal-addressed)"]) {
+      const script = (RENDERED.find((r) => r.label === label) as { script: string }).script;
+      const body = script.slice(script.indexOf(PTRGD1_GUARD_END));
+      expect(body).toContain("ptrGuard('scroll the sidebar with the wheel'");
+      expect(body).not.toContain("ptrTitleMismatch(");
     }
   });
 
@@ -651,5 +723,67 @@ describe("the shipped system-owner predicate", () => {
   it("measures the display the point is on, not a hardcoded screen", () => {
     expect(POINTER_GUARD_JXA).toContain("NSScreen.screens");
     expect(POINTER_GUARD_JXA).toContain("ptrScreenAt(px, py)");
+  });
+});
+
+/**
+ * THE TEXT LEG, EXECUTED.
+ *
+ * `POINTER_GUARD_TEXT_JS` is the comparison with the ObjC bridge kept out of it,
+ * so this suite runs the shipped source rather than pattern-matching it — the
+ * same arrangement as the occlusion table above. What it must get right is one
+ * thing: two rows of identical geometry are told apart by what they say.
+ */
+type TitleClauseFn = (text: string | null, expected: string) => string | null;
+
+const titleClause = new Function(
+  `${POINTER_GUARD_TEXT_JS}\nreturn ptrTitleClause;`,
+)() as TitleClauseFn;
+
+describe("the identity leg's TEXT comparison", () => {
+  // Sidebar row text as the census harvests it: descendant static texts joined
+  // with "|", the first segment often wearing a trailing dot (AXDRAG1).
+  const AREA = "Errands.|Errands";
+
+  it("passes the row the step was planned against", () => {
+    expect(titleClause(AREA, "Errands")).toBeNull();
+    expect(titleClause("Errands", "Errands")).toBeNull();
+  });
+
+  it("refuses a DIFFERENT row and names both titles", () => {
+    // PTRGD1 §4 "D again", as a unit: the project row that occupied the planned
+    // area row's frame to within a pixel and passed the geometry leg.
+    const clause = titleClause("Groceries.|Groceries", "Errands");
+    expect(clause).toBe(
+      'expected area "Errands" under the pointer, found "Groceries", so the frames are stale',
+    );
+  });
+
+  it("says so plainly when the row under the pointer has no readable name", () => {
+    // A spacer row, or a row whose text the harvest could not read: either way
+    // it is not the named row, and the fail direction is over-caution.
+    expect(titleClause("", "Errands")).toBe(
+      'expected area "Errands" under the pointer, found a row with no readable name, ' +
+        "so the frames are stale",
+    );
+  });
+
+  it("names a multi-segment row without repeating itself", () => {
+    // "Area-05.|Source Toggle Template|Area-05" is one row wearing three hats.
+    const clause = titleClause("Area-05.|Source Toggle Template|Area-05", "Errands");
+    expect(clause).toContain('found "Area-05 / Source Toggle Template"');
+  });
+
+  it("is silent where there is nothing to compare", () => {
+    // No row in the chain (the frame leg speaks for that), and no expected
+    // title (the wheel scroll aims at no row at all).
+    expect(titleClause(null, "Errands")).toBeNull();
+    expect(titleClause(AREA, "")).toBeNull();
+  });
+
+  it("matches a title that is a SUBSTRING of another row's, exactly", () => {
+    // Segment equality, never `indexOf` — "Read" must not satisfy "Reading".
+    expect(titleClause("Reading.|Reading", "Read")).not.toBeNull();
+    expect(titleClause("Reading.|Reading", "Reading")).toBeNull();
   });
 });

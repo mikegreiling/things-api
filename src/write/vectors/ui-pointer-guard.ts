@@ -31,11 +31,17 @@
  *  3. OCCLUSION. Nothing of another application's is between the pointer and
  *     Things at any of those points, established two ways that must BOTH agree
  *     (see the measurement note below).
- *  4. IDENTITY. The element under the grab point still belongs to the surface
- *     the caller aimed at — the same-app half, which occlusion cannot see: after
- *     a user scroll the sidebar row at those coordinates is a DIFFERENT row, and
- *     the drag driver's own invariants (area count + assignment digest) do not
- *     notice a to-do being dragged into another list.
+ *  4. IDENTITY, in two legs. The element under the grab point still belongs to
+ *     the surface the caller aimed at — the same-app half, which occlusion
+ *     cannot see: after a user scroll the sidebar row at those coordinates is a
+ *     DIFFERENT row, and the drag driver's own invariants (area count +
+ *     assignment digest) do not notice a to-do being dragged into another list.
+ *     GEOMETRY (the chain reaches an element of the right role at the planned
+ *     frame) is the first leg and TEXT (that row still reads as the row the step
+ *     was planned against) is the second, because the sidebar's 40 pt grid makes
+ *     every row the same shape and frame equality alone cannot tell two of them
+ *     apart — measured, PTRGD1 §4 "D again": a project row one pixel from the
+ *     planned area row's frame passed the geometry leg.
  *
  * Plus, for a held drag, the same assertion again at DROP time — the gesture
  * itself takes seconds, and a window can arrive during it. A failed re-check
@@ -233,6 +239,49 @@ function ptrOcclusionVerdict(frontPid, hitPid, list, x, y, screen, isSystemOwner
   if (top.pid === frontPid) return { ok: true };
   return { ok: false, pid: top.pid, name: top.name } }`;
 
+/**
+ * THE TEXT LEG'S PURE HALF — the comparison, with no ObjC bridge and no I/O, so
+ * a unit test can EXECUTE the shipped source instead of pattern-matching it
+ * (test/unit/pointer-gesture-guard.test.ts), exactly as
+ * {@link POINTER_GUARD_DECISION_JS} does for the occlusion table.
+ *
+ * The input is a row's harvested text — descendant static-text segments joined
+ * with `|`, the sparse census's own shape ("Area-05.|Area-05") — and the
+ * expected title. The output is the refusal CLAUSE naming both, or null.
+ */
+export const POINTER_GUARD_TEXT_JS = `/* PTRGD1 — the identity TEXT comparison, pure. */
+/* Does harvested row text carry this title as a SEGMENT? The census's match,
+ * trailing-dot variant included (a row's first segment often wears one). */
+function ptrSegMatch(text, title){
+  var segs = String(text).split('|');
+  for (var i = 0; i < segs.length; i++) if (segs[i] === title || segs[i] === title + '.') return true;
+  return false }
+
+/*
+ * What to CALL the row that is there, in a refusal a human reads. Row text is
+ * several segments of the same name in different dresses ("Area-05.|Area-05"),
+ * so the label strips the trailing dot, dedupes, and shows at most three.
+ */
+function ptrTextLabel(text){
+  var segs = String(text).split('|'), seen = {}, out = [], i;
+  for (i = 0; i < segs.length; i++){
+    var s = segs[i];
+    if (s.length > 1 && s.charAt(s.length - 1) === '.') s = s.slice(0, -1);
+    if (s === '' || seen[s] === true) continue;
+    seen[s] = true; out.push(s);
+    if (out.length === 3) break }
+  return out.length ? out.join(' / ') : null }
+
+/* The clause, naming BOTH titles — or null when the row still reads right. */
+function ptrTitleClause(text, expected){
+  if (typeof expected !== 'string' || expected === '') return null;
+  if (text === null) return null;
+  if (ptrSegMatch(text, expected)) return null;
+  var found = ptrTextLabel(text);
+  return 'expected area "' + expected + '" under the pointer, found ' +
+    (found === null ? 'a row with no readable name' : '"' + found + '"') +
+    ', so the frames are stale' }`;
+
 export const POINTER_GUARD_JXA = `var PTRGD1_BUNDLE = '${THINGS_BUNDLE_ID}';
 /* CGWindow.h list options; kCGNullWindowID is not bridged, and it is 0. */
 var PTRGD1_LIST_OPTS = $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements;
@@ -354,7 +403,9 @@ function ptrChainAt(pid, x, y){ PTR_OPS++;
   if ($.AXUIElementCopyElementAtPosition($.AXUIElementCreateApplication(pid), x, y, out) !== 0) return [];
   var el = ObjC.castRefToObject(out[0]), chain = [], n = 0;
   while (el && n < PTRGD1_HOPS){ PTR_OPS += 3;
-    chain.push({ role: sv(el,'AXRole'), sub: sv(el,'AXSubrole'), f: frame(el) });
+    /* The ELEMENT rides along so the text leg can read it on demand: the
+     * harvest is only paid where an identity callback asks for it. */
+    chain.push({ role: sv(el,'AXRole'), sub: sv(el,'AXSubrole'), f: frame(el), el: el });
     el = attr(el,'AXParent'); n++ }
   return chain }
 
@@ -375,7 +426,76 @@ function ptrChainRoles(chain){
   for (var i = 0; i < chain.length; i++) out.push(chain[i].role || '?');
   return out.length ? out.join(' < ') : 'nothing' }
 
+/*
+ * ------------------------------------------------------------------ THE TEXT LEG
+ *
+ * WHY A SECOND IDENTITY LEG AT ALL. Frame equality degenerates on the sidebar.
+ * Every sidebar row is the same shape — measured x = 40, w = 240, h = 24, on a
+ * 40 pt pitch — so \`ptrSameRect\` against a planned row's frame is effectively a
+ * Y comparison with a 2 pt tolerance, and after the list scrolls by whole rows
+ * SOME row is almost always inside it. PTRGD1 §4 "D again" measured exactly
+ * that: a scroll of 0.45 put a PROJECT row one pixel from the planned area
+ * row's frame, and the geometry leg passed the drag it exists to refuse.
+ *
+ * So the row under the pointer must also still READ as the row the step was
+ * planned against. The text is harvested the way the sparse census harvests it
+ * (VOPAT2 PR 2 \`rowText\`): one batched multi-attribute fetch per element,
+ * AXValue + AXDescription + AXTitle, descending to \`PTRGD1_TEXT_DEPTH\` because
+ * sidebar rows carry an EMPTY AXDescription and are named only by their
+ * descendant static texts (AXDRAG1). Matching is the census's own segment
+ * match, trailing-dot variant included, so the two never disagree about what a
+ * row is called.
+ *
+ * COST: paid only where a caller passes an expected title, and only for the ONE
+ * row under the grab point — one realized row, the same one the drive is about
+ * to grab anyway. AXR counts it, so the guard's own price stays honest.
+ */
+var PTRGD1_TEXT_DEPTH = 2;
+var PTRGD1_TEXT_ATTRS = $(['AXValue','AXDescription','AXTitle','AXChildren']);
+
+/* Text + children in ONE round-trip, the census's \`node()\` shape. */
+function ptrTextNode(el){ PTR_OPS++; AXN++;
+  var out = Ref();
+  if ($.AXUIElementCopyMultipleAttributeValues(el, PTRGD1_TEXT_ATTRS, 0, out) !== 0) return null;
+  var a = ObjC.castRefToObject(out[0]);
+  if (!a || Number(a.count) < 4) return null;
+  function s(i){ var v = a.objectAtIndex(i); if (!v) return '';
+    var j; try { j = v.js } catch(e){ return '' } return typeof j === 'string' ? j : '' }
+  var ch = [], c = a.objectAtIndex(3);
+  try { var n = Number(c.count); for (var i = 0; i < n; i++) ch.push(c.objectAtIndex(i)) } catch(e){ ch = [] }
+  return { text: [s(0), s(1), s(2)], children: ch } }
+
+/* The row's harvested segments, joined with '|' exactly as the census joins. */
+function ptrRowTextOf(el, depth, acc){
+  var n = ptrTextNode(el);
+  if (n === null) return acc;
+  for (var i = 0; i < 3; i++) if (n.text[i]) acc.push(n.text[i]);
+  if (depth <= 0) return acc;
+  for (var k = 0; k < n.children.length; k++) ptrRowTextOf(n.children[k], depth - 1, acc);
+  return acc }
+
+/* The first chain element of one of these roles, harvested. null = no such element. */
+function ptrChainText(chain, roles){
+  for (var i = 0; i < chain.length; i++){
+    if (roles !== null && roles.indexOf(chain[i].role) < 0) continue;
+    if (!chain[i].el) continue;
+    AXR++;
+    return ptrRowTextOf(chain[i].el, PTRGD1_TEXT_DEPTH, []).join('|') }
+  return null }
+
+/*
+ * IDENTITY BY TEXT. Returns the clause naming BOTH titles, or null when the row
+ * under the pointer still reads as the expected one. A chain that reaches no row
+ * at all is not this leg's verdict — the frame leg and the empty-chain check
+ * above it already speak for that case, and the harvest is not paid.
+ */
+function ptrTitleMismatch(chain, roles, expected){
+  if (typeof expected !== 'string' || expected === '') return null;
+  return ptrTitleClause(ptrChainText(chain, roles), expected) }
+
 ${POINTER_GUARD_DECISION_JS}
+
+${POINTER_GUARD_TEXT_JS}
 
 /*
  * THE GUARD. \`what\` completes the sentence "refused to <what>: ...".

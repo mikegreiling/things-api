@@ -1681,7 +1681,17 @@ describe("the drop point is CLOSED-LOOP on the live sidebar (DRPLC1, #729)", () 
   const TITLES = ["Errands", "Reading"] as const;
 
   it("re-resolves the boundary BEFORE the final DRAG and the UP", () => {
-    const script = jxaSidebarLiveDragScript(180, 220, 420, SIDEBAR_ROW, TITLES, null, 1, 40);
+    const script = jxaSidebarLiveDragScript(
+      180,
+      220,
+      420,
+      SIDEBAR_ROW,
+      "Errands",
+      TITLES,
+      null,
+      1,
+      40,
+    );
     // The whole point of the fix: a live read stands between the approach and
     // the release. Assert the ORDER, because a re-resolution that happens after
     // the button comes up is decoration.
@@ -1699,7 +1709,17 @@ describe("the drop point is CLOSED-LOOP on the live sidebar (DRPLC1, #729)", () 
   });
 
   it("reads GEOMETRY for the loop and realizes nothing for a to-last drop", () => {
-    const script = jxaSidebarLiveDragScript(180, 220, 420, SIDEBAR_ROW, TITLES, null, 1, 40);
+    const script = jxaSidebarLiveDragScript(
+      180,
+      220,
+      420,
+      SIDEBAR_ROW,
+      "Errands",
+      TITLES,
+      null,
+      1,
+      40,
+    );
     // `geom` is the batched position+size read that realizes no row (VOPAT1 §3);
     // `rowText` is the one that costs ~115 ms apiece in the field. A to-last
     // boundary is pure geometry, so no content read can be REACHED: the only
@@ -1719,6 +1739,7 @@ describe("the drop point is CLOSED-LOOP on the live sidebar (DRPLC1, #729)", () 
       220,
       420,
       SIDEBAR_ROW,
+      "Errands",
       TITLES,
       {
         title: "Reading",
@@ -1738,6 +1759,7 @@ describe("the drop point is CLOSED-LOOP on the live sidebar (DRPLC1, #729)", () 
       220,
       420,
       SIDEBAR_ROW,
+      "Errands",
       TITLES,
       {
         title: "Reading",
