@@ -3420,12 +3420,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .array(z.string())
           .describe(
             "The items to rearrange (one kind: to-dos, projects, headings, or areas), in the " +
-              "order they should land (may be a subset)",
+              "order they should land (may be a subset). Each is a uuid, partial-uuid, or unique " +
+              "name; a name matching several items is refused with the matches listed.",
           ),
         start: z.boolean().optional().describe("place the block at the start of its scope"),
         end: z.boolean().optional().describe("place the block at the end of its scope"),
-        before: z.string().optional().describe("place the block immediately before this item"),
-        after: z.string().optional().describe("place the block immediately after this item"),
+        before: z
+          .string()
+          .optional()
+          .describe(
+            "place the block immediately before this item (uuid, partial-uuid, or unique name)",
+          ),
+        after: z
+          .string()
+          .optional()
+          .describe(
+            "place the block immediately after this item (uuid, partial-uuid, or unique name)",
+          ),
         in: z
           .string()
           .optional()

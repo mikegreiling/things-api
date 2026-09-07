@@ -323,6 +323,8 @@ Project titles CAN be duplicated, so an ambiguous NAME is REFUSED fail-closed �
 
 Areas and tags already accept names (`things area update <ref>`, `things tag update <ref>`). **To-do and heading write targets STAY uuid-only** — routinely duplicated titles, and writes are identity-addressed — differing only in the entity noun their not-found copy names (`no to-do matching uuid or partial-uuid "…"`).
 
+**One carve-out: `things reorder` (2026-09-07).** Its movee refs — and its `--before`/`--after` anchor — take a uuid, a partial-uuid, or a unique NAME of any kind it addresses (to-do, project, heading, area), because that argument list already accepted an area by name while a to-do beside it could not be, and its `--in` axis has always taken a name. The reason it is safe where `todo update` is not: `reorder` rearranges siblings the caller is looking at and overwrites no field, so a mis-resolution costs an order, not data. An ambiguous name is refused fail-closed with the matches listed (`"Buy milk" matches 2 items — disambiguate with a ref below:`), and a name that hits both a task and a sidebar area refuses naming both.
+
 ### Mutation verbs are reserved in bare-noun position
 
 A bare `things <verb> …` whose first token is a write verb — every registered `todo`/`project`/`area`/`heading`/`tag` subcommand (`update`, `add`, `delete`, `complete`, `cancel`, `move`, `duplicate`, `restore`, `rename`, `archive`, `make-repeating`, …) plus the synonym `create` — no longer falls into the show-sugar (which emitted a confusing `things show` usage error). Instead it is answered with a namespaced-write suggestion:
