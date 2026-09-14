@@ -516,6 +516,29 @@ Things 3.23.3   group  40 pt (area + spacer, no projects):  every row below shif
 
 The bounded credit, because this project needed it the hard way: the gap is not *labelled*. It is two ordinary 24 pt rows with no role, subrole or description distinguishing them from any other empty row, so a client can only find it by diffing the live table against the layout it expects — which is what [DRPLC1](lab/drplc1-drop-slot.md) ended up doing. An `AXSubrole` on the placeholder would turn a diff into a read. Evidence: [lab/drplc1-drop-slot.md](lab/drplc1-drop-slot.md) §1–§3 (DRPLC1, 2026-09-04). Things 3.23 (golden-v4) and 3.23.3.
 
+## 12. Adopting Apple's `reminders` schema whole — and refusing, out loud, the two parameters that would have lied
+
+Things 3.24 adopts Apple's `reminders` App Intents schema domain in full: all five actions Apple defines (`createReminder`, `updateReminder`, `deleteReminders`, `createList`, `createSection`), all four entities it needs, three `OpenIntent`s, and the two enums. Adopting a system schema is not a free lunch — it is a signature you must match exactly, including parameters for features your app does not have.
+
+Two of those parameters describe things Things has no model for. `locationTrigger` is a geofence; Things has no geofences. `recurrence` is a `Foundation.Calendar.RecurrenceRule`, an RFC-5545 rule — and Things' repeat vocabulary is *larger* than RFC 5545 in the one direction that matters most to its users: **repeat N days after completion**, which `Calendar.RecurrenceRule` cannot express at all (the type is a pure function of a start date and a calendar pattern; there is no completion anchor, and no `EXDATE` for the exception mechanism Things also has).
+
+The tempting shortcut is to accept the parameter and do something approximately right — drop the rule on the floor, or convert an after-completion series into the nearest fixed schedule. Either would produce a to-do that looks correct in the assistant's confirmation and is quietly wrong in the app forever. Cultured Code did neither. `ThingsCommon` carries a purpose-built error type with exactly three cases —
+
+```
+TAIRemindersError: invalidList, locationTriggerUnsupported, recurrenceUnsupported
+    "Invalid list."
+    "Adding a location trigger is not supported."
+    "Adding a recurrence is not supported."
+```
+
+— each `CustomLocalizedStringResourceConvertible`, i.e. each written to be *spoken back to the user* by Siri. The app declares the full schema so it can be called at all, and then tells you, in a sentence, the one thing it will not do. That is the honest version of the trade-off, and it is the harder one to ship.
+
+The mapping underneath is its own small piece of modeling. Apple's vocabulary is list / section / reminder; Things' is Inbox / area / project / heading / to-do, with a fourth "belongs to nothing" bucket. Things' answer: a *list* is the Inbox, an area (`area-…`), a project (`project-…`) or a synthetic `noList`; a *section* is a heading; a *reminder* is a to-do. Ten new Spotlight glyphs ship alongside to render each of those cases correctly, including per-status to-do and project artwork — the mapping is not just accepted, it is illustrated.
+
+The bounded credit: Apple's reminder entity has `isCompleted` and nothing else, while Things has three states (`open`, `completed`, `canceled`). The entity carries a non-schema `isCanceled` member and Things ships `Spotlight-ToDo-Canceled` artwork for it, so the app clearly knows the difference — but the schema has no slot to say so, and what the assistant is told about a canceled to-do is ambiguous by construction. That one is Apple's to fix, not Cultured Code's.
+
+Evidence: [lab/ai324-app-intents-catalog.md](lab/ai324-app-intents-catalog.md) §2.3–§4 (AI324, 2026-09-14, static bundle inspection). Things 3.24 build 32400006 vs 3.23.3 build 32303001.
+
 ## Edge cases this project routed through
 
 Project-side context: the modeling problems the app's craft created for us. Brief by design — the app engineering above is the star; these are where we had to build to match it.
