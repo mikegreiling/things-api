@@ -52,21 +52,57 @@ LAB_SSH_OPTS=(
 lab_ssh() {
   # lab_ssh <ip> <command...> — fresh clones flap password auth in their
   # first seconds (exit 255); retry that specific failure like the TS runner.
+  #
+  # The budget is 5 attempts with a linear backoff (2/4/6/8s, ~20s total), not
+  # the original 3×2s: a `things-lab-golden-v4h` clone — the HELPERS layer,
+  # whose LaunchAgents come up alongside sshd — flapped password auth PAST the
+  # 6s budget on two of three golden-v5h mint attempts (GV5, 2026-09-14), each
+  # time AFTER `lab_wait_for_ssh` had already completed a successful probe.
+  # The `|| code=$?` form is LOAD-BEARING, not style: every driver runs under
+  # `set -e`, and a bare `sshpass …` followed by `code=$?` aborts the whole
+  # script the moment the first attempt fails — so this retry loop had never
+  # run anywhere except inside `lab_wait_for_ssh`, where an `if` suspends
+  # `set -e`. Measured GV5, 2026-09-14, after three mints died on one flap.
   local ip="$1" attempt code
   shift
-  for attempt in 1 2 3; do
+  for attempt in 1 2 3 4 5; do
+    code=0
     sshpass -p "$LAB_SSH_PASS" ssh "${LAB_SSH_OPTS[@]}" -o ConnectTimeout=10 \
-      "$LAB_SSH_USER@$ip" "$@"
-    code=$?
+      "$LAB_SSH_USER@$ip" "$@" || code=$?
     [ "$code" -ne 255 ] && return "$code"
-    [ "$attempt" -lt 3 ] && sleep 2
+    [ "$attempt" -lt 5 ] && sleep $((attempt * 2))
   done
   return 255
 }
 
 lab_scp() {
   # lab_scp <src> <ip>:<dst>  (or any scp arg pair)
-  sshpass -p "$LAB_SSH_PASS" scp "${LAB_SSH_OPTS[@]}" "$@"
+  #
+  # Retried on the same clone-boot auth flap `lab_ssh` covers — scp had NO
+  # retry at all, so a flap mid-transfer ("lost connection", exit 1) killed the
+  # driver outright even once ssh itself had settled (GV5, 2026-09-14).
+  #
+  # A RECURSIVE retry is NOT naturally idempotent, and getting that wrong cost
+  # a routed e2e arm: `scp -r dist host:.../dist` creates the directory on the
+  # failed first attempt, so the retry copies INTO it and lands `dist/dist`,
+  # leaving `dist/cli/main.js` absent and the deputy unable to start. So every
+  # retry of a recursive copy REMOVES the remote destination first. Plain file
+  # copies overwrite and need no such care.
+  local attempt code last dest host
+  last="${*: -1}"
+  for attempt in 1 2 3 4 5; do
+    if [ "$attempt" -gt 1 ] && [[ " $* " == *" -r "* ]] && [[ "$last" == *:* ]]; then
+      host="${last%%:*}"
+      dest="${last#*:}"
+      sshpass -p "$LAB_SSH_PASS" ssh "${LAB_SSH_OPTS[@]}" -o ConnectTimeout=10 \
+        "$host" "rm -rf $(printf '%q' "$dest")" >/dev/null 2>&1 || true
+    fi
+    code=0
+    sshpass -p "$LAB_SSH_PASS" scp "${LAB_SSH_OPTS[@]}" "$@" || code=$?
+    [ "$code" -eq 0 ] && return 0
+    [ "$attempt" -lt 5 ] && sleep $((attempt * 2))
+  done
+  return "$code"
 }
 
 lab_commander_dir() {

@@ -15,7 +15,7 @@ source lab/scripts/env.sh
 python3 - <<'EOF'
 import json, sys
 from datetime import datetime, timedelta
-meta = json.load(open("docs/lab/golden-v4-metadata.json"))
+meta = json.load(open("docs/lab/golden-v5-metadata.json"))
 first = datetime.strptime(meta["trialFirstLaunchIso"], "%Y-%m-%dT%H:%M:%SZ")
 pinned = datetime.strptime(meta["pinnedDate"], "%Y-%m-%d")
 expiry = first + timedelta(days=15)
@@ -43,7 +43,7 @@ done
 # arms run, and each is reported by name; the routed arm additionally drives one
 # real Repeat dialog through the broker.
 #
-# The routed arm needs `things-lab-golden-v4h` — the helpers-granted layer over
+# The routed arm needs `things-lab-golden-v5h` — the helpers-granted layer over
 # v4 (docs/lab/helpgst1-helpers-in-guest.md) — and the host-built helper bundle.
 # Both are preconditions, not optional extras: a regress that silently skipped
 # the routed arm would certify the wrong half of the surface.

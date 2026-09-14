@@ -138,3 +138,59 @@ The new tables are effectively empty at observation: `BSSpotlightDirtyEntity` ha
 ### Reconciliation
 
 Nothing measured here moves a column the engine reads, so runbook step 8 (the dependency sweep) closes with no code change, and the simulator appliers need no re-reading for 3.24 — `SIMULATED_DATABASE_VERSION = 29` rests on the stamp with the data semantics confirmed unmoved. SIMFID applier fidelity is still to be re-certified under 3.24; that rides the recertification campaign along with the clean in-lab re-measurement.
+
+---
+
+## In-lab re-measurement (GV5, 2026-09-14) — the clean pair, and it is ZERO
+
+**Version stamp:** `things-lab-golden-v5` (minted from a `things-lab-golden-v4` clone the same day) · Things **3.23 → 3.24** (direct-download build **32400006**) · macOS **15.7.7 (24G720)** · guest clock pinned **2026-07-05 12:00**, airgapped, **before Things was ever launched** · `Meta.databaseVersion` **27 → 29**.
+
+This is the clean pair the §Data-migration caveat above promised, and it **SUPERSEDES that section's data half**. The pre/post copies are `golden-inplace-swap.sh`'s own, taken either side of the single post-swap warm-up launch on a 37-row synthetic fixture with no organic traffic, no sync, and a frozen clock — so there is nothing for a migration-shaped change to hide behind. The DDL half above needed no correction and is independently reproduced here. Method as before: the two copies ATTACHed, per-column changed-row counts joined on `uuid`, transition shapes for anything that moved. Counts and column names only. Full campaign: [gv5-324-campaign.md](gv5-324-campaign.md).
+
+### DDL — reproduced exactly, additive only
+
+The full `sqlite_master` **text** diff across the pair is precisely the four objects the host measurement named, with **zero removals** and every pre-existing table, column, index and trigger byte-identical:
+
+```
+NEW TABLE  BSSpotlightDirtyEntity  (WITHOUT ROWID, PK (entityType, id))
+NEW INDEX  index_BSSpotlightDirtyEntity_expansionCursor
+             ON BSSpotlightDirtyEntity ("entityType","id") WHERE "expansionCursor" IS NOT NULL
+NEW TABLE  BSSpotlightIndexState   (singleton, CHECK ("id" = 1))
+NEW INDEX  index_TMTask_userModificationDate ON TMTask(userModificationDate)
+```
+
+`observeSchema()` over both copies returns the SAME fingerprint — `sha256:d2b7e98c6d384ef1ecd256b1410a11652e80c5860cc48370ec9b4d6956c7d4df` — with `databaseVersion` reading **27** on the pre side and **29** on the post side, and **zero extra columns** on either. The two-step 27 → 29 jump with no 28 reproduces in the lab exactly as it did on the host.
+
+### Data — ZERO changed rows, on every table
+
+| table | pre | post | shared | inserted | deleted | columns changed |
+|---|---|---|---|---|---|---|
+| `TMTask` | 37 | 37 | 37 | 0 | 0 | **0** |
+| `TMChecklistItem` | 3 | 3 | 3 | 0 | 0 | **0** |
+| `TMArea` | 2 | 2 | 2 | 0 | 0 | **0** |
+| `TMTag` | 10 | 10 | 10 | 0 | 0 | **0** |
+| `TMSettings` | 1 | 1 | 1 | 0 | 0 | **0** |
+| `TMTombstone`, `TMContact`, `TMSmartList`, `BSSyncronyMetadata`, `ThingsTouch_*` | — | — | — | 0 | 0 | **0** |
+
+Not one column moved on one row. This is a materially stronger statement than the host pair could make, and it converts that section's "strong reading" into a measurement: **3.24's migration is DDL-only.** Against 3.23's — which cleared a sentinel on 35 of 37 rows and back-filled four counter columns — 3.24 does nothing to the data at all.
+
+### The spawn cursor: SETTLED
+
+`rt1_instanceCreationStartDate` moved on **96 of 128 templates, strictly forward**, on the host pair, and the reading offered above was that this is first-launch catch-up rather than a migration rewrite — the same shape DBV27 saw, which GV4 §2.3 could not distinguish because the lab clock is pinned.
+
+Under the pinned clock here it moves on **0 rows**, on a pair whose only event between the two copies is the 3.24 warm-up launch. That is the discriminator the host pair lacked, and it lands on the catch-up reading:
+
+- if the MIGRATION rewrote the cursor, it would have rewritten it here too — the migration demonstrably ran (27 → 29, new tables present);
+- it did not, so the mass forward move on the host is the app advancing each stale cursor to "now" on first launch, and a clock that is already at "now" gives it nothing to advance.
+
+**The conclusion GV4 §2.3 called "a cell worth designing" is now answered for 3.24 without designing it, and the simulator is right not to model a migration-time cursor rewrite.** Two caveats, stated so the claim is not over-read: the golden holds only two templates, and both sit at the pin — so this shows the migration does not rewrite a CURRENT cursor, not that it would leave a STALE one alone. Distinguishing those still needs a clone pinned forward by months, which no golden's trial wall currently affords.
+
+### The other pre-flagged readings, re-checked
+
+- **`userModificationDate` was not rewritten** — 0 changed rows (the host saw 2, both organic). The new index over it was built on the existing values. The forward question the host section raised — whether the Spotlight indexer now CONSUMES `umd` as a change feed, and what a deliberately-backdated `umd` does to indexing — is **untouched by this campaign and stays open**, and is now known to be unanswerable on a macOS 15 guest for the reason below.
+- **`rt1_nextInstanceStartDate` scoping held exactly.** Both sides: 35 non-template rows with no value, 2 templates with one. The v27 template-scoping survives 27 → 29 untouched, so `templateProjectionDay`'s cache-first-then-derive shape is right on 3.24.
+- **The counters were not re-migrated.** Zero `-1` sentinels on either side of the pair, in all four counter columns — the v27 back-fill stands and 3.24 did nothing further to them.
+
+### The Spotlight tables are created EMPTY, and stay empty here
+
+Post-migration, `BSSpotlightDirtyEntity` holds **0** rows — and so does `BSSpotlightIndexState`, which on the maintainer's macOS 27 host carries the one row its `CHECK ("id" = 1)` permits (`isEnabled = 1`, `updateState = 0`). So the migration creates the plumbing unconditionally on **every** OS, and the singleton state row is written by the macOS-27-only Spotlight integration when it first runs, not by the migration. That is consistent with the release's framing and with [ai324-app-intents-catalog.md](ai324-app-intents-catalog.md): on a macOS 15 guest the Spotlight/App-Intents epicenter is inert, and **the lab cannot observe it at all** — which bounds what any 3.24 lab campaign can certify.

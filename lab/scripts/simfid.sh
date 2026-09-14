@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-GOLDEN="${GOLDEN:-things-lab-golden-v4}"
+GOLDEN="${GOLDEN:-things-lab-golden-v5}"
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 VM="things-run-simfid-$STAMP"
@@ -145,10 +145,28 @@ lab_ssh "$IP" 'chmod +x ~/things-lab/bin/node'
 
 echo "[simfid] driving cases on the real app…"
 lab_ssh "$IP" 'open -g -a Things3'; sleep 8
-lab_ssh "$IP" 'python3 ~/things-lab/simfid/guest-driver.py \
+# $LAB_WRITE_DIRECT is LOAD-BEARING (see env.sh, and GV5 §5.4). The guest shell
+# descends from sshd, so it carries no bundle id, so `writeCapability` reads
+# `direct-unknown` and every APPLESCRIPT-vector op refuses `blocked:environment`
+# (exit 4) without ever touching Things. Three of this manifest's six cases —
+# `todo.delete` and `tag.add` (AppleScript-only by construction) and
+# `todo.reopen` — are exactly that, and a refusal here captures a byte-empty
+# delta that the comparator reads as an APP behavior change. The ui escape is
+# deliberately NOT exported: the headless manifest drives no ui-vector op, and
+# an escape nothing needs would only widen what a clone may do.
+lab_ssh "$IP" "$LAB_WRITE_DIRECT python3 ~/things-lab/simfid/guest-driver.py \
   --node ~/things-lab/bin/node --app ~/things-lab/things-api \
-  --manifest ~/things-lab/simfid/manifest.json --out ~/things-lab/simfid/run' \
+  --manifest ~/things-lab/simfid/manifest.json --out ~/things-lab/simfid/run" \
   | tee "$ARTIFACTS/guest.log"
+DRIVE_EXIT=${PIPESTATUS[0]}
+if [ "$DRIVE_EXIT" -ne 0 ]; then
+  echo "[simfid] ABORT: the guest drive did not complete cleanly (exit $DRIVE_EXIT)." >&2
+  echo "[simfid] A refused or failed op writes NOTHING, so its delta is empty — comparing" >&2
+  echo "[simfid] that would manufacture a DIVERGENT that looks like an app finding." >&2
+  echo "[simfid] Per-case transcripts: $ARTIFACTS/guest-run/cases/<id>.op.json" >&2
+  lab_scp -r "admin@$IP:things-lab/simfid/run" "$ARTIFACTS/guest-run" || true
+  exit 4
+fi
 
 echo "[simfid] collecting guest snapshots"
 lab_scp -r "admin@$IP:things-lab/simfid/run" "$ARTIFACTS/guest-run"

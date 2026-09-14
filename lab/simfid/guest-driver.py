@@ -108,7 +108,7 @@ def run_cli(node, app, args, env):
     resolved = [substitute(a, env) for a in args]
     proc = subprocess.run([node, f"{app}/dist/cli/main.js", *resolved, "--json"],
                           capture_output=True, text=True)
-    return proc.returncode, proc.stdout
+    return proc.returncode, proc.stdout, proc.stderr
 
 
 def substitute(s, env):
@@ -134,6 +134,7 @@ def main():
 
     manifest = json.load(open(a.manifest))
     os.makedirs(os.path.join(a.out, "cases"), exist_ok=True)
+    failed = []
 
     for case in manifest["cases"]:
         cid = case["id"]
@@ -141,9 +142,12 @@ def main():
         env = {}
         ok = True
         for step in case.get("seed", []):
-            code, out = run_cli(a.node, a.app, step["args"], env)
+            code, out, err = run_cli(a.node, a.app, step["args"], env)
             if code != 0:
-                print(f"[{cid}] seed step failed (exit {code}): {step['args']}", file=sys.stderr)
+                print(f"[{cid}] SEED FAILED exit={code}: {step['args']}")
+                print(f"[{cid}]   stdout: {out.strip()[:600]}")
+                print(f"[{cid}]   stderr: {err.strip()[:600]}")
+                failed.append(f"{cid} (seed exit {code})")
                 ok = False
                 break
             if "as" in step:
@@ -158,15 +162,35 @@ def main():
 
         time.sleep(1)
         before = snapshot(titles)
-        code, _ = run_cli(a.node, a.app, case["op"], env)
+        code, out, err = run_cli(a.node, a.app, case["op"], env)
         time.sleep(2)
         after = snapshot(titles)
 
         json.dump(before, open(os.path.join(a.out, "cases", f"{cid}.before.json"), "w"))
         json.dump(after, open(os.path.join(a.out, "cases", f"{cid}.after.json"), "w"))
+        # The op's own transcript, banked per case. An op that REFUSED produces a
+        # byte-empty app delta, which the comparator would otherwise read as
+        # "the app no longer changes this row" — a phantom app finding. Keeping
+        # the refusal beside the snapshots is what makes the two distinguishable
+        # after the clone is gone (GV5 §5.4).
+        json.dump({"op": case["op"], "exit": code, "stdout": out, "stderr": err},
+                  open(os.path.join(a.out, "cases", f"{cid}.op.json"), "w"), indent=1)
         print(f"[{cid}] op exit={code}  before={sum(len(v) for v in before.values())} rows"
               f"  after={sum(len(v) for v in after.values())} rows")
+        if code != 0:
+            print(f"[{cid}]   OP FAILED stdout: {out.strip()[:600]}")
+            print(f"[{cid}]   OP FAILED stderr: {err.strip()[:600]}")
+            failed.append(f"{cid} (op exit {code})")
+
+
+    # FAIL CLOSED. A seed or op that did not exit 0 never touched the app, so
+    # its "delta" is the absence of a write, not a measurement of one. Reporting
+    # that upward stops simfid.sh before the comparator turns it into a verdict.
+    if failed:
+        print(f"[driver] {len(failed)} case(s) did not drive cleanly: {', '.join(failed)}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

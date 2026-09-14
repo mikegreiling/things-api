@@ -52,6 +52,16 @@ fi
 # swiftc output is deterministic, so an unsigned intermediate at the final
 # path reproduces a hash an EDR may already have convicted — signing before
 # the deliverable path exists keeps that path clean.
+# THE DEPLOYMENT TARGET IS PINNED, and it is load-bearing (GV5, 2026-09-14).
+# `swiftc` with no -target defaults the minimum OS to the BUILD HOST's, so once
+# the maintainer's Mac went to macOS 27 every helper build came out `minos 28.0`
+# and dyld refused to load it anywhere older — including the lab's macOS 15.7.7
+# guests, where the routed arm of `lab:regress` died as `launchctl` reporting
+# `last exit reason = OS_REASON_DYLD` and the CLI reporting only "the deputy is
+# not running (no socket)". The floor matches Things' own LSMinimumSystemVersion
+# (13.3), so the helper runs anywhere the app it drives runs.
+DEPLOYMENT_TARGET="${DEPLOYMENT_TARGET:-arm64-apple-macos13.0}"
+
 STAGE="$BUILD_DIR/.things-helpers.build.$$"
 trap 'rm -rf "$STAGE"' EXIT
 rm -rf "$STAGE"
@@ -61,7 +71,8 @@ mkdir -p "$APP/Contents/MacOS"
 echo "building things-deputy $VERSION..."
 sed "s/<string>0\.0\.0<\/string>/<string>$VERSION<\/string>/" \
   deputy/helpers-Info.plist > "$APP/Contents/Info.plist"
-swiftc -O deputy/src/*.swift "$BUILD_DIR/Version.swift" -o "$APP/Contents/MacOS/things-deputy"
+swiftc -O -target "$DEPLOYMENT_TARGET" deputy/src/*.swift "$BUILD_DIR/Version.swift" \
+  -o "$APP/Contents/MacOS/things-deputy"
 # Icon must land before signing — the outer signature seals bundle resources.
 mkdir -p "$APP/Contents/Resources"
 cp deputy/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -72,7 +83,8 @@ if [ "$APPLE_CHAIN" = "1" ]; then
   mkdir -p "$READER/Contents/MacOS"
   sed "s/<string>0\.0\.0<\/string>/<string>$VERSION<\/string>/" \
     deputy/reader/Info.plist > "$READER/Contents/Info.plist"
-  swiftc -O deputy/reader/main.swift deputy/src/sqlite.swift "$BUILD_DIR/Version.swift" \
+  swiftc -O -target "$DEPLOYMENT_TARGET" deputy/reader/main.swift deputy/src/sqlite.swift \
+    "$BUILD_DIR/Version.swift" \
     -o "$READER/Contents/MacOS/things-reader"
   mkdir -p "$READER/Contents/Resources"
   cp deputy/AppIcon.icns "$READER/Contents/Resources/AppIcon.icns"
