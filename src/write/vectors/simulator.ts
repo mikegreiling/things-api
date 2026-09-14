@@ -138,9 +138,22 @@ export function simulatorFenceReason(
  * simulate until the whole modeling chain is consciously re-verified —
  * a schema tripwire, not a compatibility claim.
  *
- * 27 (Things 3.23) since 2026-08-22. The 26→27 DDL delta is INDEX-ONLY (the
- * fingerprint is unchanged by construction — src/db/baselines/db-v27.ts), but
- * the DATA semantics moved, which is what these appliers model:
+ * 29 (Things 3.24) since 2026-09-14. The 27→29 DDL delta adds only two
+ * Spotlight-plumbing TABLES and two indexes, all outside the depended manifest
+ * (fingerprint unchanged by construction — src/db/baselines/db-v29.ts), and the
+ * DATA half is measured as a NO-OP for everything these appliers model: no
+ * counter, cache or column the simulator writes was rewritten, the v27 semantics
+ * below all still hold, and the one mass change (a strictly-forward spawn-cursor
+ * catch-up on 96 of 128 templates) is the same first-launch behavior already
+ * deliberately NOT modeled. The constant tracks the app's stamp regardless, per
+ * the 2026-08-22 ruling: modeling a generation the app no longer has would fold
+ * two unverified generations into the next bump. Evidence:
+ * docs/lab/dbv29-migration-diff.md.
+ *
+ * The 26→27 move (2026-08-22) is what these appliers were last re-read against.
+ * That DDL delta is INDEX-ONLY (the fingerprint is unchanged by construction —
+ * src/db/baselines/db-v27.ts), but the DATA semantics moved, which is what these
+ * appliers model:
  *   - every TMTask row now carries all four maintained counters; the `-1`
  *     "uninitialised" sentinel is back-filled with a computed 0 on the classes
  *     that can never hold one (leaf counts on to-dos, checklist counts on
@@ -153,7 +166,7 @@ export function simulatorFenceReason(
  * docs/lab/dbv27-migration-diff.md). The migration-time spawn-cursor rewrite the
  * host appeared to show did NOT reproduce (§2.3) and is deliberately NOT modeled.
  */
-export const SIMULATED_DATABASE_VERSION = 27;
+export const SIMULATED_DATABASE_VERSION = 29;
 
 function fixtureDatabaseVersion(dbPath: string): number | null {
   let db: DatabaseSync | undefined;

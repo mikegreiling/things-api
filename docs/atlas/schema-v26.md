@@ -1,8 +1,8 @@
-# Things Database Atlas — schema v26 / v27
+# Things Database Atlas — schema v26 / v27 / v29
 
 The living map of Things 3's SQLite database, annotated with how each field drives what the user sees in the app. Structure and enum values here were probed live (read-only) against a real, long-lived Things library; behavioral semantics come from the validated research in [`../research/`](../research/) (especially `validation-notes-step3.md`).
 
-**One document, two generations.** The body below was captured at `Meta.databaseVersion` = **26** (Things 3.22.11, 2026-07-02) and every table/column/trigger statement in it is still exact under **27** (Things 3.23, 2026-08-22): the 26→27 migration has **zero** table/column/trigger delta, so the two generations share a schema fingerprint by construction ([`src/db/baselines/db-v27.ts`](../../src/db/baselines/db-v27.ts) reuses `DB_V26.fingerprint`). What DID move — three indexes and two data semantics — is in [§v27 delta](#v27-delta-things-323) below, and the individual rows in the tables carry the v27 note inline. The file is deliberately NOT renamed: ~15 documents link this path, and a rename would be churn, not information.
+**One document, three generations.** The body below was captured at `Meta.databaseVersion` = **26** (Things 3.22.11, 2026-07-02) and every table/column/trigger statement in it is still exact under **27** (Things 3.23, 2026-08-22) and under **29** (Things 3.24, 2026-09-14): neither migration has any table/column/trigger delta over the tables mapped here, so all three generations share a schema fingerprint by construction ([`src/db/baselines/db-v27.ts`](../../src/db/baselines/db-v27.ts) and [`db-v29.ts`](../../src/db/baselines/db-v29.ts) both reuse `DB_V26.fingerprint`). What DID move is in [§v27 delta](#v27-delta-things-323) and [§v29 delta](#v29-delta-things-324) below, and the individual rows in the tables carry the version note inline. The file is deliberately NOT renamed: ~15 documents link this path, and a rename would be churn, not information.
 
 **Location:** `~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-<suffix>/Things Database.thingsdatabase/main.sqlite` (WAL mode; `-shm`/`-wal` sidecars present whenever Things has run). The `<suffix>` varies per account. Direct-download and MAS builds share this container (bundle-level parity verified; see `../../vendor/manifest.json`).
 
@@ -12,7 +12,7 @@ sqlite3 -readonly "<main.sqlite>" \
   "SELECT sql || ';' FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
    ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name;"
 ```
-Run against a **3.23** library this emits a v27 capture — identical except for the three index lines in §v27 delta. That is the shape the checked-in fixture now carries (its `Meta.databaseVersion` stamp is **27**); the filename keeps the `v26` spelling for the same no-churn reason as this document.
+Run against a **3.24** library this emits a v29 capture — identical except for the three index lines in §v27 delta and the two tables + two indexes in §v29 delta. That is the shape the checked-in fixture now carries (its `Meta.databaseVersion` stamp is **29**); the filename keeps the `v26` spelling for the same no-churn reason as this document.
 
 ## v27 delta (Things 3.23)
 
@@ -32,6 +32,25 @@ Measured twice: on the maintainer's live library against Things' own pre-update 
 2. **`rt1_nextInstanceStartDate` is scoped to templates, NOT retired.** The migration NULLs it on every non-template row and leaves every repeating template's cached value **byte-identical**; the set of rows keeping a value is exactly `rt1_recurrenceRule IS NOT NULL` — which is precisely what the new partial index is for. Verified read-only on the live host (0 of 21,962 non-templates carry one; **73 of 114 templates do**) and on a 3.23 lab corpus (8 of 10 templates, every calendar shape — [`../lab/rdlg2-323-recipe-cert.md`](../lab/rdlg2-323-recipe-cert.md) §6.1). The 3.23 app keeps maintaining the cache, so the projection day was **not** broken by the update; templates lacking a cached day (after-completion rules, paused series, and a live cohort that never had one) lacked it under 3.22 too, and are the cohort [`src/model/template-projection.ts`](../../src/model/template-projection.ts) derives for.
 
 **What did NOT move:** `rt1_instanceCreationStartDate` was byte-unchanged on both lab templates (0 rows), so the strictly-forward cursor move seen on the host is best explained as a one-time catch-up to "now" on first launch, **not** a schema-driven rewrite — and is deliberately not modeled anywhere. `repeaterMigrationDate` untouched. Zero rows inserted or deleted; every other table's row count unchanged. Rule blobs still decode (`rrv` unaffected).
+
+## v29 delta (Things 3.24)
+
+Measured once, read-only on the maintainer's live host against the banked v27 snapshot ([`../lab/dbv29-migration-diff.md`](../lab/dbv29-migration-diff.md), 2026-09-14). The stamp jumped **27 → 29 in one hop** — a "28" was never observed on this host, which came from 3.23.4 (dbv 27).
+
+**DDL — two new tables + two new indexes, nothing removed or rebuilt** (invisible to the fingerprint by design: the new tables are outside the depended-table manifest, and indexes steer the query planner, not data semantics):
+
+| change | statement |
+|---|---|
+| ADDED (table) | `BSSpotlightDirtyEntity ("entityType" INTEGER NOT NULL, "id" BLOB NOT NULL, "changeToken" BLOB NOT NULL, "expansionCursor" BLOB, PRIMARY KEY ("entityType","id")) WITHOUT ROWID` |
+| ADDED (index) | `"index_BSSpotlightDirtyEntity_expansionCursor" ON BSSpotlightDirtyEntity ("entityType","id") WHERE "expansionCursor" IS NOT NULL` |
+| ADDED (table) | `BSSpotlightIndexState ("id" INTEGER PRIMARY KEY CHECK ("id" = 1), "updateState" INTEGER NOT NULL, "isEnabled" INTEGER NOT NULL DEFAULT 0, "wholeIndexUpdateToken" BLOB NOT NULL, "wholeIndexExpansionCursor" BLOB, "staticEntitiesUpdateToken" BLOB, "lastCheckpointID" BLOB)` |
+| ADDED (index) | `index_TMTask_userModificationDate ON TMTask(userModificationDate)` |
+
+Both new tables are **plausibly** the persistence for 3.24's Spotlight semantic index (release notes: "Full integration with Spotlight") — a dirty-set/work queue and a singleton index checkpoint. Nothing here inspects their contents, and the `BS` prefix matches Cultured Code's own internal prefix (`BSSyncronyMetadata`), so this is app-side plumbing, not an OS-managed table. Neither table is read by things-api.
+
+`index_TMTask_userModificationDate` is the one line with a forward implication: it suggests the indexer keys its change feed on `userModificationDate`, which for the first time gives that column a non-sync consumer inside the app — worth probing against the `--preserve-modified` line of work in the 3.24 recertification campaign.
+
+**Data semantics — measured, and essentially unmoved.** Across the banked pre/post pair the only mass change is `rt1_instanceCreationStartDate`, strictly forward on 96 of 128 repeating templates — the first-launch spawn-cursor catch-up already established under v27, not a schema-driven rewrite. Every other column changed on ≤8 rows of 22,323 (organic edits over a three-day-old pre snapshot), `userModificationDate` was NOT rewritten by the migration, `rt1_nextInstanceStartDate` is still template-scoped exactly as under v27, and no `-1` counter sentinels remain. The clock-pinned golden-v5 in-lab swap will supersede this with a noise-free re-measurement.
 
 ## Table inventory
 
