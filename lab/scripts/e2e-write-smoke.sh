@@ -8,10 +8,10 @@
 # THE TWO ARMS (HELPGST1). Identity is a certification dimension, so the smoke
 # is run twice and each result is reported by name:
 #
-#   direct  the historic arm. A bare golden-v4 clone has no helper bundle, so
+#   direct  the historic arm. A bare golden-v5 clone has no helper bundle, so
 #           the guest exports the two lab escapes and executes every script
 #           under its own sshd-descended identity.
-#   routed  the FIELD shape. A golden-v4h clone carries the helper pair with
+#   routed  the FIELD shape. A golden-v5h clone carries the helper pair with
 #           its grants already baked; the host-built bundle is shipped over the
 #           installed one, `helpers-enabled` is set to true, and every
 #           AppleScript/GUI hop is brokered by the deputy. No escapes.
@@ -55,8 +55,8 @@ if [ "$GUI_ONLY" = "1" ] && [ "$ARM" != "routed" ]; then
   exit 2
 fi
 case "$ARM" in
-  direct) ARM_GOLDEN="${GOLDEN:-things-lab-golden-v4}" ;;
-  routed) ARM_GOLDEN="${GOLDEN:-things-lab-golden-v4h}" ;;
+  direct) ARM_GOLDEN="${GOLDEN:-things-lab-golden-v5}" ;;
+  routed) ARM_GOLDEN="${GOLDEN:-things-lab-golden-v5h}" ;;
   *)
     echo "unknown arm '$ARM' — expected direct or routed" >&2
     exit 2

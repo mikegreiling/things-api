@@ -1,0 +1,87 @@
+{
+  "golden": "things-lab-golden-v5",
+  "builtAt": "2026-09-14T19:01:00Z",
+  "buildMethod": "in-place Things update in a things-lab-golden-v4 clone (drift-runbook DRIFT-1 in-place path, scripted as lab/scripts/golden-inplace-swap.sh): airgap + clock pin to 2026-07-05 BEFORE any launch, then swapped Things3.app 3.23->3.24 via `ditto -xk` of the pristine Cultured Code direct-download zip (rm -rf the old bundle first - never overwrite an app bundle in place), warm-up launch (which RAN the database migration, 27 -> 29), fingerprint + sdef re-verified. All v4 human-seeded layers (seed dataset, TCC AppleEvents/FDA/Screen-Recording/Accessibility, disruption-monitor LaunchAgent, six Shortcuts proxies, AXVM1 L3-accessibility grant, trial clock) inherited byte-for-byte via APFS COW clone.",
+  "buildMethodNote": "A from-L0 rebuild was not attempted, for the reasons recorded on golden-v4 (the Cirrus base does not fit the volume, and a from-L0 golden carries none of the human-seeded layers the suites require). The trial-clock concern stays moot: firstAppLaunchDate was re-read AFTER the 3.24 swap and is unchanged.",
+  "derivedFrom": "things-lab-golden-v4",
+  "baseImage": "ghcr.io/cirruslabs/macos-sequoia-vanilla:latest",
+  "guestOs": "macOS 15.7.7 (24G720)",
+  "thingsVersion": "3.24",
+  "thingsCfBundleVersion": "32400006",
+  "thingsZipSha256": "9aea8fd0d3d81ab5dbb2580c58b80d342410789b0c914c959327b84ff319af13",
+  "thingsZipNote": "Cultured Code direct-download build (static.culturedcode.com/things/Things3.zip, downloaded 2026-09-14); CFBundleShortVersionString 3.24 / CFBundleVersion 32400006. Direct-download channel; the maintainer's host is the MAS channel (32400506). Signature: Developer ID Application: Cultured Code GmbH & Co. KG (JLMPQHK86H), notarization ticket STAPLED, `spctl -a -vv` = accepted / source=Notarized Developer ID. Signing timestamp 2026-09-14 13:29:15 - LATER than the golden's pinned clock (2026-07-05), so `codesign -dv` reports \"postdated timestamp or bad system clock\" in-guest while Gatekeeper still accepts and the app launches; the same curiosity golden-v4 recorded, and it will show up in every future pinned-clock golden. LSMinimumSystemVersion unchanged at 13.3, so 3.24 still runs on the macOS 15.7.7 guests.",
+  "thingsSdefSha256": "1b6752334207f68cdcb7e71dfc34a21407095bd239afe5df6b3cdd8e2c70cde0",
+  "sdefNote": "byte-identical to the 3.22.11 (v1), 3.22.12 (v2), 3.22.14 (v3) and 3.23 (v4) golden sdef - unchanged since 3.22.11. Still declares `_private_experimental_ reorder to dos in` (reorder canary surface unchanged). 3.24's epicenter is macOS-27-only Siri/Spotlight/App-Intents integration: ZERO scripting-dictionary delta (docs/lab/ai324-app-intents-catalog.md).",
+  "trialFirstLaunch": "2026-07-03 03:14:28 +0000",
+  "trialFirstLaunchIso": "2026-07-03T03:14:28Z",
+  "pinnedDate": "2026-07-05",
+  "guestClockNote": "guest free-runs (networktime off); all trial math uses GUEST wall-clock. Trial data inherited from v4 and re-read AFTER the 3.24 swap - an in-place app update does NOT reset the trial (firstAppLaunchDate byte-identical at 2026-07-03 03:14:28 +0000); 13 days remaining at the pinned date, so the 2026-07-18 trial wall is unmoved.",
+  "uriSchemeAuthToken": "9dFi9fY-QBuqFq59yAUxOg",
+  "settings": {
+    "groupTodayByParent": false,
+    "thingsCloudDeclined": true,
+    "thingsUrlsEnabled": true,
+    "shortcutsBulkEditWithoutConfirmation": true,
+    "thingsAutoUpdateDisabled": true
+  },
+  "schemaFingerprint": "sha256:d2b7e98c6d384ef1ecd256b1410a11652e80c5860cc48370ec9b4d6956c7d4df",
+  "schemaNote": "databaseVersion 29 (migrated 27 -> 29 by the 3.24 warm-up launch, in-lab, observed live - a TWO-step jump in one hop, exactly as the host saw). Fingerprint byte-identical to golden-v1/v2/v3/v4: the DBV29 migration adds two Spotlight tables and two indexes and touches no depended table or column, so src/db/baselines/db-v29.ts covers this golden. Verified host-side with observeSchema() on the pulled pre- and post-swap guest DB copies (pre: databaseVersion 27, post: 29, SAME hash, zero extra columns on either side).",
+  "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
+  "humanLayersDone": [
+    "L2",
+    "L3-appleevents",
+    "L3-fulldisk",
+    "L3-accessibility",
+    "L4-launchagent",
+    "L6-seed-dataset",
+    "L5-shortcuts"
+  ],
+  "consentResidue": "one trashed L5-CONSENT-PROJ (type=1) from the v1 L5 consent absorption run \u2014 not in the seed manifest; probe assertions tolerate it (inherited through v1->v2->v3->v4).",
+  "shortcutsConsent": "output-class actions Always-Allowed on the golden (headless in clones); delete-class actions have no Always-Allow and re-prompt every run (tier-3, oddities 5j).",
+  "tcc": {
+    "appleEvents_sshd": "granted (inherited; re-read after the swap: kTCCServiceAppleEvents /usr/libexec/sshd-keygen-wrapper auth_value=2)",
+    "fullDiskAccess_sshd": "granted (kTCCServiceSystemPolicyAllFiles /usr/libexec/sshd-keygen-wrapper auth_value=2)",
+    "accessibility": "granted to /usr/libexec/sshd-keygen-wrapper (kTCCServiceAccessibility auth_value=2, SIP enabled). Baked in v2 (AXVM1), re-read intact after the 3.23 swap.",
+    "screenRecording": "granted (kTCCServiceScreenCapture: /Users/admin/things-lab/bin/disruption-monitor and /usr/libexec/sshd-keygen-wrapper, both auth_value=2)."
+  },
+  "inheritedLayerVerification": {
+    "disruptionMonitorAgent": "inherited from v4 via APFS COW (unchanged by the swap)",
+    "shortcutsProxies": "shortcuts list -> all six things-proxy-* present after the swap",
+    "trialClock": "firstAppLaunchDate = 2026-07-03 03:14:28 +0000, unchanged by the 3.24 swap. NOTE the value lives in the GROUP CONTAINER plist (.../Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist), NOT the bare com.culturedcode.ThingsMac domain",
+    "tccRows": "kTCCServiceAppleEvents / SystemPolicyAllFiles / Accessibility / ScreenCapture for sshd-keygen-wrapper all auth_value=2 after the swap",
+    "positiveControl": "lab/scripts/gv5-poscontrol.sh on a throwaway clone: `area add` -> read back -> `area delete` all exit 0 with dbVersion 29 / fingerprint ok (DRPLC1 rule - the trial wall is silent, so a golden must be shown to ACCEPT a write before it is trusted with a sweep)"
+  },
+  "migrationObservedInLab": {
+    "databaseVersion": "27 -> 29 on the first 3.24 launch (no 28 observed, matching the host)",
+    "ddl": "additive only, zero removals: NEW TABLE BSSpotlightDirtyEntity (WITHOUT ROWID) + NEW INDEX index_BSSpotlightDirtyEntity_expansionCursor; NEW TABLE BSSpotlightIndexState (singleton, CHECK id=1); NEW INDEX index_TMTask_userModificationDate ON TMTask(userModificationDate). Every pre-existing table, column, index and trigger byte-identical in the full sqlite_master text diff.",
+    "data": "ZERO changed rows, on every table. 37 TMTask / 3 TMChecklistItem / 2 TMArea / 10 TMTag / 1 TMSettings rows, 0 inserted, 0 deleted, and not one column changed on one row. rt1_instanceCreationStartDate did NOT move under the pinned clock - settling the host pair's 96-of-128 forward move as first-launch cursor catch-up, not a migration rewrite. Both Spotlight tables are EMPTY after the migration (0 rows each, including the singleton BSSpotlightIndexState row the host carries) - the indexer never engages on a macOS 15 guest.",
+    "evidence": "docs/lab/gv5-324-campaign.md"
+  },
+  "seedCounts": {
+    "areas": 2,
+    "tags": 10,
+    "todos": 26,
+    "projects": 5,
+    "headings": 2,
+    "checklistItems": 3,
+    "trashed": 1,
+    "repeatingTemplates": 2
+  },
+  "l5Progress": {
+    "sittingCompleted": "2026-07-09 (inherited through v1->v2->v3->v4)",
+    "proxies": [
+      "things-proxy-create-heading {title, project(uuid)}",
+      "things-proxy-edit-title {id(uuid), title}",
+      "things-proxy-delete-items {id(uuid)}",
+      "things-proxy-delete-items-permanently {id(uuid), Delete Immediately}",
+      "things-proxy-set-detail {id(uuid), detail, value}",
+      "things-proxy-find-items {search}"
+    ]
+  },
+  "certification": {
+    "status": "PENDING - minted and swept 2026-09-14; see docs/lab/gv5-324-campaign.md",
+    "note": "Structural gates PASSED (dbVersion 29, fingerprint unchanged and baseline-covered by db-v29.ts, sdef byte-identical, notarization accepted, every inherited human layer re-verified, positive control green).",
+    "certificationCampaign": "docs/lab/gv5-324-campaign.md",
+    "certifiedAppVersionStamp": "NOT applied by the lab. `things config set certified-app-version 3.24` is the maintainer's action on the live host after review."
+  }
+}

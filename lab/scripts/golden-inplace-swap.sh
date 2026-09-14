@@ -90,6 +90,7 @@ lab_ssh "$IP" 'set -e
   defaults read /Applications/Things3.app/Contents/Info LSMinimumSystemVersion
   shasum -a 256 /Applications/Things3.app/Contents/Resources/Things.sdef
   codesign -dv /Applications/Things3.app 2>&1 | sed -n "1,8p"
+  mkdir -p ~/things-lab/artifacts   # the helpers golden (v4h lineage) has no artifacts/ dir
   cp /Applications/Things3.app/Contents/Resources/Things.sdef ~/things-lab/artifacts/Things.sdef
 ' | tee "$OUT/post-swap.txt"
 lab_scp "$LAB_SSH_USER@$IP:things-lab/artifacts/Things.sdef" "$OUT/Things.sdef"
@@ -138,7 +139,11 @@ lab_ssh "$IP" 'set -e
     "SELECT service, client, auth_value FROM access ORDER BY service" 2>/dev/null || true
   sudo sqlite3 -readonly /Library/Application\ Support/com.apple.TCC/TCC.db \
     "SELECT service, client, auth_value FROM access ORDER BY service" 2>/dev/null || true
-  defaults read com.culturedcode.ThingsMac firstAppLaunchDate 2>/dev/null || true
+  # The trial clock lives in the GROUP CONTAINER plist, not the bare app
+  # domain — a `defaults read com.culturedcode.ThingsMac firstAppLaunchDate`
+  # prints NOTHING and `|| true` swallowed it, so this gate had been reading
+  # blank (caught GV5, 2026-09-14). Read the container plist by path.
+  defaults read ~/Library/Group\ Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist firstAppLaunchDate 2>/dev/null || true
 ' | tee "$OUT/housekeeping.txt"
 lab_scp "$LAB_SSH_USER@$IP:things-lab/db-post-swap.sqlite" "$OUT/db-post-swap.sqlite"
 
