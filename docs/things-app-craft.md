@@ -539,6 +539,22 @@ The bounded credit: Apple's reminder entity has `isCompleted` and nothing else, 
 
 Evidence: [lab/ai324-app-intents-catalog.md](lab/ai324-app-intents-catalog.md) §2.3–§4 (AI324, 2026-09-14, static bundle inspection). Things 3.24 build 32400006 vs 3.23.3 build 32303001.
 
+## 13. An MCP tool built by someone who has watched an agent misbehave — a paginated read whose pages are a frozen snapshot, and a description that says so
+
+Things 3.23 quietly shipped an in-process MCP server (off behind an internal flag; [MCPSRV1](lab/mcpsrv1-static-recon.md)). It exposes exactly one tool, `GetTodayList`, and the interesting part is not that it exists — it is that the model-facing copy and the implementation were designed together, against a failure mode you only learn about by watching real agents.
+
+The description, verbatim from the binary:
+
+> Returns the contents of the user's Today list in Things as ThingsJSON. Results are paginated; call repeatedly with the returned cursor until nextCursor is absent to retrieve all items. **Stopping at the first page will likely miss results.** Pagination is an internal detail of this tool — **do not ask the user whether to fetch more pages, just keep calling until done.** Cursors expire after a short time and **must not be stored or reused across separate interactions.**
+
+Every one of those three sentences is a scar. Models stop at page one and answer confidently from a partial list; models surface pagination to the user as a question ("shall I fetch the rest?"), which is noise about an implementation detail; models cache an opaque token and replay it in a later conversation. The tool description is the only place a server gets to push back on any of that, and this one spends most of its 463 bytes doing exactly that, in imperative model-facing language rather than API prose. Compare the parameter description, which is written for the *caller* and not the *user*: "Opaque pagination cursor returned by a previous call. Omit to fetch the first page."
+
+What makes it craft rather than a good comment is that the implementation earns the claims. The session holds a `PaginatedThingsJSONResult` carrying `{toolName, nextCursor, callContext, items, expiryTask}` — the **materialized item list**, not an offset — and the call context (`THCThingsMCPToolCallContext`) pins `todayDate`, `todayDateCurrentTime`, `logDate`, `locale` and `timeZone` at the moment the first page is asked for. So a cursor is a handle into a **frozen answer**, and page 4 of a Today list is consistent with page 1 even if the day rolled over, an occurrence spawned, or the user checked something off in between. In an app whose defining design choice is that lists are *derived at render time from the wall clock* (§1), a paginated read is precisely where that purity would tear — and this is the one place it is deliberately not allowed to. The `expiryTask` is the other half of the bargain: the snapshot reaps itself, which is why the description can promise that a stored cursor will fail rather than quietly return stale rows. It fails with its own sentence, too — "Cursor is invalid or has expired." — instead of an index error.
+
+A smaller note in the same spirit, one layer down. The JSON-RPC stack this rides on (`FoundationAdditions`) ships three interchangeable channels — `FAJSONRPCChannel_StreamSocket`, `FAJSONRPCChannel_FileHandle` (the stdio shape) and `FAJSONRPCChannel_InMemory` — behind one `FAJSONRPCChannel` protocol. The in-memory one exists so the entire server, handshake and all, can be exercised in a unit test with no socket, no file descriptors and no process boundary. That is the difference between a feature-flagged experiment and something built to be maintained.
+
+Evidence: [lab/mcpsrv1-static-recon.md](lab/mcpsrv1-static-recon.md) §2–§4 (MCPSRV1, 2026-09-14, static bundle inspection). Things 3.24 build 32400006; byte-identical in 3.23 build 32300036, where it first shipped.
+
 ## Edge cases this project routed through
 
 Project-side context: the modeling problems the app's craft created for us. Brief by design — the app engineering above is the star; these are where we had to build to match it.
