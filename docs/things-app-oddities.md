@@ -1265,6 +1265,23 @@ The identical payload minus that one child creates the project and its to-dos no
 
 **Automation note.** CHORD2's cell 6 fixture was built by this payload and the cell ran to completion against an empty project, producing four "no field changed on any surviving row" diffs that looked like real declines. Nothing but the `project=` echo being blank gave it away. Any driver building fixtures through `things:///json` must assert the fixture exists before measuring anything downstream of it. Evidence: [lab/chord2-reorder-laws.md](lab/chord2-reorder-laws.md) §10.
 
+### 22a. …and an unsupported top-level `type` does the same thing — one `area` element discards the batch (MCPSRV1, 2026-09-14, golden-v5 / Things 3.24 build 32400006)
+
+The same total-discard-with-success-exit, reached by a different door. ThingsJSON's documented top-level types are `to-do` and `project`; an `area` is not one of them. Submitting one **inside** an otherwise valid array does not skip it:
+
+```json
+[ …28 well-formed "to-do" items…,
+  {"type":"area","attributes":{"title":"MCP1-Area-…"}},
+  {"type":"project","attributes":{"title":"MCP1-Proj-…", …}},
+  …8 more well-formed items… ]
+```
+
+`open -g` exits 0 and **nothing lands** — not the area (expected), and not the thirty-eight items that were fine. Bisecting the same payload into four batches without the area element creates all of them (`28/28`, `3/3`, `1/1`, `6/6`). So the rejection is not "unknown types are ignored" and not "unknown types fail"; it is "an unknown type voids the transaction, silently".
+
+**Why it matters beyond #22.** A caller cannot always know the accepted type set — it is not versioned or discoverable — and this is the shape of failure a caller is *most* likely to hit while learning the format. It cost this probe two full clone-boots before the payload was bisected. **Expected:** the same as #22 — do not exit 0 on a discarded batch. **Actual:** indistinguishable from success.
+
+Evidence: [lab/mcpsrv1-guest-probe.md](lab/mcpsrv1-guest-probe.md) §10.
+
 ## 23. Things 3.23: a URL command sent to an app whose URL scheme is not enabled is HELD in an alert **sheet** indefinitely — silently to the sender, and it applies LATE (URLEN1, 2026-08-26, golden-v4 / Things 3.23 build 32300036)
 
 Things gates the `things:///` scheme behind its own Settings ▸ General ▸ **"Enable Things URLs"** switch (`uriSchemeEnabled` in the group-container prefs plist). When that switch is off — or has never been answered, which is every fresh install — a mutating URL is **not rejected and not dropped**. The app puts up a "Things URL Scheme" alert and **parks the command behind it**:
