@@ -1,14 +1,37 @@
--- Things 3 database schema, Meta.databaseVersion = 26 AND 27
+-- Things 3 database schema, Meta.databaseVersion = 26 AND 27 AND 29
 -- Captured 2026-07-02 from Things 3.22.11 (structure only; comments are Cultured Code's own)
 -- Regenerate: sqlite3 -readonly <main.sqlite> with the query in docs/atlas/schema-v26.md
 --
--- ONE file for both generations: the 26→27 migration (Things 3.23) has ZERO
--- table/column/trigger delta — its whole DDL delta is the three index changes at
--- the bottom of this file, which the schema fingerprint excludes by design
--- (observeSchema hashes PRAGMA table_info only). The index set below is the v27
--- one; the fixture stamps Meta.databaseVersion = 27 (test/fixtures/build-db.ts).
--- Evidence: docs/lab/dbv27-migration-diff.md + docs/lab/gv4-323-campaign.md §2.
-
+-- ONE file for THREE generations. The 26→27 migration (Things 3.23) has ZERO
+-- table/column/trigger delta — its whole DDL delta is the three index changes
+-- below. The 27→29 migration (Things 3.24, stamp jumped two in one hop; a "28"
+-- was never observed) adds TWO Spotlight-plumbing TABLES and TWO indexes, and
+-- likewise moves no existing table/column/trigger. The schema fingerprint
+-- excludes all of it by design (observeSchema hashes PRAGMA table_info for the
+-- DEPENDED tables only, and the new tables are outside that manifest). The
+-- table/index set below is the v29 one; the fixture stamps
+-- Meta.databaseVersion = 29 (test/fixtures/build-db.ts).
+-- Evidence: docs/lab/dbv27-migration-diff.md + docs/lab/gv4-323-campaign.md §2
+-- + docs/lab/dbv29-migration-diff.md.
+-- v29 (Things 3.24): the two Spotlight-index plumbing tables, both NEW and both
+-- outside the depended-table manifest (plausibly dirty-tracking + checkpoint
+-- state for the 3.24 Spotlight semantic index).
+CREATE TABLE BSSpotlightDirtyEntity (
+    "entityType"        INTEGER NOT NULL,
+    "id"                BLOB NOT NULL,
+    "changeToken"       BLOB NOT NULL,
+    "expansionCursor"   BLOB,
+    PRIMARY KEY ("entityType", "id")
+) WITHOUT ROWID;
+CREATE TABLE BSSpotlightIndexState (
+    "id"                          INTEGER PRIMARY KEY CHECK ("id" = 1),
+    "updateState"                 INTEGER NOT NULL,
+    "isEnabled"                   INTEGER NOT NULL DEFAULT 0,
+    "wholeIndexUpdateToken"       BLOB NOT NULL,
+    "wholeIndexExpansionCursor"   BLOB,
+    "staticEntitiesUpdateToken"   BLOB,
+    "lastCheckpointID"            BLOB
+);
 CREATE TABLE "BSSyncronyMetadata" (          'uuid'                 TEXT PRIMARY KEY,               'value'                BLOB                            );
 CREATE TABLE 'Meta' (                    'key'                 TEXT PRIMARY KEY,                'value'               TEXT                             );
 CREATE TABLE 'TMArea' (                  'uuid'                 TEXT PRIMARY KEY,               'title'                TEXT,                           'visible'              INTEGER,                        'index'                INTEGER                         , 'cachedTags' BLOB, experimental BLOB);
@@ -110,3 +133,6 @@ CREATE INDEX index_TMTask_repeatingTemplate_and_creationDate ON TMTask (rt1_repe
 CREATE INDEX index_TMTask_id_where_recurrenceRuleNotNull ON TMTask (uuid) WHERE rt1_recurrenceRule IS NOT NULL;
 CREATE INDEX index_TMTask_stopDate ON TMTask(stopDate);
 CREATE INDEX index_TMTombstone_deletedObjectUUID ON TMTombstone (deletedObjectUUID);
+-- v29 (Things 3.24): two ADDED indexes, nothing removed or rebuilt.
+CREATE INDEX "index_BSSpotlightDirtyEntity_expansionCursor" ON BSSpotlightDirtyEntity ("entityType", "id") WHERE "expansionCursor" IS NOT NULL;
+CREATE INDEX index_TMTask_userModificationDate ON TMTask(userModificationDate);

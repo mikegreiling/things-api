@@ -62,7 +62,7 @@ describe("doctor core", () => {
     fixture = buildFixtureDb();
     const { report, exitCode, meta } = runDoctor(fixture.path);
     expect(exitCode).toBe(0);
-    expect(report?.db.databaseVersion).toBe(27);
+    expect(report?.db.databaseVersion).toBe(29);
     expect(report?.fingerprint.status).toBe("ok");
     expect(report?.writes.enabled).toBe(true);
     expect(meta.fingerprint).toBe("ok");

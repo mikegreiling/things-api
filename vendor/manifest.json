@@ -3,17 +3,17 @@
     "url": "https://culturedcode.com/things/download/",
     "resolvedUrl": "https://static.culturedcode.com/things/Things3.zip",
     "file": "Things3.zip",
-    "sha256": "56e2858c4311963acede507ab346e7dbf1154d8279fa9f73f30624d04b6d3733",
-    "downloadedAt": "2026-08-22",
-    "cfBundleShortVersionString": "3.23",
-    "cfBundleVersion": "32300036",
+    "sha256": "9aea8fd0d3d81ab5dbb2580c58b80d342410789b0c914c959327b84ff319af13",
+    "downloadedAt": "2026-09-14",
+    "cfBundleShortVersionString": "3.24",
+    "cfBundleVersion": "32400006",
     "urlNote": "The download URL is UNVERSIONED — static.culturedcode.com/things/Things3.zip always serves the current release, so this manifest describes whatever build was current at downloadedAt. Historical zips are banked OUTSIDE the repo at /Volumes/Workspace/things-releases/ (the repo keeps exactly one vendored zip, gitignored).",
     "parity": {
-      "hostMasBuild": "32300536",
+      "hostMasBuild": "32400506",
       "sdefSha256": "1b6752334207f68cdcb7e71dfc34a21407095bd239afe5df6b3cdd8e2c70cde0",
       "sdefIdenticalToMas": true,
       "thingscliPresent": true,
-      "note": "Same marketing version as the host MAS install; build number differs by distribution channel (036 direct vs 536 MAS). The sdef is byte-identical to MAS and UNCHANGED since 3.22.11 — every 3.23 feature (redesigned repeat dialog, Make Exception/Update Rule chooser, Create Next Copy, bulk pause/resume/stop, the Repeating list) is GUI-only, with zero scripting-dictionary surface."
+      "note": "Same marketing version as the host MAS install; build number differs by distribution channel (006 direct vs 506 MAS). The sdef is byte-identical to MAS and UNCHANGED since 3.22.11 — every 3.24 feature (the new Siri integration, Spotlight integration, more notification-snoozing options, the extra-tall widget, macOS 27 compatibility) is Siri/Spotlight/App-Intents-side, with zero scripting-dictionary surface. Built with the macOS 27 SDK (DTPlatformVersion 26.0 → 27.0); LSMinimumSystemVersion unchanged at 13.3. The main binary newly links CoreSpotlight, GeoToolbox, _AppIntents_SwiftUI and _GeoToolbox_AppIntents."
     }
   }
 }
