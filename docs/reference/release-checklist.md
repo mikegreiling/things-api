@@ -177,7 +177,7 @@ gh pr view <N> --json state,mergedAt,mergeCommit
 git fetch origin && git log origin/main --oneline -1
 ```
 
-Then tag the **merge commit** with a lightweight tag and push it — `release.yml` triggers on `v*` tags and on nothing else:
+Then tag the **merge commit** with a lightweight tag and push it — `release.yml` publishes on `v*` tags and on nothing else (a manual dispatch is the signing dry run — it builds and notarizes the helpers and stops, [release-signing.md](../design/release-signing.md) §4):
 
 ```sh
 git tag v<version> <merge-sha>
