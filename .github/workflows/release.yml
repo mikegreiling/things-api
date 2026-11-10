@@ -6,6 +6,13 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # SIGNING DRY RUN: a manual dispatch runs `build-helpers` ONLY — sign,
+  # notarize, staple, assess — and stops. `publish` and `github-release` are
+  # gated on the tag push below, so a dispatch can never spend a version
+  # number. This is the one way to prove the signing leg on a new runner image
+  # (or a renewed certificate) without cutting a release:
+  #   gh workflow run release.yml --ref main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,14 +21,14 @@ permissions:
 jobs:
   # Sign + notarize "Things API Helper.app" so the published tarball carries a
   # ready-to-install helper bundle (no Xcode, no certificate, no build step on
-  # the consumer's machine). Runs ONLY here, on a tag push: fork PRs never see
+  # the consumer's machine). Runs ONLY here, on a tag push or a maintainer's manual dispatch: fork PRs never see
   # the secrets — GitHub withholds them by design — and the source +
   # scripts/build-helpers.sh remain the bring-your-own-identity path.
   #
   # One-time maintainer setup for the five secrets this job reads:
   # docs/design/release-signing.md.
   build-helpers:
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       BUNDLE: deputy/build/Things API Helper.app
       # NB: the `runner` context is not available in a job-level `env`, so the
@@ -190,6 +197,8 @@ jobs:
 
   publish:
     needs: build-helpers
+    # Tag pushes only — a manual dispatch is the signing dry run (see `on:`).
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -261,6 +270,7 @@ jobs:
   # Separate job so the npm-publishing job keeps contents: read.
   github-release:
     needs: publish
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write

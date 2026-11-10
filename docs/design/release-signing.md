@@ -68,15 +68,17 @@ Verify the names are all present (values are never readable again):
 gh secret list
 ```
 
-**Fork-PR safety.** GitHub withholds secrets from workflows triggered by a fork's pull request, by design, and this job runs only on a `v*` tag push in this repository — so a fork can neither read nor exercise the signing material. That is also why signing lives in the release workflow and not in CI: `.github/workflows/ci.yml` must stay runnable by anyone.
+**Fork-PR safety.** GitHub withholds secrets from workflows triggered by a fork's pull request, by design, and this job runs only on a `v*` tag push (or a maintainer's manual dispatch — the dry run in §4) in this repository — so a fork can neither read nor exercise the signing material. That is also why signing lives in the release workflow and not in CI: `.github/workflows/ci.yml` must stay runnable by anyone.
 
 ## 4. What a release run looks like
 
 `git push origin v<version>` starts three jobs in sequence:
 
-1. **`build-helpers`** (macOS 14) — checks all five secrets are present (missing ⇒ the release fails here, deliberately), creates a throwaway keychain in `$RUNNER_TEMP`, imports the `.p12` with `codesign` in the key's partition list, makes it the default keychain for the job, then runs `scripts/build-helpers.sh` (which auto-selects `Developer ID Application`, hardened runtime + secure timestamp, nested reader signed first). It zips the bundle with `ditto -c -k`, submits it to `notarytool --wait`, requires the verdict `Accepted`, staples the ticket into the bundle, and asserts `stapler validate` + `spctl --assess`. The stapled bundle is uploaded as a **tar.gz** artifact — `upload-artifact` does not preserve the executable bit, and a helper whose main executable arrives `0644` is a bundle launchd cannot start. The keychain is deleted in an `always()` step.
+1. **`build-helpers`** (macOS 15) — checks all five secrets are present (missing ⇒ the release fails here, deliberately), creates a throwaway keychain in `$RUNNER_TEMP`, imports the `.p12` with `codesign` in the key's partition list, makes it the default keychain for the job, then runs `scripts/build-helpers.sh` (which auto-selects `Developer ID Application`, hardened runtime + secure timestamp, nested reader signed first). It zips the bundle with `ditto -c -k`, submits it to `notarytool --wait`, requires the verdict `Accepted`, staples the ticket into the bundle, and asserts `stapler validate` + `spctl --assess`. The stapled bundle is uploaded as a **tar.gz** artifact — `upload-artifact` does not preserve the executable bit, and a helper whose main executable arrives `0644` is a bundle launchd cannot start. The keychain is deleted in an `always()` step.
 2. **`publish`** (Ubuntu) — the usual tag/version check, `npm run check`, build, skill stamp; then it downloads the artifact, unpacks it into `deputy/prebuilt/`, asserts both executables are present and executable, asserts they appear in `npm pack --dry-run --json`, and publishes with npm trusted publishing.
 3. **`github-release`** — unchanged.
+
+**Signing dry run.** `gh workflow run release.yml --ref main` (a manual `workflow_dispatch`) runs `build-helpers` alone — the full sign → notarize → staple → `spctl --assess` leg, with the stapled bundle left as a 7-day artifact — and stops: `publish` and `github-release` are gated on `github.event_name == 'push'`, so a dispatch cannot publish or spend a version number. Use it after anything that changes the signing leg's environment without changing the product: a runner-image bump, a renewed certificate, a rotated App Store Connect key. Only accounts with write access to this repository can dispatch a workflow, so the fork-PR guarantee above is unchanged.
 
 To ship a release **without** prebuilt helpers you must remove `publish`'s `needs: build-helpers` edge: a missing secret can never do it silently.
 

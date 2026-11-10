@@ -25,7 +25,7 @@ jobs:
   # THINGS_DEPUTY_LIVE because managed dev machines with EDR cannot execute
   # freshly built unknown binaries — hosted runners can.
   deputy-macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
