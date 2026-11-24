@@ -2175,7 +2175,7 @@ describe("ui driver — the Repeat dialog's shape manifest (RDLAT2)", () => {
   });
 
   it("an UNRECOGNIZED app build asserts nothing and takes no fast path", async () => {
-    setInstalledThingsVersion("3.24");
+    setInstalledThingsVersion("3.26");
     // The same moved census that refuses above is merely unremarkable here: the
     // manifest has nothing to say about a generation nobody has sat the lab with,
     // so the drive runs the full per-step discrimination it always did.

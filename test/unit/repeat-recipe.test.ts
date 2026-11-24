@@ -381,7 +381,7 @@ describe("repeat dialog recipe — the cross-hop settle tag (DEPOBS3)", () => {
   });
 
   it("goes away on an app build the shape manifest was never sat with", () => {
-    setInstalledThingsVersion("3.24");
+    setInstalledThingsVersion("3.26");
     try {
       const recipe = makeRepeatingRecipe("T-1", "weekly", 1, {
         weekdays: ["thursday"],
