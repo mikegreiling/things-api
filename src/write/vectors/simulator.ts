@@ -138,7 +138,14 @@ export function simulatorFenceReason(
  * simulate until the whole modeling chain is consciously re-verified —
  * a schema tripwire, not a compatibility claim.
  *
- * 29 (Things 3.24) since 2026-09-14. The 27→29 DDL delta adds only two
+ * 30 (Things 3.25) since 2026-11-24. The 29→30 migration is a STAMP-ONLY
+ * bump as far as the lab can measure: the full sqlite_master text is
+ * byte-identical and every row of every table is unchanged except the
+ * databaseVersion value itself (docs/lab/gv6-325-campaign.md §2), so nothing
+ * these appliers model moved. The constant follows the stamp anyway, per the
+ * 2026-08-22 ruling below.
+ *
+ * 29 (Things 3.24) from 2026-09-14. The 27→29 DDL delta adds only two
  * Spotlight-plumbing TABLES and two indexes, all outside the depended manifest
  * (fingerprint unchanged by construction — src/db/baselines/db-v29.ts), and the
  * DATA half is measured as a NO-OP for everything these appliers model: no
@@ -166,7 +173,7 @@ export function simulatorFenceReason(
  * docs/lab/dbv27-migration-diff.md). The migration-time spawn-cursor rewrite the
  * host appeared to show did NOT reproduce (§2.3) and is deliberately NOT modeled.
  */
-export const SIMULATED_DATABASE_VERSION = 29;
+export const SIMULATED_DATABASE_VERSION = 30;
 
 function fixtureDatabaseVersion(dbPath: string): number | null {
   let db: DatabaseSync | undefined;

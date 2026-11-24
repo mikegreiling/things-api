@@ -1,0 +1,87 @@
+{
+  "golden": "things-lab-golden-v6",
+  "builtAt": "2026-11-24T17:18:00Z",
+  "buildMethod": "in-place Things update in a things-lab-golden-v5 clone (drift-runbook DRIFT-1 in-place path, lab/scripts/golden-inplace-swap.sh): airgap + clock pin to 2026-07-05 BEFORE any launch, then swapped Things3.app 3.24->3.25 via `ditto -xk` of the pristine Cultured Code direct-download zip (rm -rf the old bundle first - never overwrite an app bundle in place), warm-up launch (which RAN the database migration, 29 -> 30), fingerprint + sdef re-verified. All human-seeded layers (seed dataset, TCC AppleEvents/FDA/Screen-Recording/Accessibility, disruption-monitor LaunchAgent, six Shortcuts proxies, AXVM1 L3-accessibility grant, trial clock) inherited byte-for-byte via APFS COW clone (v1->v2->v3->v4->v5->v6).",
+  "buildMethodNote": "A from-L0 rebuild was not attempted, for the reasons recorded on golden-v4 (the Cirrus base does not fit the volume, and a from-L0 golden carries none of the human-seeded layers the suites require). The trial-clock concern stays moot: firstAppLaunchDate was re-read AFTER the 3.25 swap and is unchanged.",
+  "derivedFrom": "things-lab-golden-v5",
+  "baseImage": "ghcr.io/cirruslabs/macos-sequoia-vanilla:latest",
+  "guestOs": "macOS 15.7.7 (24G720)",
+  "thingsVersion": "3.25",
+  "thingsCfBundleVersion": "32500008",
+  "thingsZipSha256": "d3e96b1f02b27bf00edf328cc46da2172c1e13776f030a4d86e7e5eeee1749d1",
+  "thingsZipNote": "Cultured Code direct-download build (static.culturedcode.com/things/Things3.zip, downloaded and banked 2026-11-24 as /Volumes/Workspace/things-releases/Things3-3.25-32500008.zip); CFBundleShortVersionString 3.25 / CFBundleVersion 32500008. Direct-download channel; the maintainer's host MAS build for 3.25 was not yet observed at mint time (the host was still on MAS 3.24.2 / 32402507). Signature verifies host-side (Developer ID Application: Cultured Code GmbH & Co. KG (JLMPQHK86H)); signing timestamp 2026-11-24 09:18:17 - LATER than the golden's pinned clock, so in-guest `codesign -dv` reports \"postdated timestamp or bad system clock\" while the app launches (the permanent pinned-clock curiosity recorded on v4/v5). LSMinimumSystemVersion unchanged at 13.3; DTPlatformVersion 27.2.",
+  "thingsSdefSha256": "069e9ed6ae8a0f101cc76a66d4a971858b96e24305cbda61be58165eb0171219",
+  "sdefNote": "CHANGED for the first time since 3.22.11 (was 1b675233...70cde0 on v1-v5). The whole diff is the REMOVAL of two hidden commands, `filter by previous top tag` (THGSfptt) and `filter by next top tag` (THGSfntt); nothing in src/, lab/suites or lab/scripts uses either. All seven `_private_experimental_` declarations (including `_private_experimental_ reorder to dos in`) are still present, so the reorder canary surface is unchanged.",
+  "trialFirstLaunch": "2026-07-03 03:14:28 +0000",
+  "trialFirstLaunchIso": "2026-07-03T03:14:28Z",
+  "pinnedDate": "2026-07-05",
+  "guestClockNote": "guest free-runs (networktime off); all trial math uses GUEST wall-clock. Trial data inherited from v5 and re-read AFTER the 3.25 swap - an in-place app update does NOT reset the trial (firstAppLaunchDate byte-identical at 2026-07-03 03:14:28 +0000); 13 days remaining at the pinned date, so the 2026-07-18 trial wall is unmoved.",
+  "uriSchemeAuthToken": "9dFi9fY-QBuqFq59yAUxOg",
+  "settings": {
+    "groupTodayByParent": false,
+    "thingsCloudDeclined": true,
+    "thingsUrlsEnabled": true,
+    "shortcutsBulkEditWithoutConfirmation": true,
+    "thingsAutoUpdateDisabled": true
+  },
+  "schemaFingerprint": "sha256:d2b7e98c6d384ef1ecd256b1410a11652e80c5860cc48370ec9b4d6956c7d4df",
+  "schemaNote": "databaseVersion 30 (migrated 29 -> 30 by the 3.25 warm-up launch, in-lab, observed live). Fingerprint byte-identical to golden-v1..v5, and the full sqlite_master TEXT is byte-identical across the migration (zero DDL delta of any kind). src/db/baselines/db-v30.ts covers this golden. Verified host-side with observeSchema() on the pulled pre- and post-swap guest DB copies of BOTH lineages (v6 and v6h): pre databaseVersion 29, post 30, SAME hash, zero extra-column delta.",
+  "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
+  "humanLayersDone": [
+    "L2",
+    "L3-appleevents",
+    "L3-fulldisk",
+    "L3-accessibility",
+    "L4-launchagent",
+    "L6-seed-dataset",
+    "L5-shortcuts"
+  ],
+  "consentResidue": "one trashed L5-CONSENT-PROJ (type=1) from the v1 L5 consent absorption run - not in the seed manifest; probe assertions tolerate it (inherited through v1->v2->v3->v4->v5->v6).",
+  "shortcutsConsent": "output-class actions Always-Allowed on the golden (headless in clones); delete-class actions have no Always-Allow and re-prompt every run (tier-3, oddities 5j).",
+  "tcc": {
+    "appleEvents_sshd": "granted (inherited; re-read after the 3.25 swap: kTCCServiceAppleEvents /usr/libexec/sshd-keygen-wrapper auth_value=2)",
+    "fullDiskAccess_sshd": "granted (kTCCServiceSystemPolicyAllFiles /usr/libexec/sshd-keygen-wrapper auth_value=2)",
+    "accessibility": "granted to /usr/libexec/sshd-keygen-wrapper (kTCCServiceAccessibility auth_value=2, SIP enabled). Baked in v2 (AXVM1), re-read intact after the 3.25 swap.",
+    "screenRecording": "granted (kTCCServiceScreenCapture: /Users/admin/things-lab/bin/disruption-monitor and /usr/libexec/sshd-keygen-wrapper, both auth_value=2)."
+  },
+  "inheritedLayerVerification": {
+    "disruptionMonitorAgent": "inherited from v5 via APFS COW (unchanged by the swap)",
+    "shortcutsProxies": "shortcuts list -> all six things-proxy-* present after the swap",
+    "trialClock": "firstAppLaunchDate = 2026-07-03 03:14:28 +0000, unchanged by the 3.25 swap (read from the GROUP CONTAINER plist .../Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist)",
+    "tccRows": "kTCCServiceAppleEvents / SystemPolicyAllFiles / Accessibility / ScreenCapture for sshd-keygen-wrapper all auth_value=2 after the 3.25 swap",
+    "positiveControl": "lab/scripts/gv5-poscontrol.sh on a throwaway clone of each: `area add` -> read back -> `area delete` all exit 0 with dbVersion 30 / fingerprint ok. On v6h additionally `things helpers status --json`: deputy 1.4.0 running, axTrusted, reader installed/running/granted, both signed (Developer ID Application: Mike Greiling (VNJWARH2W7)); doctor reads write: deputy / read: helpers."
+  },
+  "migrationObservedInLab": {
+    "databaseVersion": "29 -> 30 on the first 3.25 launch",
+    "ddl": "NONE. The full sqlite_master text (type, name, tbl_name, sql for every table, index and trigger) is byte-identical pre vs post, on both the v6 and v6h lineages.",
+    "data": "ZERO changed rows on every table except the Meta.databaseVersion value itself (29 -> 30). 37 TMTask / 3 TMChecklistItem / 2 TMArea / 10 TMTag / 1 TMSettings / 3 TMTaskTag / 1 TMAreaTag, 0 inserted, 0 deleted, not one column changed on one row. Bound: the seed holds no TMContact, TMSmartList or TMTombstone rows and both Spotlight tables are empty, so a migration step that only touches row shapes absent from the seed cannot show here.",
+    "evidence": "docs/lab/gv6-325-campaign.md"
+  },
+  "seedCounts": {
+    "areas": 2,
+    "tags": 10,
+    "todos": 26,
+    "projects": 5,
+    "headings": 2,
+    "checklistItems": 3,
+    "trashed": 1,
+    "repeatingTemplates": 2
+  },
+  "l5Progress": {
+    "sittingCompleted": "2026-07-09 (inherited through v1->v2->v3->v4->v5->v6)",
+    "proxies": [
+      "things-proxy-create-heading {title, project(uuid)}",
+      "things-proxy-edit-title {id(uuid), title}",
+      "things-proxy-delete-items {id(uuid)}",
+      "things-proxy-delete-items-permanently {id(uuid), Delete Immediately}",
+      "things-proxy-set-detail {id(uuid), detail, value}",
+      "things-proxy-find-items {search}"
+    ]
+  },
+  "certification": {
+    "status": "NOT CERTIFIED (2026-11-24): zero suite flips, but ONE app flip outside the suites' reach is open - ORD-5's area-less-anytime json collapse now back-inserts on 3.25, so the `reorder --in anytime` bounce route lands the wrong order and exits 0. See docs/lab/gv6-325-campaign.md §6.",
+    "note": "lab:regress GREEN (8 suites, 177 probes, all identical to GV5; e2e 133 direct / 136 routed). Structural gates passed. Golden promoted as the active direct-arm image regardless: it IS Things 3.25.",
+    "certificationCampaign": "docs/lab/gv6-325-campaign.md",
+    "certifiedAppVersionStamp": "NOT applied by the lab, and should wait for the ORD-5 fix: `things config set certified-app-version 3.25` is the maintainer's action on his own Macs."
+  }
+}

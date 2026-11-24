@@ -1,7 +1,7 @@
 #!/bin/bash
 # Stage 5 (release-gate b/c) — the FIELD-SHAPED RC run, inside a ROUTED guest.
 #
-# Clone golden-v4h -> boot -> airgap -> pin the clock -> ship the RC's dist and
+# Clone golden-v6h -> boot -> airgap -> pin the clock -> ship the RC's dist and
 # the host-built helper bundle -> install + route through the deputy -> run the
 # batch's changed operations with the NORMAL CLI syntax -> collect -> destroy.
 #
@@ -26,7 +26,7 @@ GUEST_CELLS="${GUEST_CELLS:-lab/guest/stage5-cells.sh}"
 [ -f "$GUEST_CELLS" ] || { echo "no cell script at $GUEST_CELLS" >&2; exit 2; }
 CELLS_BASE=$(basename "$GUEST_CELLS")
 
-GOLDEN_V4H="${GOLDEN:-things-lab-golden-v4h}"
+GOLDEN_V4H="${GOLDEN:-things-lab-golden-v6h}"
 # The clone's name is overridable so a run can announce itself in `tart list`
 # to whatever else is waiting for the single VM slot (agents coordinate by
 # reading that list before they clone).
@@ -46,7 +46,7 @@ COMMANDER_DIR=$(lab_commander_dir)
 # The signed helper bundle. `deputy/build/` is GITIGNORED, so a fresh checkout
 # (or a worktree) has none and `guest_helpers_ship` would fail at the routed
 # arm's first step. Build it here the way lab/scripts/regress.sh does — same
-# Developer ID identity, which is what makes golden-v4h's baked TCC rows apply.
+# Developer ID identity, which is what makes the routed golden's baked TCC rows apply.
 if [ ! -x "deputy/build/Things API Helper.app/Contents/MacOS/things-deputy" ]; then
   echo "[stage5] no helper bundle in deputy/build — building it"
   bash scripts/build-helpers.sh >/dev/null

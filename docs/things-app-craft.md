@@ -557,6 +557,14 @@ And a third note, which only a failed attack could establish: **the gate is real
 
 Evidence: [lab/mcpsrv1-static-recon.md](lab/mcpsrv1-static-recon.md) §2–§4 (MCPSRV1 phase 1, 2026-09-14, static bundle inspection) and [lab/mcpsrv1-guest-probe.md](lab/mcpsrv1-guest-probe.md) §4–§6 (phase 2, 2026-09-14, golden-v5 guest). Things 3.24 build 32400006; byte-identical in 3.23 build 32300036, where it first shipped.
 
+## 14. The custom-drawn rows learned to say what they are (Things 3.25)
+
+Things draws its list rows and sidebar rows itself rather than out of stock AppKit controls, and through 3.24 that showed in the accessibility tree: almost every leaf inside a row was an `AXUnknown` carrying an `AXDescription` (`Checkbox`, `More. <heading title>`, `Inbox. 2 to-do's.`), which a screen reader can read but cannot classify, and the list header's title was an editable `AXTextArea`. Things 3.25, the release that added touchscreen input, re-roled those leaves. The row checkbox is now an `AXButton` with the VoiceOver hint *"Double-tap to mark as completed."*; the heading's ellipsis is an `AXButton` still titled `More. <title>`; sidebar entries are `AXButton`s whose labels and counts are `AXStaticText`; and the remaining anonymous `AXUnknown` leaves in the main window fell from 133 to 7 at launch.
+
+What makes it worth recording is what did NOT move. The table, its 31 rows and 31 cells, the scroll areas, every element's `AXDescription`, and the frames are the same, so anything that addressed a row by its description or by its position keeps working; and the Repeat and Reschedule dialogs, which were already stock AppKit controls, are untouched to the pixel. The change gives assistive technology real roles without moving any landmark existing automation steers by. It is also the honest shape of a touch release: a double-tap hint is the iOS VoiceOver idiom, now on the Mac rows that a finger can reach.
+
+Evidence: [lab/gv6-325-campaign.md](lab/gv6-325-campaign.md) §5 (GV6AX, the same AX census on golden-v4 / 3.23, golden-v5 / 3.24 and golden-v6 / 3.25 build 32500008, macOS 15.7.7 guests, 2026-11-24).
+
 ## Edge cases this project routed through
 
 Project-side context: the modeling problems the app's craft created for us. Brief by design — the app engineering above is the star; these are where we had to build to match it.

@@ -1,8 +1,13 @@
--- Things 3 database schema, Meta.databaseVersion = 26 AND 27 AND 29
+-- Things 3 database schema, Meta.databaseVersion = 26 AND 27 AND 29 AND 30
 -- Captured 2026-07-02 from Things 3.22.11 (structure only; comments are Cultured Code's own)
 -- Regenerate: sqlite3 -readonly <main.sqlite> with the query in docs/atlas/schema-v26.md
 --
--- ONE file for THREE generations. The 26→27 migration (Things 3.23) has ZERO
+-- v30 (Things 3.25, 2026-11-24): NO DDL DELTA AT ALL — the full sqlite_master
+-- text is byte-identical across the 29→30 migration (docs/lab/gv6-325-campaign.md
+-- §2), so this file needed no change beyond this note. The fixture stamps
+-- Meta.databaseVersion = 30.
+--
+-- ONE file for FOUR generations. The 26→27 migration (Things 3.23) has ZERO
 -- table/column/trigger delta — its whole DDL delta is the three index changes
 -- below. The 27→29 migration (Things 3.24, stamp jumped two in one hop; a "28"
 -- was never observed) adds TWO Spotlight-plumbing TABLES and TWO indexes, and

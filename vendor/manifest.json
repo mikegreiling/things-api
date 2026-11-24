@@ -3,17 +3,17 @@
     "url": "https://culturedcode.com/things/download/",
     "resolvedUrl": "https://static.culturedcode.com/things/Things3.zip",
     "file": "Things3.zip",
-    "sha256": "9aea8fd0d3d81ab5dbb2580c58b80d342410789b0c914c959327b84ff319af13",
-    "downloadedAt": "2026-09-14",
-    "cfBundleShortVersionString": "3.24",
-    "cfBundleVersion": "32400006",
-    "urlNote": "The download URL is UNVERSIONED — static.culturedcode.com/things/Things3.zip always serves the current release, so this manifest describes whatever build was current at downloadedAt. Historical zips are banked OUTSIDE the repo at /Volumes/Workspace/things-releases/ (the repo keeps exactly one vendored zip, gitignored).",
+    "sha256": "d3e96b1f02b27bf00edf328cc46da2172c1e13776f030a4d86e7e5eeee1749d1",
+    "downloadedAt": "2026-11-24",
+    "cfBundleShortVersionString": "3.25",
+    "cfBundleVersion": "32500008",
+    "urlNote": "The download URL is UNVERSIONED \u2014 static.culturedcode.com/things/Things3.zip always serves the current release, so this manifest describes whatever build was current at downloadedAt. Historical zips are banked OUTSIDE the repo at /Volumes/Workspace/things-releases/ (the repo keeps exactly one vendored zip, gitignored).",
     "parity": {
-      "hostMasBuild": "32400506",
-      "sdefSha256": "1b6752334207f68cdcb7e71dfc34a21407095bd239afe5df6b3cdd8e2c70cde0",
-      "sdefIdenticalToMas": true,
+      "hostMasBuild": "not yet observed (the host was still on MAS 3.24.2 / 32402507 on 2026-11-24)",
+      "sdefSha256": "069e9ed6ae8a0f101cc76a66d4a971858b96e24305cbda61be58165eb0171219",
+      "sdefIdenticalToMas": null,
       "thingscliPresent": true,
-      "note": "Same marketing version as the host MAS install; build number differs by distribution channel (006 direct vs 506 MAS). The sdef is byte-identical to MAS and UNCHANGED since 3.22.11 — every 3.24 feature (the new Siri integration, Spotlight integration, more notification-snoozing options, the extra-tall widget, macOS 27 compatibility) is Siri/Spotlight/App-Intents-side, with zero scripting-dictionary surface. Built with the macOS 27 SDK (DTPlatformVersion 26.0 → 27.0); LSMinimumSystemVersion unchanged at 13.3. The main binary newly links CoreSpotlight, GeoToolbox, _AppIntents_SwiftUI and _GeoToolbox_AppIntents."
+      "note": "The 3.25 MAS build has not reached the host yet, so MAS parity is unmeasured. The sdef CHANGED for the first time since 3.22.11: the whole diff is the removal of two hidden commands (`filter by previous top tag` THGSfptt, `filter by next top tag` THGSfntt), unused by things-api; all seven `_private_experimental_` declarations remain. 3.25 is the touch-input release (touchscreen MacBook Pro support). Signed 2026-11-24, LSMinimumSystemVersion unchanged at 13.3, DTPlatformVersion 27.2. Banked at /Volumes/Workspace/things-releases/Things3-3.25-32500008.zip."
     }
   }
 }
