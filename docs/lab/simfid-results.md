@@ -1,8 +1,8 @@
 # SIMFID — simulator-fidelity replay suite
 
-**Certified against:** the **v29 modelling chain** (Things **3.24** / `Meta.databaseVersion` **29**), host side run `simfid-20260914-194447` and clone drive `simfid-clone-20260914-152009` / comparator `simfid-20260914-202138` (2026-09-14, [GV5](gv5-324-campaign.md) §4). Pinned clock 2026-07-05 (the RSIM clock). Re-run each golden rebuild ([drift-runbook](drift-runbook.md) step 5); this is a living re-certification suite, not a frozen snapshot.
+**Certified against:** the **v30 modelling chain** (Things **3.25** / `Meta.databaseVersion` **30**), host side run `simfid-20261124-172253` and clone drive `simfid-clone-20261124-114849` / comparator `simfid-20261124-175003` (2026-11-24, [GV6](gv6-325-campaign.md) §4). Pinned clock 2026-07-05 (the RSIM clock). Re-run each golden rebuild ([drift-runbook](drift-runbook.md) step 5); this is a living re-certification suite, not a frozen snapshot.
 
-> **Honesty about which side is which.** The SIM side is unambiguously v29: the fixture stamps `Meta.databaseVersion = 29`, `SIMULATED_DATABASE_VERSION` is 29, and the 27→29 migration was measured in-lab as **DDL-only, zero changed rows on every table** (GV5 §2) — which is what makes this cycle a VERIFICATION pass rather than a re-model, since the appliers model DATA semantics and 3.24 moved none. The APP side remains a MIX, now generation-dated per row: the six headless CRUD rows are a fresh **golden-v5 / 3.24** clone capture (2026-09-14), while the whole recurrence/subtree family is still `rsim-evidence` from **≤3.22.12** (tier-3 ui-vector — out of the headless manifest until an AX-capable driver exists).
+> **Honesty about which side is which.** The SIM side is unambiguously v30: the fixture stamps `Meta.databaseVersion = 30`, `SIMULATED_DATABASE_VERSION` is 30, and the 29→30 migration was measured in-lab as **no DDL and no data change apart from the stamp itself** (GV6 §2), following a 27→29 migration that was DDL-only (GV5 §2) — which is what makes this cycle, like the last, a VERIFICATION pass rather than a re-model, since the appliers model DATA semantics and neither release moved any. The APP side remains a MIX, now generation-dated per row: the six headless CRUD rows are a fresh **golden-v6 / 3.25** clone capture (2026-11-24), while the whole recurrence/subtree family is still `rsim-evidence` from **≤3.22.12** (tier-3 ui-vector — out of the headless manifest until an AX-capable driver exists).
 
 **What it is.** SIMFID certifies [`src/write/vectors/simulator.ts`](../../src/write/vectors/simulator.ts) against the REAL Things app, op by op. For every simulator-covered op it compares two row-level DB deltas — the op replayed on the host through the full write pipeline with the simulator vector, and the same op driven through the guest CLI against the real app — after NORMALIZING away the differences that are not fidelity facts (uuids, wall-clock jitter, list positions), with declared TOLERANCES for the app's probe-proven nondeterminism. A residual difference is a **divergence the suite REPORTS** (a simulator bug OR newly-discovered app behaviour); SIMFID never edits the appliers. This is the automation of exactly the class of bug caught by hand on 2026-07-17 (the inbox-promotion filing semantics).
 
@@ -76,6 +76,10 @@ RDLG2 §5.2 certifies the 3.23 menu item as materialize-and-advance: it mints th
 
 The simulator does not maintain `untrashedLeafActionsCount` / `openUntrashedLeafActionsCount` on a PROJECT row as children are inserted, moved, completed or deleted — a minted instance project with N open leaf children carries `0`, where the real app maintains the real count. This is **pre-existing and generation-independent**: v26 maintained real counts on projects too (GV4 §2.2 measured those rows as untouched by the migration), so 27 changed nothing here. It does not surface as a DIVERGENT because the recurrence/subtree goldens derive from the sim delta, which is exactly why it is written down instead: it is invisible until those rows are clone-captured. Deliberately NOT "fixed" in this pass — no campaign has measured the counter value the app stamps on a freshly minted instance project, and guessing it would put an unproven number into the golden. Added as follow-up 5.
 
+## Clone leg against golden-v6 (2026-11-24) — the six CRUD rows are now a Things 3.25 capture
+
+`bash lab/scripts/simfid.sh -- --gate` RAN against a fresh clone of **`things-lab-golden-v6`** (Things 3.25 / dbv 30) — clone drive `simfid-clone-20261124-114849`, comparator `simfid-20261124-175003`, **gate exit 0**, 75 s wall clock end to end. All six headless CRUD cases drove cleanly (`op exit=0` on every one — read before any verdict, per the GV5 rule that an empty delta is not evidence until the exit code has been read), and **all six MATCH**. Standing after the drive: **30 MATCH · 5 TOLERATED · 0 DIVERGENT · 0 replay-error** — verdict-for-verdict identical to the host run `simfid-20261124-172253` and to the 3.24 leg before it. The `clone-drive` provenance on the six rows below now names this run. The same five tolerances, with the same rationale: nothing in 29 → 30 touches child back-links or the sentinel's provenance.
+
 ## Clone leg against golden-v5 (2026-09-14) — the six CRUD rows are now a Things 3.24 capture, and the harness learned to fail closed
 
 `bash lab/scripts/simfid.sh -- --gate` RAN against a fresh clone of **`things-lab-golden-v5`** (Things 3.24 / dbv 29) — clone drive `simfid-clone-20260914-152009`, comparator `simfid-20260914-202138`, **gate exit 0**, 90 s wall clock end to end. All six headless CRUD cases drove cleanly (`op exit=0` on every one), and **all six MATCH**. Standing after the drive: **30 MATCH · 5 TOLERATED · 0 DIVERGENT · 0 replay-error** — verdict-for-verdict identical to the host run `simfid-20260914-194447` and to the 3.23 leg before it. The `clone-drive` provenance on `todo-complete`, `todo-cancel`, `todo-reopen`, `todo-delete`, `tag-add-root` and `project-update` is therefore a **Things 3.24 / golden-v5 capture**, superseding the golden-v4 / 3.23 one.
@@ -121,10 +125,10 @@ The six headless CRUD cases drove cleanly on the real app (all `op exit=0`, real
 | `todo-add-scheduled` | `todo.add` | crud | MATCH | suite-evidence (a-suite) |
 | `todo-add-area` | `todo.add` | crud | MATCH | suite-evidence (a/e-suite) |
 | `todo-update` | `todo.update` | crud | MATCH | suite-evidence (u/e-suite) |
-| `todo-complete` | `todo.complete` | crud | MATCH | **clone-drive (simfid-clone-20260914-152009, 3.24 / golden-v5)** |
-| `todo-cancel` | `todo.cancel` | crud | MATCH | **clone-drive (simfid-clone-20260914-152009, 3.24 / golden-v5)** |
-| `todo-reopen` | `todo.reopen` | crud | MATCH (fixture + tolerance fix landed — see the RESOLVED note; momentarily TOLERATED under the raw clone leg) | **clone-drive (simfid-clone-20260914-152009, 3.24 / golden-v5)** |
-| `todo-delete` | `todo.delete` | crud | MATCH | **clone-drive (simfid-clone-20260914-152009, 3.24 / golden-v5)** |
+| `todo-complete` | `todo.complete` | crud | MATCH | **clone-drive (simfid-clone-20261124-114849, 3.25 / golden-v6)** |
+| `todo-cancel` | `todo.cancel` | crud | MATCH | **clone-drive (simfid-clone-20261124-114849, 3.25 / golden-v6)** |
+| `todo-reopen` | `todo.reopen` | crud | MATCH (fixture + tolerance fix landed — see the RESOLVED note; momentarily TOLERATED under the raw clone leg) | **clone-drive (simfid-clone-20261124-114849, 3.25 / golden-v6)** |
+| `todo-delete` | `todo.delete` | crud | MATCH | **clone-drive (simfid-clone-20261124-114849, 3.25 / golden-v6)** |
 | `todo-restore` | `todo.restore` | crud | MATCH | suite-evidence (e-suite E15) |
 | `todo-move-project` | `todo.move` | crud | MATCH | suite-evidence (o/e-suite) |
 | `todo-move-inbox-promote` | `todo.move` | crud | MATCH | suite-evidence (filing-semantics fix) |
@@ -133,11 +137,11 @@ The six headless CRUD cases drove cleanly on the real app (all `op exit=0`, real
 | `todo-set-tags` | `todo.set-tags` | crud | MATCH | suite-evidence (e-suite) |
 | `todo-replace-checklist` | `todo.replace-checklist` | crud | MATCH | suite-evidence (p-suite P18) |
 | `project-add-area` | `project.add` | crud | MATCH | suite-evidence (a-suite) |
-| `project-update` | `project.update` | crud | MATCH | **clone-drive (simfid-clone-20260914-152009, 3.24 / golden-v5)** |
+| `project-update` | `project.update` | crud | MATCH | **clone-drive (simfid-clone-20261124-114849, 3.25 / golden-v6)** |
 | `project-complete-cascade` | `project.complete` | crud | MATCH | suite-evidence (p-suite T08) |
 | `area-add` | `area.add` | crud | MATCH | suite-evidence (a-suite) |
 | `area-update-tags` | `area.update` | crud | MATCH | suite-evidence (e-suite) |
-| `tag-add-root` | `tag.add` | crud | MATCH | **clone-drive (simfid-clone-20260914-152009, 3.24 / golden-v5)** |
+| `tag-add-root` | `tag.add` | crud | MATCH | **clone-drive (simfid-clone-20261124-114849, 3.25 / golden-v6)** |
 | `tag-add-nested` | `tag.add` | crud | MATCH | suite-evidence (e-suite) |
 | `heading-create` | `heading.create` | crud | MATCH | suite-evidence (s-suite S02 / HX) |
 | `todo-make-repeating-fixed` | `todo.make-repeating` | recurrence | **TOLERATED(instance-next-sentinel)** | rsim-evidence (RSIM1) |

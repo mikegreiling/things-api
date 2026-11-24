@@ -1,8 +1,8 @@
-# Things Database Atlas — schema v26 / v27 / v29
+# Things Database Atlas — schema v26 / v27 / v29 / v30
 
 The living map of Things 3's SQLite database, annotated with how each field drives what the user sees in the app. Structure and enum values here were probed live (read-only) against a real, long-lived Things library; behavioral semantics come from the validated research in [`../research/`](../research/) (especially `validation-notes-step3.md`).
 
-**One document, three generations.** The body below was captured at `Meta.databaseVersion` = **26** (Things 3.22.11, 2026-07-02) and every table/column/trigger statement in it is still exact under **27** (Things 3.23, 2026-08-22) and under **29** (Things 3.24, 2026-09-14): neither migration has any table/column/trigger delta over the tables mapped here, so all three generations share a schema fingerprint by construction ([`src/db/baselines/db-v27.ts`](../../src/db/baselines/db-v27.ts) and [`db-v29.ts`](../../src/db/baselines/db-v29.ts) both reuse `DB_V26.fingerprint`). What DID move is in [§v27 delta](#v27-delta-things-323) and [§v29 delta](#v29-delta-things-324) below, and the individual rows in the tables carry the version note inline. The file is deliberately NOT renamed: ~15 documents link this path, and a rename would be churn, not information.
+**One document, four generations.** The body below was captured at `Meta.databaseVersion` = **26** (Things 3.22.11, 2026-07-02) and every table/column/trigger statement in it is still exact under **27** (Things 3.23, 2026-08-22) under **29** (Things 3.24, 2026-09-14) and under **30** (Things 3.25, 2026-11-24): none of the three migrations has any table/column/trigger delta over the tables mapped here, so all four generations share a schema fingerprint by construction ([`src/db/baselines/db-v27.ts`](../../src/db/baselines/db-v27.ts), [`db-v29.ts`](../../src/db/baselines/db-v29.ts) and [`db-v30.ts`](../../src/db/baselines/db-v30.ts) all reuse `DB_V26.fingerprint`). What DID move is in [§v27 delta](#v27-delta-things-323) and [§v29 delta](#v29-delta-things-324) below ([§v30 delta](#v30-delta-things-325) records that 29 → 30 moved nothing at all), and the individual rows in the tables carry the version note inline. The file is deliberately NOT renamed: ~15 documents link this path, and a rename would be churn, not information.
 
 **Location:** `~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-<suffix>/Things Database.thingsdatabase/main.sqlite` (WAL mode; `-shm`/`-wal` sidecars present whenever Things has run). The `<suffix>` varies per account. Direct-download and MAS builds share this container (bundle-level parity verified; see `../../vendor/manifest.json`).
 
@@ -51,6 +51,14 @@ Both new tables are **plausibly** the persistence for 3.24's Spotlight semantic 
 `index_TMTask_userModificationDate` is the one line with a forward implication: it suggests the indexer keys its change feed on `userModificationDate`, which for the first time gives that column a non-sync consumer inside the app — worth probing against the `--preserve-modified` line of work in the 3.24 recertification campaign.
 
 **Data semantics — measured, and essentially unmoved.** Across the banked pre/post pair the only mass change is `rt1_instanceCreationStartDate`, strictly forward on 96 of 128 repeating templates — the first-launch spawn-cursor catch-up already established under v27, not a schema-driven rewrite. Every other column changed on ≤8 rows of 22,323 (organic edits over a three-day-old pre snapshot), `userModificationDate` was NOT rewritten by the migration, `rt1_nextInstanceStartDate` is still template-scoped exactly as under v27, and no `-1` counter sentinels remain. The clock-pinned golden-v5 in-lab swap will supersede this with a noise-free re-measurement.
+
+## v30 delta (Things 3.25)
+
+Measured in the lab, not on a live library: the GV6 campaign swapped Things 3.24 → 3.25 (direct-download build 32500008) into clock-pinned clones of golden-v5 and golden-v5h, and the first 3.25 launch moved the stamp **29 → 30** ([`../lab/gv6-325-campaign.md`](../lab/gv6-325-campaign.md) §2, 2026-11-24).
+
+**DDL — none.** The full `sqlite_master` text (every table, index and trigger statement) is byte-identical across the migration, on both lineages. The fingerprint is unchanged and no depended table gained or lost a column. This is the first stamp bump the lab has measured with no DDL delta of any kind.
+
+**Data — none, except the stamp.** Every row of every table is identical before and after, apart from the `Meta.databaseVersion` value itself. Bound: the golden seed is small (37 tasks) and holds no rows in `TMContact`, `TMSmartList` or `TMTombstone`, and both Spotlight tables are empty on a macOS 15 guest, so a migration step that only touches row shapes the seed lacks cannot show here. The checked-in fixture DDL needed no change; its stamp is now **30**.
 
 ## Table inventory
 

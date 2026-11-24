@@ -17,23 +17,24 @@ afterEach(() => {
 });
 
 describe("schema fingerprint", () => {
-  it("fixture DDL reproduces the live-captured v26/v27/v29 fingerprint exactly", () => {
+  it("fixture DDL reproduces the live-captured v26/v27/v29/v30 fingerprint exactly", () => {
     // This is the load-bearing equivalence: the checked-in DDL snapshot IS
     // the real schema for every depended column. If this fails, either the
     // fixture drifted or the manifest/baseline changed without re-capture.
-    // v26, v27 and v29 share the hash by construction (each baseline reuses
-    // DB_V26's) — the 26→27 delta is index-only and the 27→29 delta adds only
-    // Spotlight-plumbing tables/indexes outside the depended manifest, so none
-    // of it is visible to the fingerprint.
+    // v26, v27, v29 and v30 share the hash by construction (each baseline
+    // reuses DB_V26's) — the 26→27 delta is index-only, the 27→29 delta adds
+    // only Spotlight-plumbing tables/indexes outside the depended manifest, and
+    // the 29→30 delta is no DDL at all, so none of it is visible to the
+    // fingerprint.
     fixture = buildFixtureDb();
     const obs = observeSchema(fixture.db);
     expect(obs.fingerprint).toBe(DB_V26.fingerprint);
-    expect(obs.databaseVersion).toBe(29);
+    expect(obs.databaseVersion).toBe(30);
   });
 
   it("parses databaseVersion from the plist blob", () => {
     fixture = buildFixtureDb();
-    expect(readDatabaseVersion(fixture.db)).toBe(29);
+    expect(readDatabaseVersion(fixture.db)).toBe(30);
   });
 
   it("matches the shipped baseline registry", () => {
@@ -64,32 +65,34 @@ describe("schema fingerprint", () => {
   it.each([
     ["26 (Things ≤3.22.14)", "26"],
     ["27 (Things 3.23)", "27"],
+    ["29 (Things 3.24)", "29"],
   ])("databaseVersion %s still matches on the identical-DDL baseline", (_label, stamp) => {
-    // Things 3.23 bumped the stamp 26 → 27 and Things 3.24 bumped it 27 → 29,
-    // both with a byte-identical set of depended tables/columns (live-captured
-    // 2026-08-22 and 2026-09-14), so the ONE fixture DDL is `ok` against the
-    // shipped registry under ANY of the three stamps. The fixture stamps 29;
-    // these are the other two directions.
+    // Things 3.23 bumped the stamp 26 → 27, Things 3.24 bumped it 27 → 29 and
+    // Things 3.25 bumped it 29 → 30, each with a byte-identical set of depended
+    // tables/columns (captured 2026-08-22, 2026-09-14 and 2026-11-24), so the ONE
+    // fixture DDL is `ok` against the shipped registry under ANY of the four
+    // stamps. The fixture stamps 30; these are the other three directions.
     fixture = buildFixtureDb();
     fixture.db.exec(
-      `UPDATE Meta SET value = replace(value, '29', '${stamp}') WHERE key = 'databaseVersion'`,
+      `UPDATE Meta SET value = replace(value, '30', '${stamp}') WHERE key = 'databaseVersion'`,
     );
     const status = compareToBaseline(observeSchema(fixture.db), BASELINES);
     expect(status.kind).toBe("ok");
+    expect(status.observation.databaseVersion).toBe(Number(stamp));
   });
 
-  it("databaseVersion 29 (Things 3.24) matches on the identical-DDL v29 baseline", () => {
+  it("databaseVersion 30 (Things 3.25) matches on the identical-DDL v30 baseline", () => {
     // The fixture's own stamp — the shipped registry must recognize it.
     fixture = buildFixtureDb();
     const status = compareToBaseline(observeSchema(fixture.db), BASELINES);
     expect(status.kind).toBe("ok");
-    expect(status.observation.databaseVersion).toBe(29);
+    expect(status.observation.databaseVersion).toBe(30);
   });
 
   it("unknown databaseVersion is its own status", () => {
     fixture = buildFixtureDb();
     fixture.db.exec(
-      "UPDATE Meta SET value = replace(value, '29', '99') WHERE key = 'databaseVersion'",
+      "UPDATE Meta SET value = replace(value, '30', '99') WHERE key = 'databaseVersion'",
     );
     const status = compareToBaseline(observeSchema(fixture.db), BASELINES);
     expect(status.kind).toBe("unknown-version");
@@ -114,7 +117,7 @@ describe("toSchemaStatus (read-path verdict)", () => {
   it("names the unrecognized databaseVersion", () => {
     fixture = buildFixtureDb();
     fixture.db.exec(
-      "UPDATE Meta SET value = replace(value, '29', '99') WHERE key = 'databaseVersion'",
+      "UPDATE Meta SET value = replace(value, '30', '99') WHERE key = 'databaseVersion'",
     );
     const status = toSchemaStatus(compareToBaseline(observeSchema(fixture.db), BASELINES));
     expect(status.status).toBe("unknown-version");

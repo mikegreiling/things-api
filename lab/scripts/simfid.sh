@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-GOLDEN="${GOLDEN:-things-lab-golden-v5}"
+GOLDEN="${GOLDEN:-things-lab-golden-v6}"
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 VM="things-run-simfid-$STAMP"

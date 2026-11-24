@@ -77,15 +77,15 @@ export function sweepFixtureDbs(): void {
 }
 
 function seedMeta(db: DatabaseSync, benchMarker: boolean): void {
-  // Stamped 29 (Things 3.24) since 2026-09-14. v26, v27 and v29 share this DDL —
-  // and therefore the schema fingerprint — because the 26→27 delta is index-only
-  // and the 27→29 delta adds only Spotlight-plumbing tables/indexes outside the
-  // depended manifest; the stamp is what the simulator's
-  // SIMULATED_DATABASE_VERSION fence keys on, so it moves in lockstep with the
-  // appliers' modeled generation.
+  // Stamped 30 (Things 3.25) since 2026-11-24. v26, v27, v29 and v30 share this
+  // DDL — and therefore the schema fingerprint — because the 26→27 delta is
+  // index-only, the 27→29 delta adds only Spotlight-plumbing tables/indexes
+  // outside the depended manifest, and the 29→30 delta is no DDL at all; the
+  // stamp is what the simulator's SIMULATED_DATABASE_VERSION fence keys on, so
+  // it moves in lockstep with the appliers' modeled generation.
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><integer>29</integer></plist>`;
+<plist version="1.0"><integer>30</integer></plist>`;
   db.prepare("INSERT INTO Meta (key, value) VALUES ('databaseVersion', ?)").run(plist);
   // The bench-harness marker is OPT-IN: it brands a DB as a synthetic bench
   // fixture, which (a) the simulator fence requires and (b) defaultVectors

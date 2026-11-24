@@ -1590,6 +1590,21 @@ LAB-PINNED-TODAY (start = 2, startDate = today), ⌘↑, one slot, same cohort
 
 Reordering a row changes its scheduling stage. It is a small change — the row is showing in Today either way — but it is a state change made by a gesture that presents itself as a reorder, and again with no modification stamp. Evidence: [lab/chord4-today-cohort.md](lab/chord4-today-cohort.md) §4.
 
+## 36. Things 3.25: the json import's `someday → anytime` round-trip now files a loose to-do at the BOTTOM of Anytime, while the same two updates sent as separate URL commands still file it at the TOP (GV6BNC, 2026-11-24, golden-v6h / Things 3.25 build 32500008, against golden-v5h / Things 3.24 build 32400006)
+
+The same edit, sent two ways, now lands in two different places. Take a loose to-do (no area, no project) in a five-member Anytime list and move it to Someday and back:
+
+- as **two URL `update` commands** (`when=someday`, then `when=anytime`): it comes back at the **top** of Anytime on 3.24 and on 3.25 alike;
+- as **one json import** carrying the same two updates in order: it came back at the **top** on 3.24 (its `index` below the list's minimum, -10994 against -10483…-8534) and comes back at the **bottom** on 3.25 (`index` -1000 against -17871…-13871).
+
+```
+3.24  json [someday, anytime] on P3-4:  P3-5 P3-4 P3-3 P3-2 P3-1  ->  P3-4 P3-5 P3-3 P3-2 P3-1
+3.25  json [someday, anytime] on P3-4:  P3-5 P3-4 P3-3 P3-2 P3-1  ->  P3-5 P3-3 P3-2 P3-1 P3-4
+3.25  URL someday, URL anytime on P2-4: P2-5 P2-4 P2-3 P2-2 P2-1  ->  P2-4 P2-5 P2-3 P2-2 P2-1
+```
+
+Neither placement is wrong in itself, and nothing says which one the json import is meant to have. What makes it odd is that two spellings of the same edit now disagree, and the json form changed silently between releases. The release notes say nothing about the json import. A to-do under a HEADING is unaffected: it is filed at the bottom of its heading by both spellings, on both versions (o-suite O18). It cost things-api a shipped operation: the `reorder … --in anytime` fallback route relied on the json form to front-insert, and on 3.25 it puts the item last ([lab/gv6-325-campaign.md](lab/gv6-325-campaign.md) §6).
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
