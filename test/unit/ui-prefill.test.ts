@@ -299,7 +299,7 @@ describe("reminders (DEFAULTS1-3)", () => {
 describe("the gates", () => {
   it("claims NOTHING on an app generation the manifest was never sat with", () => {
     const rule: PrefillRule = { frequency: "weekly", interval: 1, weekdays: ["thursday"] };
-    expect([...provenPrefills(rule, seed(), "3.24")]).toEqual([]);
+    expect([...provenPrefills(rule, seed(), "3.26")]).toEqual([]);
     expect([...provenPrefills(rule, seed(), null)]).toEqual([]);
     // And the generation it WAS sat with, plus its point releases.
     expect([...provenPrefills(rule, seed(), "3.23.2")].length).toBeGreaterThan(0);

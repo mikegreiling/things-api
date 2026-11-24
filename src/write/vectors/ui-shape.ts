@@ -43,11 +43,18 @@ import { execFileSync } from "node:child_process";
  *
  * `3.23` covers 3.23, 3.23.1 and 3.23.2: the dialog was redesigned at 3.23
  * (RDLG2 — the `Next:` occurrence pop-up) and the point releases since have not
- * moved it, which is what the shell assertion re-proves on every single open. A
- * 3.24 would not match, and would run in full-discrimination mode until someone
- * sits the lab with it.
+ * moved it, which is what the shell assertion re-proves on every single open.
+ *
+ * `3.24` and `3.25` were added by GV6 (2026-11-24), which sat the lab with both:
+ * the same AX census taken on golden-v4 (3.23), -v5 (3.24) and -v6 (3.25) finds
+ * the Repeat sheet, the detached Repeat window and the Reschedule… dialog
+ * IDENTICAL in every property a driver reads — roles, titles, values, child
+ * order and frames, to the pixel — the only delta being three `_NS:` identifier
+ * numbers, which no recipe uses (docs/lab/gv6-325-campaign.md §5). 3.24 had
+ * been running the slower full discrimination since 2026-09-14 only because
+ * GV5 never sat with it. A 3.26 will not match until someone does.
  */
-export const REPEAT_SHAPE_VERSIONS: readonly string[] = ["3.23"];
+export const REPEAT_SHAPE_VERSIONS: readonly string[] = ["3.23", "3.24", "3.25"];
 
 /** `defaults read` wants the plist path WITHOUT the .plist extension. */
 const THINGS_INFO_PLIST = "/Applications/Things3.app/Contents/Info";

@@ -81,7 +81,7 @@ describe("matchRepeatShell — the dialog's control census, asserted at the open
 
 describe("shapeManifestCoversVersion — the invalidation key", () => {
   it("covers the generation the expectations were measured against, and its point releases", () => {
-    for (const v of ["3.23", "3.23.1", "3.23.2"]) {
+    for (const v of ["3.23", "3.23.1", "3.23.2", "3.24", "3.24.2", "3.25"]) {
       expect(shapeManifestCoversVersion(v)).toBe(true);
     }
   });
@@ -89,7 +89,7 @@ describe("shapeManifestCoversVersion — the invalidation key", () => {
   it("does NOT cover a different generation, or an unreadable version", () => {
     // An AX surface is an undocumented private API: a build nobody has sat the
     // lab with gets the full per-step discrimination, not a remembered shape.
-    for (const v of ["3.22", "3.22.14", "3.24", "4.0", "232", null]) {
+    for (const v of ["3.22", "3.22.14", "3.26", "4.0", "232", null]) {
       expect(shapeManifestCoversVersion(v)).toBe(false);
     }
   });
