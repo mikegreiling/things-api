@@ -1,0 +1,69 @@
+// cx.jxa — read-only AX census of Things3 surfaces (UIFIX campaign).
+//   osascript -l JavaScript cx.jxa windows
+//   osascript -l JavaScript cx.jxa rows <maxRows> <depth>     content table rows of the standard window
+//   osascript -l JavaScript cx.jxa win <depth>                  every window (incl. AXUnknown popovers), depth-bounded
+//   osascript -l JavaScript cx.jxa menu Items                   a menu-bar menu, with submenus (title/enabled)
+//   osascript -l JavaScript cx.jxa sel                          AXSelectedRows of the content table (titles)
+ObjC.import('ApplicationServices')
+function attr(el, n) { var o = Ref(); if ($.AXUIElementCopyAttributeValue(el, $(n), o) !== 0) return null; return ObjC.castRefToObject(o[0]) }
+function sv(el, n) { var v = attr(el, n); try { return v ? String(v.js) : '' } catch (e) { return '' } }
+function kids(el) { var c = attr(el, 'AXChildren'); if (!c) return []; var a = []; for (var i = 0; i < c.count; i++) a.push(c.objectAtIndex(i)); return a }
+function frame(el) {
+  var p = attr(el, 'AXPosition'), z = attr(el, 'AXSize')
+  function d(x) { if (!x) return null; return ObjC.castRefToObject($.CFCopyDescription(x)).js }
+  var pp = d(p), zz = d(z)
+  var mp = pp && pp.match(/x:([-0-9.]+) y:([-0-9.]+)/)
+  var mz = zz && zz.match(/w:([-0-9.]+) h:([-0-9.]+)/)
+  if (!mp || !mz) return ''
+  return ' @' + Math.round(+mp[1]) + ',' + Math.round(+mp[2]) + ' ' + Math.round(+mz[1]) + 'x' + Math.round(+mz[2])
+}
+function line(el, d) {
+  var r = sv(el, 'AXRole'), sr = sv(el, 'AXSubrole'), t = sv(el, 'AXTitle'), ds = sv(el, 'AXDescription'), v = sv(el, 'AXValue'), id = sv(el, 'AXIdentifier'), h = sv(el, 'AXHelp')
+  var en = attr(el, 'AXEnabled')
+  var acts = Ref(), an = ''
+  if ($.AXUIElementCopyActionNames(el, acts) === 0) { var A = ObjC.castRefToObject(acts[0]); var L = []; for (var i = 0; i < A.count; i++) L.push(String(A.objectAtIndex(i).js)); an = L.join(',') }
+  return Array(d + 1).join('  ') + r + (sr ? '/' + sr : '') + (t ? ' t=' + JSON.stringify(t) : '') + (ds ? ' d=' + JSON.stringify(ds) : '') + (v ? ' v=' + JSON.stringify(v.slice(0, 60)) : '') + (id ? ' id=' + id : '') + (h ? ' h=' + JSON.stringify(h.slice(0, 60)) : '') + (en !== null && String(en.js) === 'false' ? ' DISABLED' : '') + (an ? ' [' + an + ']' : '') + frame(el)
+}
+function walk(el, d, max, out) { out.push(line(el, d)); if (d < max) kids(el).forEach(function (k) { walk(k, d + 1, max, out) }) }
+function run(argv) {
+  var pid = Application('System Events').processes.byName('Things3').unixId()
+  var app = $.AXUIElementCreateApplication(pid), out = []
+  var wins = kids(app).filter(function (x) { return sv(x, 'AXRole') === 'AXWindow' })
+  var std = wins.filter(function (x) { return sv(x, 'AXSubrole') === 'AXStandardWindow' })[0]
+  var cmd = argv[0]
+  if (cmd === 'windows') { wins.forEach(function (w) { out.push(line(w, 0)) }); return out.join('\n') }
+  if (cmd === 'win') { var depth = +(argv[1] || 6); wins.forEach(function (w) { walk(w, 0, depth, out) }); return out.join('\n') }
+  if (cmd === 'rows') {
+    var maxRows = +(argv[1] || 3), depth2 = +(argv[2] || 6)
+    var sa = kids(std).filter(function (x) { return sv(x, 'AXRole') === 'AXScrollArea' })
+    sa.forEach(function (s, si) {
+      out.push('scroll area ' + (si + 1) + frame(s))
+      kids(s).forEach(function (tb) {
+        out.push(' ' + line(tb, 0))
+        var rows = kids(tb).filter(function (x) { return sv(x, 'AXRole') === 'AXRow' })
+        rows.slice(0, maxRows).forEach(function (r, i) { out.push('  -- row ' + (i + 1)); walk(r, 1, depth2, out) })
+      })
+    })
+    return out.join('\n')
+  }
+  if (cmd === 'sel') {
+    var sa2 = kids(std).filter(function (x) { return sv(x, 'AXRole') === 'AXScrollArea' })
+    sa2.forEach(function (s) { kids(s).forEach(function (tb) { var sel = attr(tb, 'AXSelectedRows'); out.push(sv(tb, 'AXRole') + ' selected=' + (sel ? sel.count : 'n/a')) }) })
+    return out.join('\n')
+  }
+  if (cmd === 'menu') {
+    var se = Application('System Events'), p = se.processes.byName('Things3')
+    var m = p.menuBars[0].menuBarItems.byName(argv[1]).menus[0]
+    function dm(menu, d) {
+      var items = menu.menuItems()
+      items.forEach(function (it) {
+        var nm = ''; try { nm = it.name() } catch (e) {}
+        var en = ''; try { en = it.enabled() ? '' : ' DISABLED' } catch (e) {}
+        out.push(Array(d + 1).join('  ') + (nm === null || nm === '' ? '(sep)' : nm) + en)
+        try { if (it.menus.length > 0) dm(it.menus[0], d + 1) } catch (e) {}
+      })
+    }
+    dm(m, 0); return out.join('\n')
+  }
+  return 'unknown cmd'
+}

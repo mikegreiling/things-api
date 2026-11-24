@@ -565,6 +565,12 @@ What makes it worth recording is what did NOT move. The table, its 31 rows and 3
 
 Evidence: [lab/gv6-325-campaign.md](lab/gv6-325-campaign.md) §5 (GV6AX, the same AX census on golden-v4 / 3.23, golden-v5 / 3.24 and golden-v6 / 3.25 build 32500008, macOS 15.7.7 guests, 2026-11-24).
 
+## 15. A repeating project's repeat bar reads the whole rule aloud, and its popovers say what they are
+
+In a repeating project's template, the bar under the title is labeled with the rule itself, in the words a person would use: `Repeat every week on Friday – Jul 10, Jul 17, Jul 24, …`, `Repeat every week on Friday – Paused`, `Repeat 2 weeks after the previous project has been completed – Waiting`. A screen reader gets the rule, its next dates and its state from one element, without opening anything. The custom popovers the app draws for itself also carry identifiers that name them (`RepeatingTaskPopUpMenuComponent-…`, `ActionGroupPopUpMenu-…` for a heading's `…`, `MovePopUpDialog-…` for the Move… picker). On 3.25 the bar is also a real `AXButton` that opens its popover on `AXPress`. So an assistive client can tell which surface is open without guessing from geometry. things-api's drives use exactly these landmarks: the bar is found by the start of its label, and the picker by its identifier.
+
+Evidence: [lab/uifix1-repeat-bar-and-picker.md](lab/uifix1-repeat-bar-and-picker.md) §1.2–§1.3 (UIFIX1 census, golden-v5 / 3.24 build 32400006 and golden-v6 / 3.25 build 32500008, macOS 15.7.7 guests, 2026-11-24).
+
 ## Edge cases this project routed through
 
 Project-side context: the modeling problems the app's craft created for us. Brief by design — the app engineering above is the star; these are where we had to build to match it.

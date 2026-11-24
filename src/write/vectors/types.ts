@@ -457,6 +457,27 @@ export interface UiStep {
    */
   rowCellDescription?: string;
   /**
+   * click-element only: how `rowCellDescription` is matched. `"exact"` (the
+   * default) is the heading `…` button's full `More. <title>`. `"prefix"` is the
+   * repeating project's repeat bar, whose description carries the rule text
+   * (`Repeat every week on Friday – …`, `Repeat 2 weeks after … – Waiting`), so
+   * only its leading words are stable. A prefix walk stops at the FIRST row that
+   * carries a match and requires that row's cell to carry exactly one; a cell
+   * with two fails closed before any click (UIFIX1, Things 3.24/3.25).
+   */
+  rowCellMatch?: "exact" | "prefix";
+  /**
+   * click-element only: the dialog this click opens, declared by the recipe.
+   * When the click succeeds the drive records this as the dialog it is driving,
+   * so every later keystroke must find exactly this dialog in front and the
+   * cleanup ladder treats it as the drive's own. Needed where the click is made
+   * from a popover: the popover is itself a detached window the window-state
+   * read reports as an unrecognized dialog, and without the declaration the
+   * drive would take THAT as its dialog and refuse its own picker or sheet
+   * (UIFIX1, `expected other, found move-picker`).
+   */
+  opensDialog?: "repeat" | "move-picker";
+  /**
    * click-element only: the element expected to appear right AFTER the click
    * (a popover opening, a sheet appearing). The driver polls for it and, on
    * mismatch, sends Escape to dismiss whatever DID open and aborts fail-closed

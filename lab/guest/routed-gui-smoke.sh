@@ -136,6 +136,79 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+echo "== the repeat toggles, the project repeat bar and the Move… picker (UIFIX1) =="
+# Four shipped GUI-driven verbs refused on Things 3.23, 3.24 AND 3.25 for weeks
+# (GV6 §5.3) because no gate ever drove them: the e2e keeps ui-enabled off, and
+# this leg drove only the to-do Repeat dialog. Each is driven here through the
+# deputy with normal CLI syntax and checked against the database
+# (docs/lab/uifix1-repeat-bar-and-picker.md).
+uuid_of() { db_query "SELECT coalesce((SELECT uuid FROM TMTask WHERE title='$1' AND trashed=0 ORDER BY creationDate DESC LIMIT 1), '')"; }
+wait_uuid() {
+  local u i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    u=$(uuid_of "$1")
+    [ -n "$u" ] && { echo "$u"; return 0; }
+    sleep 1
+  done
+  return 1
+}
+template_of() { db_query "SELECT coalesce((SELECT uuid FROM TMTask WHERE title='$1' AND trashed=0 AND rt1_recurrenceRule IS NOT NULL LIMIT 1), '')"; }
+paused_of() { db_query "SELECT rt1_instanceCreationPaused FROM TMTask WHERE uuid='$1'"; }
+check() { # check <actual> <expected> <what>
+  if [ "$1" = "$2" ]; then echo "ok   $3"; else
+    echo "FAIL $3 — got '$1', expected '$2'"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+# (a) to-do pause then resume, BACK TO BACK — the menu item's title lags the
+# write, so resume right after pause is exactly the case that used to refuse.
+TT=$(template_of "E2E-ROUTED-WEEKLY")
+run_step 0 "todo pause-repeat (Items ▸ Repeat ▸ Pause)" todo pause-repeat "$TT" --dangerously-drive-gui
+check "$(paused_of "$TT")" "1" "the to-do series is paused"
+run_step 0 "todo resume-repeat straight after the pause" todo resume-repeat "$TT" --dangerously-drive-gui
+check "$(paused_of "$TT")" "0" "the to-do series is running again"
+
+# (b) a repeating PROJECT: pause, resume, then edit the rule — all through the
+# repeat bar's popover.
+run_step 0 "area add (project fixture)" area add "E2E-ROUTED-AREA"
+run_step 0 "project add (project fixture)" \
+  project add "E2E-ROUTED-PJ" --area "E2E-ROUTED-AREA" --when 2026-07-10 --todo "E2E-ROUTED-PJ-CHILD"
+PJ=$(wait_uuid "E2E-ROUTED-PJ")
+run_step 0 "project make-repeating" project make-repeating "$PJ" --frequency weekly --interval 1 \
+  --dangerously-drive-gui
+PT=$(db_query "SELECT coalesce((SELECT uuid FROM TMTask WHERE title='E2E-ROUTED-PJ' AND type=1 AND trashed=0 AND rt1_recurrenceRule IS NOT NULL LIMIT 1), '')")
+run_step 0 "project pause-repeat (repeat bar ▸ Pause)" project pause-repeat "$PT" --dangerously-drive-gui
+check "$(paused_of "$PT")" "1" "the project series is paused"
+run_step 0 "project resume-repeat (repeat bar ▸ Resume)" project resume-repeat "$PT" --dangerously-drive-gui
+check "$(paused_of "$PT")" "0" "the project series is running again"
+RULE_BEFORE=$(db_query "SELECT hex(rt1_recurrenceRule) FROM TMTask WHERE uuid='$PT'")
+run_step 0 "project reschedule-repeat (repeat bar ▸ Edit Rule…, every 2 weeks)" \
+  project reschedule-repeat "$PT" --frequency weekly --interval 2 --dangerously-drive-gui
+RULE_AFTER=$(db_query "SELECT coalesce((SELECT hex(rt1_recurrenceRule) FROM TMTask WHERE uuid='$PT' AND trashed=0), '')")
+if [ -n "$RULE_AFTER" ] && [ "$RULE_AFTER" != "$RULE_BEFORE" ]; then
+  echo "ok   the project's rule changed in place (same template uuid)"
+else
+  echo "FAIL the project's rule did not change in place"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# (c) move a heading to another project, with a destination whose title is a
+# PREFIX of another project's (HXPC1 §B3): the row is committed by exact title.
+open -g 'things:///json?data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-ROUTED-HP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-ROUTED-H1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-ROUTED-H1-CHILD%22%7D%7D%2C%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-ROUTED-H2%22%7D%7D%5D%7D%7D%5D'
+HCHILD=$(wait_uuid "E2E-ROUTED-H1-CHILD")
+run_step 0 "project add (destination)" project add "E2E-ROUTED-DEST"
+run_step 0 "project add (a project whose title extends the destination's)" project add "E2E-ROUTED-DEST-2"
+HP=$(wait_uuid "E2E-ROUTED-HP")
+HD=$(wait_uuid "E2E-ROUTED-DEST")
+H1=$(uuid_of "E2E-ROUTED-H1")
+run_step 0 "project move-heading-to-project (… ▸ Move… ▸ the destination row)" \
+  project move-heading-to-project "$HP" "E2E-ROUTED-H1" --to "$HD" --dangerously-drive-gui
+check "$(db_query "SELECT project FROM TMTask WHERE uuid='$H1'")" "$HD" "the heading lives in the destination"
+check "$(db_query "SELECT heading FROM TMTask WHERE uuid='$HCHILD'")" "$H1" "its to-do followed it"
+check "$(db_query "SELECT count(*) FROM TMTask WHERE title='E2E-ROUTED-DEST' AND type=1 AND trashed=0")" "1" \
+  "no new project was created by the picker"
+
 echo "== the broker's own verdict =="
 # The client sees a refused script as a failed drive; the DEPUTY records WHY.
 # Reading its log is what turns "the drive failed" into "the broker refused the
