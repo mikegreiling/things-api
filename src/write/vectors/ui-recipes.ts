@@ -239,18 +239,39 @@ function waitFor(label: string, path: string, timeoutMs = 5000): UiStep {
 
 // --------------------------------------------------------------- tier 1
 
+/**
+ * `Items ▸ Repeat ▸ Pause` / `Resume` — ONE menu item whose title toggles with
+ * the series' state, and the title LAGS the write (UIFIX1, golden-v5 / 3.24 and
+ * golden-v6 / 3.25): after a pause lands in the database the item still reads
+ * `Pause` for ~0.4–0.8 s, and after a resume it still reads `Resume`, with the
+ * selection unchanged. Pressing straight after the opposite verb therefore found
+ * no such item (`Can't get menu item "Resume"` — GV6 §5.3, every version). So
+ * the press is preceded by a bounded wait for the item this verb needs: a
+ * closed loop on the one label the app publishes, failing closed if it never
+ * appears. Never a sleep.
+ */
+function repeatToggleSteps(verb: "Pause" | "Resume"): UiStep[] {
+  const item = `menu item "${verb}" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`;
+  return [
+    {
+      primitive: "wait",
+      label: `Items ▸ Repeat ▸ ${verb} (the item's title follows the series' state)`,
+      path: item,
+      timeoutMs: 5000,
+      dynamic: true,
+      addressing: "title",
+    },
+    // The submenu (not the item) is what the canary resolves up front: it only
+    // materializes on a selected TEMPLATE, which is the real precondition.
+    menuPress(`Items ▸ Repeat ▸ ${verb}`, item, REPEAT_SUBMENU_ANCHOR),
+  ];
+}
+
 export function pauseRepeatRecipe(targetUuid: string): UiRecipe {
   return {
     op: "todo.pause-repeat",
     targetUuid,
-    steps: [
-      ...preamble(targetUuid),
-      menuPress(
-        "Items ▸ Repeat ▸ Pause",
-        `menu item "Pause" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`,
-        REPEAT_SUBMENU_ANCHOR,
-      ),
-    ],
+    steps: [...preamble(targetUuid), ...repeatToggleSteps("Pause")],
   };
 }
 
@@ -289,14 +310,7 @@ export function resumeRepeatRecipe(targetUuid: string): UiRecipe {
   return {
     op: "todo.resume-repeat",
     targetUuid,
-    steps: [
-      ...preamble(targetUuid),
-      menuPress(
-        "Items ▸ Repeat ▸ Resume",
-        `menu item "Resume" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`,
-        REPEAT_SUBMENU_ANCHOR,
-      ),
-    ],
+    steps: [...preamble(targetUuid), ...repeatToggleSteps("Resume")],
   };
 }
 
@@ -1808,48 +1822,51 @@ export function rescheduleRepeatRecipe(
 
 // --------------------------------------------------- repeating-PROJECT ops
 //
-// A repeating project has no Items ▸ Repeat submenu (a shown project is not a
-// selected to-do — UIC2). Instead its view carries an always-visible REPEAT BAR
-// (`text area 2` of the header cell); clicking it opens a custom popover
-// [Change… · Pause↔Resume · Stop · Show Latest]. The bar is AX-resolvable and
-// the popover items are AX-READABLE but INERT to AXPress (UIC2), so they are
-// actuated with a synthetic MOUSE click at their AX-resolved frame center
-// (the NATIVE1 primitive) — never a guessed pixel. The Repeat dialog the
-// Change… item opens is a sheet, byte-identical to the to-do dialog, and is
-// driven with pure AX (reusing repeatDialogEntry). NO project.stop-repeat is
-// built: the project Stop then selecting the demoted project crashes Things
+// A repeating project has no Items ▸ Repeat submenu: with the template shown,
+// every Items entry is disabled (UIC2; re-measured on 3.24 and 3.25, UIFIX1).
+// Its view instead carries an always-visible REPEAT BAR, and clicking the bar
+// opens a popover — [Edit Rule… · Create Next Copy · Pause↔Resume · Stop] on
+// Things 3.23+, where 3.22 offered [Change… · Pause↔Resume · Stop · Show
+// Latest]. The popover items are AX-readable but INERT to AXPress (UIC2,
+// re-measured UIFIX1), so they are actuated with a synthetic MOUSE click at
+// their AX-resolved frame center (the NATIVE1 primitive) — never a guessed
+// pixel. The Repeat dialog Edit Rule… opens is the same sheet as the to-do
+// dialog and is driven with pure AX (repeatDialogEntry). NO project.stop-repeat
+// is built: the project Stop then selecting the demoted project crashes Things
 // (CRASH1 / oddities §7 C5).
 //
-// PROVISIONAL element paths (pending UIC3 certification): the header cell, the
-// repeat bar, the popover, and the popover items are best-guess structural
-// paths derived from the UIC2 AX inventory; the certification pass confirms or
-// corrects them exactly as the to-do recipes were corrected in UIC1.
+// WHERE THE BAR IS (UIFIX1, golden-v5 / 3.24 and golden-v6 / 3.25). Since 3.23
+// a template's view opens with a banner row ("You're editing the template of a
+// repeating project.") and a spacer, so the project's header is the THIRD row,
+// not the first; and the bar is no longer a text area. It is an unlabeled
+// element (AXUnknown on 3.24, AXButton on 3.25) followed by a sibling whose
+// description is the rule as the app words it: `Repeat every week on Friday –
+// Jul 10, …`, `… – Paused`, `Repeat 2 weeks after the previous project has
+// been completed – Waiting`. The click resolves that described element by
+// prefix and clicks its centre, which lies inside the bar. The `text area 2`
+// the recipe addressed through 3.22 resolves to nothing on 3.23, 3.24 or 3.25.
 
-/** The header cell of the project view (row 1 of the content table).
- *  positional-ok: the project view's header IS its first content-table row by
- *  construction (UIC2/UIC3) — the row the app renders above the item list — and
- *  this path only ever reaches a CLICK target, never a value. */
-const PROJECT_HEADER_CELL = `UI element 1 of row 1 of table 1 of scroll area 1 of ${MAIN_WINDOW}`;
-/** The always-visible repeat bar of a repeating project (UIC2/UIC3: text area 2).
- *  positional-ok: the bar carries no title or description to address it by (UIC2),
- *  so its index in the header cell is the only handle the app offers. It is not a
- *  value-bearing field: the step that uses it is a click whose `assertPath` REQUIRES
- *  the repeat popover to appear afterwards, so a click that lands on the wrong text
- *  area fails closed (Escape + abort) instead of cascading into blind presses. */
-const PROJECT_REPEAT_BAR = `text area 2 of ${PROJECT_HEADER_CELL}`;
+/** The repeat bar's description begins with this on every rule shape measured (UIFIX1). */
+const PROJECT_REPEAT_BAR_PREFIX = "Repeat ";
 /**
- * The popover opened by clicking the repeat bar. Confirmed by UIC3 discovery: it
- * is a SEPARATE AXUnknown top-level window (≈215×220), NOT a `pop over` of the
- * standard window — the same custom-window shape UIC2 found for the `…` menu.
- * Two AXUnknown windows exist while it is open (the popover + a hidden 40×40
- * utility window), so it is addressed by subrole AND by not being that 40×40
- * utility window; its items live in the window's scroll area.
+ * The popover opened by clicking the repeat bar: a SEPARATE AXUnknown top-level
+ * window, not a `pop over` of the standard window (UIC3). Its identifier begins
+ * `RepeatingTaskPopUpMenuComponent-` (UIFIX1), but a `whose` clause cannot test
+ * an identifier prefix across windows (the utility window carries none), so it
+ * is addressed by subrole and by not being the hidden 40×40 utility window, and
+ * every item inside it is addressed by exact description.
  */
 const PROJECT_REPEAT_POPOVER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
 // positional-ok: a CONTAINER handle only — these custom AXUnknown popovers hold
 // exactly one scroll area (MEASURED on the sibling Move… picker, HXPC1 §B2:
-// `scroll areas=1`), and every item inside is addressed by exact AXDescription.
+// `scroll areas=1`, and on this popover, UIFIX1), and every item inside is
+// addressed by exact AXDescription.
 const PROJECT_REPEAT_POPOVER_ITEMS = `scroll area 1 of ${PROJECT_REPEAT_POPOVER}`;
+
+/** A popover item, addressed by its exact description. */
+function projectPopoverItem(description: string): string {
+  return `(first UI element of ${PROJECT_REPEAT_POPOVER_ITEMS} whose description is "${description}")`;
+}
 
 /** A project view + foreground preamble — the mouse segment needs Things frontmost. */
 function projectPreamble(targetUuid: string): UiStep[] {
@@ -1868,15 +1885,26 @@ function projectPreamble(targetUuid: string): UiStep[] {
   ];
 }
 
-/** Click the always-visible repeat bar to open the [Change…/Pause/Stop/…] popover. */
-function openProjectRepeatPopover(): UiStep {
+/**
+ * Click the always-visible repeat bar to open the popover, and wait for the ONE
+ * item the next step clicks. Asserting the item rather than the window closes
+ * the loop on the state the drive needs: a popover that opens offering `Pause`
+ * where the drive wants `Resume` (the series is not in the state the caller
+ * assumed) fails closed here, and the popover is dismissed.
+ */
+function openProjectRepeatPopover(item: string): UiStep {
   return {
     primitive: "click-element",
     label: "open the project's repeat menu (click the repeat bar)",
-    path: PROJECT_REPEAT_BAR,
-    assertPath: PROJECT_REPEAT_POPOVER,
-    assertLabel: "the repeat menu",
+    path: PROJECT_CONTENT_TABLE,
+    rowCellDescription: PROJECT_REPEAT_BAR_PREFIX,
+    rowCellMatch: "prefix",
+    assertPath: projectPopoverItem(item),
+    assertLabel: `the repeat menu offering "${item}"`,
     assertTimeoutMs: 5000,
+    // The bar is resolved by walking the content table at run time (fail-closed),
+    // like the heading's `…` button; there is no static path to canary.
+    dynamic: true,
     addressing: "title",
   };
 }
@@ -1885,12 +1913,12 @@ function openProjectRepeatPopover(): UiStep {
 function popoverItemClick(
   label: string,
   description: string,
-  assert?: { path: string; label: string },
+  assert?: { path: string; label: string; opensDialog: "repeat" },
 ): UiStep {
   return {
     primitive: "click-element",
     label,
-    path: `(first UI element of ${PROJECT_REPEAT_POPOVER_ITEMS} whose description is "${description}")`,
+    path: projectPopoverItem(description),
     // The popover only exists after openProjectRepeatPopover ran, so this is not
     // canary-resolvable up front; its frame is resolved (fail-closed) at run time.
     dynamic: true,
@@ -1898,6 +1926,7 @@ function popoverItemClick(
       assertPath: assert.path,
       assertLabel: assert.label,
       assertTimeoutMs: 5000,
+      opensDialog: assert.opensDialog,
     }),
     addressing: "title",
   };
@@ -1909,7 +1938,7 @@ export function projectPauseRepeatRecipe(targetUuid: string): UiRecipe {
     targetUuid,
     steps: [
       ...projectPreamble(targetUuid),
-      openProjectRepeatPopover(),
+      openProjectRepeatPopover("Pause"),
       popoverItemClick("repeat menu ▸ Pause", "Pause"),
     ],
   };
@@ -1921,7 +1950,7 @@ export function projectResumeRepeatRecipe(targetUuid: string): UiRecipe {
     targetUuid,
     steps: [
       ...projectPreamble(targetUuid),
-      openProjectRepeatPopover(),
+      openProjectRepeatPopover("Resume"),
       popoverItemClick("repeat menu ▸ Resume", "Resume"),
     ],
   };
@@ -1939,12 +1968,13 @@ export function projectRescheduleRepeatRecipe(
     needsWindowReachability: true,
     steps: [
       ...projectPreamble(targetUuid),
-      openProjectRepeatPopover(),
-      popoverItemClick("repeat menu ▸ Change…", "Change…", {
+      openProjectRepeatPopover("Edit Rule…"),
+      popoverItemClick("repeat menu ▸ Edit Rule…", "Edit Rule…", {
         // positional-ok: a post-click EXISTENCE assert on the one attached sheet a
         // window can present; nothing is read or written through this path.
         path: `sheet 1 of ${MAIN_WINDOW}`,
         label: "the Repeat dialog",
+        opensDialog: "repeat",
       }),
       ...repeatDialogEntry({ frequency, interval, ...extras }),
     ],
@@ -2073,6 +2103,11 @@ export function moveHeadingToProjectRecipe(
         assertPath: HEADING_MOVE_PICKER_MARKER,
         assertLabel: "the Move… project picker",
         assertTimeoutMs: 5000,
+        // The picker is the dialog the rest of this drive types into. Declared,
+        // because the census taken before this click saw the ellipsis popover —
+        // an unrecognized detached window — and would otherwise have been
+        // latched as the drive's dialog, refusing the picker (UIFIX1).
+        opensDialog: "move-picker",
         dynamic: true,
         addressing: "title",
       },

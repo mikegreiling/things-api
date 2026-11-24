@@ -76,15 +76,20 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     // honestly (verify-failed:mismatch, observed interval 1).
     evidence: ["UI2-b", "UIC1-a", "UIC6-k", "UIC7-b"],
   },
-  "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
-  "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
+  // UIFIX1 (golden-v5h/-v6h, Things 3.24/3.25, routed): the pair re-certified back
+  // to back — the toggle's title lags the write, so each verb waits for its item.
+  "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a", "UIFIX1"] },
+  "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a", "UIFIX1"] },
   "todo.convert-to-project": { status: "lab-certified", evidence: ["UI2-d", "UIC1-a"] },
+  // UIFIX1 (golden-v5h/-v6h, Things 3.24/3.25, routed): the 3.23+ repeat bar —
+  // found by its `Repeat …` label in the template view's header row — and the
+  // `Edit Rule…` popover item. UIC3-b's `text area 2` handle was 3.22-only.
   "project.reschedule-repeat": {
     status: "lab-certified",
-    evidence: ["UIC2-a", "UIC3-b", "UIC6-k"],
+    evidence: ["UIC2-a", "UIC3-b", "UIC6-k", "UIFIX1"],
   },
-  "project.pause-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
-  "project.resume-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
+  "project.pause-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b", "UIFIX1"] },
+  "project.resume-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b", "UIFIX1"] },
   "area.reorder": {
     status: "lab-certified",
     evidence: ["NATIVE1-d", "AXDRAG1-a", "AXDRAG1-b", "AXDRAG1-f", "AXDRAG2-c"],
@@ -120,8 +125,14 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     // which a completed or canceled destination is. 7/7 through the production CLI
     // (clean match, prefix collision, completed-destination refusal with zero
     // mutation). docs/lab/hxpc1-picker-assert.md.
+    //
+    // UIFIX1 (2026-11-24, golden-v5h/-v6h, Things 3.24/3.25, routed) re-certified
+    // it after the #627 focus guard had latched the `…` popover as the drive's
+    // dialog and refused the picker (the Move… click now declares the picker),
+    // and after 3.25 re-roled the picker's rows to AXStaticText. 12/12 per version
+    // into a prefix-colliding destination. docs/lab/uifix1-repeat-bar-and-picker.md.
     status: "lab-certified",
-    evidence: ["HEADXPROJ", "HXPC1"],
+    evidence: ["HEADXPROJ", "HXPC1", "UIFIX1"],
   },
   "project.move-heading": {
     // HEADORD1 (2026-08-25, headord1-lab, Things 3.23 / golden-v4) discovered and

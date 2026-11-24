@@ -2915,8 +2915,41 @@ end tell`;
  * The row/cell indices are never guessed: every row is walked and the match is
  * exact, so a heading whose title changed under us fails closed by name.
  */
-export function axRowCellFrameScript(tablePath: string, description: string): string {
+export function axRowCellFrameScript(
+  tablePath: string,
+  description: string,
+  match: "exact" | "prefix" = "exact",
+): string {
   const d = escapeAppleScript(description);
+  if (match === "prefix") {
+    // The repeat bar (UIFIX1): its description carries the rule text, so only
+    // the leading words are stable. The walk stops at the FIRST row whose cell
+    // carries a match — the project's header row, which the app renders above
+    // every item row — and that cell must carry exactly one, or nothing is
+    // clicked. Every element read is a direct child of one cell: no subtree
+    // sweep, and no row past the header is visited.
+    return `${SE}
+  set t to (${tablePath})
+  repeat with r in rows of t
+    set hits to {}
+    repeat with c in UI elements of r
+      repeat with e in UI elements of c
+        try
+          if ((description of e) as text) starts with "${d}" then set end of hits to e
+        end try
+      end repeat
+    end repeat
+    if (count of hits) > 1 then error "this project's header shows " & (count of hits) & " elements starting \\"${d}\\", so the one to click is ambiguous"
+    if (count of hits) is 1 then
+      set e to item 1 of hits
+      set _p to position of e
+      set _s to size of e
+      return ((item 1 of _p) as text) & " " & ((item 2 of _p) as text) & " " & ((item 1 of _s) as text) & " " & ((item 2 of _s) as text)
+    end if
+  end repeat
+  error "no row of this project's view shows an element starting \\"${d}\\" — the project may not repeat, or it is not the one shown"
+end tell`;
+  }
   return `${SE}
   set t to (${tablePath})
   repeat with r in rows of t
@@ -2944,8 +2977,8 @@ end tell`;
  * The picker exposes no `AXSelected` / `AXFocused` / `AXHighlighted` on any row
  * (measured — only its filter field is focused), so there is nothing to read
  * back from a keyboard commit and no way to assert what Return would take. What
- * it does expose is one `AXUnknown` per row whose `AXDescription` IS the project
- * title, and — whenever the filter holds text — a trailing
+ * it does expose is one element per row whose `AXDescription` IS the project
+ * title (`AXUnknown` through Things 3.24, `AXStaticText` from 3.25 — UIFIX1), and — whenever the filter holds text — a trailing
  * `New Project "<typed text>"` row that CREATES a project when committed. That
  * row is what the blind Return took whenever the destination was missing from
  * the picker, which an ordinary database-resolved destination reaches: a
@@ -2994,7 +3027,11 @@ export function axPickerRowFrameScript(pickerPath: string, title: string): strin
     try
       set d to (description of e) as text
     end try
-    if d is not "" and (role of e) is "AXUnknown" then
+    -- A row is the element carrying the project's title: AXUnknown through
+    -- Things 3.24, AXStaticText from 3.25 (UIFIX1 census). The other described
+    -- children are the row icons (the New-Project row's "Dialog MoveToNewList
+    -- Template", the current project's tick), and they are images.
+    if d is not "" and (role of e) is not "AXImage" then
       set offered to offered & " [" & d & "]"
       if d is "${t}" then set end of hits to e
     end if
@@ -4346,7 +4383,7 @@ export function commandForStep(
         lang: "applescript",
         script:
           step.rowCellDescription !== undefined
-            ? axRowCellFrameScript(step.path ?? "", step.rowCellDescription)
+            ? axRowCellFrameScript(step.path ?? "", step.rowCellDescription, step.rowCellMatch)
             : axFrameScript(step.path ?? ""),
       };
     case "click-picker-row":
@@ -5989,6 +6026,12 @@ async function driveSteps(
         const clear = outcome.needsAbort === true ? await clearNow() : undefined;
         return partial(step.label, outcome.why ?? "the click failed", clear);
       }
+      // A click that opens a dialog from a POPOVER declares that dialog: the
+      // pointer hop's census saw the popover (a detached window it cannot name,
+      // so `other`) and latched it, and the keystrokes that follow would then
+      // refuse the very picker or sheet this click opened (UIFIX1). The click's
+      // own post-click assert has just proven the declared dialog appeared.
+      if (step.opensDialog !== undefined) latch.sheet = step.opensDialog;
       done.push(step.label);
       continue;
     }

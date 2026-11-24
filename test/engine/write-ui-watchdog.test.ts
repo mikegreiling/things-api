@@ -99,7 +99,9 @@ describe("ui drive watchdog", () => {
     // Each mocked hop costs a couple of real milliseconds — DRVLAT1 removed the
     // fixed post-preamble settle, so a drive whose every hop answers instantly
     // can otherwise finish inside a 1ms budget and never reach the boundary.
-    const slow = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    const slow = mockRunner((c) =>
+      c.primitive === "resolve" || c.primitive === "wait" ? ok("true") : ok(),
+    );
     const run = async (c: UiCommand, t: number): Promise<UiRunResult> => {
       await new Promise((r) => setTimeout(r, 2));
       return slow(c, t);
@@ -114,7 +116,9 @@ describe("ui drive watchdog", () => {
   });
 
   it("a generous budget never fires the watchdog (a fast mocked drive completes)", async () => {
-    const run = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    const run = mockRunner((c) =>
+      c.primitive === "resolve" || c.primitive === "wait" ? ok("true") : ok(),
+    );
     const vector = createUiVector(config(90_000), run);
     const res = await vector.execute(invocation(pauseRepeatRecipe("TODO-1")));
     expect(res.watchdog).toBeUndefined();

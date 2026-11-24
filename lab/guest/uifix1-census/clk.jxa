@@ -1,0 +1,34 @@
+// clk.jxa row <desc>  — HID click the content-table cell child described exactly <desc>
+// clk.jxa win <idprefix> <desc> — HID click the item described <desc> anywhere (depth<=3) in the window whose id starts with <idprefix>
+ObjC.import('ApplicationServices'); ObjC.import('CoreGraphics')
+function attr(el, n) { var o = Ref(); if ($.AXUIElementCopyAttributeValue(el, $(n), o) !== 0) return null; return ObjC.castRefToObject(o[0]) }
+function sv(el, n) { var v = attr(el, n); try { return v ? String(v.js) : '' } catch (e) { return '' } }
+function kids(el) { var c = attr(el, 'AXChildren'); if (!c) return []; var a = []; for (var i = 0; i < c.count; i++) a.push(c.objectAtIndex(i)); return a }
+function frame(el) {
+  var p = attr(el, 'AXPosition'), z = attr(el, 'AXSize')
+  function d(x) { if (!x) return null; return ObjC.castRefToObject($.CFCopyDescription(x)).js }
+  var mp = (d(p) || '').match(/x:([-0-9.]+) y:([-0-9.]+)/), mz = (d(z) || '').match(/w:([-0-9.]+) h:([-0-9.]+)/)
+  return mp && mz ? { x: +mp[1], y: +mp[2], w: +mz[1], h: +mz[2] } : null
+}
+function click(f) {
+  var pt = $.CGPointMake(f.x + f.w / 2, f.y + f.h / 2)
+  $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, pt, $.kCGMouseButtonLeft)); delay(0.05)
+  $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, pt, $.kCGMouseButtonLeft))
+}
+function find(el, desc, d, max) { if (sv(el, 'AXDescription') === desc) return el; if (d >= max) return null; var k = kids(el); for (var i = 0; i < k.length; i++) { var r = find(k[i], desc, d + 1, max); if (r) return r } return null }
+function run(argv) {
+  var pid = Application('System Events').processes.byName('Things3').unixId()
+  var app = $.AXUIElementCreateApplication(pid)
+  var wins = kids(app)
+  var target = null
+  if (argv[0] === 'row') {
+    var std = wins.filter(function (x) { return sv(x, 'AXSubrole') === 'AXStandardWindow' })[0]
+    var sa = kids(std).filter(function (x) { return sv(x, 'AXRole') === 'AXScrollArea' })[0]
+    target = find(kids(sa)[0], argv[1], 0, 3)
+  } else {
+    var w = wins.filter(function (x) { return sv(x, 'AXIdentifier').indexOf(argv[1]) === 0 || (argv[1] === '*' && sv(x, 'AXSubrole') === 'AXUnknown') })
+    for (var i = 0; i < w.length && !target; i++) target = find(w[i], argv[2], 0, 3)
+  }
+  if (!target) return 'not found'
+  var f = frame(target); click(f); return 'clicked ' + JSON.stringify(f)
+}

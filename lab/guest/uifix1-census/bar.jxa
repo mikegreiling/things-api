@@ -1,0 +1,45 @@
+// bar.jxa <mode> — find the project header's "Repeat …" element and act on it.
+//   find        : print row index, the element, and its preceding sibling
+//   press-text  : AXPress the "Repeat …" element
+//   press-btn   : AXPress the button that contains it (the sibling before it)
+//   click-text  : HID click at the "Repeat …" element's frame center
+ObjC.import('ApplicationServices'); ObjC.import('CoreGraphics')
+function attr(el, n) { var o = Ref(); if ($.AXUIElementCopyAttributeValue(el, $(n), o) !== 0) return null; return ObjC.castRefToObject(o[0]) }
+function sv(el, n) { var v = attr(el, n); try { return v ? String(v.js) : '' } catch (e) { return '' } }
+function kids(el) { var c = attr(el, 'AXChildren'); if (!c) return []; var a = []; for (var i = 0; i < c.count; i++) a.push(c.objectAtIndex(i)); return a }
+function frame(el) {
+  var p = attr(el, 'AXPosition'), z = attr(el, 'AXSize')
+  function d(x) { if (!x) return null; return ObjC.castRefToObject($.CFCopyDescription(x)).js }
+  var mp = (d(p) || '').match(/x:([-0-9.]+) y:([-0-9.]+)/), mz = (d(z) || '').match(/w:([-0-9.]+) h:([-0-9.]+)/)
+  return mp && mz ? { x: +mp[1], y: +mp[2], w: +mz[1], h: +mz[2] } : null
+}
+function run(argv) {
+  var pid = Application('System Events').processes.byName('Things3').unixId()
+  var app = $.AXUIElementCreateApplication(pid)
+  var std = kids(app).filter(function (x) { return sv(x, 'AXSubrole') === 'AXStandardWindow' })[0]
+  var sa = kids(std).filter(function (x) { return sv(x, 'AXRole') === 'AXScrollArea' })[0]
+  var tb = kids(sa)[0]
+  var rows = kids(tb).filter(function (x) { return sv(x, 'AXRole') === 'AXRow' })
+  var hit = null, prev = null, rix = -1
+  rows.forEach(function (r, i) {
+    if (hit) return
+    kids(r).forEach(function (c) {
+      var ks = kids(c)
+      ks.forEach(function (k, j) { if (!hit && sv(k, 'AXDescription').indexOf('Repeat ') === 0) { hit = k; prev = j > 0 ? ks[j - 1] : null; rix = i + 1 } })
+    })
+  })
+  if (!hit) return 'NO "Repeat …" element in ' + rows.length + ' rows'
+  var f = frame(hit)
+  var s = 'row ' + rix + ': ' + sv(hit, 'AXRole') + ' d=' + sv(hit, 'AXDescription') + ' f=' + JSON.stringify(f) + ' | prev ' + (prev ? sv(prev, 'AXRole') + ' f=' + JSON.stringify(frame(prev)) : 'none')
+  var m = argv[0]
+  if (m === 'press-text') s += ' | AXPress=' + $.AXUIElementPerformAction(hit, $('AXPress'))
+  if (m === 'press-btn' && prev) s += ' | AXPress(btn)=' + $.AXUIElementPerformAction(prev, $('AXPress'))
+  if (m === 'click-text') {
+    var pt = $.CGPointMake(f.x + f.w / 2, f.y + f.h / 2)
+    var dn = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, pt, $.kCGMouseButtonLeft)
+    var up = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, pt, $.kCGMouseButtonLeft)
+    $.CGEventPost($.kCGHIDEventTap, dn); delay(0.05); $.CGEventPost($.kCGHIDEventTap, up)
+    s += ' | clicked'
+  }
+  return s
+}

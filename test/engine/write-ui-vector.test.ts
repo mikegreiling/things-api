@@ -26,6 +26,7 @@ import {
   makeRepeatingRecipe,
   moveHeadingToProjectRecipe,
   pauseRepeatRecipe,
+  projectRescheduleRepeatRecipe,
   rescheduleRepeatRecipe,
 } from "../../src/write/vectors/ui-recipes.ts";
 import {
@@ -175,7 +176,9 @@ describe("ui driver — fail-closed", () => {
   });
 
   it("emits one stable osascript shape per primitive", async () => {
-    const { run, commands } = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    const { run, commands } = mockRunner((c) =>
+      c.primitive === "resolve" || c.primitive === "wait" ? ok("true") : ok(),
+    );
     const vector = createUiVector(config(true), run);
     const res = await vector.execute(invocation(pauseRepeatRecipe("TODO-1")));
     expect(res.exitCode).toBe(0);
@@ -1186,16 +1189,32 @@ describe("ui driver — ADR1 selection/eligibility assertion (#480)", () => {
 // resolve-frame → click-point ladder as every other mouse-hybrid step.
 const moveRecipe = (): UiRecipe => moveHeadingToProjectRecipe("SRC-1", "Phase 1", "Dest");
 
+/**
+ * The screen as the Move… drive really sees it (UIFIX1): the ellipsis popover is
+ * a detached window the census cannot name (`other`), and the Move… click
+ * replaces it with the picker (`move-picker`). Before UIFIX1 this fake left the
+ * screen at `none` throughout, which is why no test noticed that the drive
+ * latched the POPOVER as its dialog and then refused its own picker.
+ */
+function moveScreenAnswer(screen: FakeScreen, c: UiCommand): void {
+  if (c.primitive !== "click-point") return;
+  if (c.label.startsWith("open the heading's ellipsis menu")) screen.kind = "other";
+  else if (c.label === "ellipsis menu ▸ Move…") screen.kind = "move-picker";
+  else if (c.label.startsWith("commit the Move… picker")) screen.kind = "none";
+}
+
 describe("ui driver — the Move… picker commit is addressed, never a blind Return (HXPC1)", () => {
   it("types the destination, resolves the matching ROW, and clicks it — no Return is ever sent", async () => {
+    const screen = healthyScreen({ opens: "none" });
     const { run, commands } = mockRunner((c) => {
+      moveScreenAnswer(screen, c);
       if (isReach(c)) return ok("1 1 1");
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "wait") return ok("true");
       if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
       if (c.primitive === "resolve-frame") return ok("400 150 230 18");
       return ok();
-    });
+    }, screen);
     const vector = createUiVector(config(true), run);
     const res = await vector.execute(invocation(moveRecipe()));
     expect(res.exitCode).toBe(0);
@@ -1214,7 +1233,9 @@ describe("ui driver — the Move… picker commit is addressed, never a blind Re
   it("aborts with the resolver's own reason — and NO click — when the destination row is absent", async () => {
     const offered =
       'the Move… picker offers no project named "Dest" — it offered: [Something Else]';
+    const screen = healthyScreen({ opens: "none" });
     const { run, commands } = mockRunner((c) => {
+      moveScreenAnswer(screen, c);
       if (isReach(c)) return ok("1 1 1");
       if (c.primitive === "resolve") return ok("true");
       if (c.primitive === "wait") return ok("true");
@@ -1227,7 +1248,7 @@ describe("ui driver — the Move… picker commit is addressed, never a blind Re
           : ok("100 200 26 22");
       }
       return ok();
-    });
+    }, screen);
     const vector = createUiVector(config(true), run);
     const res = await vector.execute(invocation(moveRecipe()));
     expect(res.exitCode).toBe(1);
@@ -1236,6 +1257,78 @@ describe("ui driver — the Move… picker commit is addressed, never a blind Re
     // Two clicks opened the picker; the third — the commit — never fired.
     expect(commands.filter((c) => c.primitive === "click-point").length).toBe(2);
     expect(commands.some((c) => c.script?.includes("key code 36"))).toBe(false);
+  });
+
+  it("types into the picker it opened — the popover seen before the Move… click is NOT taken as the drive's dialog (UIFIX1)", async () => {
+    const screen = healthyScreen({ opens: "none" });
+    const { run, commands } = mockRunner((c) => {
+      moveScreenAnswer(screen, c);
+      if (isReach(c)) return ok("1 1 1");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "resolve-frame") return ok("400 150 230 18");
+      return ok();
+    }, screen);
+    const res = await createUiVector(config(true), run).execute(invocation(moveRecipe()));
+    expect(res.exitCode).toBe(0);
+    expect(res.stderr).not.toContain("no longer the one in front");
+    // The keystroke hop carries the dialog invariant for the PICKER.
+    const typed = commands.find((c) => c.primitive === "type-text");
+    expect(typed?.script).toContain('if sheetKind is not "move-picker" then set fgBad to true');
+  });
+
+  it("still refuses to type when something other than the picker is in front after the Move… click", async () => {
+    const screen = healthyScreen({ opens: "none" });
+    const { run, commands } = mockRunner((c) => {
+      moveScreenAnswer(screen, c);
+      // The Move… click "succeeds", but a different dialog is what is up.
+      if (c.primitive === "click-point" && c.label === "ellipsis menu ▸ Move…")
+        screen.kind = "other";
+      if (isReach(c)) return ok("1 1 1");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "resolve-frame") return ok("400 150 230 18");
+      return ok();
+    }, screen);
+    const res = await createUiVector(config(true), run).execute(invocation(moveRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("expected move-picker, found other");
+    // Nothing was committed: only the two clicks that opened the picker fired.
+    expect(commands.filter((c) => c.primitive === "click-point").length).toBe(2);
+  });
+});
+
+// UIFIX1: a repeating project's reschedule opens its Repeat sheet FROM the
+// repeat-bar popover, the same shape as the Move… picker — so the drive must
+// type into the sheet the Edit Rule… click opened, not refuse it because the
+// census before that click saw the popover.
+describe("ui driver — project reschedule drives the sheet its popover opened (UIFIX1)", () => {
+  it("latches the Repeat sheet the Edit Rule… click declares, and the dialog entry runs", async () => {
+    const screen = healthyScreen({ opens: "none" });
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "click-point") {
+        if (c.label.startsWith("open the project's repeat menu")) screen.kind = "other";
+        else if (c.label === "repeat menu ▸ Edit Rule…") screen.kind = "repeat";
+      }
+      if (isReach(c)) return ok("1 1 1");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("true");
+      if (c.primitive === "resolve-frame") return ok("130 230 366 17");
+      if (c.primitive === "dialog-open") return ok(REPEAT_DIALOG_OPEN_STDOUT);
+      if (c.primitive === "audit-dialog") return ok("OK");
+      return ok();
+    }, screen);
+    const res = await createUiVector(config(true), run).execute(
+      invocation(projectRescheduleRepeatRecipe("P-1", "weekly", 2)),
+    );
+    expect(res.stderr).not.toContain("no longer the one in front");
+    expect(res.exitCode).toBe(0);
+    // Every guarded keystroke hop after the click carries the REPEAT invariant.
+    const guarded = commands.filter((c) => c.script?.includes("set fgBad to true") === true);
+    expect(guarded.length).toBeGreaterThan(0);
+    expect(guarded.every((c) => c.script?.includes('if sheetKind is not "repeat"') === true)).toBe(
+      true,
+    );
   });
 });
 
@@ -1313,6 +1406,7 @@ describe("ui driver — session-reachability gate (SESSGATE #480)", () => {
     const { run, commands } = mockRunner((c) => {
       if (isReach(c)) return ok("1 0 0"); // would be "locked" — but must never be consulted
       if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("true"); // the toggle-label wait (UIFIX1)
       return ok();
     });
     const vector = createUiVector(config(true), run);
@@ -1765,7 +1859,7 @@ describe("ui driver — the per-step focus guard (#620)", () => {
     // element named whether or not Things is in front. The ONE census is the
     // drive's open-dialog precondition, not a per-step guard.
     const { run, commands } = mockRunner(
-      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      (c) => (c.primitive === "resolve" || c.primitive === "wait" ? ok("true") : ok()),
       healthyScreen({ front: "Finder", opens: "none" }),
     );
     const res = await createUiVector(config(true), run).execute(
@@ -2019,7 +2113,7 @@ describe("ui driver — the audited cleanup ladder (#620)", () => {
 describe("ui driver — a drive refuses to start with a dialog already open (#620)", () => {
   it("refuses before pressing anything, naming the dialog and the sync consequence", async () => {
     const { run, commands } = mockRunner(
-      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      (c) => (c.primitive === "resolve" || c.primitive === "wait" ? ok("true") : ok()),
       healthyScreen({ kind: "repeat", depth: 1 }),
     );
     const res = await createUiVector(config(true), run).execute(
@@ -2035,7 +2129,7 @@ describe("ui driver — a drive refuses to start with a dialog already open (#62
 
   it("names the stack when dialogs are piled up (they dismiss one at a time)", async () => {
     const { run } = mockRunner(
-      (c) => (c.primitive === "resolve" ? ok("true") : ok()),
+      (c) => (c.primitive === "resolve" || c.primitive === "wait" ? ok("true") : ok()),
       healthyScreen({ kind: "other", depth: 3 }),
     );
     const res = await createUiVector(config(true), run).execute(
@@ -2045,7 +2139,9 @@ describe("ui driver — a drive refuses to start with a dialog already open (#62
   });
 
   it("proceeds when the screen is clear", async () => {
-    const { run } = mockRunner((c) => (c.primitive === "resolve" ? ok("true") : ok()));
+    const { run } = mockRunner((c) =>
+      c.primitive === "resolve" || c.primitive === "wait" ? ok("true") : ok(),
+    );
     const res = await createUiVector(config(true), run).execute(
       invocation(pauseRepeatRecipe("TODO-1")),
     );
@@ -2346,6 +2442,7 @@ describe("ui driver — session-lock gate (LOCKSCR1 #732, zero-hop LOCKSCR2)", (
     const { run, commands } = mockRunner((c) => {
       if (isFusedActivate(c)) return ok(fusedJson()); // reads LOCKED — and must not stop this op
       if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("true"); // the toggle-label wait (UIFIX1)
       return ok();
     });
     const res = await createUiVector(config(true), run).execute(
