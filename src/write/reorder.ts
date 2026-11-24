@@ -34,15 +34,9 @@
  * `--after`) placement co-bounces the minimal contiguous run between the block
  * and the bucket edge (disclosed as `touched`).
  *
- * JSON collapse (BOUNCEJSON, oddities §9i): a bounce whose PLACEMENT (`back`)
- * leg is `when=anytime` can collapse its whole N-item round-trip to ONE pre-
- * validated `things:///json` update array (2N ops, 1 dispatch, ~7×, validate-
- * first FULL-ABORT). Eligibility is a per-BounceSpec flag
- * ({@link BounceSpec.jsonCollapsible}). Since ORD-5 (2026-11-24) NO class is
- * eligible: on Things 3.25 the array's `when=anytime` element intermittently
- * leaves the row at the index its `when=someday` element gave it, for loose and
- * heading children alike (ORD5J-T), while the sequential URL legs place
- * correctly on every version measured. See the flag's doc.
+ * Every bounce dispatches its legs sequentially as URL calls; the one-array
+ * `things:///json` collapse is not used because Things 3.25 places it
+ * intermittently (oddities §36, canary o-suite O40).
  *
  * Column verify (ORD-5, 2026-11-24): every bounce-class protocol ends with ONE
  * terminal check of the whole planned column — the touched block strictly in
@@ -75,14 +69,12 @@ import {
 } from "./disclosures.ts";
 import {
   fingerprintLabel,
-  readAuthToken,
   runLockedComposite,
   runMutation,
   type MutationResult,
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
-import type { WriteVector } from "./vectors/types.ts";
 import {
   chordTargetOrder,
   cohortFenceViolation,
@@ -119,7 +111,6 @@ export type BounceKind =
   | "heading"
   | "area-someday"
   | "anytime"
-  | "project-someday"
   // SIT7 SOMEBACK — the non-experimental `someday`-scope fallback (front-insert).
   // The URL `anytime↔someday` `when=` round-trip front-inserts BOTH loose someday
   // to-dos AND area-less someday projects at the loose someday `index` min, so a
@@ -142,8 +133,7 @@ interface BounceSpec {
   /**
    * SIT4 DAYBNC: the `day` bounce's legs are a cross-DATE round-trip (away = the
    * neighbour day D+1, back = the day D itself), computed from the movees' shared
-   * startDate at dispatch — not a fixed bucket. Sequential URL legs only (the
-   * things:///json when= reindex is unproven for dated placement, §9i).
+   * startDate at dispatch — not a fixed bucket.
    */
   dated: boolean;
   /** front = reverse-iterate (front-insert); back = forward-iterate (back-insert). */
@@ -156,54 +146,6 @@ interface BounceSpec {
    * front-insert to-dos and projects on ONE shared todayIndex axis).
    */
   legOp: "todo.update" | "project.update" | "per-type";
-  /**
-   * Whether the whole N-item round-trip may collapse to ONE pre-validated
-   * `things:///json` update array (BOUNCEJSON, oddities §9i). The app's `json`
-   * `when=` reindex fires ONLY when the PLACEMENT (`back`) leg is `anytime`
-   * landing into a LOOSE or heading-CONTAINER bucket — so eligibility is keyed
-   * off the placement-leg VALUE, NOT the front/back direction:
-   *   - eligible: NONE since ORD-5 (2026-11-24). `anytime` (area-less loose,
-   *     BJ-0 front-insert) and `heading` (container child, BJ-a back-insert) were
-   *     the two eligible classes; both measured deterministic on ≤3.24 (ORD5J-T:
-   *     24/24 on 3.24). On Things 3.25 the array's `when=anytime` element
-   *     intermittently does not re-insert the row, which keeps the index its
-   *     `when=someday` element gave it: a loose to-do lands LAST (GV6 §6, 3/6
-   *     trials on a CLI-seeded column) and a heading run leaves a child tied
-   *     with an untouched sibling (3/6 trials). The sequential URL legs placed
-   *     correctly in every trial on both versions. The collapse rested on an
-   *     undocumented importer side effect the vendor changed, so both classes run
-   *     the sequential bounce unconditionally — no version switch (ALPHA-
-   *     CONTRACT). Were a class re-admitted, the array would carry
-   *     `[{when:away},{when:back}]` per item in the SAME per-item order the
-   *     sequential loop iterates, so array order == the resulting index order.
-   *   - NOT eligible (json index-INERT — must stay on the sequential URL bounce):
-   *     any `someday`-placement class (`area-someday`, `project-someday`) — §9i(b)
-   *     measured `when=someday` leaves `index` untouched; and any area-DIRECT
-   *     member — §9i(c) measured it index-FROZEN under both toggles. Collapsing
-   *     either would SILENTLY not reorder. `today`/`evening` (todayIndex legs) and
-   *     `projects` (project.update — the json when= reindex is unproven for a
-   *     type=1 project) also stay on the URL loop.
-   * The collapse is validate-first FULL-ABORT (§9i / BJ-c): one unresolvable id
-   * rejects the ENTIRE array (nothing partial lands), so it needs no partial-
-   * progress reconciliation — refs are pre-resolved in {@link runReorder}.
-   *
-   * Classified here so the split is explicit and evidence-locked (a regression
-   * test pins the membership); the one-shot json dispatch itself is the wiring
-   * that consumes this flag.
-   */
-  jsonCollapsible: boolean;
-}
-
-/**
- * The bounce kinds whose N-item round-trip is eligible for the `things:///json`
- * one-array collapse (BOUNCEJSON §9i) — none since ORD-5. Exported for the
- * classification regression test (guards against "optimizing" a someday-placement
- * or area-direct class into json, which §9i proves is a silent no-op, and against
- * re-collapsing the `anytime` / `heading` classes, which Things 3.25 places
- * intermittently through json — ORD-5).
- */
-export function bounceJsonCollapsible(kind: BounceKind): boolean {
-  return bounceSpecOf(kind).jsonCollapsible;
 }
 
 function bounceSpecOf(kind: BounceKind): BounceSpec {
@@ -229,8 +171,6 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "todayIndex",
         legOp: "per-type",
-        // todayIndex leg, not an anytime placement — json reindex unproven here.
-        jsonCollapsible: false,
       };
     case "evening":
       // EVEORD: to-dos AND projects share ONE evening todayIndex axis; a project's
@@ -244,14 +184,12 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "todayIndex",
         legOp: "per-type",
-        jsonCollapsible: false,
       };
     // SIT4 DAYBNC: the DATED BOUNCE for an arbitrary future day-group across all
     // containers — loose/project-child/headed/area-direct to-dos AND area-less
     // project rows front-insert at the day-D GLOBAL todayIndex min on the back
     // leg. away/back are the cross-date round-trip (D+1 → D), per-type legs,
-    // reminder/deadline/heading-FK preserving (§2e/R21). Sequential URL only —
-    // the json when= reindex is unproven for dated placement (§9i tested anytime).
+    // reminder/deadline/heading-FK preserving (§2e/R21).
     case "day":
       return {
         away: null,
@@ -260,7 +198,6 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "todayIndex",
         legOp: "per-type",
-        jsonCollapsible: false,
       };
     case "projects":
       return {
@@ -270,13 +207,8 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "index",
         legOp: "project.update",
-        // project.update (type=1): the json when= reindex is unproven for a
-        // project row — stays on the URL loop (§9i tested to-dos only).
-        jsonCollapsible: false,
       };
-    // Headed anytime children BACK-insert (BOUNCE2-h): forward-order bounce on the
-    // sequential URL legs. NOT json-collapsible (ORD-5): on Things 3.25 the json
-    // array intermittently leaves a child at its someday-leg index (ORD5J-T).
+    // Headed anytime children BACK-insert (BOUNCE2-h): forward-order bounce.
     case "heading":
       return {
         away: "someday",
@@ -285,10 +217,8 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "back",
         rankKey: "index",
         legOp: "todo.update",
-        jsonCollapsible: false,
       };
     // Area someday members FRONT-insert (SOMEBNC-area): reverse-order bounce.
-    // Someday placement leg AND area-direct -> json index-INERT (§9i b+c): URL only.
     case "area-someday":
       return {
         away: "anytime",
@@ -297,11 +227,8 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "index",
         legOp: "todo.update",
-        jsonCollapsible: false,
       };
-    // Area-less loose anytime FRONT-insert (ANYBNC): reverse-order bounce on the
-    // sequential URL legs. NOT json-collapsible (ORD-5): on Things 3.25 the json
-    // array intermittently leaves the row LAST; the URL legs front-insert everywhere.
+    // Area-less loose anytime FRONT-insert (ANYBNC): reverse-order bounce.
     case "anytime":
       return {
         away: "someday",
@@ -310,26 +237,11 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "index",
         legOp: "todo.update",
-        jsonCollapsible: false,
-      };
-    // Project someday children BACK-insert (SOMEBNC-project): forward-order bounce.
-    // Someday placement leg -> json index-INERT (§9i b): URL only, despite being
-    // a back-insert (eligibility is the placement-leg value, not the direction).
-    case "project-someday":
-      return {
-        away: "anytime",
-        back: "someday",
-        dated: false,
-        direction: "back",
-        rankKey: "index",
-        legOp: "todo.update",
-        jsonCollapsible: false,
       };
     // SIT7 SOMEBACK: loose someday to-dos AND area-less someday projects FRONT-insert
     // at the loose someday index min via the anytime↔someday round-trip (reverse-order
     // dispatch). Per-type leg op (todo.update / update-project) — the first MIXED-kind
-    // fixed-bucket bounce, mirroring the day/evening per-type legs. Someday placement
-    // leg -> json index-INERT (§9i b): URL loop only (never collapsible).
+    // fixed-bucket bounce, mirroring the day/evening per-type legs.
     case "someday":
       return {
         away: "anytime",
@@ -338,7 +250,6 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "index",
         legOp: "per-type",
-        jsonCollapsible: false,
       };
   }
 }
@@ -929,9 +840,7 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
 
 // (The SOMEBNC-project someday-only bounce fallback for the `project` scope is
 // SUPERSEDED by PROJROOT — the SIT7 park + re-home MOVE round-trip that reorders
-// ALL of a project's unheaded children flag-safely, one protocol for every row.
-// The `project-someday` BounceKind survives as the §9i json-collapse classification
-// pin, but it is no longer selected by resolveStrategy.)
+// ALL of a project's unheaded children flag-safely, one protocol for every row.)
 
 // ----------------------------------------------------- compound leg options
 //
@@ -968,9 +877,8 @@ function compoundLegOptions(options: WriteOptions, txnId: string): WriteOptions 
 //     preserved, Arm C); the re-head then BACK-INSERTS each now-loose row at the
 //     heading someday-bucket end (§9h renumber, Arm B), so forward-order re-heads
 //     land the exact target order (HEADSUB2 q1fix), `start=2` preserved. Two URL
-//     move legs per item (unhead + re-head), no json collapse (re-head is a list-
-//     id move, not a when= reindex); needs neither the experimental surface nor
-//     the bounce. (The earlier direct-re-head-only compile shipped in #327 was a
+//     move legs per item (unhead + re-head); needs neither the experimental
+//     surface nor the bounce. (The earlier direct-re-head-only compile shipped in #327 was a
 //     silent no-op — HEADSUB2 §Q1 — corrected here.)
 
 /** The project a heading belongs to (its re-head destination), or null. */
@@ -1005,8 +913,7 @@ function headingSomedayAborted(
  * (its `index` is below the re-inserted block), and unnamed siblings inside the
  * suffix are co-unheaded + co-re-headed (disclosed as `touched`). Two `todo.move`
  * legs per item (unhead + re-head), `start=2` preserved throughout; needs neither
- * the experimental surface nor the bounce, and there is no json collapse (re-head
- * is a list-id move). Non-atomic: a mid-protocol failure leaves items UNHEADED in
+ * the experimental surface nor the bounce. Non-atomic: a mid-protocol failure leaves items UNHEADED in
  * the project root and fails loudly with placed/remaining detail.
  */
 async function runHeadingSomeday(
@@ -1213,7 +1120,6 @@ async function runBounce(
   const wantsContainer =
     bounceKind === "heading" ||
     bounceKind === "area-someday" ||
-    bounceKind === "project-someday" ||
     // SIT7 fallback routing: `container-day` degrades to the dated `day` bounce
     // (fallback 5) and legitimately carries its project/area container.
     params.scope === "container-day";
@@ -1535,25 +1441,11 @@ async function runBounce(
   // Front-insert contexts (loose/area-direct) place last-first (reverse iterate,
   // unshift); back-insert contexts (heading/project children) place first-first
   // (forward iterate, push). Either way `placed` holds the current top-to-bottom
-  // order of the bounced block. The SAME per-item order drives the json-array
-  // collapse (array order == result index order for both directions).
+  // order of the bounced block.
   const order =
     direction === "front"
       ? dispatchRun.map((_, i) => dispatchRun.length - 1 - i)
       : dispatchRun.map((_, i) => i);
-
-  // BOUNCEJSON collapse (§9i): when the spec is jsonCollapsible (no class since
-  // ORD-5 — see BounceSpec.jsonCollapsible), the whole N-item round-trip collapses
-  // to ONE pre-validated `things:///json` array (2N ops, 1 dispatch, ~7×,
-  // validate-first FULL-ABORT). Only against a REAL dispatch surface — under the
-  // simulator (simulates=true, per-op appliers, no json-array applier) we keep
-  // the proven sequential legs.
-  // The json collapse is only ever eligible for a fixed-op, jsonCollapsible spec;
-  // per-type (day/evening) and every dated bounce stay on the sequential URL loop.
-  const dispatchVector =
-    spec.jsonCollapsible && legOp !== "per-type" ? pickDispatchVector(deps, legOp) : undefined;
-  const useJson =
-    spec.jsonCollapsible && dispatchVector !== undefined && dispatchVector.simulates !== true;
 
   if (options.dryRun === true) {
     // Name the per-row-class legs. A `day` set may mix SCHEDULED rows (when= bounce)
@@ -1580,18 +1472,12 @@ async function runBounce(
         );
       legNaming = bits.join("; ");
     }
-    const invocation = useJson
-      ? `json-collapse ×${coBounce.length} (${direction}-insert, ` +
-        `${direction === "front" ? "reverse" : "forward"} array order, ` +
-        (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
-        `1 dispatch / ${coBounce.length * 2} ops): ` +
-        `${legNaming} interleaved per item; validate-first full-abort, ` +
-        `one terminal order verify`
-      : `bounce ×${coBounce.length} (${direction}-insert, ` +
-        `${direction === "front" ? "reverse" : "forward"} order, ` +
-        (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
-        `${coBounce.length * 2} legs): ` +
-        `${legNaming}; one verify per item round-trip`;
+    const invocation =
+      `bounce ×${coBounce.length} (${direction}-insert, ` +
+      `${direction === "front" ? "reverse" : "forward"} order, ` +
+      (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
+      `${coBounce.length * 2} legs): ` +
+      `${legNaming}; one verify per item round-trip`;
     return {
       kind: "dry-run",
       op: "reorder",
@@ -1604,24 +1490,6 @@ async function runBounce(
         hazardsChecked: ["H-REORDER-SCOPE"],
       },
     };
-  }
-
-  if (useJson) {
-    return runBounceJsonCollapse(deps, params, spec, {
-      coBounce,
-      order,
-      bounceKind,
-      containerUuid,
-      preRanks,
-      txnId,
-      actor,
-      touchedUnnamed,
-      startedAt,
-      options,
-      vector: dispatchVector as WriteVector,
-      rest,
-      direction,
-    });
   }
 
   const placed: string[] = [];
@@ -2183,7 +2051,7 @@ function scratchBag(
  * `index` max, so forward-order re-heads land the exact order (the shipped
  * `heading-someday` mechanism, now for the ANYTIME class + proven flag-safe). Two
  * `todo.move` URL legs per item (`list-id=<p>` then `list-id=<p>&heading=<h>`), no
- * when= leg, no json collapse. Non-atomic: a mid-fail leaves rows UNHEADED in the
+ * when= leg. Non-atomic: a mid-fail leaves rows UNHEADED in the
  * project root, disclosed (same discipline as heading-someday).
  */
 async function runHeadMove(
@@ -3543,168 +3411,6 @@ async function runAreaBack(
   );
 }
 
-/**
- * The url-scheme dispatch surface for a leg op — the vector the json collapse
- * opens its `things:///json` array through. In tests this is the injected fake
- * (id "url-scheme"); in production `createUrlSchemeVector`; under the simulator
- * fence the simulator (id "url-scheme", simulates=true) — which the caller then
- * rejects for the collapse (it has no json-array applier) and falls back to the
- * sequential per-leg bounce the simulator DOES model.
- */
-function pickDispatchVector(
-  deps: WriteDeps,
-  legOp: "todo.update" | "project.update",
-): WriteVector | undefined {
-  return deps.vectors.find((v) => v.id === "url-scheme" && v.matrix[legOp]?.support === "yes");
-}
-
-interface JsonCollapseCtx {
-  coBounce: string[];
-  /** Per-item placement order (reverse target for front-insert, forward for back). */
-  order: number[];
-  bounceKind: BounceKind;
-  containerUuid: string | null;
-  preRanks: Record<string, unknown>;
-  txnId: string;
-  actor: string;
-  touchedUnnamed: string[];
-  startedAt: Date;
-  options: WriteOptions;
-  vector: WriteVector;
-  /** The untouched remainder of the planned column (ORD-5 column verify). */
-  rest: string[];
-  direction: "front" | "back";
-}
-
-/**
- * The BOUNCEJSON collapse (§9i / BJ-a / BJ-c): dispatch the whole bounce as ONE
- * pre-validated `things:///json` update array carrying `[{when:away},{when:back}]`
- * per item, iterated in the SAME per-item order the sequential loop uses (so
- * array order == the resulting index order for both insert directions), then run
- * ONE terminal ordering verify. The app validates the entire array first and
- * applies it all-or-nothing, so a failed dispatch/verify means NOTHING landed —
- * there is no partial-progress state to reconcile (contrast the sequential
- * path's placed/remaining bookkeeping). Every id was already resolved in
- * {@link runReorder} (a single unresolvable ref would full-abort the batch).
- */
-async function runBounceJsonCollapse(
-  deps: WriteDeps,
-  params: ReorderParams,
-  spec: BounceSpec,
-  ctx: JsonCollapseCtx,
-): Promise<ReorderResult> {
-  const {
-    coBounce,
-    order,
-    bounceKind,
-    containerUuid,
-    preRanks,
-    txnId,
-    actor,
-    touchedUnnamed,
-    startedAt,
-    options,
-    vector,
-    rest,
-    direction,
-  } = ctx;
-  const { rankKey } = spec;
-  // The json collapse is only ever reached for a fixed-bucket, jsonCollapsible spec
-  // (no class since ORD-5) — never a dated or per-type bounce — so away/back are the
-  // concrete keywords the spec pins.
-  const away = spec.away as WhenValue;
-  const back = spec.back as WhenValue;
-  const now = deps.now ?? (() => new Date());
-
-  const abort = (detail: string): ReorderResult => {
-    auditSummary(
-      deps,
-      params,
-      startedAt,
-      "verify-failed:mismatch",
-      { placed: [] },
-      {
-        pre: preRanks,
-        txnId,
-        actor,
-      },
-    );
-    return {
-      kind: "bounce-aborted",
-      op: "reorder",
-      detail,
-      placed: [],
-      remaining: coBounce,
-      cause: null,
-    };
-  };
-
-  // Validate-first full-abort means nothing lands, so the concurrent-edit guard
-  // checks EVERY member up front (not per item as the sequential loop does).
-  for (const uuid of coBounce) {
-    const problem = checkStillMember(deps, uuid, bounceKind, containerUuid, now(), null);
-    if (problem !== null) {
-      return abort(
-        `aborted before the json-collapsed bounce: ${uuid} ${problem} (Things was likely ` +
-          "edited concurrently); NOTHING was applied",
-      );
-    }
-  }
-
-  // ONE json array, both legs interleaved per item, in placement order.
-  const ops = order.flatMap((i) => {
-    const uuid = coBounce[i] as string;
-    return [
-      { type: "to-do", operation: "update", id: uuid, attributes: { when: away } },
-      { type: "to-do", operation: "update", id: uuid, attributes: { when: back } },
-    ];
-  });
-  const token = readAuthToken(deps.db);
-  const data = encodeURIComponent(JSON.stringify(ops));
-  const payload = `things:///json?data=${data}${token !== null ? `&auth-token=${encodeURIComponent(token)}` : ""}`;
-  const redactedPayload = `things:///json?data=${data}${token !== null ? "&auth-token=REDACTED" : ""}`;
-
-  const exec = await vector.execute({
-    vector: "url-scheme",
-    kind: "open-url",
-    payload,
-    redactedPayload,
-  });
-  if (exec.exitCode !== 0 || exec.timedOut === true) {
-    return abort(
-      `the json-collapsed bounce dispatch failed (exit ${exec.exitCode ?? "?"}` +
-        `${exec.timedOut === true ? ", timed out" : ""}) — the array is validate-first ` +
-        "all-or-nothing, so NOTHING was applied",
-    );
-  }
-
-  // ONE terminal COLUMN verify (ORD-5): the run in order AND on its insert edge.
-  const verify = await verifyColumn(deps, rankKey, coBounce, rest, direction, options);
-  if (verify.kind !== "ok") {
-    return abort(
-      "the json-collapsed bounce did not land the requested order: " +
-        `${columnMismatchDetail(deps, rankKey, coBounce, rest, direction)}. The app applies the ` +
-        "array all-or-nothing (§9i / BJ-c), so either nothing was applied or every item was " +
-        "placed differently from the order this reorder relies on; read the list before re-running",
-    );
-  }
-
-  const reader = createDbReader(deps.db);
-  const observed: Record<string, unknown> = {};
-  for (const uuid of coBounce) observed[uuid] = reader.rankOf(uuid, rankKey);
-  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId, actor });
-  return {
-    kind: "ok",
-    op: "reorder",
-    uuid: null,
-    observed,
-    vector: "url-scheme",
-    tier: 0,
-    undoToken: txnId,
-    ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
-  };
-}
-
 function legOptions(options: WriteOptions, txnId?: string): WriteOptions {
   const legs: WriteOptions = {};
   if (txnId !== undefined) legs.txn = { id: txnId, role: "leg" };
@@ -3790,13 +3496,6 @@ function checkStillMember(
     case "area-someday":
       if (row.type !== 0) return "the item is not a to-do";
       if (row.area !== containerUuid || row.heading !== null) return "the to-do left the area";
-      if (row.start !== 2 || row.startDate !== null) return "the to-do is no longer a Someday item";
-      return null;
-    case "project-someday":
-      if (row.type !== 0) return "the item is not a to-do";
-      if (row.project !== containerUuid || row.heading !== null) {
-        return "the to-do left the project";
-      }
       if (row.start !== 2 || row.startDate !== null) return "the to-do is no longer a Someday item";
       return null;
     case "anytime":

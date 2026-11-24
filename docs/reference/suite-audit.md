@@ -51,7 +51,7 @@ Verified GREEN in a fresh clone: run **`o-20260728-001645`**, all 16 o-suite pro
 
 ## o-suite BOUNCEJSON collapse row — ADDED 2026-07-28 (BOUNCEJSON / BJ-a)
 
-The BOUNCEJSON collapse (a bounce whose placement leg is `when=anytime` into a loose/heading bucket dispatches as ONE `things:///json` array applied in array order — [lab/reordgaps-results.md](../lab/reordgaps-results.md) BOUNCEJSON, oddities §9i) is the app behavior the reorder compiler now relies on for the `heading` / `anytime` classes; it needed a recurring lock so the release canary re-certifies it every Things update:
+The BOUNCEJSON collapse (a bounce whose placement leg is `when=anytime` into a loose/heading bucket dispatches as ONE `things:///json` array applied in array order — [lab/reordgaps-results.md](../lab/reordgaps-results.md) BOUNCEJSON, oddities §9i) was the app behavior the reorder compiler relied on for the `heading` / `anytime` classes until ORD-5 retired it (2026-11-24; code deleted 2026-11-25, O40 is now the canary); it needed a recurring lock so the release canary re-certifies it every Things update:
 - **O18** (`order.bounce-json-collapse`): self-seeds a project + heading + 4 anytime children (`O-BJHc1..4`, seed order 1<2<3<4) via ONE `things:///json` new-project payload; the command is ONE `things:///json` update array interleaving `[{when:someday},{when:anytime}]` per item in the SCRAMBLED target order `c2,c4,c1,c3`; asserts the resulting `index` order is `c2<c4<c1<c3` (array order CONTROLS placement — the scramble proves it is not a no-op), the heading FK is preserved 4/4, and every child is back at `start=1`. Created its own targets (no new seeds).
 
 Verified GREEN in a fresh clone: run **`o-20260728-064802`**, all 17 o-suite probes `ok` (O18 `supported`, tier 0).

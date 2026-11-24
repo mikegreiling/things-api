@@ -159,17 +159,6 @@ function membershipVector(): WriteVector {
       "project.update": { support: "yes", disruption: 0, validation: "validated" },
     },
     async execute(invocation) {
-      // BOUNCEJSON collapse (§9i): a raw things:///json array carries no op/
-      // opParams — apply each element's when leg in array order (the same bounce
-      // reindex law the per-leg branch uses).
-      if (invocation.op === undefined && invocation.payload.includes("/json?")) {
-        const arr = JSON.parse(new URL(invocation.payload).searchParams.get("data") ?? "[]") as {
-          id: string;
-          attributes: { when: string };
-        }[];
-        for (const el of arr) bounceLeg(el.id, el.attributes.when);
-        return { exitCode: 0, stdout: "", stderr: "" };
-      }
       const p = invocation.opParams as Record<string, unknown>;
       const uuid = p["uuid"] as string;
       if (invocation.op === "todo.update" || invocation.op === "project.update") {
@@ -2087,7 +2076,7 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
   });
 
   it("a dated direct-area movee routes to the SAFE `day` bounce, NEVER a de-scheduling bounce", async () => {
-    // THE de-schedule hazard: the area-someday (and project-someday) reorder is a
+    // THE de-schedule hazard: the area-someday reorder is a
     // when= bounce whose away leg `when=anytime` CLEARS a startDate — a dated
     // movee must NEVER reach it. A direct-area scheduled-day child now routes to
     // the SIT4 dated `day` bounce (a cross-DATE when= round-trip that preserves the

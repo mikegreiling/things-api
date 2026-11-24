@@ -19,7 +19,7 @@ import { encodePackedDate } from "../../src/model/dates.ts";
 import type { EnvironmentTracker, EnvironmentTuple } from "../../src/write/environment.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import { computeReorderPre } from "../../src/write/pre-state.ts";
-import { BOUNCE_MAX_ITEMS, bounceJsonCollapsible, runReorder } from "../../src/write/reorder.ts";
+import { BOUNCE_MAX_ITEMS, runReorder } from "../../src/write/reorder.ts";
 import { ruleXml } from "../../src/write/recurrence-rule-blob.ts";
 import { planUndo } from "../../src/write/undo.ts";
 import type { ReorderParams } from "../../src/write/operations.ts";
@@ -1266,21 +1266,16 @@ describe("someday scope: PROJECTS (P9e inverted protocol)", () => {
  * Faithful index-keyed bounce sim (reordgaps-results.md BOUNCE2 re-entry law).
  * A when= leg re-schedules the item and, when it lands in a ranked bucket,
  * re-inserts it: FRONT (min index − 1) for a loose/area-direct item, BACK
- * (max index + 1) for a heading/project child. Handles BOTH dispatch shapes so
- * one fake covers the sequential URL bounce AND the BOUNCEJSON one-array
- * collapse (§9i): a per-leg `things:///update?...&when=` URL, and a single
- * `things:///json?data=[…]` array applied element-by-element in ARRAY ORDER
- * (the app's per-element distinct sub-transactions, BJ-b) — the same reindex
- * law modelling anytime-into-loose/heading front/back-insert.
+ * (max index + 1) for a heading/project child, one per-leg
+ * `things:///update?...&when=` URL at a time.
  *
- * `flip` (ORD-5) inverts the insert direction for one dispatch shape — `json`
- * models Things 3.25's json importer back-inserting a loose to-do, `url` an app
- * that re-enters URL legs at the other edge — so a test can prove the engine
- * never reports success on an order the app did not land.
+ * `flip` (ORD-5) inverts the insert direction — an app that re-enters URL legs
+ * at the other edge — so a test can prove the engine never reports success on
+ * an order the app did not land.
  */
-function indexBounceVector(opts: { flip?: "json" | "url" } = {}) {
+function indexBounceVector(opts: { flip?: boolean } = {}) {
   const calls: string[] = [];
-  const applyWhen = (id: string, when: string, viaJson = false): void => {
+  const applyWhen = (id: string, when: string): void => {
     const row = fixture.db
       .prepare("SELECT heading, project, area FROM TMTask WHERE uuid = ?")
       .get(id) as { heading: string | null; project: string | null; area: string | null };
@@ -1329,8 +1324,7 @@ function indexBounceVector(opts: { flip?: "json" | "url" } = {}) {
            WHERE trashed=0 AND status=0 AND type=0 AND uuid != ? AND ${where}`,
         )
         .get(id, ...binds) as { mn: number | null; mx: number | null };
-      const flipped = opts.flip === (viaJson ? "json" : "url");
-      const atBack = flipped ? !back : back;
+      const atBack = opts.flip === true ? !back : back;
       const newIndex = atBack ? (sib.mx ?? 0) + 1 : (sib.mn ?? 0) - 1;
       fixture.db
         .prepare(`UPDATE TMTask SET "index"=?, userModificationDate=? WHERE uuid=?`)
@@ -1346,19 +1340,6 @@ function indexBounceVector(opts: { flip?: "json" | "url" } = {}) {
     async execute(invocation) {
       calls.push(invocation.payload);
       const url = new URL(invocation.payload);
-      if (
-        url.pathname === "//json" ||
-        url.host === "json" ||
-        invocation.payload.includes("/json?")
-      ) {
-        // BOUNCEJSON collapse: apply every element's when in array order.
-        const arr = JSON.parse(url.searchParams.get("data") ?? "[]") as {
-          id: string;
-          attributes: { when: string };
-        }[];
-        for (const el of arr) applyWhen(el.id, el.attributes.when, true);
-        return { exitCode: 0, stdout: "", stderr: "" };
-      }
       applyWhen(url.searchParams.get("id") ?? "", url.searchParams.get("when") ?? "");
       return { exitCode: 0, stdout: "", stderr: "" };
     },
@@ -1681,12 +1662,10 @@ describe("anytime scope (ANYBNC reverse-order front-insert)", () => {
     const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
     const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 });
     const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
-    // The sim's json importer back-inserts (Things 3.25) — the loose class must
-    // not use it at all.
-    const { vector, calls } = indexBounceVector({ flip: "json" });
+    const { vector, calls } = indexBounceVector();
     const result = await runReorder(deps([vector]), { scope: "anytime", uuids: [c, a] });
     expect(result.kind).toBe("ok");
-    // ORD-5: sequential URL legs, never the json collapse — a bounced first, then c.
+    // ORD-5: sequential URL legs, never a json array — a bounced first, then c.
     expect(calls).toHaveLength(4);
     expect(calls.some((u) => u.includes("/json?"))).toBe(false);
     expect(calls[0]).toContain(a);
@@ -1714,7 +1693,7 @@ describe("ORD-5: a bounce never reports success on an order the app did not land
     const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
     const d = seedTodo(fixture.db, { title: "d", start: "active", index: 40 });
     const e = seedTodo(fixture.db, { title: "e", start: "active", index: 50 });
-    const { vector } = indexBounceVector({ flip: "url" });
+    const { vector } = indexBounceVector({ flip: true });
     const result = await runReorder(
       deps([vector]),
       { scope: "anytime", uuids: [d] },
@@ -1747,7 +1726,7 @@ describe("ORD-5: a bounce never reports success on an order the app did not land
     const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
     const d = seedTodo(fixture.db, { title: "d", start: "active", index: 40 });
     const e = seedTodo(fixture.db, { title: "e", start: "active", index: 50 });
-    const { vector } = indexBounceVector({ flip: "url" });
+    const { vector } = indexBounceVector({ flip: true });
     const result = await runReorder(
       deps([vector]),
       { scope: "anytime", uuids: [e, d, c] },
@@ -1763,7 +1742,7 @@ describe("ORD-5: a bounce never reports success on an order the app did not land
     const h1 = seedTodo(fixture.db, { title: "h1", heading, index: 10 });
     const h2 = seedTodo(fixture.db, { title: "h2", heading, index: 20 });
     const h3 = seedTodo(fixture.db, { title: "h3", heading, index: 30 });
-    const { vector, calls } = indexBounceVector({ flip: "url" });
+    const { vector, calls } = indexBounceVector({ flip: true });
     // --end for h1: target [h2, h3, h1]; the back-insert run is [h1] alone.
     const result = await runReorder(
       deps([vector]),
@@ -3712,32 +3691,6 @@ describe("heading-someday scope (HEADSUB2 unhead → re-head-in-order back-inser
     expect(inv.kind).toBe("ok");
     // Restored to the original relative order s1 < s2 < s3.
     expect(ascending(ranks([s1, s2, s3], `"index"`))).toBe(true);
-  });
-});
-
-describe("BOUNCEJSON collapse eligibility (§9i placement-leg mechanism)", () => {
-  // The `things:///json` one-array collapse works ONLY when the placement (back)
-  // leg is `when=anytime` into a loose/heading-container bucket (oddities §9i,
-  // BJ-0/BJ-a). This test pins the classification so nobody "optimizes" a
-  // someday-placement or area-direct class into json — §9i proved that is a
-  // SILENT no-op (index frozen), which would corrupt ordering without failing.
-  it("collapses no class since ORD-5 (Things 3.25 places the json array intermittently)", () => {
-    // Formerly eligible (BJ-0 loose front-insert, BJ-a heading back-insert). On 3.25
-    // the array's anytime element intermittently keeps the someday-leg index
-    // (ORD5J-T); the sequential URL legs place correctly on every version measured.
-    expect(bounceJsonCollapsible("anytime")).toBe(false);
-    expect(bounceJsonCollapsible("heading")).toBe(false);
-  });
-  it("keeps every someday-placement / area-direct / non-index class on the URL loop", () => {
-    // Someday-placement (index-INERT via json, §9i b) — despite project-someday
-    // being a BACK-insert, eligibility follows the leg VALUE, not the direction.
-    expect(bounceJsonCollapsible("area-someday")).toBe(false); // §9i b+c (area-direct)
-    expect(bounceJsonCollapsible("project-someday")).toBe(false); // §9i b
-    // todayIndex legs (not an anytime index placement).
-    expect(bounceJsonCollapsible("today")).toBe(false);
-    expect(bounceJsonCollapsible("evening")).toBe(false);
-    // project.update (type=1) — json when= reindex unproven for a project row.
-    expect(bounceJsonCollapsible("projects")).toBe(false);
   });
 });
 
