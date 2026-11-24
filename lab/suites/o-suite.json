@@ -1097,7 +1097,7 @@
     },
     {
       "id": "O18",
-      "title": "BOUNCEJSON: ONE `things:///json` update array carrying [someday,anytime] per item, applied in ARRAY ORDER, reorders a heading's anytime children (back-insert, BJ-a) \u2014 the collapse the reorder compiler dispatches for the heading / area-less-anytime classes (\u00a79i, BounceSpec.jsonCollapsible). Scrambled target (seed 1<2<3<4, target 2<4<1<3) proves array order CONTROLS placement, not a no-op; heading FK + start=1 preserved (validate-first, one dispatch).",
+      "title": "BOUNCEJSON: ONE `things:///json` update array carrying [someday,anytime] per item, applied in ARRAY ORDER, reorders a heading's anytime children (back-insert, BJ-a) \u2014 the collapse the reorder compiler dispatched for the heading / area-less-anytime classes (\u00a79i, BounceSpec.jsonCollapsible) until ORD-5 retired it on 2026-11-24 (Things 3.25 places it intermittently; O40 is the canary, O41-O44 lock the sequential legs). A whole-block scramble into an empty Someday sub-bucket comes out in array order from the someday legs alone, so this row stays green on 3.25. Scrambled target (seed 1<2<3<4, target 2<4<1<3) proves array order CONTROLS placement, not a no-op; heading FK + start=1 preserved (validate-first, one dispatch).",
       "vector": "url",
       "operation": "order.bounce-json-collapse",
       "appState": "running-background",
@@ -4297,6 +4297,657 @@
           }
         }
       ]
+    },
+    {
+      "id": "O40",
+      "title": "ORD-5 canary: the BOUNCEJSON collapse's wire \u2014 ONE `things:///json` update array carrying [someday, anytime] per item \u2014 for an anchored heading move (`c5 --before c2` = forward run c5, c2, c3, c4 under a fresh five-child heading), repeated 12 times. Things <=3.24 lands c1 < c5 < c2 < c3 < c4 every time (ORD5J-T: 6/6 heading, 18/18 loose). From 3.25 the array's anytime element intermittently does not re-insert the row, which keeps its someday-leg index (ORD5J-T: 3/6 heading runs tie c5 with c1; GV6 \u00a76 and 3/6 CLI-seeded loose trials land a loose to-do LAST). The shipped engine sends no json collapse since ORD-5, so this row is a canary, not a dependency: it counts the bad runs.",
+      "vector": "url",
+      "operation": "order.bounce-json-collapse-canary",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK1P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK1H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK1c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK1c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK1c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK1c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK1c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK1c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK1H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK1c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK2P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK2H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK2c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK2c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK2c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK2c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK2c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK2c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK2H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK2c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK3P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK3H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK3c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK3c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK3c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK3c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK3c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK3c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK3H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK3c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK4P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK4H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK4c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK4c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK4c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK4c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK4c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK4c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK4H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK4c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK5P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK5H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK5c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK5c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK5c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK5c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK5c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK5c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK5H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK5c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK6P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK6H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK6c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK6c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK6c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK6c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK6c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK6c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK6H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK6c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK7P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK7H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK7c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK7c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK7c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK7c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK7c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK7c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK7H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK7c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK8P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK8H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK8c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK8c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK8c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK8c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK8c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK8c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK8H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK8c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK9P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK9H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK9c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK9c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK9c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK9c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK9c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK9c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK9H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK9c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK10P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK10H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK10c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK10c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK10c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK10c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK10c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK10c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK10H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK10c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK11P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK11H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK11c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK11c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK11c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK11c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK11c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK11c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK11H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK11c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK12P%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK12H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK12c1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK12c2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK12c3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK12c4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-JK12c5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-JK12c5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-JK12H' AND type=2)"
+        },
+        {
+          "sleep": 2
+        },
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c5}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-JK12c4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "sleep": 4
+        },
+        {
+          "exec": [
+            "python3",
+            "-c",
+            "import glob, os, sqlite3, sys\nDB = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]\nc = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)\nk = int(sys.argv[1])\nwrong = []\nfor t in range(1, k + 1):\n    p = f'O-JK{t}c'\n    rows = dict(c.execute('SELECT title, \"index\" FROM TMTask WHERE title LIKE ? AND trashed=0', (p + '%',)).fetchall())\n    want = [p + s for s in ('1', '5', '2', '3', '4')]\n    seq = [rows.get(x) for x in want]\n    if None in seq or any(a >= b for a, b in zip(seq, seq[1:])):\n        wrong.append(str(t) + ':' + ','.join(str(v) for v in seq))\nprint(f'wrong={len(wrong)}/{k}', ' '.join(wrong))",
+            "12"
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "stdoutMatches",
+            "command": 24,
+            "pattern": "^wrong=0/12"
+          }
+        ]
+      },
+      "expectFrom": [
+        {
+          "fromVersion": "3.25",
+          "because": "Things 3.25 places a `when=anytime` element of a json update array intermittently: in some runs it re-inserts the row (as <=3.24 always does), in others the row keeps the index its `when=someday` element gave it (docs/lab/ord5-325-anytime-bounce.md ORD5J-T: heading 3/6, CLI-seeded loose 3/6, URL-seeded loose 0/6; 3.24 24/24 clean). The shipped engine stopped collapsing any bounce to json (ORD-5). This override asserts at least one bad run in 12; at the measured ~1/2 rate a false red is about 1 in 4000. When every run comes back clean the row goes RED: re-measure before trusting the collapse again.",
+          "expect": {
+            "verdict": "supported",
+            "tier": 0,
+            "assertions": [
+              {
+                "kind": "stdoutMatches",
+                "command": 24,
+                "pattern": "^wrong=([1-9]|1[0-2])/12"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "O41",
+      "title": "ORD-5 / ANYBNC single: the sequential URL legs `update when=someday` then `update when=anytime` on the MIDDLE member of a fresh five-member loose Anytime column FRONT-insert it at the top of the WHOLE loose column (the shipped `things reorder <x> --in anytime --start` bounce, GUI off). Version-independent: GV6BNC P2 measured front on 3.24 and 3.25.",
+      "vector": "url",
+      "operation": "order.anytime-bounce-single",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-LU1&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LU1' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LU2&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LU2' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LU3&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LU3' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LU4&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LU4' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LU5&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LU5' AND start=1"
+        }
+      ],
+      "commands": [
+        {
+          "exec": [
+            "python3",
+            "-c",
+            "import glob, os, sqlite3, subprocess, sys, time, urllib.parse\nDB = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]\nLOOSE = \"type=0 AND trashed=0 AND status=0 AND project IS NULL AND area IS NULL AND heading IS NULL AND start=1 AND startDate IS NULL AND rt1_recurrenceRule IS NULL\"\ndef q(sql, a=()):\n    c = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)\n    try:\n        return c.execute(sql, a).fetchall()\n    finally:\n        c.close()\ndef col():\n    return q(f'SELECT uuid, title FROM TMTask WHERE {LOOSE} ORDER BY \"index\"')\nmode = sys.argv[1]\nif mode == 'pos':\n    t, p, wait = sys.argv[2], sys.argv[3], float(sys.argv[4])\n    end = time.time() + wait\n    while True:\n        titles = [r[0] for r in q(f'SELECT title FROM TMTask WHERE {LOOSE} AND title LIKE ? ORDER BY \"index\"', (p,))]\n        r = 'absent' if t not in titles else 'front' if titles.index(t) == 0 else 'back' if titles.index(t) == len(titles) - 1 else 'middle'\n        if r in ('front', 'back') or time.time() >= end:\n            break\n        time.sleep(0.25)\n    c = [x[1] for x in col()]\n    g = 'global-front' if c and c[0] == t else 'global-back' if c and c[-1] == t else 'global-middle'\n    print(r, g, '|', ' '.join(titles), '| column', len(c))\nelif mode == 'top':\n    n = int(sys.argv[2])\n    print(','.join(x[1] for x in col()[:n]))\nelif mode == 'anchored':\n    mv, an, rel = sys.argv[2], sys.argv[3], sys.argv[4]\n    tok = q('SELECT uriSchemeAuthenticationToken FROM TMSettings')[0][0]\n    rows = col()\n    by_title = {r[1]: r[0] for r in rows}\n    title = {r[0]: r[1] for r in rows}\n    order = [r[0] for r in rows]\n    m, a = by_title[mv], by_title[an]\n    target = [u for u in order if u != m]\n    target.insert(target.index(a) + (1 if rel == 'after' else 0), m)\n    run = target[: target.index(m) + 1]\n    def leg(u, w, s):\n        subprocess.run(['open', '-g', 'things:///update?id=' + u + '&when=' + w + '&auth-token=' + urllib.parse.quote(tok)])\n        end = time.time() + 8\n        while time.time() < end:\n            if q('SELECT start FROM TMTask WHERE uuid=?', (u,))[0][0] == s:\n                return True\n            time.sleep(0.2)\n        return False\n    for u in reversed(run):\n        if not (leg(u, 'someday', 2) and leg(u, 'anytime', 1)):\n            print('leg-timeout', title[u])\n            sys.exit(0)\n    end = time.time() + 5\n    while True:\n        after = [r[0] for r in col() if r[0] in set(order)]\n        if after == target or time.time() >= end:\n            break\n        time.sleep(0.25)\n    print('ok' if after == target else 'mismatch', 'run=' + str(len(run)), '|', ' '.join(title[u] for u in after[: len(run) + 2]))",
+            "pos",
+            "O-LU3",
+            "O-LU%",
+            "0"
+          ]
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-LU3}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LU3' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-LU3}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LU3' AND start=1"
+        },
+        {
+          "exec": [
+            "python3",
+            "-c",
+            "import glob, os, sqlite3, subprocess, sys, time, urllib.parse\nDB = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]\nLOOSE = \"type=0 AND trashed=0 AND status=0 AND project IS NULL AND area IS NULL AND heading IS NULL AND start=1 AND startDate IS NULL AND rt1_recurrenceRule IS NULL\"\ndef q(sql, a=()):\n    c = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)\n    try:\n        return c.execute(sql, a).fetchall()\n    finally:\n        c.close()\ndef col():\n    return q(f'SELECT uuid, title FROM TMTask WHERE {LOOSE} ORDER BY \"index\"')\nmode = sys.argv[1]\nif mode == 'pos':\n    t, p, wait = sys.argv[2], sys.argv[3], float(sys.argv[4])\n    end = time.time() + wait\n    while True:\n        titles = [r[0] for r in q(f'SELECT title FROM TMTask WHERE {LOOSE} AND title LIKE ? ORDER BY \"index\"', (p,))]\n        r = 'absent' if t not in titles else 'front' if titles.index(t) == 0 else 'back' if titles.index(t) == len(titles) - 1 else 'middle'\n        if r in ('front', 'back') or time.time() >= end:\n            break\n        time.sleep(0.25)\n    c = [x[1] for x in col()]\n    g = 'global-front' if c and c[0] == t else 'global-back' if c and c[-1] == t else 'global-middle'\n    print(r, g, '|', ' '.join(titles), '| column', len(c))\nelif mode == 'top':\n    n = int(sys.argv[2])\n    print(','.join(x[1] for x in col()[:n]))\nelif mode == 'anchored':\n    mv, an, rel = sys.argv[2], sys.argv[3], sys.argv[4]\n    tok = q('SELECT uriSchemeAuthenticationToken FROM TMSettings')[0][0]\n    rows = col()\n    by_title = {r[1]: r[0] for r in rows}\n    title = {r[0]: r[1] for r in rows}\n    order = [r[0] for r in rows]\n    m, a = by_title[mv], by_title[an]\n    target = [u for u in order if u != m]\n    target.insert(target.index(a) + (1 if rel == 'after' else 0), m)\n    run = target[: target.index(m) + 1]\n    def leg(u, w, s):\n        subprocess.run(['open', '-g', 'things:///update?id=' + u + '&when=' + w + '&auth-token=' + urllib.parse.quote(tok)])\n        end = time.time() + 8\n        while time.time() < end:\n            if q('SELECT start FROM TMTask WHERE uuid=?', (u,))[0][0] == s:\n                return True\n            time.sleep(0.2)\n        return False\n    for u in reversed(run):\n        if not (leg(u, 'someday', 2) and leg(u, 'anytime', 1)):\n            print('leg-timeout', title[u])\n            sys.exit(0)\n    end = time.time() + 5\n    while True:\n        after = [r[0] for r in col() if r[0] in set(order)]\n        if after == target or time.time() >= end:\n            break\n        time.sleep(0.25)\n    print('ok' if after == target else 'mismatch', 'run=' + str(len(run)), '|', ' '.join(title[u] for u in after[: len(run) + 2]))",
+            "pos",
+            "O-LU3",
+            "O-LU%",
+            "15"
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "stdoutMatches",
+            "command": 0,
+            "pattern": "^middle"
+          },
+          {
+            "kind": "stdoutMatches",
+            "command": 3,
+            "pattern": "^front global-front "
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LU3"
+            },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "O42",
+      "title": "ORD-5 / ANYBNC multi: the shipped anytime bounce's wire for a three-item move \u2014 sequential URL `someday`/`anytime` legs dispatched in REVERSE target order (O-LM5, O-LM2, O-LM4) into a fresh five-member loose column \u2014 lands exactly O-LM4, O-LM2, O-LM5 as the top three of the WHOLE loose Anytime column (each re-entry front-inserts below the running min).",
+      "vector": "url",
+      "operation": "order.anytime-bounce-multi",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-LM1&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LM1' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LM2&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LM2' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LM3&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LM3' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LM4&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LM4' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LM5&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LM5' AND start=1"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-LM5}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LM5' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-LM5}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LM5' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-LM2}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LM2' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-LM2}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LM2' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-LM4}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LM4' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-LM4}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-LM4' AND start=1"
+        },
+        {
+          "exec": [
+            "python3",
+            "-c",
+            "import glob, os, sqlite3, subprocess, sys, time, urllib.parse\nDB = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]\nLOOSE = \"type=0 AND trashed=0 AND status=0 AND project IS NULL AND area IS NULL AND heading IS NULL AND start=1 AND startDate IS NULL AND rt1_recurrenceRule IS NULL\"\ndef q(sql, a=()):\n    c = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)\n    try:\n        return c.execute(sql, a).fetchall()\n    finally:\n        c.close()\ndef col():\n    return q(f'SELECT uuid, title FROM TMTask WHERE {LOOSE} ORDER BY \"index\"')\nmode = sys.argv[1]\nif mode == 'pos':\n    t, p, wait = sys.argv[2], sys.argv[3], float(sys.argv[4])\n    end = time.time() + wait\n    while True:\n        titles = [r[0] for r in q(f'SELECT title FROM TMTask WHERE {LOOSE} AND title LIKE ? ORDER BY \"index\"', (p,))]\n        r = 'absent' if t not in titles else 'front' if titles.index(t) == 0 else 'back' if titles.index(t) == len(titles) - 1 else 'middle'\n        if r in ('front', 'back') or time.time() >= end:\n            break\n        time.sleep(0.25)\n    c = [x[1] for x in col()]\n    g = 'global-front' if c and c[0] == t else 'global-back' if c and c[-1] == t else 'global-middle'\n    print(r, g, '|', ' '.join(titles), '| column', len(c))\nelif mode == 'top':\n    n = int(sys.argv[2])\n    print(','.join(x[1] for x in col()[:n]))\nelif mode == 'anchored':\n    mv, an, rel = sys.argv[2], sys.argv[3], sys.argv[4]\n    tok = q('SELECT uriSchemeAuthenticationToken FROM TMSettings')[0][0]\n    rows = col()\n    by_title = {r[1]: r[0] for r in rows}\n    title = {r[0]: r[1] for r in rows}\n    order = [r[0] for r in rows]\n    m, a = by_title[mv], by_title[an]\n    target = [u for u in order if u != m]\n    target.insert(target.index(a) + (1 if rel == 'after' else 0), m)\n    run = target[: target.index(m) + 1]\n    def leg(u, w, s):\n        subprocess.run(['open', '-g', 'things:///update?id=' + u + '&when=' + w + '&auth-token=' + urllib.parse.quote(tok)])\n        end = time.time() + 8\n        while time.time() < end:\n            if q('SELECT start FROM TMTask WHERE uuid=?', (u,))[0][0] == s:\n                return True\n            time.sleep(0.2)\n        return False\n    for u in reversed(run):\n        if not (leg(u, 'someday', 2) and leg(u, 'anytime', 1)):\n            print('leg-timeout', title[u])\n            sys.exit(0)\n    end = time.time() + 5\n    while True:\n        after = [r[0] for r in col() if r[0] in set(order)]\n        if after == target or time.time() >= end:\n            break\n        time.sleep(0.25)\n    print('ok' if after == target else 'mismatch', 'run=' + str(len(run)), '|', ' '.join(title[u] for u in after[: len(run) + 2]))",
+            "top",
+            "3"
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "stdoutMatches",
+            "command": 6,
+            "pattern": "^O-LM4,O-LM2,O-LM5$"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LM2"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LM4"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LM5"
+            },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "O43",
+      "title": "ORD-5 / ANYBNC anchored: the shipped anchored placement `reorder O-LC1 --after O-LC4 --in anytime` re-enters the minimal prefix of the WHOLE loose column down to the movee's target slot (the movee, the anchor and every sibling above it), in REVERSE target order, through sequential URL `someday`/`anytime` legs. The guest step reads the live column, plans exactly as the engine does, dispatches the raw legs and prints `ok` only if the whole column then equals the planned order.",
+      "vector": "url",
+      "operation": "order.anytime-bounce-anchored",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-LC1&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LC1' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LC2&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LC2' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LC3&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LC3' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LC4&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LC4' AND start=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LC5&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LC5' AND start=1"
+        }
+      ],
+      "commands": [
+        {
+          "exec": [
+            "python3",
+            "-c",
+            "import glob, os, sqlite3, subprocess, sys, time, urllib.parse\nDB = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]\nLOOSE = \"type=0 AND trashed=0 AND status=0 AND project IS NULL AND area IS NULL AND heading IS NULL AND start=1 AND startDate IS NULL AND rt1_recurrenceRule IS NULL\"\ndef q(sql, a=()):\n    c = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)\n    try:\n        return c.execute(sql, a).fetchall()\n    finally:\n        c.close()\ndef col():\n    return q(f'SELECT uuid, title FROM TMTask WHERE {LOOSE} ORDER BY \"index\"')\nmode = sys.argv[1]\nif mode == 'pos':\n    t, p, wait = sys.argv[2], sys.argv[3], float(sys.argv[4])\n    end = time.time() + wait\n    while True:\n        titles = [r[0] for r in q(f'SELECT title FROM TMTask WHERE {LOOSE} AND title LIKE ? ORDER BY \"index\"', (p,))]\n        r = 'absent' if t not in titles else 'front' if titles.index(t) == 0 else 'back' if titles.index(t) == len(titles) - 1 else 'middle'\n        if r in ('front', 'back') or time.time() >= end:\n            break\n        time.sleep(0.25)\n    c = [x[1] for x in col()]\n    g = 'global-front' if c and c[0] == t else 'global-back' if c and c[-1] == t else 'global-middle'\n    print(r, g, '|', ' '.join(titles), '| column', len(c))\nelif mode == 'top':\n    n = int(sys.argv[2])\n    print(','.join(x[1] for x in col()[:n]))\nelif mode == 'anchored':\n    mv, an, rel = sys.argv[2], sys.argv[3], sys.argv[4]\n    tok = q('SELECT uriSchemeAuthenticationToken FROM TMSettings')[0][0]\n    rows = col()\n    by_title = {r[1]: r[0] for r in rows}\n    title = {r[0]: r[1] for r in rows}\n    order = [r[0] for r in rows]\n    m, a = by_title[mv], by_title[an]\n    target = [u for u in order if u != m]\n    target.insert(target.index(a) + (1 if rel == 'after' else 0), m)\n    run = target[: target.index(m) + 1]\n    def leg(u, w, s):\n        subprocess.run(['open', '-g', 'things:///update?id=' + u + '&when=' + w + '&auth-token=' + urllib.parse.quote(tok)])\n        end = time.time() + 8\n        while time.time() < end:\n            if q('SELECT start FROM TMTask WHERE uuid=?', (u,))[0][0] == s:\n                return True\n            time.sleep(0.2)\n        return False\n    for u in reversed(run):\n        if not (leg(u, 'someday', 2) and leg(u, 'anytime', 1)):\n            print('leg-timeout', title[u])\n            sys.exit(0)\n    end = time.time() + 5\n    while True:\n        after = [r[0] for r in col() if r[0] in set(order)]\n        if after == target or time.time() >= end:\n            break\n        time.sleep(0.25)\n    print('ok' if after == target else 'mismatch', 'run=' + str(len(run)), '|', ' '.join(title[u] for u in after[: len(run) + 2]))",
+            "anchored",
+            "O-LC1",
+            "O-LC4",
+            "after"
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "stdoutMatches",
+            "command": 0,
+            "pattern": "^ok run=[3-9] "
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LC1"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LC4"
+            },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "O44",
+      "title": "ORD-5 / BOUNCE2-h anchored: the shipped heading bounce's wire for an ANCHORED move with an untouched prefix \u2014 `O-BKc5 --before O-BKc2` under one heading re-enters the suffix run c5, c2, c3, c4 in FORWARD order through sequential URL `someday`/`anytime` legs; each back-inserts past the heading bucket max, so the column reads c1 < c5 < c2 < c3 < c4 with c1 untouched and the heading FK kept 5/5. This is the edge against an untouched sibling the engine's column verify asserts (the json collapse failed it intermittently on 3.25 \u2014 O40).",
+      "vector": "url",
+      "operation": "order.heading-bounce-anchored",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BKP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BKH%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BKc1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BKc2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BKc3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BKc4%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BKc5%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BKc5' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-BKH' AND type=2)"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc5}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc5' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc5}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc5' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc2}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc2' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc2}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc2' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc3}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc3' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc3}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc3' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc4}&when=someday&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc4' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BKc4}&when=anytime&auth-token={ctx:token}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BKc4' AND start=1"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-BKc1') < (SELECT \"index\" FROM TMTask WHERE title='O-BKc5') AND (SELECT \"index\" FROM TMTask WHERE title='O-BKc5') < (SELECT \"index\" FROM TMTask WHERE title='O-BKc2') AND (SELECT \"index\" FROM TMTask WHERE title='O-BKc2') < (SELECT \"index\" FROM TMTask WHERE title='O-BKc3') AND (SELECT \"index\" FROM TMTask WHERE title='O-BKc3') < (SELECT \"index\" FROM TMTask WHERE title='O-BKc4')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title LIKE 'O-BKc%' AND heading=(SELECT uuid FROM TMTask WHERE title='O-BKH' AND type=2))=5"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BKc1"
+            },
+            "fields": ["index", "start", "heading"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BKc2"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BKc3"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BKc4"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BKc5"
+            },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
     }
   ]
 }

@@ -233,3 +233,14 @@ What now covers it:
 
 The two properties: **(a) the switches are proven from the drive's own TRACE FILE, never from the variable the cell set** — each of the eight `{rawax} x {observer} x {prefill}` quadrants is confirmed by the phases that only appear when that machinery ran, which caught a cell asserting a quadrant it was not in; and **(b) a BASELINE dist answers "is this ours?"**. `stage5-rc-run.sh`'s `RC_DIST_BASELINE` ships origin/main into the same guest, and cells that drive the released CLI over the same fixtures on the same boot turn "this predates us" from an inference into a measurement. Three of RAWAX1's four findings were localized that way, and one hypothesis was REFUTED by it.
 
+## o-suite ORD-5 rows — ADDED 2026-11-24 (anytime/heading bounce off the json collapse, Things 3.25)
+
+ORD-5 retired the json `[someday, anytime]` collapse for every bounce class, because Things 3.25 places it intermittently ([lab/ord5-325-anytime-bounce.md](../lab/ord5-325-anytime-bounce.md)). Before this, the only o-suite lock on the anytime bounce was O18, a json full-block scramble under a heading, which 3.25 passes by coincidence: the someday-leg indices of a whole block already land in array order. Five rows now lock the mechanism the engine ships, plus a canary for the one it dropped:
+
+- **O40** (`order.bounce-json-collapse-canary`): the heading anchored json run (`c5 --before c2` = c5, c2, c3, c4 in one array) on twelve fresh five-child headings. A guest step counts the bad runs. Base (≤3.24) `wrong=0/12`; `expectFrom 3.25` at least one. Statistical by necessity: 3.25 is intermittent (3/6 and 7/12 measured).
+- **O41** (`order.anytime-bounce-single`): sequential URL `someday` → `anytime` on the middle of a fresh five-member loose column lands it at the FRONT of the WHOLE loose column.
+- **O42** (`order.anytime-bounce-multi`): reverse dispatch of three into a five-member column; the whole column's top three are exactly the target.
+- **O43** (`order.anytime-bounce-anchored`): `--after` planned off the live column exactly as the engine plans it (the minimal prefix down to the movee's slot, co-bounced in reverse); the whole column must equal the plan.
+- **O44** (`order.heading-bounce-anchored`): heading `c5 --before c2` as sequential URL legs, forward: `c1<c5<c2<c3<c4`, c1 byte-untouched, heading FK 5/5.
+
+All self-seed with synthetic titles and drive raw URL legs (O43 and O40's counter run a guest-side Python step). Green on golden-v6 in a targeted run (`o-20261124-202108`) and in the full `lab:regress` recorded in the campaign doc. The complementary field-shaped lock is `lab/guest/ord5-anytime-cells.sh` (normal CLI, routed, both goldens), and the engine lock is `test/engine/write-reorder.test.ts` "ORD-5: a bounce never reports success…".

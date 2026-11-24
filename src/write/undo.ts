@@ -1431,7 +1431,34 @@ export function planUndo(
           );
         }
       }
-      const uuids = ranked.toSorted((a, b) => a[1] - b[1]).map(([id]) => id);
+      // A row whose captured rank TIES another's had no order on the rank axis
+      // before the reorder, so the inverse owes it no position; and when the
+      // forward op left its rank untouched, naming it only makes the inverse's
+      // ordering verify demand a strict order the app never wrote. Things 3.25
+      // leaves the unmoved rows of a Today chord at their tied `todayIndex` (3.24
+      // renumbered them), which failed the undo although the visible order was
+      // restored (ORD-5 cell 18b). Such rows are left out — but only from the
+      // TAIL of the inverse (ranked after every row it keeps), so dropping them
+      // cannot pull a kept row above them; they "keep their current positions",
+      // as the plan's note says. A row the forward op named as a movee, or whose
+      // recorded rank shows it moved, always keeps its place.
+      const observed = record.observed ?? {};
+      const movees = new Set(requested.named ?? requested.uuids ?? []);
+      const tally = new Map<number, number>();
+      for (const [, r] of ranked) tally.set(r, (tally.get(r) ?? 0) + 1);
+      const droppable = ([id, r]: [string, number]): boolean =>
+        (tally.get(r) ?? 0) > 1 &&
+        !movees.has(id) &&
+        !(typeof observed[id] === "number" && observed[id] !== r);
+      const kept = ranked.filter((e) => !droppable(e));
+      const keptMax = kept.length > 0 ? Math.max(...kept.map(([, r]) => r)) : -Infinity;
+      const restorable = ranked.filter((e) => !droppable(e) || e[1] < keptMax);
+      if (restorable.length === 0) {
+        return irreversible(
+          "every captured rank was tied and none moved, so there is no prior order to restore",
+        );
+      }
+      const uuids = restorable.toSorted((a, b) => a[1] - b[1]).map(([id]) => id);
       const params: Record<string, unknown> = { scope: requested.scope, uuids };
       if (requested.container !== undefined) params["container"] = requested.container;
       if (requested.scope === "day") {

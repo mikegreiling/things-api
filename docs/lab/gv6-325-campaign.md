@@ -146,3 +146,9 @@ Fourteen law rows take `3.25 (golden-v6)`. **ORD-5 does not** (§6). Suspensions
 - **Goldens:** v6/v6h ACTIVE. v5/v5h retired in place (and used as this campaign's controls), v4/v4h retained (deletion is still the maintainer's call). `tart list` at the end shows exactly those six, all stopped.
 - **Evidence** (gitignored, primary checkout): `lab/artifacts/v6-build/`, `v6h-build/` (pre/post DBs, sdef, row and DDL diffs, positive-control logs), `gv6ax-v4|v5|v6/`, `gv6ax-diff/`, `gv6-s5-*`, `gv6-bnc-*`, `reord325-lab/`, and the suite, e2e and SIMFID run ids above.
 - **Hook refusal:** one Bash command writing documentation that quoted a json-import URL literally was refused by `.claude/hooks/prod-things-guard.sh` (it pattern-matched the URL text; nothing was sent). The edit was made with the editor instead.
+
+---
+
+## Addendum (2026-11-24, later the same day): ORD-5 fixed, 3.25 certified
+
+Not a revision of the findings above, which stand as measured. §6.3's open item was taken up under an orchestrator ruling and is recorded in its own snapshot: [ord5-325-anytime-bounce.md](ord5-325-anytime-bounce.md). In short: on 3.25 the json `[someday, anytime]` round-trip turned out to be intermittent rather than a clean back-insert, and it misplaces heading children too (§2 there), so no bounce class uses the json collapse any more. Every bounce-class protocol now verifies the whole planned column before reporting success. Cell 11a was cell 9's wrong column, and cell 18b was an undo defect that 3.24 had been masking (§6 there). With five new o-suite rows (O40–O44) the gate re-ran green, and the verdict there is CERTIFIED.

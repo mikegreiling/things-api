@@ -34,15 +34,21 @@
  * `--after`) placement co-bounces the minimal contiguous run between the block
  * and the bucket edge (disclosed as `touched`).
  *
- * JSON collapse (BOUNCEJSON, oddities §9i): for the bounce classes whose
- * PLACEMENT (`back`) leg is `when=anytime` landing into a loose or heading-
- * container bucket, the whole N-item round-trip can collapse to ONE pre-
- * validated `things:///json` update array (2N ops, 1 dispatch, exact array
- * order, ~7×, validate-first FULL-ABORT). Eligibility is a per-BounceSpec flag
- * ({@link BounceSpec.jsonCollapsible}) keyed off that mechanism, NOT the front/
- * back direction — see the flag's doc for why a someday-placement or area-
- * direct class must NEVER collapse (json is index-inert there — a collapse
- * would silently fail to reorder).
+ * JSON collapse (BOUNCEJSON, oddities §9i): a bounce whose PLACEMENT (`back`)
+ * leg is `when=anytime` can collapse its whole N-item round-trip to ONE pre-
+ * validated `things:///json` update array (2N ops, 1 dispatch, ~7×, validate-
+ * first FULL-ABORT). Eligibility is a per-BounceSpec flag
+ * ({@link BounceSpec.jsonCollapsible}). Since ORD-5 (2026-11-24) NO class is
+ * eligible: on Things 3.25 the array's `when=anytime` element intermittently
+ * leaves the row at the index its `when=someday` element gave it, for loose and
+ * heading children alike (ORD5J-T), while the sequential URL legs place
+ * correctly on every version measured. See the flag's doc.
+ *
+ * Column verify (ORD-5, 2026-11-24): every bounce-class protocol ends with ONE
+ * terminal check of the whole planned column — the touched block strictly in
+ * target order AND wholly on its insert edge of the untouched remainder
+ * ({@link columnEvaluation}). Checking only the block's own relative order let a
+ * one-item `--start` the app had placed LAST read back as success.
  */
 import { randomBytes } from "node:crypto";
 
@@ -85,7 +91,7 @@ import {
   type TodoChordColumn,
 } from "./vectors/ui-chord-todo.ts";
 import { simFenceActive } from "./vectors/simulator.ts";
-import { createDbReader, evaluateDelta } from "./verify/delta.ts";
+import { createDbReader, evaluateDelta, type DeltaEvaluation } from "./verify/delta.ts";
 import { pollUntilVerified } from "./verify/poller.ts";
 
 /**
@@ -156,13 +162,20 @@ interface BounceSpec {
    * `when=` reindex fires ONLY when the PLACEMENT (`back`) leg is `anytime`
    * landing into a LOOSE or heading-CONTAINER bucket — so eligibility is keyed
    * off the placement-leg VALUE, NOT the front/back direction:
-   *   - eligible: `heading` (back=anytime, container child — BJ-a back-insert)
-   *     and `anytime` (back=anytime, area-less loose — BJ-0 front-insert); both
-   *     are `todo.update` legs, the exact `type:"to-do"` json shape BJ-0/BJ-a
-   *     validated. The array carries `[{when:away},{when:back}]` per item in the
-   *     SAME per-item order the sequential loop iterates (reverse for the loose
-   *     front-insert, forward for the heading back-insert), so array order == the
-   *     resulting index order.
+   *   - eligible: NONE since ORD-5 (2026-11-24). `anytime` (area-less loose,
+   *     BJ-0 front-insert) and `heading` (container child, BJ-a back-insert) were
+   *     the two eligible classes; both measured deterministic on ≤3.24 (ORD5J-T:
+   *     24/24 on 3.24). On Things 3.25 the array's `when=anytime` element
+   *     intermittently does not re-insert the row, which keeps the index its
+   *     `when=someday` element gave it: a loose to-do lands LAST (GV6 §6, 3/6
+   *     trials on a CLI-seeded column) and a heading run leaves a child tied
+   *     with an untouched sibling (3/6 trials). The sequential URL legs placed
+   *     correctly in every trial on both versions. The collapse rested on an
+   *     undocumented importer side effect the vendor changed, so both classes run
+   *     the sequential bounce unconditionally — no version switch (ALPHA-
+   *     CONTRACT). Were a class re-admitted, the array would carry
+   *     `[{when:away},{when:back}]` per item in the SAME per-item order the
+   *     sequential loop iterates, so array order == the resulting index order.
    *   - NOT eligible (json index-INERT — must stay on the sequential URL bounce):
    *     any `someday`-placement class (`area-someday`, `project-someday`) — §9i(b)
    *     measured `when=someday` leaves `index` untouched; and any area-DIRECT
@@ -183,10 +196,11 @@ interface BounceSpec {
 
 /**
  * The bounce kinds whose N-item round-trip is eligible for the `things:///json`
- * one-array collapse (BOUNCEJSON §9i) — exactly the classes whose placement
- * (`back`) leg is `when=anytime` into a loose/heading-container bucket. Exported
- * for the classification regression test (guards against "optimizing" a someday-
- * placement or area-direct class into json, which §9i proves is a silent no-op).
+ * one-array collapse (BOUNCEJSON §9i) — none since ORD-5. Exported for the
+ * classification regression test (guards against "optimizing" a someday-placement
+ * or area-direct class into json, which §9i proves is a silent no-op, and against
+ * re-collapsing the `anytime` / `heading` classes, which Things 3.25 places
+ * intermittently through json — ORD-5).
  */
 export function bounceJsonCollapsible(kind: BounceKind): boolean {
   return bounceSpecOf(kind).jsonCollapsible;
@@ -260,8 +274,9 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         // project row — stays on the URL loop (§9i tested to-dos only).
         jsonCollapsible: false,
       };
-    // Headed anytime children BACK-insert (BOUNCE2-h): forward-order bounce.
-    // Placement leg = anytime into a heading container -> json-collapsible (BJ-a).
+    // Headed anytime children BACK-insert (BOUNCE2-h): forward-order bounce on the
+    // sequential URL legs. NOT json-collapsible (ORD-5): on Things 3.25 the json
+    // array intermittently leaves a child at its someday-leg index (ORD5J-T).
     case "heading":
       return {
         away: "someday",
@@ -270,7 +285,7 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "back",
         rankKey: "index",
         legOp: "todo.update",
-        jsonCollapsible: true,
+        jsonCollapsible: false,
       };
     // Area someday members FRONT-insert (SOMEBNC-area): reverse-order bounce.
     // Someday placement leg AND area-direct -> json index-INERT (§9i b+c): URL only.
@@ -284,8 +299,9 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         legOp: "todo.update",
         jsonCollapsible: false,
       };
-    // Area-less loose anytime FRONT-insert (ANYBNC): reverse-order bounce.
-    // Placement leg = anytime into a loose bucket -> json-collapsible (BJ-0).
+    // Area-less loose anytime FRONT-insert (ANYBNC): reverse-order bounce on the
+    // sequential URL legs. NOT json-collapsible (ORD-5): on Things 3.25 the json
+    // array intermittently leaves the row LAST; the URL legs front-insert everywhere.
     case "anytime":
       return {
         away: "someday",
@@ -294,7 +310,7 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         direction: "front",
         rankKey: "index",
         legOp: "todo.update",
-        jsonCollapsible: true,
+        jsonCollapsible: false,
       };
     // Project someday children BACK-insert (SOMEBNC-project): forward-order bounce.
     // Someday placement leg -> json index-INERT (§9i b): URL only, despite being
@@ -1135,15 +1151,15 @@ async function runHeadingSomeday(
     placed.push(uuid);
   }
 
-  // 3. Terminal verify: the block's index order matches the target.
-  const verify = await pollUntilVerified(
-    () =>
-      evaluateDelta({ mode: "ordering", key: "index", sequence: block }, createDbReader(deps.db), {
-        modDates: {},
-        fields: {},
-      }),
-    options.verifyTimeoutMs ?? 4000,
-    deps.poller ?? {},
+  // 3. Terminal COLUMN verify (ORD-5): the block in target order AND below every
+  //    untouched sibling of the someday sub-bucket (it back-inserts).
+  const verify = await verifyColumn(
+    deps,
+    "index",
+    block,
+    targetOrder.slice(0, firstMoved),
+    "back",
+    options,
   );
   if (verify.kind !== "ok") {
     auditSummary(
@@ -1314,6 +1330,10 @@ async function runBounce(
   const coBounce =
     direction === "back" ? targetOrder.slice(firstMoved) : targetOrder.slice(0, lastMoved + 1);
   const touchedUnnamed = coBounce.filter((u) => !named.has(u));
+  // The untouched remainder of the planned column: the terminal column verify
+  // (ORD-5) asserts the touched run lands wholly on its insert edge of it.
+  const rest =
+    direction === "back" ? targetOrder.slice(0, firstMoved) : targetOrder.slice(lastMoved + 1);
 
   // STEV1 cell 3 — the `today` bounce NORMALIZES a past-dated movee's schedule.
   // Its away leg is `when=evening`, and This Evening is definitionally the
@@ -1333,7 +1353,7 @@ async function runBounce(
         })
       : [];
 
-  // FLAG-AWARE protocol routing (SIT6). The three json-collapsible index bounces
+  // FLAG-AWARE protocol routing (SIT6). The three when=someday/anytime index bounces
   // (`heading` BOUNCE2-h, `anytime` ANYBNC, `projects` P8e) are when=someday →
   // when=anytime round-trips whose `when=` legs OVERWRITE the Today/Evening flag:
   // the someday leg nulls startDate (start 1→2), the anytime leg only flips start
@@ -1364,6 +1384,8 @@ async function runBounce(
         startedAt,
         options,
         cap,
+        rest,
+        direction,
       };
       if (bounceKind === "heading") return runHeadMove(deps, params, ctx);
       if (bounceKind === "anytime") return runLoosePark(deps, params, ctx);
@@ -1520,8 +1542,8 @@ async function runBounce(
       ? dispatchRun.map((_, i) => dispatchRun.length - 1 - i)
       : dispatchRun.map((_, i) => i);
 
-  // BOUNCEJSON collapse (§9i): when the placement (`back`) leg is when=anytime
-  // into a loose/heading-container bucket, the whole N-item round-trip collapses
+  // BOUNCEJSON collapse (§9i): when the spec is jsonCollapsible (no class since
+  // ORD-5 — see BounceSpec.jsonCollapsible), the whole N-item round-trip collapses
   // to ONE pre-validated `things:///json` array (2N ops, 1 dispatch, ~7×,
   // validate-first FULL-ABORT). Only against a REAL dispatch surface — under the
   // simulator (simulates=true, per-op appliers, no json-array applier) we keep
@@ -1597,6 +1619,8 @@ async function runBounce(
       startedAt,
       options,
       vector: dispatchVector as WriteVector,
+      rest,
+      direction,
     });
   }
 
@@ -1812,6 +1836,35 @@ async function runBounce(
     }
   }
 
+  // ORD-5 terminal COLUMN verify: the per-item prefix checks above only compare the
+  // moved items with each other, so a one-item move the app placed at the wrong
+  // edge passes them. The dispatched run must also sit wholly on its insert edge
+  // of the untouched remainder. (A project template left as the untouched day-
+  // block suffix is in neither list — it is disclosed, not placed.)
+  const column = await verifyColumn(deps, rankKey, dispatchRun, rest, direction, options);
+  if (column.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...placed] },
+      { pre: preRanks, txnId, actor },
+    );
+    return {
+      kind: "bounce-aborted",
+      op: "reorder",
+      detail:
+        `every bounce leg landed, but the list did not take the requested order: ` +
+        `${columnMismatchDetail(deps, rankKey, dispatchRun, rest, direction)}. Things placed the ` +
+        "re-entered item(s) differently from the order this reorder relies on; nothing was " +
+        "rolled back — read the list, then arrange it in the app",
+      placed: [...placed],
+      remaining: [],
+      cause: null,
+    };
+  }
+
   const reader = createDbReader(deps.db);
   const observed: Record<string, unknown> = {};
   for (const uuid of coBounce) observed[uuid] = reader.rankOf(uuid, rankKey);
@@ -1870,7 +1923,7 @@ async function runBounce(
 
 // ------------------------------------------------ flag-safe MOVE protocols
 //
-// The de-Today-free twins of the three json-collapsible index bounces (SIT6,
+// The de-Today-free twins of the three when=someday/anytime index bounces (SIT6,
 // docs/lab/sit6-flagsafe-index-protocols.md). Each rides ONLY URL move legs
 // (`list-id=`/`area-id=`) — no when= leg, no private reorder surface — so the
 // Today/Evening flag + reminder + deadline + FKs survive the sort. The bounce
@@ -1887,6 +1940,10 @@ async function runBounce(
 interface SwapCtx {
   /** The touched run in TARGET order (named movees + co-touched siblings). */
   coBounce: string[];
+  /** The untouched remainder of the planned column (never re-ranked). */
+  rest: string[];
+  /** Which edge of {@link rest} the touched run must land on. */
+  direction: "front" | "back";
   /** The heading uuid for HEADMOVE; null for the loose/projects protocols. */
   containerUuid: string | null;
   txnId: string;
@@ -1950,21 +2007,101 @@ function swapBlocked(
   return result;
 }
 
-/** Terminal ordering verify over the touched run on the `index` axis. */
-async function verifyIndexOrder(deps: WriteDeps, coBounce: string[], options: WriteOptions) {
+/**
+ * Untouched members sitting on the WRONG side of the touched block: for a front-
+ * insert every untouched member must rank strictly after the block's last row, for
+ * a back-insert strictly before its first. A member whose rank no longer reads
+ * (deleted concurrently) is not judged.
+ */
+function edgeOffenders(
+  deps: WriteDeps,
+  key: "index" | "todayIndex",
+  block: string[],
+  rest: string[],
+  direction: "front" | "back",
+): { uuid: string; rank: number }[] {
+  const reader = createDbReader(deps.db);
+  const blockRanks = block.map((u) => reader.rankOf(u, key)).filter((r): r is number => r !== null);
+  if (blockRanks.length === 0) return [];
+  const edge = direction === "front" ? Math.max(...blockRanks) : Math.min(...blockRanks);
+  const out: { uuid: string; rank: number }[] = [];
+  for (const uuid of rest) {
+    const rank = reader.rankOf(uuid, key);
+    if (rank === null) continue;
+    if (direction === "front" ? rank <= edge : rank >= edge) out.push({ uuid, rank });
+  }
+  return out;
+}
+
+/**
+ * ORD-5 — the terminal COLUMN evaluation every bounce-class protocol polls. The
+ * touched block must read back strictly in target order on `key` AND sit wholly on
+ * its insert edge of the untouched remainder (`rest`): above every untouched member
+ * for a front-insert, below every one for a back-insert. That is the whole planned
+ * column — the remainder is never re-ranked, so its own order is the app's.
+ * Checking the block alone passed a one-item `--start` that Things 3.25 placed LAST
+ * (a one-element sequence is trivially ordered).
+ */
+function columnEvaluation(
+  deps: WriteDeps,
+  key: "index" | "todayIndex",
+  block: string[],
+  rest: string[],
+  direction: "front" | "back",
+): DeltaEvaluation {
+  const ev = evaluateDelta({ mode: "ordering", key, sequence: block }, createDbReader(deps.db), {
+    modDates: {},
+    fields: {},
+  });
+  if (!ev.satisfied) return ev;
+  const offenders = edgeOffenders(deps, key, block, rest, direction);
+  if (offenders.length === 0) return ev;
+  const observed: Record<string, unknown> = { ...ev.observed };
+  for (const o of offenders) observed[o.uuid] = o.rank;
+  return { ...ev, satisfied: false, assertedMovement: true, observed };
+}
+
+/** Poll {@link columnEvaluation} until it holds or the verify budget runs out. */
+async function verifyColumn(
+  deps: WriteDeps,
+  key: "index" | "todayIndex",
+  block: string[],
+  rest: string[],
+  direction: "front" | "back",
+  options: WriteOptions,
+) {
   return pollUntilVerified(
-    () =>
-      evaluateDelta(
-        { mode: "ordering", key: "index", sequence: coBounce },
-        createDbReader(deps.db),
-        {
-          modDates: {},
-          fields: {},
-        },
-      ),
+    () => columnEvaluation(deps, key, block, rest, direction),
     options.verifyTimeoutMs ?? 4000,
     deps.poller ?? {},
   );
+}
+
+/** What a failed column verify found, in words, for the abort detail. */
+function columnMismatchDetail(
+  deps: WriteDeps,
+  key: "index" | "todayIndex",
+  block: string[],
+  rest: string[],
+  direction: "front" | "back",
+): string {
+  const ordered = evaluateDelta(
+    { mode: "ordering", key, sequence: block },
+    createDbReader(deps.db),
+    { modDates: {}, fields: {} },
+  ).satisfied;
+  if (!ordered) return "the moved items do not read back in the requested order";
+  const offenders = edgeOffenders(deps, key, block, rest, direction).map((o) => o.uuid);
+  if (offenders.length === 0) return "the order changed again while it was being checked";
+  return (
+    `untouched item(s) ${offenders.join(", ")} sit ${direction === "front" ? "above" : "below"} ` +
+    `the moved item(s), which should be at the ${direction === "front" ? "top" : "bottom"} of the list`
+  );
+}
+
+/** Terminal column verify for a flag-safe / move-fallback protocol on the `index` axis. */
+async function verifyIndexOrder(deps: WriteDeps, ctx: SwapCtx, options: WriteOptions) {
+  return verifyColumn(deps, "index", ctx.coBounce, ctx.rest, ctx.direction, options);
 }
 
 /**
@@ -2167,7 +2304,7 @@ async function runHeadMove(
     placed.push(uuid);
   }
 
-  const verify = await verifyIndexOrder(deps, coBounce, options);
+  const verify = await verifyIndexOrder(deps, ctx, options);
   if (verify.kind !== "ok") {
     auditSummary(
       deps,
@@ -2368,7 +2505,7 @@ async function runLoosePark(
   const scratchTrashed = del.kind === "ok";
 
   // 5. Terminal verify: the loose Anytime order matches the target.
-  const verify = await verifyIndexOrder(deps, coBounce, options);
+  const verify = await verifyIndexOrder(deps, ctx, options);
   if (verify.kind !== "ok") {
     auditSummary(
       deps,
@@ -2581,7 +2718,7 @@ async function runProjPark(
   const scratchDeleted = del.kind === "ok";
 
   // 5. Terminal verify: the sidebar order matches the target.
-  const verify = await verifyIndexOrder(deps, coBounce, options);
+  const verify = await verifyIndexOrder(deps, ctx, options);
   if (verify.kind !== "ok") {
     auditSummary(
       deps,
@@ -2709,6 +2846,10 @@ async function runMoveFallback(
   const coBounce =
     direction === "back" ? targetOrder.slice(firstMoved) : targetOrder.slice(0, lastMoved + 1);
   const touchedUnnamed = coBounce.filter((u) => !named.has(u));
+  // The untouched remainder of the planned column: the terminal column verify
+  // (ORD-5) asserts the touched run lands wholly on its insert edge of it.
+  const rest =
+    direction === "back" ? targetOrder.slice(0, firstMoved) : targetOrder.slice(lastMoved + 1);
   const ctx: SwapCtx = {
     coBounce,
     containerUuid,
@@ -2718,6 +2859,8 @@ async function runMoveFallback(
     startedAt,
     options,
     cap,
+    rest,
+    direction,
   };
   const preRanks = captureIndexRanks(deps, coBounce);
 
@@ -2924,7 +3067,7 @@ async function runInboxPark(
   const scratchTrashed = del.kind === "ok";
 
   // 5. Terminal verify: the inbox order matches the target.
-  const verify = await verifyIndexOrder(deps, coBounce, options);
+  const verify = await verifyIndexOrder(deps, ctx, options);
   if (verify.kind !== "ok") {
     auditSummary(
       deps,
@@ -3134,7 +3277,7 @@ async function runProjectRoot(
   const scratchTrashed = del.kind === "ok";
 
   // 5. Terminal verify: the project-root order matches the target.
-  const verify = await verifyIndexOrder(deps, coBounce, options);
+  const verify = await verifyIndexOrder(deps, ctx, options);
   if (verify.kind !== "ok") {
     auditSummary(
       deps,
@@ -3363,7 +3506,7 @@ async function runAreaBack(
   const scratchRemoved = del.kind === "ok";
 
   // 5. Terminal verify: the area's member order matches the target.
-  const verify = await verifyIndexOrder(deps, coBounce, options);
+  const verify = await verifyIndexOrder(deps, ctx, options);
   if (verify.kind !== "ok") {
     auditSummary(
       deps,
@@ -3428,6 +3571,9 @@ interface JsonCollapseCtx {
   startedAt: Date;
   options: WriteOptions;
   vector: WriteVector;
+  /** The untouched remainder of the planned column (ORD-5 column verify). */
+  rest: string[];
+  direction: "front" | "back";
 }
 
 /**
@@ -3459,10 +3605,12 @@ async function runBounceJsonCollapse(
     startedAt,
     options,
     vector,
+    rest,
+    direction,
   } = ctx;
   const { rankKey } = spec;
   // The json collapse is only ever reached for a fixed-bucket, jsonCollapsible spec
-  // (heading / anytime) — never a dated or per-type bounce — so away/back are the
+  // (no class since ORD-5) — never a dated or per-type bounce — so away/back are the
   // concrete keywords the spec pins.
   const away = spec.away as WhenValue;
   const back = spec.back as WhenValue;
@@ -3530,25 +3678,14 @@ async function runBounceJsonCollapse(
     );
   }
 
-  // ONE terminal ordering verify over the whole run.
-  const verify = await pollUntilVerified(
-    () =>
-      evaluateDelta(
-        { mode: "ordering", key: rankKey, sequence: coBounce },
-        createDbReader(deps.db),
-        {
-          modDates: {},
-          fields: {},
-        },
-      ),
-    options.verifyTimeoutMs ?? 4000,
-    deps.poller ?? {},
-  );
+  // ONE terminal COLUMN verify (ORD-5): the run in order AND on its insert edge.
+  const verify = await verifyColumn(deps, rankKey, coBounce, rest, direction, options);
   if (verify.kind !== "ok") {
     return abort(
-      "the json-collapsed bounce did not land the requested order — the app validates the " +
-        "whole array first and applies it all-or-nothing (§9i / BJ-c), so NOTHING was applied " +
-        "(no partial-progress repair needed); re-run once Things is idle",
+      "the json-collapsed bounce did not land the requested order: " +
+        `${columnMismatchDetail(deps, rankKey, coBounce, rest, direction)}. The app applies the ` +
+        "array all-or-nothing (§9i / BJ-c), so either nothing was applied or every item was " +
+        "placed differently from the order this reorder relies on; read the list before re-running",
     );
   }
 

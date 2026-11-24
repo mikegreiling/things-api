@@ -618,6 +618,77 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
     });
   });
 
+  it("leaves out tied rows the forward reorder never moved (ORD-5 cell 18b)", () => {
+    // A Today chord moved D above A; three older-cohort rows sat tied at todayIndex
+    // 0 before AND after (Things 3.25 does not renumber them). Naming them would
+    // make the inverse's verify demand a strict order the app never wrote.
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "today", uuids: ["D"] },
+        pre: { A: -7000, D: -6000, X: 0, Y: 0, Z: 0 },
+        observed: { D: -8000, A: -7000, X: 0, Y: 0, Z: 0 },
+      }),
+      NOW,
+    );
+    expect(plan.steps[0]).toEqual({
+      op: "reorder",
+      params: { scope: "today", uuids: ["A", "D"] },
+    });
+  });
+
+  it("leaves out unnamed tied rows when the record observed only the movee (the chord shape)", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "today", uuids: ["D", "A", "X", "Y", "Z"], named: ["D"] },
+        pre: { A: -7000, D: -6000, X: 0, Y: 0, Z: 0 },
+        observed: { D: -8000 },
+      }),
+      NOW,
+    );
+    expect(plan.steps[0]).toEqual({
+      op: "reorder",
+      params: { scope: "today", uuids: ["A", "D"] },
+    });
+  });
+
+  it("keeps unnamed tied rows that sit ABOVE a kept row (only a tail is left out)", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "today", uuids: ["D"], named: ["D"] },
+        pre: { X: -9000, Y: -9000, A: -7000, D: -6000 },
+        observed: { D: -9500 },
+      }),
+      NOW,
+    );
+    expect(plan.steps[0]).toEqual({
+      op: "reorder",
+      params: { scope: "today", uuids: ["X", "Y", "A", "D"] },
+    });
+  });
+
+  it("keeps a tied row the forward reorder DID move", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "today", uuids: ["Y"] },
+        pre: { A: -7000, X: 0, Y: 0 },
+        observed: { Y: -9000, A: -7000, X: 0 },
+      }),
+      NOW,
+    );
+    expect(plan.steps[0]).toEqual({
+      op: "reorder",
+      params: { scope: "today", uuids: ["A", "Y"] },
+    });
+  });
+
   it("day reorder inverts to the pre-rank order, re-running the dated when= bounce", () => {
     const plan = planUndo(
       record({
